@@ -16,7 +16,8 @@ cargo run --locked --release -- /absolute/path/to/a/repository
 Install full Xcode and its Metal toolchain. Rustup uses the pinned
 `rust-toolchain.toml`. See the README for setup details. Linux and Intel macOS
 are not verified desktop targets. Rex is useful for long jobs but is not required
-to build. The desktop does not need Node; the isolated runtime probe does.
+to build. The desktop itself does not need Node; the local host sidecar and
+isolated runtime probe do.
 
 ## Work together
 
@@ -30,12 +31,14 @@ to build. The desktop does not need Node; the isolated runtime probe does.
 
 ## M2 work split
 
-These are parallel tasks, not features already present in the desktop.
+The composer, native client, and independent host are now connected in code.
+Safety and full-loop validation are still in progress. Keep the ownership
+boundaries below when changing this slice.
 
-### Native composer — open for a contributor
+### Native composer
 
-Own `crates/plait/src/ui/composer.rs` and its focused tests. Build a standalone
-GPUI input component; do not connect it to a model or start a process.
+`crates/plait/src/ui/composer.rs` and its focused tests implement a standalone
+GPUI input component. Keep it independent of models and processes.
 
 Component boundary:
 

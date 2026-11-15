@@ -11,6 +11,8 @@ if [ ! -x "$binary" ]; then
     exit 1
 fi
 fixture=$(mktemp -d -t plait-smoke)
+# Fixture checks must not connect to the user's live host.
+export PLAIT_HOST_STORE="$fixture/host"
 app_pid=''
 stop_app() {
     if [ -n "$app_pid" ]; then

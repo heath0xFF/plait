@@ -64,7 +64,7 @@ on run arguments
     my assertThat(my visibleText() does not contain "README.md", "Tool details did not collapse")
     my toggleReadTool()
     tell application "System Events" to tell process "plait"
-        set tree to outline "Projects, machines and example threads" of root
+        set tree to outline "Projects, machines, host threads and labeled fixtures" of root
         perform action "AXPress" of row "Review Git boundaries, Needs input (mock)" of tree
         perform action "AXPress" of row "Native desktop foundation, Ready (mock)" of tree
     end tell
@@ -72,7 +72,7 @@ on run arguments
     my assertThat(my visibleText() does not contain "README.md", "Tool details leaked across thread selection")
     tell application "System Events" to tell process "plait"
         click radio button "Changes" of root
-        set tree to outline "Projects, machines and example threads" of root
+        set tree to outline "Projects, machines, host threads and labeled fixtures" of root
         set originalCount to count rows of tree
         my assertThat(originalCount = 11, "Expected fresh fixture navigation")
         perform action "AXPress" of row 1 of tree

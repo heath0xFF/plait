@@ -3268,6 +3268,18 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "libc",
+ "serde",
+ "serde_json",
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "plait-host"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
