@@ -101,29 +101,59 @@ pub struct Assets;
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
         let svg = match path {
+            "plait-mark.svg" => {
+                include_str!("../../../../assets/branding/marks/plait-mark-gradient.svg")
+            }
+            "plait-wordmark.svg" => {
+                include_str!("../../../../assets/branding/wordmarks/plait-wordmark-light.svg")
+            }
             "down" => {
                 r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4" fill="none" stroke="black" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>"#
             }
             "right" => {
                 r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4" fill="none" stroke="black" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>"#
             }
-            "folder" => {
-                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M2 4h5l1 2h6v7H2Z" fill="none" stroke="black" stroke-width="1.3" stroke-linejoin="round"/></svg>"#
-            }
-            "machine" => {
-                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M2 3h12v8H2ZM5 14h6M8 11v3" fill="none" stroke="black" stroke-width="1.2" stroke-linejoin="round"/></svg>"#
-            }
-            "branch" => {
-                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><g fill="none" stroke="black" stroke-width="1.2"><circle cx="4" cy="3" r="2"/><circle cx="4" cy="13" r="2"/><circle cx="12" cy="4" r="2"/><path d="M4 5v6m0-1c5 0 8-1 8-4"/></g></svg>"#
-            }
-            "braid" => {
-                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 28"><g fill="none" stroke="black" stroke-width="2.4" stroke-linecap="round"><path d="M5 3c0 8 14 14 14 22M12 3c0 8-7 14-7 22M19 3c0 8-7 14-7 22"/></g></svg>"#
-            }
+            "folder" => include_str!("../../../../assets/branding/icons/plait-projects.svg"),
+            "machine" => include_str!("../../../../assets/branding/icons/plait-machines.svg"),
+            "thread" => include_str!("../../../../assets/branding/icons/plait-threads.svg"),
+            "branch" => include_str!("../../../../assets/branding/icons/plait-git.svg"),
             _ => return Ok(None),
         };
         Ok(Some(Cow::Borrowed(svg.as_bytes())))
     }
     fn list(&self, _: &str) -> gpui::Result<Vec<SharedString>> {
         Ok(vec![])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Assets;
+    use gpui::{AssetSource, SvgRenderer};
+    use std::sync::Arc;
+
+    #[test]
+    fn embedded_icons_render_and_brand_keeps_color() {
+        let renderer = SvgRenderer::new(Arc::new(Assets));
+        for name in [
+            "plait-mark.svg",
+            "plait-wordmark.svg",
+            "folder",
+            "machine",
+            "thread",
+            "branch",
+            "down",
+            "right",
+        ] {
+            let bytes = Assets.load(name).unwrap().expect("embedded icon");
+            let image = renderer.render_single_frame(&bytes, 1.0).unwrap();
+            let (pixels, remainder) = image.as_bytes(0).unwrap().as_chunks::<4>();
+            assert!(remainder.is_empty());
+            assert!(pixels.iter().any(|pixel| pixel[3] > 0), "{name}");
+            if name == "plait-mark.svg" {
+                assert!(pixels.iter().any(|pixel| pixel[0] != pixel[1]));
+            }
+        }
+        assert!(Assets.load("missing.svg").unwrap().is_none());
     }
 }

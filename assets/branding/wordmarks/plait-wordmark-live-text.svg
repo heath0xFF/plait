@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="230" viewBox="0 0 480 230" role="img" aria-labelledby="art-title art-description">
+  <title id="art-title">Plait live-text wordmark</title>
+  <desc id="art-description">Live editable text alternative. Font appearance depends on installed Avenir Next or fallback Arial. The path-based wordmarks have no font dependency.</desc>
+  <defs></defs>
+  <text id="editable-wordmark" x="16" y="167" fill="#151923" font-family="Avenir Next, Arial, sans-serif" font-weight="700" font-size="190" letter-spacing="-7">plait</text>
+</svg>

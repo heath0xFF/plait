@@ -118,6 +118,35 @@ text at the narrow size. The Git inspector hides at the existing breakpoint;
 conversation content scrolls above the unavailable composer. Updated both M1
 screenshots. Full VoiceOver and sustained frame-rate checks remain outstanding.
 
+## macOS package and vector branding
+
+The development package builds with `bash scripts/build-macos.sh`. Checks pass
+for the property list, arm64 executable, system-only dynamic links, dependency
+notices, compiled icon, ad-hoc signature, and the extracted ZIP. The archive's
+SHA-256 checksum also passes.
+
+Imported the owner's vector kit unchanged, with its reconstruction notes. GPUI
+embeds the ribbon mark, outlined lettering, and category glyphs. The build uses
+the kit's supplied 1024-pixel app-icon export to generate all native icon sizes.
+No screenshot crops or replacement hand-drawn glyphs remain.
+
+Formatting, warning-free Clippy, 16 library tests plus one GPUI SVG rendering
+test, the release build, and the native accessibility smoke suite pass. The
+scripted Pi Durable probe and both SIGKILL recovery tests pass without model
+credentials. `actionlint` passes for the new macOS workflow; local checks do not
+establish that the hosted build has passed.
+
+Launched `dist/Plait.app` through Launch Services. Visually checked its full-color
+brand and navigation at 1380 × 860 and the 900 × 600 content-size floor. The
+narrow view keeps the brand and state labels and hides the Git inspector.
+AeroSpace was temporarily set to float only the test window for these checks;
+its tiled layout was restored afterward.
+
+- [Packaged app with vector branding](screenshots/macos-branding.png)
+
+This is still the M1 desktop. The package does not contain an agent host or
+updater. See [macOS packaging](MACOS.md) for distribution limits.
+
 ## Known limitations
 
 - One selected local checkout. Path, selection, and collapse state are not saved.
@@ -137,8 +166,9 @@ screenshots. Full VoiceOver and sustained frame-rate checks remain outstanding.
   clipped with a notice. Untracked symlinks and special files are not followed.
 - Clean/process filters are disabled. Repositories that depend on filters, such
   as Git LFS, can show raw-content differences rather than filter-normalized data.
-- No application bundle, signing, notarization, installer, or custom Dock icon.
-  Launch with Cargo or `target/release/plait`.
+- The development app bundle is ad-hoc signed only. No Developer ID signing,
+  notarization, installer, or automatic updater. Downloaded builds may be blocked
+  by Gatekeeper. Cargo and `target/release/plait` remain supported.
 - Intel macOS, other operating systems, full VoiceOver behavior, and sustained
   frame-rate/load testing have not been verified.
 
@@ -149,8 +179,10 @@ Published Pi 1.5.2 passed a live `openai-codex/gpt-6-astra` run using existing P
 authentication, real temporary-file read/edit tools, incremental state, observer
 detach/reattach, SQLite reopen, stable identity, and request deduplication.
 
-This is not desktop integration or crash-recovery verification. Next implement
-the independent host, native composer, and one local create/resume/stream/persist
-path with process-crash and client-reconnect tests. Keep the Git read-only
+Separate scripted-provider SIGKILL tests now verify safe versus unsafe tool
+replay after reopening the Durable store. This is not desktop integration or
+Plait-host recovery verification. Next implement the independent host, native
+composer, and one local create/resume/stream/persist path with host-crash and
+client-reconnect tests. Keep the Git read-only
 boundary until the separate Git-write milestone. Do not add remote execution or
 orchestration as part of that first integration.

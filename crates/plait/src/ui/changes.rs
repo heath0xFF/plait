@@ -44,7 +44,7 @@ impl Plait {
                             .pb_4()
                             .gap_2()
                             .child(
-                                row().child(icon("branch").text_color(rgb(MINT))).child(
+                                row().child(icon("branch").text_color(rgb(TEXT))).child(
                                     div()
                                         .truncate()
                                         .text_color(rgb(MINT))

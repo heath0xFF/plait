@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" role="img" aria-labelledby="art-title art-description">
+  <title id="art-title">Plait editor icon</title>
+  <desc id="art-description">Editable 24-pixel UI icon approximated from the supplied raster artwork. Change the group color attribute to recolor; all lines remain editable strokes.</desc>
+  <defs></defs>
+  <g id="editor-icon" color="#62DCEE" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m6.5 7-5 5 5 5m11-10 5 5-5 5M14 3l-4 18"/></g>
+</svg>

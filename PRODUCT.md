@@ -16,7 +16,8 @@ No remote connection, agent execution, terminal, or persistence is claimed.
 
 ## Brand commitments
 BB-inspired conversation layout, compact sidebar, charcoal surfaces, mint,
-blue and violet accents. Native keyboard behavior. No decorative animation.
+blue and violet accents. Use the owner's ribbon-P vector kit for branding and
+category icons. Native keyboard behavior. No decorative animation.
 
 ## Principles
 Responsiveness first. No blocking I/O on the UI thread. No mandatory worktrees.
