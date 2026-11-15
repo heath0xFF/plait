@@ -14,7 +14,8 @@ Read `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `docs/ARCHITECTURE.md`,
 
 - Arthur: Ubuntu 26.04.1 LTS, x86-64, user `heath`.
 - Intended checkout: `/home/heath/code/plait`.
-- Development branch: `feat/local-agent-loop`.
+- Development baseline: `main` after the M2 merge. Use a new focused branch
+  for the next change; `feat/local-agent-loop` is the completed checkpoint.
 - Mac source: `/Users/heath/code/plait`, on Zaphod.
 - Node 26.13.0, npm 11.20.0, Pi 1.5.2, Git, Rustup, C compiler, CMake,
   pkg-config, Bubblewrap, and unshare were found on Arthur.
@@ -24,9 +25,10 @@ Read `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `docs/ARCHITECTURE.md`,
 - Keep existing Rex services, sessions, and unrelated work. Run long jobs in
   named panes in the existing tab, with the agent pane focused. No new tabs.
 
-Heath approved pushing the checkpoint to GitHub, then continuing development on
-Arthur. Fetch and check out `feat/local-agent-loop` from
-`https://github.com/heath0xFF/plait`. Check `git status --short --branch` and
+Heath approved pushing the checkpoint and merging it into `main`, then continuing
+development on Arthur. Clone `main` from `https://github.com/heath0xFF/plait`.
+For an existing clean checkout, switch to `main` and pull with `--ff-only`.
+Check `git status --short --branch` and
 `git log -3 --oneline` before starting work. Do not reset either checkout.
 Keep later synchronization explicit; do not overwrite work on the other machine.
 
