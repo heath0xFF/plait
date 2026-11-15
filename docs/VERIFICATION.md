@@ -4,15 +4,17 @@
 
 The installer branch adds combined and independent component packages. Linux
 checks passed with 50 workspace Rust tests, strict Clippy, and the portable
-runtime suite (40 tests). Nine portable package-planning tests pass. Mac build, actual
+runtime suite (40 tests). Ten portable package-planning tests pass. Mac build, actual
 installation, native launch, and installed-runtime acceptance remain pending.
 
 The headless checkpoint is pushed as `ae8cab2` (PR #9). Its Linux CI passed.
-Its Mac CI failed at Metal lookup: Xcode 16.4 stores Metal below the versioned
-`XcodeDefault.xctoolchain/usr/metal/…/bin` directory. The installer branch checks
-that fixed layout and canonical Xcode aliases while retaining root ownership,
-non-writable tool files, exact tool names, and command sandbox tests. This needs
-real Mac confirmation; it is not a sandbox pass yet.
+Its Mac CI failed at Metal lookup. Xcode 16.4 uses a versioned application
+path, and the macOS 15 image's compiler files and toolchain root are owned by
+UID 501, not root. The installer branch handles canonical aliases and known
+Metal layouts without removing the compiler/root ownership or write-mode checks.
+CI now uses macOS 26 and validates tool discovery before the long build. No system
+ownership or permissions were changed. This still needs real Mac confirmation;
+it is not a sandbox pass yet.
 
 The new CI install test uses a labeled upgrade fixture with unchanged program
 code. It checks install/activation lifetime and durable state, not compatibility

@@ -4,6 +4,8 @@ Plait is an early local preview for **Apple Silicon and macOS 15 or later**.
 The client and host are separate programs. Closing or updating the client does
 not stop accepted host work. Model requests still need provider connectivity;
 a flight without working internet is not an offline agent environment.
+The bundle declares macOS 15, but packaging CI uses macOS 26. Older-system
+runtime acceptance is not yet complete.
 
 ## Packages
 

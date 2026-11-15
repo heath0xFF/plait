@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 
 from release_macos import (
     AGENT_LABEL, HOST_BASE, client_preinstall, distribution,
-    host_postinstall, host_preinstall, launch_agent, manifest, normalize_modes, payload_digest,
+    host_postinstall, host_preinstall, launch_agent, manifest, normalize_modes, payload_digest, platform_preflight,
 )
 
 
@@ -79,7 +79,7 @@ class ReleaseTests(unittest.TestCase):
     def test_existing_host_release_is_rejected_without_writes(self):
         with tempfile.TemporaryDirectory() as directory:
             installed = Path(directory) / "release with spaces"
-            script = host_preinstall(installed)
+            script = host_preinstall(installed).replace('/usr/bin/sw_vers -productVersion', 'printf 15.0').replace('/usr/bin/uname -m', 'printf arm64')
             self.assertEqual(subprocess.run(["bash"], input=script, text=True, capture_output=True).returncode, 0)
             installed.mkdir()
             marker = installed / "marker"
@@ -88,6 +88,15 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(refused.returncode, 1)
             self.assertIn("already installed", refused.stderr)
             self.assertEqual(marker.read_text(), "active release")
+
+    def test_preflight_rejects_wrong_platform_and_non_startup_volumes(self):
+        for architecture, version, volume, expected in [
+            ('arm64', '15.0', '/', 0), ('x86_64', '15.0', '/', 1),
+            ('arm64', '14.0', '/', 1), ('arm64', '15.0', '/Volumes/Other', 1),
+        ]:
+            script = platform_preflight().replace('/usr/bin/sw_vers -productVersion', f'printf {version}').replace('/usr/bin/uname -m', f'printf {architecture}')
+            result = subprocess.run(['bash', '-s', '--', 'package', '/', volume], input=script, text=True, capture_output=True)
+            self.assertEqual(result.returncode, expected)
 
     def test_package_modes_do_not_allow_group_or_other_writes(self):
         with tempfile.TemporaryDirectory() as directory:

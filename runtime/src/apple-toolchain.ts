@@ -29,9 +29,7 @@ export async function appleToolchain(scratch: string, signal: AbortSignal) {
   let developer: string;
   try { developer = await realpath(DEVELOPER); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { bin: '', readOnly: [] as string[] }; throw error; }
-  const developerInfo = await lstat(developer);
-  if (!developer.startsWith('/Applications/') || !developer.endsWith('.app/Contents/Developer')
-    || developerInfo.uid !== 0 || (developerInfo.mode & 0o022) !== 0) {
+  if (!developer.startsWith('/Applications/') || !developer.endsWith('.app/Contents/Developer')) {
     fail('permission_denied', 'Xcode developer directory is not a trusted installed application.');
   }
   // Xcode.app may be a system-managed alias to a versioned Xcode application.

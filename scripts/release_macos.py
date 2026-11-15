@@ -24,8 +24,11 @@ def run(*args, **kwargs):
 
 
 def digest(path):
+    result = hashlib.sha256()
     with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            result.update(chunk)
+    return result.hexdigest()
 
 
 def manifest(component, version, revision):
@@ -60,13 +63,15 @@ def payload_digest(root):
         result.update(relative.encode() + b"\0")
         if path.is_symlink():
             # npm's relative bin links are valid; links outside the package are not.
-            if path.readlink().is_absolute() or not path.resolve().is_relative_to(root.resolve()):
-                raise ValueError(f"Package symlink escapes its root: {relative}")
-            result.update(b"link\0" + os.fsencode(path.readlink()))
+            if path.readlink().is_absolute() or not path.exists() or not path.resolve().is_relative_to(root.resolve()):
+                raise ValueError(f"Package symlink escapes its root or has no target: {relative}")
+            result.update(b"link\0" + os.fsencode(path.readlink()) + b"\0")
         elif path.is_file():
-            result.update(f"{path.stat().st_mode & 0o777:o}\0".encode())
-            result.update(digest(path).encode())
-        elif not path.is_dir():
+            result.update(b"file\0" + f"{path.stat().st_mode & 0o777:o}\0".encode())
+            result.update(digest(path).encode() + b"\0")
+        elif path.is_dir():
+            result.update(b"directory\0")
+        else:
             raise ValueError(f"Special file in package: {relative}")
     return result.hexdigest()
 
@@ -83,10 +88,23 @@ def launch_agent(installed):
     }
 
 
+def platform_preflight():
+    return '''if [[ ${3:-/} != / ]]; then
+    echo 'Plait installs only on the current startup volume.' >&2
+    exit 1
+fi
+version=$(/usr/bin/sw_vers -productVersion)
+if [[ $(/usr/bin/uname -m) != arm64 || ${version%%.*} -lt 15 ]]; then
+    echo 'Plait requires an Apple Silicon Mac with macOS 15 or later.' >&2
+    exit 1
+fi
+'''
+
+
 def host_preinstall(installed):
     return f'''#!/bin/bash
 set -euo pipefail
-# Even an identical reinstall must not rewrite a live executable or sidecar file.
+{platform_preflight()}# Even an identical reinstall must not rewrite a live executable or sidecar file.
 if [[ -e {shlex.quote(str(installed))} ]]; then
     echo 'This exact host build is already installed. Use the client-only package or a newer host build.' >&2
     exit 1
@@ -117,9 +135,7 @@ exit 0
 
 
 def client_preinstall():
-    return '''#!/bin/bash
-set -euo pipefail
-# Closing the client leaves the independent host and accepted work running.
+    return '#!/bin/bash\nset -euo pipefail\n' + platform_preflight() + '''# Closing the client leaves the independent host and accepted work running.
 if /usr/bin/pgrep -x plait >/dev/null; then
     echo 'Quit the Plait client, then run this client installer again. Do not stop the host.' >&2
     exit 1
@@ -227,6 +243,11 @@ def component_package(root, scripts, component, version, output, work):
             "BundleHasStrictIdentifier": True,
             "BundleOverwriteAction": "upgrade",
         }]))
+        args.extend(["--component-plist", components])
+    else:
+        # Runtime dependencies must not be relocated through automatic bundle discovery.
+        components = work / "host-components.plist"
+        components.write_bytes(plistlib.dumps([]))
         args.extend(["--component-plist", components])
     run(*args, output)
 

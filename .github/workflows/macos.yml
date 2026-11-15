@@ -15,8 +15,10 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -41,6 +43,16 @@ jobs:
                   info = item.stat()
                   print(name, item, 'uid', info.st_uid, 'mode', oct(info.st_mode & 0o777))
           PY
+          node --input-type=module - <<'JS'
+          import { mkdtemp, rm } from 'node:fs/promises';
+          import { appleToolchain } from './runtime/src/apple-toolchain.ts';
+          const scratch = await mkdtemp('/private/tmp/plait-toolchain-check-');
+          try {
+            const tools = await appleToolchain(scratch, AbortSignal.timeout(20000));
+            if (!tools.bin) throw new Error('No trusted installed Metal toolchain is available.');
+            console.log('Root-owned Metal tool discovery passed; sandbox tests still follow.');
+          } finally { await rm(scratch, { recursive: true, force: true }); }
+          JS
       - name: Check workspace and real command sandbox
         run: bash scripts/check.sh --require-command-sandbox
       - name: Check runtime recovery without credentials
