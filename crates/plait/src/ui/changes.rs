@@ -1,6 +1,6 @@
 use super::{OpenRepository, Plait, Refresh, theme::*};
 use gpui::{prelude::*, *};
-use plait::{
+use plait_core::{
     model::{DiffKind, DiffMode},
     state::Load,
 };

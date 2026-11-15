@@ -26,6 +26,9 @@ Build `cargo build -p plait-host`; install runtime packages with
 ## Transport
 
 Owner-only Unix stream socket, UTF-8 newline-delimited JSON, protocol version 1.
+Clients and the daemon verify connected-peer user identity with `getpeereid` on
+macOS or `SO_PEERCRED` on Linux. Clients also check socket and parent ownership
+and private modes before connecting. This does not enable Linux commands.
 One request and one reply per connection, then EOF, except `watch`. No greeting.
 Request limit: 64 KiB including newline. Reply/event limit: 1 MiB including
 newline. Absolute input deadline: 5 seconds; sidecar exchange deadline: 20 seconds. Slow watchers are disconnected rather
@@ -188,7 +191,15 @@ or transcript data in the production host.
 
 ## Verification
 
-Verified on Apple Silicon macOS with Node 26 and the pinned Rust 1.98.1 toolchain:
+Use `bash scripts/check.sh` for the shared macOS/Linux development checks.
+`bash scripts/check.sh --require-command-sandbox` requires full command-sandbox
+coverage and currently fails on Linux. Runtime `npm test` labels its platform
+coverage; Linux runs common daemon/file tests and explicit execution-denial tests.
+See VERIFICATION.md for current results and LINUX-SANDBOX.md for the open backend
+decision. A Linux development pass is not full host-execution acceptance.
+
+The following records the earlier M2 Mac checkpoint, before the portable runtime
+refactor. Verified on Apple Silicon macOS with Node 26 and the pinned Rust 1.98.1 toolchain:
 
 ```sh
 cargo fmt --all -- --check

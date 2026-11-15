@@ -1,3 +1,4 @@
+use plait_core::local_socket;
 use serde_json::{Value, json};
 #[cfg(test)]
 use std::io::BufRead;
@@ -103,7 +104,7 @@ fn timed_write(
 }
 
 pub fn status(store: &Path) -> io::Result<Vec<u8>> {
-    let mut socket = UnixStream::connect(store.join("host.sock"))?;
+    let mut socket = local_socket::connect(&store.join("host.sock"))?;
     socket.set_read_timeout(Some(Duration::from_secs(2)))?;
     socket.write_all(b"{\"op\":\"status\"}\n")?;
     let reply = timed_frame(
@@ -260,6 +261,7 @@ fn send(socket: &mut UnixStream, value: &Value) -> io::Result<()> {
 }
 
 fn connection(mut socket: UnixStream, sidecar: &Mutex<Sidecar>) -> io::Result<()> {
+    local_socket::require_same_user(&socket)?;
     socket.set_read_timeout(Some(Duration::from_secs(5)))?;
     socket.set_write_timeout(Some(Duration::from_secs(2)))?;
     let request = timed_frame(

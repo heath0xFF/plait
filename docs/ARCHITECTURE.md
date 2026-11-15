@@ -3,9 +3,10 @@
 ## Scope
 
 M2 adds an independent local host to the M1 native desktop. The Cargo workspace
-contains `crates/plait` (desktop and GPUI-free client/state code) and
-`crates/plait-host` (local daemon and filesystem/process helpers). `runtime/`
-contains the pinned Pi Durable TypeScript sidecar. There is no remote execution,
+contains `crates/plait` (native desktop), `crates/plait-core` (headless models,
+client state, local host client, and read-only Git), and `crates/plait-host`
+(local daemon and filesystem/process helpers). `runtime/` contains the pinned
+Pi Durable TypeScript sidecar. There is no remote execution,
 embedded terminal, editor, Git-write interface, or worktree manager.
 
 The native client, local host safety checks, edit/command/Stop loop, and
@@ -14,6 +15,7 @@ This remains an early local preview; Linux execution and remote transport are
 not implemented. See VERIFICATION.md and HANDOFF.md for the remaining work.
 
 ```text
+crates/plait/src/
 main.rs                 native app lifecycle, window, startup
 ui/                     GPUI layout, actions, focus, lists, theme
   mod.rs                UI state and background-task dispatch
@@ -24,16 +26,34 @@ ui/                     GPUI layout, actions, focus, lists, theme
   host.rs               background host requests and event subscriptions
   settings.rs           model choice, auth status, defaults, and reconnect
   changes.rs            real local status and diff views
+
+crates/plait-core/src/
 host.rs                 bounded blocking Unix-socket client; background only
 host_state.rs           host selection, request identity, and stale-result guards
+local_socket.rs         owner-only paths and OS peer-identity checks
 state.rs                selection, collapse state, request queue, cache
 model.rs                plain Rust data, no GPUI
 fixtures.rs             example projects, machines, threads, events
 git.rs                  synchronous, read-only Git adapter; background only
 ```
 
-The desktop library does not import GPUI. Its tests do not need a window.
+The desktop imports `plait_core`; the core has no GPUI dependencies. Core and
+host Rust tests can run on Linux without compiling the desktop. The default
+Cargo member remains the macOS desktop. The macOS workspace checks still cover
+all crates, including the native composer. See CONTRIBUTING.md for both commands.
+The core uses Unix filesystem and socket APIs; it is not a Windows port.
 Filesystem, socket, and Git operations run on the background executor.
+
+This crate split does not enable Linux agent execution. The runtime still rejects
+non-macOS commands, and the Rust command guardian still requires Seatbelt. Linux
+containment and cancellation need a separate safety review. Local peer identity
+is checked with `getpeereid` on macOS and `SO_PEERCRED` on Linux.
+There are no changes to the local host protocol or ownership boundaries.
+
+The Linux sandbox mechanism is an open decision. Arthur's namespace probe works,
+but a read-only bind mount still permits access to an outside pathname Unix
+socket. See [the evidence, alternatives, and enablement gates](LINUX-SANDBOX.md).
+Landlock ABI 9 is one option, not a fixed product requirement.
 
 ## Local agent boundary
 
@@ -58,6 +78,28 @@ File helpers own checkout writes; command execution reads the checkout and uses
 private scratch space for build output. Stop revokes pending approvals and
 cancels work. Interrupted work must not replay automatically after host failure.
 These boundaries need the tests listed in HOST.md before valuable-repository use.
+
+## Portable runtime and development
+
+The daemon uses the core's low-level local-socket checks, not its client state.
+Both accepted connections and client connections verify the peer's effective
+user ID. Socket and parent-directory ownership/modes are also checked before
+clients connect. The wire protocol is unchanged.
+
+`runtime/src/safety.ts` owns common checkout, file, and lease checks.
+`command/platform.ts` selects only an implemented platform policy;
+`command/macos.ts` owns Seatbelt and Apple build-environment setup.
+`command.ts` owns scratch lifetime and root validation, while
+`command/supervisor.ts` owns bounded output, cancellation, timeout, and guardian
+cleanup. Spawn failures clear their timer/listener. Final output is drained, with
+a one-second drain bound after guardian exit so an unsupported detached process
+cannot keep a subscription open.
+
+`bash scripts/check.sh` is the common development entry point. Runtime test
+selection is explicit: common daemon/file tests on both systems, real sandbox
+tests on macOS, and command-denial tests on Linux. The full sandbox gate fails
+on Linux instead of returning a partial acceptance result. Scripted guardian
+tests check process lifecycle only; they do not establish containment.
 
 ## Git data flow
 

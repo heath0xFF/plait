@@ -309,11 +309,36 @@ open Git; the optional conversation inspector is hidden.
 
 ### Development checks
 
+Use the same development entry point on macOS and Linux:
+
+```sh
+bash scripts/check.sh
+```
+
+It checks pinned Rust dependencies, installs the runtime packages with
+`npm ci --ignore-scripts`, checks TypeScript, runs scripted daemon tests, and
+builds release binaries. macOS includes the native desktop and real command
+sandbox tests. Linux checks the headless crates and explicitly verifies that
+unsupported commands are denied. No provider credentials are needed.
+
+This gives both systems a shared development workflow, not full product parity.
+Linux command execution and native Linux UI validation remain outstanding.
+See [the Linux sandbox decision](docs/LINUX-SANDBOX.md). To require a working
+command sandbox, use `bash scripts/check.sh --require-command-sandbox`; it fails
+on Linux until that backend is implemented and validated.
+
+For focused Rust checks:
+
 ```sh
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 ```
+
+On Linux, use `-p plait-core -p plait-host` instead of `--workspace` for clippy
+and tests. These headless crates do not compile GPUI. This is a development test
+target, not Linux agent execution or a Linux desktop. See
+[the contributor checks](CONTRIBUTING.md#required-checks) for the full commands.
 
 For a native UI smoke check, build the release binary, close Plait, then run
 `bash scripts/smoke-macos.sh`. It needs macOS Accessibility permission for the

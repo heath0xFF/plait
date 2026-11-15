@@ -8,7 +8,7 @@ mod settings;
 pub mod theme;
 
 use gpui::{prelude::*, *};
-use plait::{
+use plait_core::{
     host_state::HostState,
     model::{DiffMode, Selection},
     state::{AppState, Load},

@@ -1,6 +1,6 @@
 use super::{OpenRepository, Plait, theme::*};
 use gpui::{prelude::*, *};
-use plait::model::Selection;
+use plait_core::model::Selection;
 
 impl Plait {
     pub(super) fn navigation(&self, wide: bool, cx: &mut Context<Self>) -> impl IntoElement {

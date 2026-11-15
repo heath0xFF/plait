@@ -32,11 +32,8 @@ jobs:
             xcodebuild -downloadComponent MetalToolchain
           fi
           rustup show
-      - name: Check Rust
-        run: |
-          cargo fmt --all -- --check
-          cargo clippy --locked --workspace --all-targets -- -D warnings
-          cargo test --locked --workspace
+      - name: Check workspace and real command sandbox
+        run: bash scripts/check.sh --require-command-sandbox
       - name: Check runtime recovery without credentials
         working-directory: experiments/pi-durable
         run: |

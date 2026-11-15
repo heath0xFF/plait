@@ -6,7 +6,8 @@
   "engines": { "node": ">=22.19.0" },
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "node --test test/*.test.ts"
+    "test": "node test/run.mjs",
+    "test:sandbox": "node test/run.mjs --require-command-sandbox"
   },
   "dependencies": {
     "@earendil-works/chord": "1.5.2",

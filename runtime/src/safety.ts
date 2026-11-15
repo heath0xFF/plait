@@ -1,14 +1,9 @@
 import { execFile, spawn } from 'node:child_process';
-import { realpath, mkdtemp, rm, mkdir, symlink, readlink, readdir, lstat, open } from 'node:fs/promises';
+import { realpath, lstat, open } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { constants } from 'node:fs';
 import { promisify } from 'node:util';
 import { fail, HostError } from './protocol.ts';
-import { prepareBuildCache } from './build-cache.ts';
-import type { BuildCache } from './build-cache.ts';
-import { appleToolchain, DEVELOPER, SDK } from './apple-toolchain.ts';
-
-export const COMMAND_TIMEOUT_MS = 15 * 60 * 1000;
 
 const execute = promisify(execFile);
 const gitEnv = { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: '/nonexistent', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C' };
@@ -141,99 +136,4 @@ export async function fileAction(root: string, action: string, path: string, inp
     if (error instanceof HostError) throw error;
     fail('permission_denied', 'File operation failed safely.');
   }
-}
-export function sandboxPolicy(root: string, scratch: string, readOnly: string[] = [], cacheRoots: string[] = []) {
-  const quote = (value: string) => JSON.stringify(value);
-  return `(version 1) (deny default file-link)
-    (allow process-exec process-fork sysctl-read)
-    (allow signal (target same-sandbox))
-    (allow network-bind network-outbound (subpath ${quote(scratch)}))
-    (allow file-read-metadata)
-    (allow file-read-data (literal "/"))
-    (allow file-read* (subpath ${quote(root)}) (subpath ${quote(scratch)})
-      (subpath "/System") (subpath "/usr") (subpath "/bin") (subpath "/sbin")
-      (subpath "/Library/Developer") (subpath "/private/var/db")
-      (subpath "/Applications/Xcode.app") (subpath "/opt/homebrew")
-      ${[...readOnly, ...cacheRoots].map(path => `(subpath ${quote(path)})`).join(' ')}
-      (literal "/private/etc/ssl/openssl.cnf")
-      (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random"))
-    (allow file-write* (subpath ${quote(scratch)}) (literal "/dev/null")
-      ${cacheRoots.map(path => `(subpath ${quote(path)})`).join(' ')})
-    ${cacheRoots.length ? `(deny file-write-unlink file-write-mode file-write-owner ${cacheRoots.map(path => `(literal ${quote(path)})`).join(' ')})` : ''}
-    (deny file-write* (require-all (regex #"(^|/)[.][gG][iI][tT](/|$)") (require-not (subpath ${quote(scratch)}))))`;
-}
-async function buildEnvironment(root: string, scratch: string, signal: AbortSignal, cache?: BuildCache) {
-  const home = process.env.HOME ?? '/nonexistent';
-  if (cache && (cache.store === root || cache.store.startsWith(root + '/'))) fail('permission_denied', 'Build cache store must be outside the checkout.');
-  const paths = cache ? await prepareBuildCache(cache) : { cargo: join(scratch, 'cargo'), target: join(scratch, 'target') };
-  const cacheRoots = cache ? [paths.cargo, paths.target] : [];
-  if (cacheRoots.some(path => root === path || root.startsWith(path + '/'))) fail('permission_denied', 'Checkout must be outside the build cache.');
-  const cargoHome = paths.cargo;
-  if (!cache) await mkdir(cargoHome);
-  const readOnly: string[] = [];
-  for (const cache of ['registry', 'git']) {
-    try {
-      const path = await realpath(join(home, '.cargo', cache));
-      readOnly.push(path);
-      const alias = join(cargoHome, cache);
-      try { await symlink(path, alias); }
-      catch (error) {
-        if ((error as { code?: string }).code !== 'EEXIST') throw error;
-        if (await readlink(alias) !== path) fail('permission_denied', 'Cargo source-cache link changed.');
-      }
-    } catch (error) { if ((error as { code?: string }).code !== 'ENOENT') throw error; }
-  }
-  let channel = '1.98.1';
-  try {
-    await lstat(join(root, 'rust-toolchain.toml'));
-    const { text: config } = await fileAction(root, 'read', 'rust-toolchain.toml');
-    const match = config.match(/^\s*channel\s*=\s*"([A-Za-z0-9_.-]+)"/m);
-    if (!match) fail('permission_denied', 'Cannot safely select the pinned Rust toolchain.');
-    channel = match[1];
-  } catch (error) { if ((error as { code?: string }).code !== 'ENOENT') throw error; }
-  let toolchainBin = '';
-  try {
-    const directory = join(home, '.rustup', 'toolchains');
-    const installed = (await readdir(directory)).find(name => name === channel || name.startsWith(`${channel}-`));
-    if (installed) {
-      const path = await realpath(join(directory, installed));
-      readOnly.push(path); toolchainBin = join(path, 'bin') + ':';
-    }
-  } catch (error) { if ((error as { code?: string }).code !== 'ENOENT') throw error; }
-  const apple = await appleToolchain(scratch, signal);
-  return { readOnly: [...readOnly, ...apple.readOnly], cacheRoots, env: {
-    PATH: apple.bin + toolchainBin + `${DEVELOPER}/Toolchains/XcodeDefault.xctoolchain/usr/bin:${DEVELOPER}/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin`,
-    SDKROOT: SDK, DEVELOPER_DIR: DEVELOPER,
-    HOME: scratch, TMPDIR: scratch, CARGO_HOME: cargoHome, CARGO_TARGET_DIR: paths.target, CARGO_NET_OFFLINE: 'true', GIT_OPTIONAL_LOCKS: '0', OPENSSL_CONF: '/dev/null',
-  } };
-}
-export async function command(root: string, text: string, _baseline: string[], signal: AbortSignal, output: (chunk: string) => void, checkoutFd?: number, identity?: FileIdentity, cache?: BuildCache): Promise<string> {
-  if (process.platform !== 'darwin') fail('permission_denied', 'Commands require the tested macOS filesystem sandbox.');
-  if (signal.aborted) fail('permission_denied', 'Run stopped.');
-  // Keep fixture Unix socket paths below macOS SUN_LEN; mkdtemp creates mode 0700.
-  const scratch = await realpath(await mkdtemp('/private/tmp/plait-command-'));
-  try {
-    if (identity) await checkRoot(root, identity);
-    const environment = await buildEnvironment(root, scratch, signal, cache);
-    if (signal.aborted) fail('permission_denied', 'Run stopped.');
-    return await new Promise<string>((resolve, reject) => {
-      const child = spawn(process.env.PLAIT_HOST_EXE!, ['command', root, sandboxPolicy(root, scratch, environment.readOnly, environment.cacheRoots), text], {
-        cwd: root, stdio: ['pipe', 'pipe', 'pipe', process.env.PLAIT_LOCK_FD ? Number(process.env.PLAIT_LOCK_FD) : 'ignore', checkoutFd ?? 'ignore'], env: environment.env,
-      });
-      child.stdin!.on('error', () => {});
-      let result = '';
-      const kill = () => { child.stdin!.end(); };
-      const timeout = setTimeout(kill, COMMAND_TIMEOUT_MS);
-      signal.addEventListener('abort', kill, { once: true });
-      const collect = (data: Buffer) => { const chunk = data.toString(); result = (result + chunk).slice(-16384); output(chunk.slice(-4096)); };
-      child.stdout!.on('data', collect); child.stderr!.on('data', collect);
-      child.once('error', reject);
-      child.once('exit', code => {
-        clearTimeout(timeout); signal.removeEventListener('abort', kill); kill();
-        child.stdout!.destroy(); child.stderr!.destroy();
-        if (code !== 0) reject(new HostError('permission_denied', `Command ended without success (${code ?? 'stopped'}). ${result}`));
-        else resolve(result || 'Command completed.');
-      });
-    });
-  } finally { await rm(scratch, { recursive: true, force: true }); }
 }

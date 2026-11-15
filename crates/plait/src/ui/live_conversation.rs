@@ -1,6 +1,6 @@
 use super::{Plait, theme::*};
 use gpui::{prelude::*, *};
-use plait::host::MessageRole;
+use plait_core::host::MessageRole;
 
 impl Plait {
     fn live_event(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {

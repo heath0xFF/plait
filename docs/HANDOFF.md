@@ -62,16 +62,17 @@ Start with a bounded portability review and agree on the next milestone with
 Heath. Preserve the finished M2 behavior while making the headless test boundary
 independent of desktop dependencies:
 
-1. The plain Rust modules do not import GPUI, but `crates/plait/Cargo.toml`
-   still depends on GPUI. Separate the headless core/client test target cleanly
-   instead of adding unrelated platform conditionals throughout the UI.
+1. The headless split is now implemented in `crates/plait-core`. It owns the
+   existing models, state, local client, and read-only Git tests without GPUI.
+   `crates/plait` remains the native desktop and default Cargo member. Keep this
+   crate boundary instead of adding platform conditionals throughout the UI.
 2. Inspect `crates/plait-host/src/fingerprint.rs`, `files.rs`, and `command.rs`
    before choosing Linux equivalents. macOS descriptor paths and Seatbelt
    behavior must not be assumed to work on Linux.
-3. `runtime/src/safety.ts` intentionally rejects non-macOS commands.
-   `apple-toolchain.ts` is Apple-specific. Some runtime safety tests also pin a
-   Mac Cargo path. Separate platform policy from common admission/persistence
-   logic; add real Linux containment and cancellation tests before enabling it.
+3. `runtime/src/command/platform.ts` intentionally rejects non-macOS commands.
+   Platform policy is now separate from common admission/persistence, and the
+   fixed Mac Cargo test path is removed. `apple-toolchain.ts` remains Apple-only.
+   Add real Linux containment and cancellation tests before enabling commands.
 4. Keep desktop/Metal builds and UI inspection on a Mac or macOS CI. Arthur
    cannot verify the native macOS renderer.
 5. A remote Plait connection needs authenticated transport and machine-scoped
@@ -81,6 +82,70 @@ independent of desktop dependencies:
 A Pi CLI session on Arthur is a development tool, not the Plait sandbox. Its
 ordinary filesystem/process permissions are broader. Review its proposed work
 accordingly. Do not report Linux host execution as working just because Pi runs.
+
+## Arthur headless checkpoint
+
+The focused branch is `refactor/headless-core`.
+
+- Moved the six plain Rust modules and their tests into `crates/plait-core`.
+  Production module contents were unchanged in that first extraction. The later
+  socket checks below change the client transport. Desktop changes remain import
+  renames only; the UI still owns all GPUI code.
+- Kept the desktop as the default Cargo member and kept all dependency versions
+  pinned. `Cargo.lock` changes only the local package graph.
+- Added a Linux test for real non-UTF-8 Git filenames, including untracked
+  previews, tracked diffs, and unchanged index/worktree contents after reads.
+- Added `.github/workflows/headless.yml`: formatting, a no-GPUI dependency check,
+  strict clippy, tests, and release builds for `plait-core` and `plait-host`.
+  See CONTRIBUTING.md and VERIFICATION.md for commands and local results.
+- No host protocol, runtime policy, persistence, or sandbox behavior changed.
+  Native Mac checks are still required; a Linux build is not renderer validation.
+
+The Linux containment investigation is recorded in [LINUX-SANDBOX.md](LINUX-SANDBOX.md).
+Bubblewrap namespaces work on Arthur, but a disposable probe confirmed outside
+pathname-socket access through a read-only mount. Arthur reports Landlock ABI 8;
+pathname-socket restrictions start at ABI 9. The mechanism is still open. Keep
+Linux commands disabled while building the common daemon safety and lifecycle
+layer; do not treat a newer ABI as the only permitted future design.
+
+### Portable daemon checkpoint
+
+Heath's goal is the same Plait development workflow on macOS and Linux, with
+independent daemons and clients that can disconnect and reconnect.
+
+- `bash scripts/check.sh` is now the shared development entry point and is used
+  by both CI workflows. It includes Rust, runtime installation/type checking,
+  scripted daemon tests, and release builds. See CONTRIBUTING.md for coverage.
+- `local_socket.rs` now verifies peer identity on both platforms. The daemon,
+  desktop client, and host status/start checks use the same implementation.
+- Platform command policy moved out of common file/checkout safety code.
+  `runtime/src/command/macos.ts` preserves the original Seatbelt/environment
+  body. `command/supervisor.ts` owns shared process lifecycle and bounded output.
+- Spawn errors now clear timers/listeners. Final output drains after exit, with
+  a one-second bound for pipes held by unsupported detached processes.
+- The Linux development run passes 34 headless Rust tests and 39 runtime tests.
+  The full Rust workspace also passes 49 tests and strict clippy on Arthur.
+  Release core/host builds pass. No tests were skipped. These are scripted
+  providers and lifecycle fixtures, not Linux sandbox or live-model acceptance.
+- Original Mac command safety cases remain in explicit macOS test files,
+  including command-crash recovery and command-backed postimage recovery.
+  The fixed `/Users/heath/.../cargo` test path was removed.
+- Both `bash scripts/check.sh --require-command-sandbox` and runtime
+  `npm run test:sandbox` refuse Linux full-sandbox acceptance. Runtime and direct
+  Rust guardian entry points also deny Linux commands before execution.
+
+Next: re-run the full Mac checks and native client on a Mac, then select and test
+a Linux containment design. Linux file-helper tests now cover root replacement,
+postimages, protected files, aliases, and crash recovery, but do not establish
+all filesystem-race or command-containment guarantees. No remote transport or
+protocol/schema change was added. Do not add an unsandboxed fallback or expose
+the local socket over TCP.
+
+The installed `/usr/bin/rex` is an unrelated Perl task runner. The live Rex server
+still uses its original, now-deleted executable. This session used a temporary
+copy at `/tmp/plait-dev-tools.jRZw9R/rex` to run the `plait-checks` pane in the
+existing tab. No services were restarted and no system binary was replaced.
+That temporary path is not a permanent CLI repair; preserve the live sessions.
 
 ## Product direction
 

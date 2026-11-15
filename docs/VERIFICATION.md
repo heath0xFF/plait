@@ -1,5 +1,80 @@
 # Verification
 
+## Portable daemon development checkpoint
+
+Verified on Arthur after the local-socket and runtime boundary changes:
+
+- `bash scripts/check.sh` passed: formatting, strict headless clippy, 34 Rust
+  tests (30 core and 4 host), a debug host build, pinned runtime installation,
+  TypeScript checking, 39 runtime tests, and core/host release builds.
+- Full workspace strict clippy and all 49 Rust tests also passed on Linux.
+- No selected tests were skipped, ignored, or filtered out.
+- Both full command-sandbox gates correctly returned an error on Linux before
+  running tests. Linux runtime tests explicitly verify denial at both the
+  TypeScript and Rust helper entry points.
+- Workflow `actionlint`, shell syntax, JavaScript syntax, and `git diff --check`
+  passed. The Mac policy/environment body matches the pre-refactor source.
+
+The 39 Linux runtime tests are **not** the older 39-test Mac sandbox suite below.
+They test independent daemon start, socket protocol limits, persistent models and
+request IDs, client disconnect/reconnect, approved file edits, Stop approval
+revocation, checkout leases, exact postimages, dirty-file protection, and crash
+recovery. Common guardian tests use a clearly labeled subprocess fixture to
+check cancellation, output drainage/bounds, spawn failure, and deadline cleanup.
+That fixture is not a containment mechanism.
+
+The test runner selects real command-sandbox and command-crash cases on macOS,
+and command-denial cases on Linux. All original Mac command tests remain. Mac
+checks, native UI inspection, and live-model acceptance have not been repeated
+for this refactor. Hosted CI results are not yet observed. Linux command
+execution and remote Plait connections remain unsupported.
+
+## Arthur headless core checkpoint (initial extraction)
+
+Verified on Arthur (Ubuntu x86-64, pinned Rust 1.98.1) after the core crate split:
+
+- `cargo fmt --all -- --check`
+- `cargo clippy --locked -p plait-core -p plait-host --all-targets -- -D warnings`
+- `cargo test --locked -p plait-core -p plait-host` — 31 tests passed:
+  28 core and 3 host tests. No tests were ignored or filtered out.
+- `cargo build --locked --release -p plait-core -p plait-host`
+- `cargo clippy --locked --workspace --all-targets -- -D warnings`
+- `cargo test --locked --workspace` — 46 tests passed, including the 15
+  desktop/composer tests. No tests were ignored or filtered out.
+- The headless dependency graph contains no GPUI packages. The default workspace
+  member is still the desktop. Existing dependency versions are unchanged.
+- `actionlint` passed for both workflows; `git diff --check` passed.
+
+The new Linux-only Git test creates a non-UTF-8 filename and verifies real status,
+preview, and tracked diff reads without changing the index or worktree. The
+existing 27 core tests moved with their production modules. Those six production
+modules are byte-for-byte unchanged; desktop source changes only rename imports
+from `plait` to `plait_core`.
+
+The full workspace test target also compiles on Arthur, but it does not validate
+a native window or the macOS renderer. The smaller headless CI job does not
+compile GPUI. Cargo can still fetch desktop dependency sources while resolving
+the workspace. The new hosted CI job has not been observed running yet.
+
+No Mac build, native UI inspection, TypeScript runtime suite, or live model run
+was repeated for this split. The native validation below records the earlier
+Mac checkpoint. Linux agent execution and remote connections remain unsupported;
+no sandbox checks were removed. See [HANDOFF.md](HANDOFF.md) for the remaining
+platform boundaries and the temporary Rex CLI workaround.
+
+## Arthur Linux containment investigation
+
+On 2026-11-15, an unprivileged Bubblewrap 0.11.1 namespace probe succeeded on
+Arthur. The Landlock ABI query returned 8. A second disposable probe confirmed
+that a process in `--unshare-all` namespaces could connect to an outside Unix
+server through a `--ro-bind` fixture directory. It received only a fixed test
+message. The server recorded one connection, and the fixture was removed.
+
+Runtime `npm ci --ignore-scripts` and `npm run check` also passed. The runtime
+safety suite was not run in this investigation, and no Linux command backend was
+enabled. No system security settings were changed. See
+[LINUX-SANDBOX.md](LINUX-SANDBOX.md) for the open design decision and test gates.
+
 ## M2 validation — in progress
 
 The full workspace passes formatting, warning-free clippy, 45 Rust tests
