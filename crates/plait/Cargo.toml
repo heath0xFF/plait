@@ -1,0 +1,13 @@
+[package]
+name = "plait"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+gpui.workspace = true
+gpui_platform.workspace = true
+libc = "=0.2.191"

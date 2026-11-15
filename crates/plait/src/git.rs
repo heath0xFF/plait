@@ -1,0 +1,452 @@
+use std::{
+    ffi::OsStr,
+    io::{Read, Write},
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
+};
+
+use crate::model::{Change, Diff, DiffKind, DiffLine, DiffMode, Snapshot};
+
+const STATUS_LIMIT: usize = 8 * 1024 * 1024;
+const DIFF_LIMIT: usize = 512 * 1024;
+const TIMEOUT: Duration = Duration::from_secs(10);
+
+type Result<T> = std::result::Result<T, String>;
+
+struct Output {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+fn drain(mut reader: impl Read, limit: usize) -> std::io::Result<Output> {
+    let mut bytes = Vec::new();
+    let mut truncated = false;
+    let mut buffer = [0; 8192];
+    loop {
+        let n = reader.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        let keep = n.min(limit.saturating_sub(bytes.len()));
+        bytes.extend_from_slice(&buffer[..keep]);
+        truncated |= keep < n;
+    }
+    Ok(Output { bytes, truncated })
+}
+
+fn base_command(root: &Path) -> Command {
+    let mut command = Command::new("git");
+    command
+        .args([
+            "--no-pager",
+            "--no-optional-locks",
+            "--literal-pathspecs",
+            "--no-replace-objects",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.untrackedCache=false",
+            "-c",
+            "color.ui=false",
+        ])
+        .arg("-C")
+        .arg(root)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("LC_ALL", "C");
+    // The selected folder, not the launching shell, owns Git's repository context.
+    for key in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_EXTERNAL_DIFF",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_COUNT",
+    ] {
+        command.env_remove(key);
+    }
+    command
+}
+
+fn command(root: &Path, args: &[&OsStr], limit: usize) -> Result<Output> {
+    let keys = execute(
+        base_command(root).args(["config", "--null", "--name-only", "--list"]),
+        STATUS_LIMIT,
+        TIMEOUT,
+    )?;
+    if keys.truncated {
+        return Err("Git configuration exceeds the safe read limit".into());
+    }
+    let keys = String::from_utf8(keys.bytes).map_err(|_| "Git configuration keys are not UTF-8")?;
+    let filters: std::collections::BTreeSet<_> = keys
+        .split('\0')
+        .filter_map(|key| {
+            let (driver, _) = key.rsplit_once('.')?;
+            driver.starts_with("filter.").then_some(driver)
+        })
+        .collect();
+    let mut command = base_command(root);
+    // Even read-only Git commands can execute clean/process filters while comparing the worktree.
+    for driver in filters {
+        for setting in ["clean=", "process=", "required=false"] {
+            command.arg("-c").arg(format!("{driver}.{setting}"));
+        }
+    }
+    execute(command.args(args), limit, TIMEOUT)
+}
+
+fn execute(command: &mut Command, limit: usize, timeout: Duration) -> Result<Output> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Cannot start Git: {e}"))?;
+    let stdout = child.stdout.take().ok_or("Git stdout is unavailable")?;
+    let stderr = child.stderr.take().ok_or("Git stderr is unavailable")?;
+    let out = thread::spawn(move || drain(stdout, limit));
+    let err = thread::spawn(move || drain(stderr, 8192));
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) if start.elapsed() < timeout => thread::sleep(Duration::from_millis(10)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break Err(
+                    "Git command timed out. Try a smaller repository, then Refresh.".to_owned(),
+                );
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break Err(format!("Cannot wait for Git: {e}"));
+            }
+        }
+    };
+    let out = out
+        .join()
+        .map_err(|_| "Git output reader failed")?
+        .map_err(|e| e.to_string())?;
+    let err = err
+        .join()
+        .map_err(|_| "Git error reader failed")?
+        .map_err(|e| e.to_string())?;
+    let status = status?;
+    if !status.success() {
+        return Err(format!(
+            "Git: {}",
+            String::from_utf8_lossy(&err.bytes).trim()
+        ));
+    }
+    Ok(out)
+}
+
+pub fn status(path: &Path) -> Result<Snapshot> {
+    let start = Instant::now();
+    let root = command(
+        path,
+        &[OsStr::new("rev-parse"), OsStr::new("--show-toplevel")],
+        STATUS_LIMIT,
+    )?;
+    let root = root.bytes.strip_suffix(b"\n").unwrap_or(&root.bytes);
+    let root = path_from_bytes(root);
+    let output = command(
+        &root,
+        &[
+            OsStr::new("status"),
+            OsStr::new("--porcelain=v1"),
+            OsStr::new("-z"),
+            OsStr::new("--branch"),
+            OsStr::new("--untracked-files=all"),
+            OsStr::new("--ignore-submodules=dirty"),
+        ],
+        STATUS_LIMIT,
+    )?;
+    if output.truncated {
+        return Err("Status exceeds 8 MiB. Reduce the untracked-file set and Refresh.".into());
+    }
+    let (branch, changes) = parse_status(&output.bytes)?;
+    Ok(Snapshot {
+        root,
+        branch,
+        changes,
+        elapsed: start.elapsed(),
+    })
+}
+
+pub fn parse_status(bytes: &[u8]) -> Result<(String, Vec<Change>)> {
+    let mut records = bytes.split(|b| *b == 0).filter(|s| !s.is_empty());
+    let header = records.next().ok_or("Git returned an empty status")?;
+    let branch = header
+        .strip_prefix(b"## ")
+        .ok_or("Missing Git branch header")?;
+    let mut changes = Vec::new();
+    while let Some(record) = records.next() {
+        if record.len() < 4 || record[2] != b' ' {
+            return Err("Malformed Git status record".into());
+        }
+        let index = record[0];
+        let worktree = record[1];
+        let path = path_from_bytes(&record[3..]);
+        validate_relative(&path)?;
+        let original = if [index, worktree].iter().any(|s| matches!(s, b'R' | b'C')) {
+            let old = path_from_bytes(records.next().ok_or("Missing rename source")?);
+            validate_relative(&old)?;
+            Some(old)
+        } else {
+            None
+        };
+        changes.push(Change {
+            path,
+            original,
+            index,
+            worktree,
+        });
+    }
+    Ok((String::from_utf8_lossy(branch).into_owned(), changes))
+}
+
+fn path_from_bytes(bytes: &[u8]) -> PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    PathBuf::from(OsStr::from_bytes(bytes))
+}
+
+fn validate_relative(path: &Path) -> Result<()> {
+    if path.as_os_str().is_empty()
+        || path
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        return Err("Git returned an unsafe relative path".into());
+    }
+    Ok(())
+}
+
+pub fn diff(root: &Path, change: &Change, mode: DiffMode) -> Result<Diff> {
+    let start = Instant::now();
+    validate_relative(&change.path)?;
+    if let Some(original) = &change.original {
+        validate_relative(original)?;
+    }
+    if change.index == b'?' {
+        if mode == DiffMode::Staged {
+            return Ok(Diff::message(
+                "Untracked file. There is no staged version.",
+                start.elapsed(),
+            ));
+        }
+        return untracked(root, change, start);
+    }
+    let mut args: Vec<&OsStr> = [
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "--unified=3",
+        "--ignore-submodules=dirty",
+        "--submodule=short",
+    ]
+    .into_iter()
+    .map(OsStr::new)
+    .collect();
+    if mode == DiffMode::Staged {
+        args.push(OsStr::new("--cached"));
+    }
+    args.push(OsStr::new("--"));
+    args.push(change.path.as_os_str());
+    if let Some(original) = &change.original {
+        args.push(original.as_os_str());
+    }
+    let output = command(root, &args, DIFF_LIMIT)?;
+    let mut diff = format_diff(&output.bytes, output.truncated, start.elapsed());
+    diff.elapsed = start.elapsed();
+    Ok(diff)
+}
+
+fn untracked(root: &Path, change: &Change, start: Instant) -> Result<Diff> {
+    let path = root.join(&change.path);
+    let metadata =
+        std::fs::symlink_metadata(&path).map_err(|e| format!("Cannot inspect file: {e}"))?;
+    if !metadata.is_file() {
+        return Ok(Diff::message(
+            "Untracked symlink or special file. Content is not followed.",
+            start.elapsed(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    open_regular_file(root, &change.path)?
+        .take(DIFF_LIMIT as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    let truncated = bytes.len() > DIFF_LIMIT;
+    bytes.truncate(DIFF_LIMIT);
+    if let Err(error) = std::str::from_utf8(&bytes)
+        && truncated
+        && error.error_len().is_none()
+    {
+        bytes.truncate(error.valid_up_to());
+    }
+    if bytes.contains(&0) || std::str::from_utf8(&bytes).is_err() {
+        return Ok(Diff::message(
+            "Binary or non-UTF-8 file. Text preview is unavailable.",
+            start.elapsed(),
+        ));
+    }
+    if bytes.is_empty() {
+        return Ok(Diff::message(
+            "Empty untracked file. Nothing to preview.",
+            start.elapsed(),
+        ));
+    }
+    let mut patch = Vec::new();
+    writeln!(patch, "Untracked file — preview only").map_err(|e| e.to_string())?;
+    writeln!(
+        patch,
+        "@@ -0,0 +1,{} @@",
+        bytes.split_inclusive(|b| *b == b'\n').count()
+    )
+    .map_err(|e| e.to_string())?;
+    for line in bytes
+        .strip_suffix(b"\n")
+        .unwrap_or(&bytes)
+        .split(|b| *b == b'\n')
+    {
+        patch.push(b'+');
+        patch.extend_from_slice(line);
+        patch.push(b'\n');
+    }
+    let mut diff = format_diff(&patch, truncated, start.elapsed());
+    diff.elapsed = start.elapsed();
+    Ok(diff)
+}
+
+fn open_regular_file(root: &Path, relative: &Path) -> Result<std::fs::File> {
+    use std::{
+        ffi::CString,
+        os::{
+            fd::{AsRawFd, FromRawFd},
+            unix::ffi::OsStrExt,
+        },
+    };
+    validate_relative(relative)?;
+    let mut file = std::fs::File::open(root).map_err(|e| e.to_string())?;
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        let name = CString::new(component.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
+        let directory = if components.peek().is_some() {
+            libc::O_DIRECTORY
+        } else {
+            0
+        };
+        // Resolve each component from its open parent so a concurrent symlink swap cannot escape.
+        let fd = unsafe {
+            libc::openat(
+                file.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK | directory,
+            )
+        };
+        if fd < 0 {
+            return Err(format!(
+                "Cannot safely open preview: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        // openat returned an owned descriptor; File closes it on every return path.
+        file = unsafe { std::fs::File::from_raw_fd(fd) };
+    }
+    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
+        return Err("Preview is not a regular file".into());
+    }
+    Ok(file)
+}
+
+fn format_diff(bytes: &[u8], mut truncated: bool, elapsed: Duration) -> Diff {
+    let mut lines = Vec::new();
+    let (mut old, mut new) = (None, None);
+    for line in String::from_utf8_lossy(bytes).lines().take(10_001) {
+        if lines.len() == 10_000 {
+            truncated = true;
+            break;
+        }
+        if line.starts_with("diff ") {
+            old = None;
+            new = None;
+        }
+        if let Some(hunk) = line.strip_prefix("@@ ") {
+            let mut ranges = hunk.split_whitespace();
+            old = ranges
+                .next()
+                .and_then(|v| v.strip_prefix('-'))
+                .and_then(|v| v.split(',').next())
+                .and_then(|v| v.parse::<usize>().ok());
+            new = ranges
+                .next()
+                .and_then(|v| v.strip_prefix('+'))
+                .and_then(|v| v.split(',').next())
+                .and_then(|v| v.parse::<usize>().ok());
+        }
+        let kind = if line.starts_with("@@") {
+            DiffKind::Hunk
+        } else if old.is_none() && new.is_none() {
+            DiffKind::Header
+        } else if line.starts_with('+') {
+            DiffKind::Added
+        } else if line.starts_with('-') {
+            DiffKind::Removed
+        } else {
+            DiffKind::Context
+        };
+        let old_line = if matches!(kind, DiffKind::Removed) || line.starts_with(' ') {
+            old
+        } else {
+            None
+        };
+        let new_line = if matches!(kind, DiffKind::Added) || line.starts_with(' ') {
+            new
+        } else {
+            None
+        };
+        if old_line.is_some() {
+            old = old.map(|n| n.saturating_add(1));
+        }
+        if new_line.is_some() {
+            new = new.map(|n| n.saturating_add(1));
+        }
+        let mut text: String = line.chars().take(2000).collect();
+        if line.chars().count() > 2000 {
+            text.push_str(" … [line clipped]");
+        }
+        lines.push(DiffLine {
+            text: Arc::from(text.replace('\t', "    ")),
+            kind,
+            old_line,
+            new_line,
+        });
+    }
+    if lines.is_empty() {
+        return Diff::message(
+            "No text diff in this layer. The file may have changed; Refresh to update status.",
+            elapsed,
+        );
+    }
+    let widest_line = lines
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, line)| line.text.len())
+        .map_or(0, |(i, _)| i);
+    Diff {
+        lines,
+        widest_line,
+        truncated,
+        elapsed,
+    }
+}
+
+#[cfg(test)]
+mod tests;
