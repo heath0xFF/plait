@@ -4,11 +4,13 @@
 
 Your projects. Every machine. Every thread.
 
-**Early development:** the macOS preview has real, read-only Git views and
-example conversations. Local agent execution (M2) is in progress, not yet
-connected to the desktop.
+**Early local preview:** the native desktop has a local host client, composer,
+model picker, and read-only Git views. Local edit, command, Stop, reconnect, and
+full sandboxed workspace tests pass on macOS. Review every approved action;
+Linux execution and remote Plait connections are not supported yet. See
+[verification](docs/VERIFICATION.md) and the [Arthur handoff](docs/HANDOFF.md).
 
-[Build and run](#run-m1) · [Contribute](CONTRIBUTING.md) · [MIT license](LICENSE)
+[Build and run](#run-the-desktop) · [Contribute](CONTRIBUTING.md) · [MIT license](LICENSE)
 
 Plait is an agent-native development environment designed around persistent coding agents, distributed execution, and first-class Git workflows.
 
@@ -244,11 +246,13 @@ Maintain concise architecture documentation and explain major design decisions.
 
 Use Codex and Claude interchangeably, with repository documentation as the shared source of truth.
 
-**The first objective is a real GPUI application running on Zaphod, with working project navigation and real local Git diffs.**
+**The current objective is safe local execution: create a thread, make an approved
+change, run tests, and recover the same thread without duplicate execution.**
 
-## Run M1
+## Run the desktop
 
-M1 is implemented in `crates/plait`. It is a native macOS application, not a web shell.
+The desktop is implemented in `crates/plait`. It is a native macOS application,
+not a web shell. Without a running local host, agent execution is disabled.
 
 Requirements: macOS on Apple Silicon, Git, rustup, and full Xcode with the Metal
 compiler. `rust-toolchain.toml` selects Rust 1.98.1. If Xcode reports a missing
@@ -275,14 +279,13 @@ updater. See [macOS packaging and CI artifacts](docs/MACOS.md).
 
 ### Real versus example data
 
-- **Real:** native window, hierarchy navigation, selection, keyboard actions,
-  local Git status, changed files, separate staged/unstaged diffs, untracked text
-  previews, and error recovery. The conversation preview has user bubbles,
-  open agent replies, and expandable tool details.
-- **Example:** all conversations, tool events, thread statuses, and the Marvin
-  and Arthur machine entries. These are labeled. No agent or remote host runs.
-- **Not in M1:** sending messages, persistence, automatic refresh, Git writes,
-  file editing, terminals, worktree creation, or Pi Durable integration.
+- **Real:** native input, local host connection, model choice and authentication
+  status, saved defaults, host threads, and read-only Git status/diffs. Host
+  execution is still subject to the M2 safety validation below.
+- **Example:** the original preview conversations and the Marvin and Arthur
+  machine entries remain labeled fixtures. Selecting them never runs an agent.
+- **Not included:** remote execution, Git-write controls, a file editor, an
+  embedded terminal, automatic updates, or mandatory worktrees.
 
 ### Keyboard controls
 
@@ -292,6 +295,8 @@ updater. See [macOS packaging and CI artifacts](docs/MACOS.md).
 | Cmd-R | Refresh local Git status and invalidate cached diffs |
 | Cmd-1 / Cmd-2 | Conversation / Changes |
 | Cmd-B | Show or hide the sidebar |
+| Cmd-comma | Open local host settings |
+| Enter / Shift-Enter | Submit the composer draft / insert a line break |
 | Cmd-Option-Up / Down | Previous / next thread |
 | Option-Up / Down | Previous / next changed file |
 | Tab / Shift-Tab | Move keyboard focus |
@@ -320,13 +325,28 @@ does not change macOS permissions.
 See [architecture and dependency research](docs/ARCHITECTURE.md) and
 [verification, performance notes, and limits](docs/VERIFICATION.md).
 
-**Next: M2 — Local agent execution.** The isolated
-[Pi Durable probe](experiments/pi-durable/README.md) has passed with a real model,
-existing Pi authentication, temporary-file tools, observer reconnection, and
-SQLite reopen. The desktop is not connected to it yet. Next build the independent
-host and one local create/resume/stream/persist path, with actual process-crash
-and client-reconnect tests. Regular Pi extensions are not automatically compatible.
-Do not add remote execution yet.
+### M2 local host — validation in progress
+
+The independent Rust host and Pi Durable sidecar are in `crates/plait-host` and
+`runtime/`. The desktop uses their owner-only local socket. Closing a window must
+not stop a thread, and restarting a host must not replay interrupted commands.
+See [the host contract](docs/HOST.md) for setup, permissions, and recovery rules.
+Regular Pi extensions are not automatically compatible.
+
+The opt-in acceptance check uses an existing Pi account and a disposable Rust
+repository. It makes two turns in one thread, each with one exact source edit
+and one `cargo test` command. It never gives the model this checkout. Run it
+only after the scripted host safety suite passes:
+
+```sh
+node scripts/smoke-agent.mjs --self-test
+PI_PROVIDER=YOUR_PROVIDER PI_MODEL=YOUR_MODEL node scripts/smoke-agent.mjs --live
+```
+
+The live check needs a built `target/debug/plait-host` and installed runtime
+packages. `PLAIT_HOST_BINARY` can select another built host. Fixtures stay in a
+private temporary directory for inspection. This check does not replace native
+window-close/reopen, Stop, provider-failure, or process-crash tests.
 
 ## License
 

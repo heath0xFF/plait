@@ -1,8 +1,11 @@
 # Plait desktop design
 
 ## Direction
-Follow the user's BB-inspired native conversation brief. This is a working
-developer tool, not a marketing surface. Keep familiar navigation and controls.
+BB is the primary look-and-feel reference, not just loose inspiration. See
+[the pinned reference checkout and study areas](docs/UI-REFERENCES.md).
+Keep Plait's native GPUI implementation, Project → Machine → Thread hierarchy,
+independent host, Git focus, safety rules, and supplied branding. This is a
+working developer tool, not a marketing surface.
 
 ## Layout
 Compact Project → Machine → Thread rail; conversation or diff workspace;

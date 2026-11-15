@@ -106,7 +106,7 @@ impl Plait {
                     .child(tag("Example thread", VIOLET))
                     .child(tag("No agent is running. Tool events are mock data.", MUTED)))
                 .child(if empty_thread {
-                    empty("A quiet place to start", "This sample thread has no events. Creating and running real threads is planned for M2.").into_any_element()
+                    empty("A quiet place to start", "This fixture has no events. Use New local thread to create a real conversation.").into_any_element()
                 } else {
                     list(self.conversation_scroll.clone(), cx.processor(|this, index, _, cx| {
                         this.conversation_event(index, cx)
@@ -114,12 +114,12 @@ impl Plait {
                 })
                 .child(column().flex_shrink_0().px_6().pt_4().pb_5()
                     .child(column().id("composer-preview").role(Role::Group)
-                        .aria_label("Message composer unavailable. Local agent execution is not connected in M1.")
+                        .aria_label("Input disabled for fixture threads. Use New local thread for real execution.")
                         .p_4().gap_6().rounded_xl().border_1().border_color(rgb(BORDER))
-                        .child(div().text_size(px(15.)).text_color(rgb(MUTED)).child("Message this thread"))
+                        .child(div().text_size(px(15.)).text_color(rgb(MUTED)).child("Fixture thread · input disabled"))
                         .child(row().justify_between()
-                            .child(tag("Local agent not connected", MUTED))
-                            .child(tag("M1 preview · input unavailable", VIOLET))))))
+                            .child(tag("Fixture entries never run an agent", MUTED))
+                            .child(tag("Example · input unavailable", VIOLET))))))
             .when(wide, |el| el.child(column().w(px(280.)).flex_shrink_0()
                 .border_l_1().border_color(rgb(BORDER)).bg(rgb(RAIL))
                 .child(row().h(px(48.)).px_4().justify_between()

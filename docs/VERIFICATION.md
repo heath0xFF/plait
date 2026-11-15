@@ -1,6 +1,58 @@
-# M1 verification
+# Verification
 
-## Environment
+## M2 validation — in progress
+
+The full workspace passes formatting, warning-free clippy, 45 Rust tests
+(27 library, 15 desktop/composer, and 3 host), and the release build. Runtime
+installation, TypeScript checking, and all 39 runtime tests pass after the final
+build-environment changes. No tests were skipped. A second independent safety
+review cleared the cache, toolchain, and sandbox changes.
+
+PID-scoped native checks used an isolated store and a disposable checkout:
+
+- Loaded the real Pi catalog and selected an exact provider/model.
+- Saved a default only after host acknowledgement.
+- Created a real thread without starting a task.
+- Entered text through native accessibility input; blank Send was disabled.
+- Changed the default and confirmed the existing thread kept its saved model.
+- Disconnected the host and confirmed the disabled composer retained its draft.
+- Inspected wide and 900 × 600 content-size windows. AeroSpace was temporarily
+  set to float only the test window, then its layout was restored.
+
+The checks used direct accessibility actions by element identity. GPUI's
+coordinate-based fallback could activate a neighboring model row after a resize;
+new host controls and Send/Stop now use explicit identity-bound actions.
+No global keystrokes were sent, and the existing user app was left untouched.
+
+- [Native settings and acknowledged default](screenshots/m2-settings.png)
+- [Retained draft while offline at 900 points](screenshots/m2-composer-offline-900.png)
+
+The real-provider acceptance script passed with `openai-codex/gpt-6-astra` in
+a disposable Rust repository: two exact approved edits, two sandboxed Cargo test
+runs, same-thread follow-up, observer reconnect, create/submit deduplication,
+and an unchanged Git index. Independent review cleared the core safety fixes.
+
+The real Plait checkout now builds and passes all 45 workspace tests inside the
+sandbox: 33.285 seconds with an empty private thread cache, then 1.026 seconds
+with the same cache. Fixed installed Metal/Git lookup, stable private Cargo
+paths, and scratch-only test fixtures resolved the earlier build failures.
+Negative tests cover outside process signals, sockets, TCP, and checkout writes.
+
+Native Send, accepted-draft clearing, exact edit approval, and command completion
+passed. The test window was closed during an observed sleep process and reopened
+on the same running thread. Host execution continued, request/tool identities
+were unchanged, and the real final response arrived. Native Stop then cancelled
+an approved active command: its sleep process exited and pending approval cleared.
+The old human conversation and fixture remained byte-for-byte unchanged.
+
+**An agent-authored change to Plait itself is not yet verified.** Real keyboard
+IME use and full VoiceOver coverage are not verified. The development bundle
+still packages the desktop only, not Node or the independent host. Linux Plait
+execution is not supported yet; see [the Arthur handoff](HANDOFF.md).
+
+The following sections record the historical M1 baseline, not M2 acceptance.
+
+## M1 environment
 
 Built and run on Zaphod: Apple Silicon, macOS 26.6.2, Rust 1.98.1.
 GPUI revision: `596dfdcf32d85d4d8d17a8887b4d0979ec7c5e14`.

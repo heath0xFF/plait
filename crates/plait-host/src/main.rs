@@ -1,0 +1,105 @@
+mod command;
+mod files;
+mod fingerprint;
+mod lease;
+mod transport;
+
+use std::{
+    env,
+    io::{self, Write},
+    os::unix::process::CommandExt,
+    path::PathBuf,
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
+fn main() {
+    if let Err(error) = run() {
+        eprintln!("plait-host: {error}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> io::Result<()> {
+    let mut args = env::args().skip(1);
+    let operation = args.next().unwrap_or_default();
+    if operation == "file" {
+        return files::run(args.collect());
+    }
+    if operation == "lock-fd" {
+        return lease::acquire();
+    }
+    if operation == "command" {
+        return command::run(args.collect());
+    }
+    let mut store = env::var_os("PLAIT_HOST_STORE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env::var_os("HOME").unwrap_or_default()).join(".local/share/plait")
+        });
+    let mut runtime = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../runtime/src/main.ts");
+    while let Some(option) = args.next() {
+        let value = args
+            .next()
+            .ok_or_else(|| io::Error::other("missing option value"))?;
+        match option.as_str() {
+            "--store" => store = value.into(),
+            "--runtime" => runtime = value.into(),
+            _ => return Err(io::Error::other("unknown option")),
+        }
+    }
+    if !store.is_absolute() || !runtime.is_absolute() {
+        return Err(io::Error::other("store and runtime paths must be absolute"));
+    }
+    match operation.as_str() {
+        "run" => transport::serve(&store, &runtime),
+        "status" => {
+            let reply = transport::status(&store)?;
+            io::stdout().write_all(&reply)
+        }
+        "start" => {
+            if transport::status(&store).is_ok() {
+                return Ok(());
+            }
+            drop(transport::private_store(&store)?);
+            let mut command = Command::new(env::current_exe()?);
+            command
+                .args(["run", "--store"])
+                .arg(&store)
+                .arg("--runtime")
+                .arg(runtime)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            // Detach from the desktop's process group and terminal lifetime.
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setsid() < 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let mut child = command.spawn()?;
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while Instant::now() < deadline {
+                if transport::status(&store).is_ok() {
+                    return Ok(());
+                }
+                if child.try_wait()?.is_some() {
+                    return Err(io::Error::other(
+                        "host startup failed; run in foreground for diagnostics",
+                    ));
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            Err(io::Error::other(
+                "host readiness timed out; check status before retrying",
+            ))
+        }
+        _ => Err(io::Error::other(
+            "usage: plait-host run|start|status [--store PATH] [--runtime PATH]",
+        )),
+    }
+}

@@ -1,10 +1,17 @@
-# M1 architecture
+# Architecture
 
 ## Scope
 
-One Cargo workspace, one package: `crates/plait`. The package has a library for
-models, fixtures, state, and Git, plus a GPUI desktop binary. There is no daemon,
-RPC layer, persistence service, agent runtime, terminal, or worktree manager.
+M2 adds an independent local host to the M1 native desktop. The Cargo workspace
+contains `crates/plait` (desktop and GPUI-free client/state code) and
+`crates/plait-host` (local daemon and filesystem/process helpers). `runtime/`
+contains the pinned Pi Durable TypeScript sidecar. There is no remote execution,
+embedded terminal, editor, Git-write interface, or worktree manager.
+
+The native client, local host safety checks, edit/command/Stop loop, and
+window-close/reopen checks pass on macOS. Full sandboxed workspace tests pass.
+This remains an early local preview; Linux execution and remote transport are
+not implemented. See VERIFICATION.md and HANDOFF.md for the remaining work.
 
 ```text
 main.rs                 native app lifecycle, window, startup
@@ -12,17 +19,47 @@ ui/                     GPUI layout, actions, focus, lists, theme
   mod.rs                UI state and background-task dispatch
   navigation.rs         Project → Machine → Thread
   conversation.rs       labeled fixture events
+  live_conversation.rs  real host messages, tools, and exact-call approvals
+  composer.rs           native input, IME, clipboard, undo, submit/stop events
+  host.rs               background host requests and event subscriptions
+  settings.rs           model choice, auth status, defaults, and reconnect
   changes.rs            real local status and diff views
+host.rs                 bounded blocking Unix-socket client; background only
+host_state.rs           host selection, request identity, and stale-result guards
 state.rs                selection, collapse state, request queue, cache
 model.rs                plain Rust data, no GPUI
 fixtures.rs             example projects, machines, threads, events
 git.rs                  synchronous, read-only Git adapter; background only
 ```
 
-The library does not import GPUI. Its tests do not need a window. M1 does not
-need crate boundaries or a service trait for each module.
+The desktop library does not import GPUI. Its tests do not need a window.
+Filesystem, socket, and Git operations run on the background executor.
 
-## Data flow
+## Local agent boundary
+
+The Rust daemon owns the sidecar, the owner-only Unix socket, and the store
+writer lock. The desktop is a client, not the owner of an agent run. Window
+closure drops subscriptions; it does not stop execution. See [HOST.md](HOST.md)
+for the exact protocol, storage location, launch commands, and safety policy.
+
+The host owns model discovery, existing Pi authentication, thread persistence,
+and the default model. The desktop receives availability, not credentials.
+Each thread keeps its exact provider/model pair. Saving a default does not
+change an existing thread.
+
+The desktop uses bounded snapshot subscriptions. A repository epoch, watch epoch,
+and thread ID guard each async result. An uncertain submission keeps its request
+ID for an explicit retry. Reconnect loads state; it does not submit a new task.
+The composer keeps its draft until acceptance and clears it only if its edit
+revision still matches the submitted draft. Each thread has its own composer.
+
+Every file change and command needs a one-call approval with full arguments.
+File helpers own checkout writes; command execution reads the checkout and uses
+private scratch space for build output. Stop revokes pending approvals and
+cancels work. Interrupted work must not replay automatically after host failure.
+These boundaries need the tests listed in HOST.md before valuable-repository use.
+
+## Git data flow
 
 1. A UI action changes application state.
 2. `RepositoryState::next_job` returns at most one pending job.

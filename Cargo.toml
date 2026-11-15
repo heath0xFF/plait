@@ -1,5 +1,6 @@
 [workspace]
-members = ["crates/plait"]
+members = ["crates/plait", "crates/plait-host"]
+default-members = ["crates/plait"]
 resolver = "3"
 
 [workspace.package]

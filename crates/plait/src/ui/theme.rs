@@ -42,6 +42,47 @@ pub fn button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> State
         .child(label)
 }
 
+pub trait ButtonAction {
+    fn on_activate<T: 'static>(
+        self,
+        cx: &Context<T>,
+        action: impl Fn(&mut T, &mut Window, &mut Context<T>) + 'static,
+    ) -> Self;
+}
+
+impl ButtonAction for Stateful<Div> {
+    fn on_activate<T: 'static>(
+        self,
+        cx: &Context<T>,
+        action: impl Fn(&mut T, &mut Window, &mut Context<T>) + 'static,
+    ) -> Self {
+        let action = std::rc::Rc::new(action);
+        let click = action.clone();
+        let entity = cx.weak_entity();
+        self.on_click(cx.listener(move |this, _, window, cx| click(this, window, cx)))
+            // Bind identity directly; GPUI's fallback simulates a click at cached bounds.
+            .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
+                let _ = entity.update(cx, |this, cx| action(this, window, cx));
+            })
+    }
+}
+
+pub trait DisabledControl {
+    fn disabled(self, disabled: bool) -> Self;
+}
+
+impl DisabledControl for Stateful<Div> {
+    fn disabled(self, disabled: bool) -> Self {
+        self.when(disabled, |el| {
+            el.opacity(0.5)
+                .cursor_default()
+                .a11y_synthetic_children(|builder| {
+                    builder.parent_node().set_disabled();
+                })
+        })
+    }
+}
+
 pub fn tag(text: impl Into<SharedString>, color: u32) -> Div {
     let text = text.into();
     div()

@@ -1,14 +1,23 @@
 mod changes;
+mod composer;
 mod conversation;
+mod host;
+mod live_conversation;
 mod navigation;
+mod settings;
 pub mod theme;
 
 use gpui::{prelude::*, *};
 use plait::{
+    host_state::HostState,
     model::{DiffMode, Selection},
     state::{AppState, Load},
 };
-use std::{collections::HashSet, path::PathBuf, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    time::Instant,
+};
 use theme::*;
 
 actions!(
@@ -18,6 +27,7 @@ actions!(
         Close,
         Minimize,
         OpenRepository,
+        Settings,
         Refresh,
         ToggleSidebar,
         Conversation,
@@ -33,6 +43,12 @@ actions!(
 
 pub struct Plait {
     state: AppState,
+    host: HostState,
+    composers: HashMap<String, Entity<composer::Composer>>,
+    live_scroll: ListState,
+    live_count: usize,
+    settings_open: bool,
+    new_thread_open: bool,
     focus: FocusHandle,
     conversation_scroll: ListState,
     expanded_tools: HashSet<usize>,
@@ -57,12 +73,19 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let host = HostState::new(path.clone());
         let state = AppState::new(path);
         let count = state.projects[0].machines[0].threads[0].events.len();
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let mut this = Self {
             state,
+            host,
+            composers: HashMap::new(),
+            live_scroll: ListState::new(0, ListAlignment::Bottom, px(300.)),
+            live_count: 0,
+            settings_open: false,
+            new_thread_open: false,
             focus,
             conversation_scroll: ListState::new(count, ListAlignment::Top, px(300.)),
             expanded_tools: HashSet::new(),
@@ -80,6 +103,7 @@ impl Plait {
             switch_us: 0,
         };
         this.pump(cx);
+        this.reconnect_host(window, cx);
         this
     }
 
@@ -109,6 +133,9 @@ impl Plait {
 
     fn select_thread(&mut self, selection: Selection, cx: &mut Context<Self>) {
         self.interaction = Some(Instant::now());
+        self.host.select(None);
+        self.settings_open = false;
+        self.new_thread_open = false;
         self.state.select(selection);
         let s = self.state.selection;
         let count = self.state.projects[s.project].machines[s.machine].threads[s.thread]
@@ -178,6 +205,12 @@ impl Plait {
         if self.picker_open {
             return;
         }
+        if self.host.pending_create.is_some() {
+            self.notice =
+                Some("Resolve the pending thread creation before changing checkout.".into());
+            cx.notify();
+            return;
+        }
         self.picker_open = true;
         let prompt = cx.prompt_for_paths(PathPromptOptions {
             files: false,
@@ -185,9 +218,9 @@ impl Plait {
             multiple: false,
             prompt: Some("Open repository (read-only)".into()),
         });
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             let result = prompt.await;
-            let _ = this.update(cx, |this, cx| {
+            let _ = this.update_in(cx, |this, window, cx| {
                 this.picker_open = false;
                 match result {
                     Ok(Ok(Some(paths))) => {
@@ -197,6 +230,12 @@ impl Plait {
                                 .unwrap_or(path.as_os_str())
                                 .to_string_lossy()
                                 .into_owned();
+                            let epoch = this.host.epoch + 1;
+                            let submissions = std::mem::take(&mut this.host.submissions);
+                            this.host = HostState::new(path.clone());
+                            this.host.epoch = epoch;
+                            this.host.submissions = submissions;
+                            this.reconnect_host(window, cx);
                             this.state.repository.open(path);
                             this.select_thread(
                                 Selection {
@@ -239,9 +278,46 @@ impl Render for Plait {
         let project = &self.state.projects[selection.project];
         let machine = &project.machines[selection.machine];
         let thread = &machine.threads[selection.thread];
-        let title = thread.title;
-        let status = thread.status;
-        let location = format!("{}  /  {}", project.name, machine.name);
+        let real = self.host.selected.is_some();
+        let title = if self.settings_open {
+            "Settings".to_owned()
+        } else if self.new_thread_open {
+            "New local thread".to_owned()
+        } else if real {
+            self.host.selected.clone().unwrap_or_default()
+        } else {
+            thread.title.to_owned()
+        };
+        let (status_label, status_tint) = if self.settings_open || self.new_thread_open {
+            (
+                if self.host.connected {
+                    "Host connected"
+                } else {
+                    "Host disconnected"
+                }
+                .to_owned(),
+                if self.host.connected { MINT } else { AMBER },
+            )
+        } else if real {
+            (
+                self.host
+                    .snapshot
+                    .as_ref()
+                    .map_or("Loading", |snapshot| snapshot.status.label())
+                    .to_owned(),
+                MINT,
+            )
+        } else {
+            (
+                format!("{} · fixture", thread.status.label()),
+                status_color(thread.status),
+            )
+        };
+        let location = if self.settings_open {
+            "Plait / Local host".to_owned()
+        } else {
+            format!("{}  /  {}", project.name, machine.name)
+        };
         let local = machine.local;
         let root = column()
             .id("plait")
@@ -251,6 +327,12 @@ impl Render for Plait {
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::open_repository))
             .on_action(cx.listener(Self::refresh))
+            .on_action(cx.listener(|this, _: &Settings, window, cx| {
+                window.focus(&this.focus, cx);
+                this.settings_open = !this.settings_open;
+                this.new_thread_open = false;
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &ToggleSidebar, window, cx| {
                 // Keep the shortcut context alive when its focused child is removed.
                 window.focus(&this.focus, cx);
@@ -319,11 +401,8 @@ impl Render for Plait {
                                     .child(
                                         row()
                                             .flex_shrink_0()
-                                            .child(dot(status_color(status)))
-                                            .child(tag(
-                                                format!("{} · mock", status.label()),
-                                                status_color(status),
-                                            )),
+                                            .child(dot(status_tint))
+                                            .child(tag(status_label, status_tint)),
                                     ),
                             )
                             .child(
@@ -362,7 +441,14 @@ impl Render for Plait {
                                             ),
                                     )
                                     .child(if local {
-                                        tag("READ-ONLY", MINT)
+                                        tag(
+                                            if real {
+                                                "LOCAL HOST · GIT READ-ONLY"
+                                            } else {
+                                                "GIT READ-ONLY"
+                                            },
+                                            MINT,
+                                        )
                                     } else {
                                         tag("REMOTE FIXTURE · NOT CONNECTED", VIOLET)
                                     }),
@@ -370,8 +456,14 @@ impl Render for Plait {
                             .when_some(self.notice.clone(), |el, notice| {
                                 el.child(div().px_5().py_2().text_color(rgb(RED)).child(notice))
                             })
-                            .child(if self.show_changes {
+                            .child(if self.settings_open {
+                                self.settings(cx).into_any_element()
+                            } else if self.new_thread_open {
+                                self.new_thread(cx).into_any_element()
+                            } else if self.show_changes {
                                 self.changes(cx).into_any_element()
+                            } else if real {
+                                self.live_conversation(wide, cx).into_any_element()
                             } else {
                                 self.conversation(wide, cx).into_any_element()
                             }),
@@ -408,11 +500,13 @@ impl Render for Plait {
 }
 
 pub fn menus(cx: &mut App) {
+    composer::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-w", Close, Some("Plait")),
         KeyBinding::new("cmd-m", Minimize, Some("Plait")),
         KeyBinding::new("cmd-o", OpenRepository, Some("Plait")),
+        KeyBinding::new("cmd-,", Settings, Some("Plait")),
         KeyBinding::new("cmd-r", Refresh, Some("Plait")),
         KeyBinding::new("cmd-b", ToggleSidebar, Some("Plait")),
         KeyBinding::new("cmd-1", Conversation, Some("Plait")),
@@ -426,7 +520,11 @@ pub fn menus(cx: &mut App) {
     ]);
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.set_menus([
-        Menu::new("Plait").items([MenuItem::action("Quit Plait", Quit)]),
+        Menu::new("Plait").items([
+            MenuItem::action("Settings…", Settings),
+            MenuItem::separator(),
+            MenuItem::action("Quit Plait", Quit),
+        ]),
         Menu::new("File").items([
             MenuItem::action("Open Repository…", OpenRepository),
             MenuItem::action("Refresh Git Status", Refresh),

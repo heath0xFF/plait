@@ -7,7 +7,7 @@ impl Plait {
         let mut tree = column()
             .id("project-tree")
             .role(Role::Tree)
-            .aria_label("Projects, machines and example threads")
+            .aria_label("Projects, machines, host threads and labeled fixtures")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -34,12 +34,12 @@ impl Plait {
                             .child(project.name.clone()),
                     )
                     .child(tag(project.machines.len().to_string(), MUTED))
-                    .on_click(cx.listener(move |this, _, _, cx| {
+                    .on_activate(cx, move |this, _, cx| {
                         if !this.state.collapsed_projects.remove(&pi) {
                             this.state.collapsed_projects.insert(pi);
                         }
                         cx.notify();
-                    })),
+                    }),
             );
             if expanded {
                 for (mi, machine) in project.machines.iter().enumerate() {
@@ -67,21 +67,63 @@ impl Plait {
                                 if machine.local { "local" } else { "fixture" },
                                 if machine.local { MINT } else { MUTED },
                             ))
-                            .on_click(cx.listener(move |this, _, _, cx| {
+                            .on_activate(cx, move |this, _, cx| {
                                 if !this.state.collapsed_machines.remove(&(pi, mi)) {
                                     this.state.collapsed_machines.insert((pi, mi));
                                 }
                                 cx.notify();
-                            })),
+                            }),
                     );
                     if open {
+                        if machine.local {
+                            for (index, thread) in self.host.threads.iter().enumerate() {
+                                let id = thread.id.clone();
+                                let selected = self.host.selected.as_ref() == Some(&id);
+                                group = group.child(
+                                    button(("host-thread", index), "")
+                                        .ml(px(37.))
+                                        .h(px(48.))
+                                        .min_w_0()
+                                        .role(Role::TreeItem)
+                                        .aria_level(3)
+                                        .aria_selected(selected)
+                                        .aria_label(format!(
+                                            "Local thread {} · {} · {} / {}",
+                                            id,
+                                            thread.status.label(),
+                                            thread.model.provider,
+                                            thread.model.model_id
+                                        ))
+                                        .when(selected, |el| {
+                                            el.bg(rgb(PANEL)).border_color(rgb(MINT))
+                                        })
+                                        .child(icon("thread").text_color(rgb(MINT)))
+                                        .child(
+                                            column()
+                                                .min_w_0()
+                                                .gap_1()
+                                                .child(
+                                                    div()
+                                                        .truncate()
+                                                        .text_color(rgb(TEXT))
+                                                        .child(id.clone()),
+                                                )
+                                                .child(tag(thread.status.label(), MUTED)),
+                                        )
+                                        .on_activate(cx, move |this, window, cx| {
+                                            this.select_host_thread(id.clone(), window, cx)
+                                        }),
+                                );
+                            }
+                        }
                         for (ti, thread) in machine.threads.iter().enumerate() {
                             let selection = Selection {
                                 project: pi,
                                 machine: mi,
                                 thread: ti,
                             };
-                            let selected = selection == self.state.selection;
+                            let selected =
+                                self.host.selected.is_none() && selection == self.state.selection;
                             group = group.child(
                                 button(("thread", pi * 10000 + mi * 100 + ti), "")
                                     .ml(px(37.))
@@ -123,9 +165,10 @@ impl Plait {
                                                     )),
                                             ),
                                     )
-                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                    .on_activate(cx, move |this, window, cx| {
+                                        window.focus(&this.focus, cx);
                                         this.select_thread(selection, cx)
-                                    })),
+                                    }),
                             );
                         }
                     }
@@ -169,21 +212,43 @@ impl Plait {
                     .border_t_1()
                     .border_color(rgb(BORDER))
                     .child(
+                        button("new-local-thread", "New local thread…")
+                            .text_color(rgb(MINT))
+                            .on_activate(cx, |this, window, cx| {
+                                window.focus(&this.focus, cx);
+                                this.open_new_thread(cx);
+                            }),
+                    )
+                    .child(
+                        button("settings", "Settings…")
+                            .aria_keyshortcuts("Meta+,")
+                            .on_activate(cx, |this, window, cx| {
+                                window.focus(&this.focus, cx);
+                                this.settings_open = true;
+                                this.new_thread_open = false;
+                                cx.notify();
+                            }),
+                    )
+                    .child(
                         button("open-repository", "Open repository…")
                             .aria_keyshortcuts("Meta+O")
                             .h(px(34.))
                             .bg(rgb(PANEL))
                             .text_color(rgb(TEXT))
-                            .on_click(cx.listener(|this, _, window, cx| {
+                            .on_activate(cx, |this, window, cx| {
                                 this.open_repository(&OpenRepository, window, cx)
-                            })),
+                            }),
                     )
                     .child(
                         div()
                             .px_1()
                             .text_size(px(11.))
                             .text_color(rgb(MUTED))
-                            .child("Conversations are examples.\nOnly local Git is connected."),
+                            .child(if self.host.connected {
+                                "Local host connected.\nRemote entries remain fixtures."
+                            } else {
+                                "Local host disconnected.\nFixtures never run an agent."
+                            }),
                     ),
             )
     }
