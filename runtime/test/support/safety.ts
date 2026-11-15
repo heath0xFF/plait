@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 export const exec = promisify(execFile);
-process.env.PLAIT_HOST_EXE = resolve('../target/debug/plait-host');
+process.env.PLAIT_HOST_EXE = process.env.PLAIT_HOST_BINARY ?? resolve('../target/debug/plait-host');
 
 export async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'plait-sandbox-')));

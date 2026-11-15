@@ -50,7 +50,8 @@ Keep later synchronization explicit; do not overwrite work on the other machine.
 
 See `docs/VERIFICATION.md` for remaining native checks. A real agent-authored
 Plait source change, live keyboard IME, and full VoiceOver remain unverified.
-The macOS bundle contains the desktop, not a complete host/Node installation.
+That Mac validation used the desktop-only bundle. The installer branch now
+builds separate client and host/Node packages; its Mac checks are still pending.
 
 The older human test conversation and drafts remain untouched on the Mac under
 `/tmp/plait-desktop-check.oaAqzp/`. Do not reset or copy that host store as a
@@ -85,7 +86,10 @@ accordingly. Do not report Linux host execution as working just because Pi runs.
 
 ## Arthur headless checkpoint
 
-The focused branch is `refactor/headless-core`.
+The checkpoint is pushed as `ae8cab2` on `refactor/headless-core`, draft PR #9.
+Linux CI passed. Mac CI exposed an Xcode 16 Metal layout that the existing
+fixed-tool validator rejects; no sandbox assertions were removed.
+Current installer work is on `feat/macos-client-host-installer`.
 
 - Moved the six plain Rust modules and their tests into `crates/plait-core`.
   Production module contents were unchanged in that first extraction. The later

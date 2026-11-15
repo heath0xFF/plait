@@ -1,5 +1,25 @@
 # Verification
 
+## Client/host installer work — Mac results pending
+
+The installer branch adds combined and independent component packages. Linux
+checks passed with 50 workspace Rust tests, strict Clippy, and the portable
+runtime suite (40 tests). Nine portable package-planning tests pass. Mac build, actual
+installation, native launch, and installed-runtime acceptance remain pending.
+
+The headless checkpoint is pushed as `ae8cab2` (PR #9). Its Linux CI passed.
+Its Mac CI failed at Metal lookup: Xcode 16.4 stores Metal below the versioned
+`XcodeDefault.xctoolchain/usr/metal/…/bin` directory. The installer branch checks
+that fixed layout and canonical Xcode aliases while retaining root ownership,
+non-writable tool files, exact tool names, and command sandbox tests. This needs
+real Mac confirmation; it is not a sandbox pass yet.
+
+The new CI install test uses a labeled upgrade fixture with unchanged program
+code. It checks install/activation lifetime and durable state, not compatibility
+with an unknown future runtime or storage migration. It does not use real model
+credentials. Personal-Mac Gatekeeper approval, authentication, and live-model
+acceptance of the installed package are still required before travel use.
+
 ## Portable daemon development checkpoint
 
 Verified on Arthur after the local-socket and runtime boundary changes:
@@ -121,9 +141,9 @@ an approved active command: its sleep process exited and pending approval cleare
 The old human conversation and fixture remained byte-for-byte unchanged.
 
 **An agent-authored change to Plait itself is not yet verified.** Real keyboard
-IME use and full VoiceOver coverage are not verified. The development bundle
-still packages the desktop only, not Node or the independent host. Linux Plait
-execution is not supported yet; see [the Arthur handoff](HANDOFF.md).
+IME use and full VoiceOver coverage are not verified. That validation used the
+desktop-only development bundle; current installer work is recorded above.
+Linux Plait execution is not supported yet; see [the Arthur handoff](HANDOFF.md).
 
 The following sections record the historical M1 baseline, not M2 acceptance.
 

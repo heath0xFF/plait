@@ -267,15 +267,19 @@ Omit the path to inspect the current directory. Use **Open repository…** (Cmd-
 to select another folder. The native picker accepts directories; Git validates
 the selection in the background. Nothing is staged, committed, or discarded.
 
-To build a native `.app` with the Plait icon and a ZIP archive:
+To build the native client, a combined client/host installer, independent
+component installers, and a portable client ZIP:
 
 ```sh
 bash scripts/build-macos.sh
 open dist/Plait.app --args /absolute/path/to/repository
 ```
 
-This development package is ad-hoc signed, not notarized, and has no automatic
-updater. See [macOS packaging and CI artifacts](docs/MACOS.md).
+The host package includes pinned Node and runtime dependencies and installs a
+per-user LaunchAgent. Client-only updates do not stop host work; host updates
+are staged until you finish work and restart the host session. Preview installers
+are unsigned and not notarized. There is no automatic updater. See
+[installation, independent updates, and CI artifacts](docs/MACOS.md).
 
 ### Real versus example data
 

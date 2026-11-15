@@ -154,6 +154,25 @@ A status snapshot and its later diff are not a filesystem transaction. Another
 program can change the checkout between reads. Refresh is explicit. No data is
 staged, discarded, committed, or repaired in response to a read error.
 
+## macOS installation boundary
+
+The client and host are independent update units. A combined installer carries
+both component packages; either package can also be installed alone. The host
+unit includes Rust, pinned Node, and locked production runtime dependencies.
+It runs as a per-user LaunchAgent, never as a root agent executor.
+
+Host releases use content-derived directory names. The loaded job and sidecar
+keep their original paths while a new package stages the next release. An
+identical host reinstall is rejected before payload writes. Activation requires
+an explicit session restart after work finishes. Client updates do not control
+the host process. User state and credentials are not package payloads.
+
+This changes launch configuration, not the frozen protocol or durable thread
+schema. Version 1 compatibility is still checked by the client. Future protocol
+and storage changes need a separate compatibility review. Signing, notarization,
+automatic update delivery, and automatic old-release removal are not implemented.
+See [Mac installation](MACOS.md) for paths and operational limits.
+
 ## UI and performance
 
 Use GPUI's native macOS platform, Metal renderer, system sans-serif font, and

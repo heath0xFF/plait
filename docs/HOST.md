@@ -6,19 +6,27 @@ The desktop has no dependency on the host crate and does not own its process.
 ## Launch and recovery
 
 Build `cargo build -p plait-host`; install runtime packages with
-`cd runtime && npm ci --ignore-scripts`. Node 22.19 or newer is required.
+`cd runtime && npm ci --ignore-scripts`. Node 22.19 or newer is required for
+source development. The [Mac host package](MACOS.md) includes pinned Node and
+runtime dependencies; it does not need a development checkout or shell Node.
 
 - `plait-host run [--store ABSOLUTE_PATH] [--runtime ABSOLUTE_PATH]`: foreground
   daemon. `--runtime` is the path to `runtime/src/main.ts`.
 - `plait-host start [same options]`: spawn an independent daemon and return when
   its socket answers, or report a startup error. Closing the client has no effect.
 - `plait-host status [--store ABSOLUTE_PATH]`: print the status JSON reply.
+- `plait-host version`: print local binary version/revision and protocol metadata.
+  This is a CLI operation, not a new socket operation.
 - Default store: `$PLAIT_HOST_STORE`, if set, otherwise `$HOME/.local/share/plait`.
   Socket: `STORE/host.sock`. Store overrides must be absolute.
 - The store directory is mode 0700 and socket mode 0600. A lifetime OS writer
   lock on `STORE/host.lock` rejects a second host, including after a crash.
 - The Rust host owns and monitors the Node sidecar. No TCP port is opened.
-  Sidecar failure closes the host; restart is explicit through `start`.
+  Sidecar failure closes the host. Development restart is explicit through
+  `start`; the installed Mac LaunchAgent restarts failed hosts. Neither route
+  replays interrupted work. The packaged host uses adjacent immutable Node and
+  runtime paths, not a build-machine source path. It removes inherited
+  `NODE_OPTIONS` and `NODE_PATH` before starting its sidecar.
 - Startup marks interrupted work as `interrupted`. It does not run the model
   or replay commands. A new user submission resumes the saved conversation.
   Thread IDs, submitted request IDs, and exact model choice survive restart.

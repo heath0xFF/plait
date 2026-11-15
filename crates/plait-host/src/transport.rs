@@ -175,7 +175,7 @@ pub fn private_store(store: &Path) -> io::Result<File> {
     Ok(lock)
 }
 
-pub fn serve(store: &Path, runtime: &Path) -> io::Result<()> {
+pub fn serve(store: &Path, runtime: &Path, node: &std::ffi::OsStr) -> io::Result<()> {
     // Private creation modes also apply to SQLite WALs and runtime scratch files.
     unsafe {
         libc::umask(0o077);
@@ -194,10 +194,12 @@ pub fn serve(store: &Path, runtime: &Path) -> io::Result<()> {
     if unsafe { libc::fcntl(lock.as_raw_fd(), libc::F_SETFD, 0) } < 0 {
         return Err(io::Error::last_os_error());
     }
-    let mut child = Command::new("node")
+    let mut child = Command::new(node)
         .arg("--disable-warning=ExperimentalWarning")
         .arg(runtime)
         .arg(store)
+        .env_remove("NODE_OPTIONS")
+        .env_remove("NODE_PATH")
         .env("PLAIT_HOST_EXE", std::env::current_exe()?)
         .env("PLAIT_LOCK_FD", lock.as_raw_fd().to_string())
         .stdin(Stdio::piped())

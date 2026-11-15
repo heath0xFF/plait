@@ -9,8 +9,8 @@ import { promisify } from 'node:util';
 import type { Snapshot } from '../../src/protocol.ts';
 
 export const exec = promisify(execFile);
-export const binary = resolve('../target/debug/plait-host');
-export const fixture = resolve('test/fixture.ts');
+export const binary = process.env.PLAIT_HOST_BINARY ?? resolve('../target/debug/plait-host');
+export const fixture = process.env.PLAIT_TEST_RUNTIME ?? resolve('test/fixture.ts');
 export const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 export async function childPids(parent: number) {
   return (await exec('/bin/ps', ['-axo', 'pid=,ppid='])).stdout.trim().split('\n')

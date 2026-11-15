@@ -1,5 +1,5 @@
 import { lstat, mkdir, readlink, readdir, realpath, symlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fail } from '../protocol.ts';
 import { fileAction } from '../safety.ts';
 import { prepareBuildCache } from '../build-cache.ts';
@@ -65,8 +65,10 @@ async function buildEnvironment(root: string, scratch: string, signal: AbortSign
     }
   } catch (error) { if ((error as { code?: string }).code !== 'ENOENT') throw error; }
   const apple = await appleToolchain(scratch, signal);
-  return { readOnly: [...readOnly, ...apple.readOnly], cacheRoots, env: {
-    PATH: apple.bin + toolchainBin + `${DEVELOPER}/Toolchains/XcodeDefault.xctoolchain/usr/bin:${DEVELOPER}/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin`,
+  // Installed hosts carry Node outside the developer shell's PATH.
+  const node = await realpath(process.execPath);
+  return { readOnly: [...readOnly, ...apple.readOnly, node], cacheRoots, env: {
+    PATH: apple.bin + dirname(node) + ':' + toolchainBin + `${DEVELOPER}/Toolchains/XcodeDefault.xctoolchain/usr/bin:${DEVELOPER}/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin`,
     SDKROOT: SDK, DEVELOPER_DIR: DEVELOPER,
     HOME: scratch, TMPDIR: scratch, CARGO_HOME: cargoHome, CARGO_TARGET_DIR: paths.target, CARGO_NET_OFFLINE: 'true', GIT_OPTIONAL_LOCKS: '0', OPENSSL_CONF: '/dev/null',
   } };

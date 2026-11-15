@@ -1,0 +1,115 @@
+import json
+from pathlib import Path
+import plistlib
+import subprocess
+import tempfile
+import unittest
+import xml.etree.ElementTree as ET
+
+from release_macos import (
+    AGENT_LABEL, HOST_BASE, client_preinstall, distribution,
+    host_postinstall, host_preinstall, launch_agent, manifest, normalize_modes, payload_digest,
+)
+
+
+class ReleaseTests(unittest.TestCase):
+    def test_component_contracts_are_separate_and_inputs_are_bounded(self):
+        for component in ["client", "host"]:
+            value = manifest(component, "0.1.0", "a" * 12)
+            self.assertEqual(value["component"], component)
+            self.assertEqual(value["protocol_version"], 1)
+        for component, version, revision in [
+            ("other", "0.1.0", "a" * 12),
+            ("host", "../escape", "a" * 12),
+            ("host", "0.1.0", "x; rm -rf anything"),
+        ]:
+            with self.assertRaises(ValueError):
+                manifest(component, version, revision)
+
+    def test_payload_identity_ignores_timestamps_but_includes_content_and_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            file = root / "program"
+            file.write_text("one")
+            first = payload_digest(root)
+            file.touch()
+            self.assertEqual(first, payload_digest(root))
+            file.write_text("two")
+            self.assertNotEqual(first, payload_digest(root))
+            second = payload_digest(root)
+            file.chmod(0o755)
+            self.assertNotEqual(second, payload_digest(root))
+
+    def test_package_links_cannot_escape(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "target").write_text("safe")
+            (root / "link").symlink_to("target")
+            payload_digest(root)
+            (root / "link").unlink()
+            (root / "link").symlink_to("/etc/passwd")
+            with self.assertRaisesRegex(ValueError, "escapes"):
+                payload_digest(root)
+
+    def test_user_agent_pins_an_immutable_release_without_a_store_override(self):
+        installed = HOST_BASE / "releases/0.1.0-aabbccdd"
+        agent = plistlib.loads(plistlib.dumps(launch_agent(installed)))
+        self.assertEqual(agent["Label"], AGENT_LABEL)
+        self.assertEqual(agent["ProgramArguments"], [str(installed / "bin/plait-host"), "run"])
+        self.assertNotIn("UserName", agent)
+        self.assertNotIn("PLAIT_HOST_STORE", agent["EnvironmentVariables"])
+        self.assertEqual(agent["KeepAlive"], {"SuccessfulExit": False})
+
+    def test_host_updates_never_force_restart_and_client_package_does_not_touch_host(self):
+        script = host_postinstall(HOST_BASE / "releases/0.1.0-aabb")
+        for forbidden in ["killall", "pkill", "bootout", "kickstart", "rm -rf"]:
+            self.assertNotIn(forbidden, script)
+        self.assertIn("launchctl print", script)
+        self.assertIn("launchctl bootstrap", script)
+        self.assertNotIn("launchctl", client_preinstall())
+
+    def test_combined_installer_contains_independently_selectable_components(self):
+        document = ET.fromstring(distribution("client.pkg", "host.pkg"))
+        choices = document.findall("choice")
+        self.assertEqual([choice.get("id") for choice in choices], ["client", "host"])
+        self.assertEqual([choice.get("start_selected") for choice in choices], ["true", "true"])
+        self.assertEqual([ref.text for ref in document.findall("pkg-ref")], ["client.pkg", "host.pkg"])
+        self.assertEqual(document.find("volume-check/allowed-os-versions/os-version").get("min"), "15.0")
+
+    def test_existing_host_release_is_rejected_without_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            installed = Path(directory) / "release with spaces"
+            script = host_preinstall(installed)
+            self.assertEqual(subprocess.run(["bash"], input=script, text=True, capture_output=True).returncode, 0)
+            installed.mkdir()
+            marker = installed / "marker"
+            marker.write_text("active release")
+            refused = subprocess.run(["bash"], input=script, text=True, capture_output=True)
+            self.assertEqual(refused.returncode, 1)
+            self.assertIn("already installed", refused.stderr)
+            self.assertEqual(marker.read_text(), "active release")
+
+    def test_package_modes_do_not_allow_group_or_other_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = root / "data"
+            code = root / "program"
+            data.write_text("data")
+            code.write_text("code")
+            data.chmod(0o666)
+            code.chmod(0o777)
+            normalize_modes(root)
+            self.assertEqual(data.stat().st_mode & 0o777, 0o644)
+            self.assertEqual(code.stat().st_mode & 0o777, 0o755)
+            self.assertEqual(root.stat().st_mode & 0o777, 0o755)
+
+    def test_node_download_is_pinned(self):
+        path = Path(__file__).resolve().parent.parent / "packaging/macos/node.json"
+        node = json.loads(path.read_text())
+        self.assertEqual(node["archive"], f"node-v{node['version']}-darwin-arm64.tar.xz")
+        self.assertRegex(node["sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(node["source"], f"https://nodejs.org/dist/v{node['version']}/")
+
+
+if __name__ == "__main__":
+    unittest.main()

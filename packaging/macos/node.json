@@ -1,0 +1,6 @@
+{
+  "version": "26.12.0",
+  "archive": "node-v26.12.0-darwin-arm64.tar.xz",
+  "sha256": "a2e255e35347f727f29aa158c552a60140b17b6ba68719d5d6fc46c7d058aa75",
+  "source": "https://nodejs.org/dist/v26.12.0/"
+}

@@ -32,6 +32,15 @@ jobs:
             xcodebuild -downloadComponent MetalToolchain
           fi
           rustup show
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          for name in ['metal', 'metallib']:
+              path = Path(subprocess.check_output(['xcrun', '--sdk', 'macosx', '--find', name], text=True).strip()).resolve()
+              for item in [path, *list(path.parents)[:5]]:
+                  info = item.stat()
+                  print(name, item, 'uid', info.st_uid, 'mode', oct(info.st_mode & 0o777))
+          PY
       - name: Check workspace and real command sandbox
         run: bash scripts/check.sh --require-command-sandbox
       - name: Check runtime recovery without credentials
@@ -39,8 +48,12 @@ jobs:
         run: |
           npm ci --ignore-scripts
           npm test
-      - name: Build and verify development bundle
+      - name: Check installer planning
+        run: python3 -m unittest discover -s scripts -p 'test_release_*.py'
+      - name: Build and verify client and host installers
         run: bash scripts/build-macos.sh
+      - name: Install and test packaged client and daemon
+        run: bash scripts/smoke-installer-macos.sh
       - name: Upload development package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -48,5 +61,9 @@ jobs:
           path: |
             dist/*.zip
             dist/*.sha256
+            dist/*.pkg
+            dist/Plait-Release-*.json
+            dist/installed-client.png
+            dist/installed-client.log
           if-no-files-found: error
           retention-days: 14

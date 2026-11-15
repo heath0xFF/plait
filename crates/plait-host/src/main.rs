@@ -1,6 +1,7 @@
 mod command;
 mod files;
 mod fingerprint;
+mod installation;
 mod lease;
 mod transport;
 
@@ -33,12 +34,24 @@ fn run() -> io::Result<()> {
     if operation == "command" {
         return command::run(args.collect());
     }
+    if operation == "version" {
+        serde_json::to_writer(
+            io::stdout(),
+            &serde_json::json!({
+                "component": "host", "version": env!("CARGO_PKG_VERSION"),
+                "revision": option_env!("PLAIT_BUILD_REVISION").unwrap_or("development"),
+                "protocol_version": 1,
+            }),
+        )?;
+        return Ok(());
+    }
+    let paths = installation::runtime_paths(&env::current_exe()?)?;
     let mut store = env::var_os("PLAIT_HOST_STORE")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             PathBuf::from(env::var_os("HOME").unwrap_or_default()).join(".local/share/plait")
         });
-    let mut runtime = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../runtime/src/main.ts");
+    let mut runtime = paths.runtime;
     while let Some(option) = args.next() {
         let value = args
             .next()
@@ -53,7 +66,7 @@ fn run() -> io::Result<()> {
         return Err(io::Error::other("store and runtime paths must be absolute"));
     }
     match operation.as_str() {
-        "run" => transport::serve(&store, &runtime),
+        "run" => transport::serve(&store, &runtime, &paths.node),
         "status" => {
             let reply = transport::status(&store)?;
             io::stdout().write_all(&reply)
@@ -99,7 +112,7 @@ fn run() -> io::Result<()> {
             ))
         }
         _ => Err(io::Error::other(
-            "usage: plait-host run|start|status [--store PATH] [--runtime PATH]",
+            "usage: plait-host run|start|status [--store PATH] [--runtime PATH], or plait-host version",
         )),
     }
 }
