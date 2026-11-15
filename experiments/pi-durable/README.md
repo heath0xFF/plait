@@ -14,8 +14,9 @@ npm ci --ignore-scripts
 npm test
 ```
 
-The default test uses Pi's scripted model. It needs no credentials or network
-model request. It still uses real Pi Durable tools and SQLite storage.
+The default suite uses Pi's scripted model. It needs no credentials or network
+model request. It still uses real Pi Durable tools, child processes, and SQLite
+storage.
 
 The live probe uses the existing Pi credential/model configuration through the
 public `ModelRuntime` SDK. It can refresh stored OAuth credentials through Pi's
@@ -45,6 +46,22 @@ Assertions check:
 
 The result names the temporary directory. It is kept for inspection. The probe
 closes the Harness and Pi's provider session resources before it exits.
+
+### Process crash checks
+
+`recovery.test.mjs` starts a runtime in a child process. After a tool writes its
+file effect, but before it returns a result, the parent sends `SIGKILL`. A new
+process then opens the same SQLite store.
+
+Two tests check the replay policy:
+
+- An `unsafe` tool is not run again. Its result records the interruption.
+- A `safe` tool is run again and completes its idempotent file overwrite.
+
+Both check that the thread and submission IDs survive, retrying the same request
+does not add a user message, and the file contents remain correct. An attempt
+log detects duplicate execution. Workers and temporary directories are removed
+after each test, including a failure. The tests use no account credentials.
 
 The live run on Zaphod also received an incremental update: 9 watch callbacks,
 1 partial update before detach, and 7 final transcript entries. This is a small
@@ -76,14 +93,16 @@ Pi Durable is viable for the next local slice, with these boundaries:
 
 A separate Rust host, authenticated local transport, a TypeScript sidecar,
 creation/resume controls, a native editable composer, and streamed typed UI
-state. Add host-process crash/restart, actual client reconnect, abort, failed
-storage, and interrupted-tool replay tests. Load project instructions explicitly
+state. Add Plait host-process crash/restart, actual client reconnect, abort, and
+failed-storage tests. Extend replay checks to the tools enabled in that host.
+Load project instructions explicitly
 before enabling coding against a real checkout.
 
-The current check stops an observer in one process and reopens storage cleanly.
-It does **not** prove recovery from a killed host, a desktop disconnection, or
-power loss. It installs no regular Pi extensions. No remote execution or
-orchestration is included.
+The original probe stops an observer in one process and reopens storage cleanly.
+The crash tests kill an isolated Pi runtime, not a Plait host. They do **not**
+prove desktop reconnection, real-provider request recovery, power-loss safety,
+or exactly-once effects for arbitrary tools. No regular Pi extensions, remote
+execution, or orchestration are included.
 
 Sources: [Pi Durable](https://github.com/earendil-works/pi/tree/main/packages/durable),
 [Pi SDK](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/sdk.md),
