@@ -39,6 +39,12 @@ git init -q "$fixture"
 pid=$!
 sleep 5
 kill -0 "$pid"
+client_package=$(python3 -c 'import json,os; r=json.load(open(os.environ["PLAIT_RELEASE_MANIFEST"])); print(next(a["name"] for a in r["artifacts"] if a["name"].startswith("Plait-Client-")))')
+if sudo -n /usr/sbin/installer -pkg "$root/dist/$client_package" -target /; then
+    echo 'Client installer did not refuse an active client.' >&2
+    exit 1
+fi
+kill -0 "$pid"
 if ! /usr/sbin/screencapture -x dist/installed-client.png; then
     echo 'The installed client stayed running, but this runner could not capture its display.' >&2
 fi

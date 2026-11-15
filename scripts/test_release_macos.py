@@ -7,7 +7,7 @@ import unittest
 import xml.etree.ElementTree as ET
 
 from release_macos import (
-    AGENT_LABEL, HOST_BASE, client_preinstall, distribution,
+    AGENT_LABEL, HOST_BASE, client_preinstall, component_manifests, distribution,
     host_postinstall, host_preinstall, launch_agent, manifest, normalize_modes, payload_digest, platform_preflight,
 )
 
@@ -111,6 +111,17 @@ class ReleaseTests(unittest.TestCase):
             self.assertEqual(data.stat().st_mode & 0o777, 0o644)
             self.assertEqual(code.stat().st_mode & 0o777, 0o755)
             self.assertEqual(root.stat().st_mode & 0o777, 0o755)
+
+    def test_installer_manifests_exclude_npm_component_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = root / 'client.pkg/Payload/Applications/Plait.app/Contents/Resources/component.json'
+            host = root / 'host.pkg/Payload/Library/Application Support/Plait/Host/releases/version/component.json'
+            unrelated = host.parent / 'runtime/node_modules/extend/component.json'
+            for path in [client, host, unrelated]:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('{}')
+            self.assertEqual(component_manifests(root), [client, host])
 
     def test_node_download_is_pinned(self):
         path = Path(__file__).resolve().parent.parent / "packaging/macos/node.json"

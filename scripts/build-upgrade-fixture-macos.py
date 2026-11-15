@@ -8,7 +8,7 @@ import sys
 import tempfile
 
 from release_macos import (
-    AGENT_PATH, HOST_BASE, component_package, host_postinstall, host_preinstall,
+    AGENT_PATH, HOST_BASE, component_manifests, component_package, host_postinstall, host_preinstall,
     launch_agent, normalize_modes, payload_digest, run, write_json,
 )
 
@@ -23,7 +23,7 @@ def main():
         expanded = work / "expanded"
         run("pkgutil", "--expand-full", source, expanded)
         payload = expanded / "Payload"
-        manifests = list(payload.rglob("component.json"))
+        manifests = component_manifests(expanded)
         if len(manifests) != 1:
             raise ValueError("Expected one host manifest")
         metadata = json.loads(manifests[0].read_text())

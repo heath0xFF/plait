@@ -136,7 +136,7 @@ exit 0
 
 def client_preinstall():
     return '#!/bin/bash\nset -euo pipefail\n' + platform_preflight() + '''# Closing the client leaves the independent host and accepted work running.
-if /usr/bin/pgrep -x plait >/dev/null; then
+if /usr/bin/pgrep -x '[Pp]lait' >/dev/null; then
     echo 'Quit the Plait client, then run this client installer again. Do not stop the host.' >&2
     exit 1
 fi
@@ -272,6 +272,13 @@ def distribution(client_name, host_name):
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
 
+def component_manifests(expanded):
+    # npm packages may have unrelated component.json files of their own.
+    return sorted(expanded.glob("**/Applications/Plait.app/Contents/Resources/component.json")) + sorted(
+        expanded.glob("**/Library/Application Support/Plait/Host/releases/*/component.json")
+    )
+
+
 def build_installers(bundle, client_version, host_version, revision, work):
     payload = work / "client-root"
     (payload / "Applications").mkdir(parents=True)
@@ -293,9 +300,10 @@ def build_installers(bundle, client_version, host_version, revision, work):
     for component in [client, host, combined]:
         expanded = work / (component.stem + "-expanded")
         run("pkgutil", "--expand-full", component, expanded)
-        manifests = list(expanded.rglob("component.json"))
-        if not manifests:
-            raise ValueError(f"Installer has no component manifest: {component.name}")
+        manifests = component_manifests(expanded)
+        expected = {"client"} if component == client else {"host"} if component == host else {"client", "host"}
+        if len(manifests) != len(expected) or {json.loads(path.read_text())["component"] for path in manifests} != expected:
+            raise ValueError(f"Installer component manifest set is incorrect: {component.name}")
         for path in manifests:
             item = json.loads(path.read_text())
             if item["component"] == "host":

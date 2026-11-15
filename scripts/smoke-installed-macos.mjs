@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
-import { mkdtemp, readFile, writeFile, symlink, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, symlink, rm, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
@@ -32,7 +32,17 @@ process.env.PLAIT_HOST_BINARY = binary;
 process.env.PLAIT_TEST_RUNTIME = fixturePath;
 
 // This module was loaded before the fixture override; start the full suite in a child.
-test('installed production host starts without developer Node or source runtime paths', { timeout: 30000 }, async t => {
+test('user LaunchAgent and isolated packaged host start without developer Node', { timeout: 30000 }, async t => {
+  const consoleUid = Number((await exec('/usr/bin/stat', ['-f', '%u', '/dev/console'])).stdout.trim());
+  assert.equal(consoleUid, process.getuid(), 'Install smoke check requires the runner graphical user.');
+  const defaultStore = join(process.env.HOME, '.local/share/plait');
+  const managedStatus = await until(() => request(defaultStore, { op: 'status' }), value => value.ok);
+  assert.equal(managedStatus.result.protocol_version, 1);
+  assert.equal((await stat(join(defaultStore, 'host.sock'))).uid, process.getuid());
+  const job = (await exec('/bin/launchctl', ['print', `gui/${process.getuid()}/dev.plait.host`])).stdout;
+  const managedPid = job.match(/\bpid\s*=\s*(\d+)/);
+  assert(managedPid, 'The user LaunchAgent must have a running process.');
+  process.env.PLAIT_MANAGED_HOST_PID = managedPid[1];
   const base = await mkdtemp('/tmp/plait-installed-host-');
   const store = join(base, 'store');
   const host = spawn(binary, ['run', '--store', store], {
@@ -41,6 +51,11 @@ test('installed production host starts without developer Node or source runtime 
   t.after(async () => { host.kill('SIGTERM'); await delay(500); await rm(base, { recursive: true, force: true }); });
   const status = await until(() => request(store, { op: 'status' }), value => value.ok);
   assert.equal(status.result.protocol_version, 1);
+  const children = await support.childPids(host.pid);
+  assert.equal(children.length, 1);
+  const childCommand = (await exec('/bin/ps', ['-ww', '-p', String(children[0]), '-o', 'command='])).stdout;
+  assert(childCommand.includes(join(installed, 'runtime/src/main.ts')));
+  assert(childCommand.includes(node));
   assert.equal((await exec(node, ['--version'])).stdout.trim(), 'v' + release.host.node_version);
   const version = JSON.parse((await exec(binary, ['version'])).stdout);
   assert.equal(version.protocol_version, 1);
@@ -79,6 +94,8 @@ test('client update and staged host upgrade preserve an active command and durab
         if(index===1) await assert.rejects(install); else await install();
         assert.equal(await readFile(${JSON.stringify(join(installed, 'component.json'))},'utf8'),oldManifest);
         process.kill(f.host.pid,0);
+        const managed=(await promisify(execFile)('/bin/launchctl',['print','gui/'+process.getuid()+'/dev.plait.host'])).stdout.match(/\\bpid\\s*=\\s*(\\d+)/);
+        assert.equal(managed?.[1],process.env.PLAIT_MANAGED_HOST_PID);
         const current=await f.watch(thread.id);
         assert.equal(current.status,'running');
         assert.deepEqual(current.tools.map(tool=>tool.id),running.tools.map(tool=>tool.id));
