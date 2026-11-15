@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" role="img" aria-labelledby="art-title art-description">
+  <title id="art-title">Plait threads icon</title>
+  <desc id="art-description">Editable 24-pixel UI icon approximated from the supplied raster artwork. Change the group color attribute to recolor; all lines remain editable strokes.</desc>
+  <defs></defs>
+  <g id="threads-icon" color="#A083F4" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-8l-5 4v-4H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z"/></g>
+</svg>

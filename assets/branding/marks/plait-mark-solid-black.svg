@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="320" viewBox="0 0 256 320" role="img" aria-labelledby="art-title art-description">
+  <title id="art-title">Plait ribbon P · solid-black</title>
+  <desc id="art-description">Editable vector approximation manually reconstructed from the supplied Plait raster reference; not the original source artwork.</desc>
+  <defs></defs>
+  <g id="plait-solid" transform="translate(9 8)"><path id="plait-silhouette" fill="#11141D" fill-rule="evenodd" d="M0 299 V54 C0 19 22 0 64 0 H151 C201 0 238 40 238 85 V101 C238 165 212 197 156 197 H65 V264 Q65 270 59 274 L5 303 Q0 306 0 299 Z M65 59 H177 L65 120 Z"/></g>
+</svg>

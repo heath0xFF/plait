@@ -1,0 +1,19 @@
+{
+  "note": "Approximate colors reconstructed from the supplied raster, not official brand specifications.",
+  "mint": "#85EECB",
+  "cyan": "#39D0EF",
+  "blue": "#4569D6",
+  "violet": "#8A55FF",
+  "ink": "#151923",
+  "porcelain": "#F9F8F4",
+  "background": "#090D17",
+  "ui": {
+    "projects": "#83E8C0",
+    "machines": "#489BF5",
+    "threads": "#A083F4",
+    "git": "#D5D7DE",
+    "editor": "#62DCEE",
+    "preview": "#A083F4",
+    "logs": "#83E8C0"
+  }
+}

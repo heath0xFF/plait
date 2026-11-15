@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="465" height="226" viewBox="0 0 465 226" role="img" aria-labelledby="art-title art-description">
+  <title id="art-title">Plait outlined wordmark · dark</title>
+  <desc id="art-description">Editable vector approximation manually reconstructed from the supplied Plait raster reference; not the original source artwork.</desc>
+  <defs></defs>
+  <g transform="translate(16 16)"><g id="wordmark" fill="#151923" fill-rule="evenodd"><path id="wordmark-letter-p" d="M0 45 H27 V62 C37 48 54 42 73 42 C104 42 123 65 123 99 C123 132 103 156 72 156 C53 156 38 150 28 137 V194 H0 Z M28 100 C28 80 41 68 61 68 C81 68 95 81 95 100 C95 120 81 133 61 133 C41 133 28 121 28 100 Z"/><path id="wordmark-letter-l" d="M139 0 H167 V152 H139 Z"/><path id="wordmark-letter-a" d="M235 42 C268 42 290 58 290 86 V152 H263 V138 C254 149 241 156 224 156 C200 156 185 143 185 123 C185 99 204 87 234 87 H263 V84 C263 73 253 66 238 66 C224 66 216 71 211 81 L191 73 C198 53 215 42 235 42 Z M263 107 H236 C220 107 213 113 213 122 C213 131 220 135 231 135 C250 135 263 122 263 107 Z"/><path id="wordmark-letter-i" d="M312 45 H340 V152 H312 Z M342 16 A16 16 0 1 1 310 16 A16 16 0 1 1 342 16 Z"/><path id="wordmark-letter-t" d="M372 11 H400 V45 H431 V69 H400 V113 C400 128 405 133 416 133 C422 133 428 131 433 129 V152 C425 155 418 157 410 157 C385 157 372 145 372 119 V69 H354 V45 H372 Z"/></g></g>
+</svg>

@@ -25,7 +25,7 @@ impl Plait {
                     .aria_label(format!("{} project", project.name))
                     .aria_expanded(expanded)
                     .child(icon(if expanded { "down" } else { "right" }))
-                    .child(icon("folder").text_color(rgb(if pi == 0 { MINT } else { VIOLET })))
+                    .child(icon("folder").text_color(rgb(MINT)))
                     .child(
                         div()
                             .flex_1()
@@ -61,7 +61,7 @@ impl Plait {
                             ))
                             .aria_expanded(open)
                             .child(icon(if open { "down" } else { "right" }))
-                            .child(icon("machine"))
+                            .child(icon("machine").text_color(rgb(BLUE)))
                             .child(div().flex_1().text_color(rgb(TEXT)).child(machine.name))
                             .child(tag(
                                 if machine.local { "local" } else { "fixture" },
@@ -98,7 +98,7 @@ impl Plait {
                                     .when(selected, |el| {
                                         el.bg(rgb(0x292d2c)).border_color(rgb(0x383f3c))
                                     })
-                                    .child(dot(status_color(thread.status)))
+                                    .child(icon("thread").text_color(rgb(VIOLET)))
                                     .child(
                                         column()
                                             .min_w_0()
@@ -113,10 +113,15 @@ impl Plait {
                                                     }))
                                                     .child(thread.title),
                                             )
-                                            .child(tag(
-                                                format!("{} · mock", thread.status.label()),
-                                                MUTED,
-                                            )),
+                                            .child(
+                                                row()
+                                                    .gap_2()
+                                                    .child(dot(status_color(thread.status)))
+                                                    .child(tag(
+                                                        format!("{} · mock", thread.status.label()),
+                                                        MUTED,
+                                                    )),
+                                            ),
                                     )
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.select_thread(selection, cx)
@@ -142,19 +147,16 @@ impl Plait {
                     .justify_between()
                     .child(
                         row()
+                            .id("plait-brand")
+                            .role(Role::Image)
+                            .aria_label("Plait")
                             .gap_3()
+                            .child(img("plait-mark.svg").w(px(24.)).h(px(30.)).flex_shrink_0())
                             .child(
-                                svg()
-                                    .path("braid")
-                                    .w(px(16.))
-                                    .h(px(22.))
-                                    .text_color(rgb(MINT)),
-                            )
-                            .child(
-                                div()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_size(px(16.))
-                                    .child("plait"),
+                                img("plait-wordmark.svg")
+                                    .w(px(64.))
+                                    .h(px(31.))
+                                    .flex_shrink_0(),
                             ),
                     )
                     .child(tag("2", MUTED)),

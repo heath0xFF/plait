@@ -1,0 +1,17 @@
+Plait — third-party notices
+
+Plait's own MIT license is in LICENSE. Dependency versions and Git revisions
+are recorded in the accompanying Cargo.lock. Unmodified dependency sources are
+available from their listed repositories and https://crates.io.
+
+{{#each licenses}}
+======================================================================
+{{name}} ({{id}})
+Used by:
+{{#each used_by}}
+- {{crate.name}} {{crate.version}} — {{{crate.repository}}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}

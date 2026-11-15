@@ -7,7 +7,11 @@ developer tool, not a marketing surface. Keep familiar navigation and controls.
 ## Layout
 Compact Project → Machine → Thread rail; conversation or diff workspace;
 optional wide-window Git inspector. Keep machine and thread context visible.
-The wordmark lives in the sidebar, not in a second app-wide header.
+The supplied ribbon P and outlined wordmark live in the sidebar, not in a second
+app-wide header. Use the owner's vector kit in `assets/branding`, not a generic
+braid or a crop from the reference sheet. The Dock/Finder icon uses the kit's
+rounded tile. Category glyphs use the kit's paths: mint projects, blue machines,
+violet threads, and light Git. Keep separate state dots and readable labels.
 
 Use right-aligned, neutral user-message bubbles. Agent replies remain open text
 on the conversation surface. Tool events start as compact disclosure rows;
@@ -28,7 +32,8 @@ architecture: no spawned-agent hierarchy, orchestration, or required worktrees.
 
 System sans-serif at 11–19 points; Menlo at 12 points for code. Conversation
 content is capped at 820 points; user bubbles use at most 85% of that width. Spacing follows a 4-point
-base. Avoid gradients, shadows, animation, and decorative dashboard cards.
+base. Preserve gradients inside the supplied brand artwork only. Avoid new
+chrome gradients, shadows, animation, and decorative dashboard cards.
 
 ## Behavior
 Native titlebar, menus, folder picker, close/minimize controls. Keyboard focus

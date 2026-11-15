@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" role="img" aria-labelledby="art-title art-description">
+  <title id="art-title">Plait projects icon</title>
+  <desc id="art-description">Editable 24-pixel UI icon approximated from the supplied raster artwork. Change the group color attribute to recolor; all lines remain editable strokes.</desc>
+  <defs></defs>
+  <g id="projects-icon" color="#83E8C0" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5.5A1.5 1.5 0 0 1 4.5 4H9l3 3h7.5A1.5 1.5 0 0 1 21 8.5V19H3Z"/></g>
+</svg>

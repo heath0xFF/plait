@@ -263,6 +263,16 @@ Omit the path to inspect the current directory. Use **Open repository…** (Cmd-
 to select another folder. The native picker accepts directories; Git validates
 the selection in the background. Nothing is staged, committed, or discarded.
 
+To build a native `.app` with the Plait icon and a ZIP archive:
+
+```sh
+bash scripts/build-macos.sh
+open dist/Plait.app --args /absolute/path/to/repository
+```
+
+This development package is ad-hoc signed, not notarized, and has no automatic
+updater. See [macOS packaging and CI artifacts](docs/MACOS.md).
+
 ### Real versus example data
 
 - **Real:** native window, hierarchy navigation, selection, keyboard actions,

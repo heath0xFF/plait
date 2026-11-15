@@ -78,7 +78,10 @@ staged, discarded, committed, or repaired in response to a read error.
 ## UI and performance
 
 Use GPUI's native macOS platform, Metal renderer, system sans-serif font, and
-Menlo for code. Assets are embedded strings, not runtime file reads.
+Menlo for code. SVG assets are embedded strings, not runtime file reads. GPUI
+renders the supplied ribbon mark and outlined wordmark as full-color images;
+category glyphs use its tinted SVG path. Brand files live in `assets/branding`.
+The development bundle and icon build are described in [MACOS.md](MACOS.md).
 
 Conversation events use GPUI's variable-height `list`. User messages render as
 right-aligned bubbles; agent replies remain open text. Tool details start

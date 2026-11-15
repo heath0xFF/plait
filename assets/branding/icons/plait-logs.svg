@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" role="img" aria-labelledby="art-title art-description">
+  <title id="art-title">Plait logs icon</title>
+  <desc id="art-description">Editable 24-pixel UI icon approximated from the supplied raster artwork. Change the group color attribute to recolor; all lines remain editable strokes.</desc>
+  <defs></defs>
+  <g id="logs-icon" color="#83E8C0" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12h6l3-9 4 18 3-9h6"/></g>
+</svg>
