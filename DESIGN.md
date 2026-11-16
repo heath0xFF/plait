@@ -19,27 +19,31 @@ optional wide-window Git inspector. Keep machine and thread context visible.
 
 - **Chrome.** One 44-point header: sidebar toggle, thread title, a muted
   `project / machine` on wide windows, state dot with a text label, and the
-  Conversation / Changes switch. The sidebar's brand row is the same height, so
-  the two align. No second header, tab strip, or permanent footer.
-- **Rail.** The supplied ribbon P and outlined wordmark live in the rail, above
-  two actions: New thread and Open repository. Every tree row is 28 points and
-  one line. Category glyphs use the owner's vector kit in `assets/branding`:
-  mint projects, blue machines, violet threads, and light Git. Do not use a
-  generic braid or a crop from the reference sheet. The Dock/Finder icon uses
-  the kit's rounded tile. Host state sits in a one-line footer with Settings.
-- **Thread rows.** Real threads show their state as a text label and a dot.
-  Example threads show a visible `mock` label and a dot; the header and the
-  accessible name spell out the sample state. Selection is a neutral fill.
+  Conversation / Changes switch. The sidebar's first action row centers on the
+  same 44 points. No second header, tab strip, or permanent footer.
+- **Rail.** No in-app logo: the app icon and window carry the brand. The rail
+  starts with two actions, New thread and Open repository. Projects are plain
+  section headers. Machines are outlined pills with their icon and name.
+  Every tree row is 28 points and one line. Category glyphs use the owner's
+  vector kit in `assets/branding`: mint projects, blue machines, violet
+  threads, and light Git. Do not use a generic braid or a crop from the
+  reference sheet. The Dock/Finder icon uses the kit's rounded tile. Host state
+  sits in a one-line footer with Settings.
+- **Thread rows.** A thread's state is a pill with a dot and a text label.
+  Selection is a neutral fill.
+- **Real data only.** No sample threads or placeholder machines. With no
+  thread open, the workspace says why (not connected, no threads yet, or
+  nothing selected) and offers the one useful action.
+- **Pills** are for metadata (machine, state), not for every label, so they
+  stay meaningful.
 - **Conversation.** Right-aligned, neutral user bubbles. Agent replies remain
   open text on the conversation surface. Tool events are compact disclosure rows
-  aligned to the text edge; expand them in place for details. Keep one clear
-  example-thread notice and visible mock labels on tool rows, with full
-  author/context labels for assistive technology.
+  aligned to the text edge; expand them in place for details. Give each row a
+  full author/context label for assistive technology.
 - **Composer.** One raised, rounded box holds the draft, its hint, and a single
   send control that becomes Stop while the agent works. Directly beneath it, a
   context line names the Project, Machine, and checkout branch, the thread's
-  saved model, and the approval rule. An example thread shows the same box
-  visibly unavailable, with no send control.
+  saved model, and the approval rule.
 - **Approval.** A bordered card above the composer shows the exact arguments,
   the risk, protected dirty paths, and Deny once / Allow once.
 - **Git.** Changed files are 28-point rows: a one-letter state, file name first,

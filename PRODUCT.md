@@ -10,8 +10,9 @@ A development environment for AI coding-agent work. The developer moves between
 Project → Machine → Thread, reads conversations, and inspects Git changes.
 
 ## Scope and truth
-README.md is the product authority. M1 has real local, read-only Git and fixture
-conversations. Zaphod is local; Marvin and Arthur are labeled remote fixtures.
+README.md is the product authority. The desktop shows only real data: the
+opened checkout's read-only Git and this machine's host threads. Remote
+machines are not shown until remote execution exists.
 No remote connection, agent execution, terminal, or persistence is claimed.
 
 ## Brand commitments

@@ -1,5 +1,28 @@
 # Verification
 
+## Real data only, sidebar pills, Cmd-number jumps — Linux checks, 2026-11-16
+
+Branch `ui/sidebar-pills-shortcuts`. **Not built or inspected on macOS.**
+
+- Removed the sample projects, machines, threads, and conversations. The app
+  shows the opened checkout on this machine (named from its hostname) and its
+  real host threads. With no thread open, it says why and offers Reconnect or
+  New thread.
+- Removed the in-window logo. Machines are pills; thread state is a pill.
+- Cmd-1 to Cmd-9 jump to threads, or to machines or projects (Settings ›
+  Keyboard). Conversation and Changes moved to Cmd-Shift-1 and Cmd-Shift-2.
+  The choice is a desktop-only preference file; see ARCHITECTURE.md.
+- Formatting, strict workspace Clippy, and all workspace Rust tests pass. New
+  tests cover the preference file (missing, malformed, oversized, unknown
+  fields, failed save, atomic replacement), jump order, hostname display, and,
+  in the headless walk, Cmd-number selection and next/previous wrapping.
+- Every view was rendered headlessly at 1380 × 860 and 900 × 600 and inspected,
+  including the three no-thread states.
+- `scripts/smoke-macos.applescript` was rewritten for the new tree (one project,
+  one machine) and the no-thread state. **It has not been run.** It accepts
+  either "Not connected" or "No threads yet", depending on whether a host is
+  running on the Mac.
+
 ## Cancellable desktop subscriptions — Linux checks, 2026-11-16
 
 Removed the desktop watch's one-second read timeout and repeated UI stale-watch

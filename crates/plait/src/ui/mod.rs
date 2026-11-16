@@ -2,6 +2,7 @@ mod changes;
 mod composer;
 mod conversation;
 mod host;
+mod jump;
 mod live_conversation;
 mod navigation;
 mod settings;
@@ -12,8 +13,8 @@ pub mod theme;
 use gpui::{prelude::*, *};
 use plait_core::{
     host_state::HostState,
-    model::{DiffMode, Selection},
-    state::{AppState, Load},
+    model::DiffMode,
+    state::{AppState, Load, project_name},
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -54,14 +55,13 @@ pub struct Plait {
     settings_open: bool,
     new_thread_open: bool,
     focus: FocusHandle,
-    conversation_scroll: ListState,
-    expanded_tools: HashSet<usize>,
     expanded_live_tools: HashSet<String>,
     file_scroll: UniformListScrollHandle,
     diff_scroll: UniformListScrollHandle,
     show_changes: bool,
     sidebar: bool,
     diagnostics: bool,
+    preferences: jump::PreferenceState,
     picker_open: bool,
     notice: Option<String>,
     last_render_us: u128,
@@ -81,7 +81,6 @@ impl Plait {
     ) -> Self {
         let host = HostState::new(path.clone());
         let state = AppState::new(path);
-        let count = state.projects[0].machines[0].threads[0].events.len();
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let mut this = Self {
@@ -94,14 +93,13 @@ impl Plait {
             settings_open: false,
             new_thread_open: false,
             focus,
-            conversation_scroll: ListState::new(count, ListAlignment::Top, px(300.)),
-            expanded_tools: HashSet::new(),
             expanded_live_tools: HashSet::new(),
             file_scroll: UniformListScrollHandle::new(),
             diff_scroll: UniformListScrollHandle::new(),
             show_changes: false,
             sidebar: true,
             diagnostics: false,
+            preferences: jump::PreferenceState::default(),
             picker_open: false,
             notice: None,
             last_render_us: 0,
@@ -112,6 +110,7 @@ impl Plait {
             switch_us: 0,
         };
         this.pump(cx);
+        this.load_preferences(cx);
         this.reconnect_host(window, cx);
         this
     }
@@ -140,40 +139,27 @@ impl Plait {
         .detach();
     }
 
-    /// Point the example conversation at `selection`. The list and disclosure
-    /// state change with it; otherwise they describe the previous thread.
-    fn show_fixture(&mut self, selection: Selection) {
-        self.state.select(selection);
-        let s = self.state.selection;
-        let count = self.state.projects[s.project].machines[s.machine].threads[s.thread]
-            .events
-            .len();
-        self.expanded_tools.clear();
-        self.conversation_scroll.reset(count);
-    }
-
-    /// Host threads and the new-thread page belong to the local machine.
-    fn show_local_machine(&mut self) {
-        self.show_fixture(Selection {
-            project: 0,
-            machine: 0,
-            thread: 0,
-        });
-    }
-
-    fn select_thread(&mut self, selection: Selection, cx: &mut Context<Self>) {
-        self.interaction = Some(Instant::now());
-        self.host_watch = None;
-        self.host.select(None);
-        self.settings_open = false;
-        self.new_thread_open = false;
-        self.show_fixture(selection);
-        cx.notify();
-    }
-
-    fn step_thread(&mut self, forward: bool, cx: &mut Context<Self>) {
-        self.state.step_thread(forward);
-        self.select_thread(self.state.selection, cx);
+    /// Move to the next or previous host thread, wrapping. With no selection,
+    /// forward starts at the first thread and backward at the last.
+    fn step_thread(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let count = self.host.threads.len();
+        if count == 0 {
+            return;
+        }
+        let current = self
+            .host
+            .selected
+            .as_ref()
+            .and_then(|id| self.host.threads.iter().position(|thread| &thread.id == id));
+        let next = match (current, forward) {
+            (Some(index), true) => (index + 1) % count,
+            (Some(index), false) => (index + count - 1) % count,
+            (None, true) => 0,
+            (None, false) => count - 1,
+        };
+        self.interaction = Some(std::time::Instant::now());
+        let id = self.host.threads[next].id.clone();
+        self.select_host_thread(id, window, cx);
     }
 
     fn select_file(
@@ -218,7 +204,7 @@ impl Plait {
 
     fn refresh(&mut self, _: &Refresh, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
-        if self.state.local() && !matches!(self.state.repository.snapshot, Load::Loading) {
+        if !matches!(self.state.repository.snapshot, Load::Loading) {
             self.state.repository.refresh();
             self.pump(cx);
             cx.notify();
@@ -250,11 +236,7 @@ impl Plait {
                 match result {
                     Ok(Ok(Some(paths))) => {
                         if let Some(path) = paths.into_iter().next() {
-                            this.state.projects[0].name = path
-                                .file_name()
-                                .unwrap_or(path.as_os_str())
-                                .to_string_lossy()
-                                .into_owned();
+                            this.state.projects[0].name = project_name(&path);
                             let epoch = this.host.epoch + 1;
                             let submissions = std::mem::take(&mut this.host.submissions);
                             this.host = HostState::new(path.clone());
@@ -262,14 +244,10 @@ impl Plait {
                             this.host.submissions = submissions;
                             this.reconnect_host(window, cx);
                             this.state.repository.open(path);
-                            this.select_thread(
-                                Selection {
-                                    project: 0,
-                                    machine: 0,
-                                    thread: 0,
-                                },
-                                cx,
-                            );
+                            // The new checkout's threads come from the reconnect.
+                            this.host_watch = None;
+                            this.settings_open = false;
+                            this.new_thread_open = false;
                             this.file_scroll = UniformListScrollHandle::new();
                             this.notice = None;
                             this.pump(cx);
@@ -321,9 +299,9 @@ impl Plait {
     ) -> impl IntoElement {
         let changed = self
             .state
-            .local()
-            .then(|| self.state.repository.snapshot.ready())
-            .flatten()
+            .repository
+            .snapshot
+            .ready()
             .map(|snapshot| snapshot.changes.len())
             .filter(|count| *count > 0);
         row()
@@ -367,12 +345,12 @@ impl Plait {
                 segmented()
                     .child(
                         segment("conversation-tab", "Conversation", !self.show_changes)
-                            .aria_keyshortcuts("Meta+1")
+                            .aria_keyshortcuts("Meta+Shift+1")
                             .on_click(cx.listener(|this, _, _, cx| this.show_tab(false, cx))),
                     )
                     .child(
                         segment("changes-tab", "Changes", self.show_changes)
-                            .aria_keyshortcuts("Meta+2")
+                            .aria_keyshortcuts("Meta+Shift+2")
                             // The accessible name stays "Changes"; the count is visual.
                             .when_some(changed, |el, count| {
                                 el.child(
@@ -393,13 +371,14 @@ impl Plait {
         model: Option<String>,
         note: Option<(&'static str, u32)>,
     ) -> impl IntoElement {
-        let selection = self.state.selection;
-        let project = &self.state.projects[selection.project];
-        let machine = &project.machines[selection.machine];
-        let branch = machine
-            .local
-            .then(|| self.state.repository.snapshot.ready())
-            .flatten()
+        // Host threads belong to this machine's checkout.
+        let project = &self.state.projects[0];
+        let machine = &project.machines[0];
+        let branch = self
+            .state
+            .repository
+            .snapshot
+            .ready()
             .map(|snapshot| snapshot.branch.clone());
         let chip = |id: &'static str, glyph: &'static str, label: String| {
             row()
@@ -417,19 +396,7 @@ impl Plait {
             .text_size(px(11.))
             .text_color(rgb(MUTED))
             .child(chip("environment-project", "folder", project.name.clone()))
-            .child(chip(
-                "environment-machine",
-                "machine",
-                format!(
-                    "{} · {}",
-                    machine.name,
-                    if machine.local {
-                        "local"
-                    } else {
-                        "remote fixture"
-                    }
-                ),
-            ))
+            .child(chip("environment-machine", "machine", machine.name.clone()))
             .when_some(branch, |el, branch| {
                 el.child(chip("environment-branch", "branch", branch))
             })
@@ -478,11 +445,16 @@ impl Render for Plait {
             self.switch_us = interaction.elapsed().as_micros();
         }
         let wide = window.viewport_size().width > px(1150.);
-        let selection = self.state.selection;
-        let project = &self.state.projects[selection.project];
-        let machine = &project.machines[selection.machine];
-        let thread = &machine.threads[selection.thread];
+        let project = &self.state.projects[0];
+        let machine = &project.machines[0];
         let real = self.host.selected.is_some();
+        let connection = if self.host.connecting {
+            ("Connecting…".to_owned(), MUTED)
+        } else if self.host.connected {
+            ("Host connected".to_owned(), MINT)
+        } else {
+            ("Host disconnected".to_owned(), AMBER)
+        };
         let title = if self.settings_open {
             "Settings".to_owned()
         } else if self.new_thread_open {
@@ -490,15 +462,9 @@ impl Render for Plait {
         } else if real {
             self.host.selected.clone().unwrap_or_default()
         } else {
-            thread.title.to_owned()
+            project.name.clone()
         };
-        let status = if self.settings_open || self.new_thread_open {
-            if self.host.connected {
-                ("Host connected".to_owned(), MINT)
-            } else {
-                ("Host disconnected".to_owned(), AMBER)
-            }
-        } else if real {
+        let status = if real && !self.settings_open && !self.new_thread_open {
             self.host.snapshot.as_ref().map_or_else(
                 || ("Loading".to_owned(), MUTED),
                 |snapshot| {
@@ -508,21 +474,14 @@ impl Render for Plait {
                     )
                 },
             )
-        } else if machine.local {
-            (
-                format!("{} · fixture", thread.status.label()),
-                status_color(thread.status),
-            )
         } else {
-            (
-                format!("{} · remote fixture, not connected", thread.status.label()),
-                status_color(thread.status),
-            )
+            connection
         };
-        let location = if self.settings_open {
-            "Plait / Local host".to_owned()
-        } else {
+        // With no thread open the title is already the project; don't repeat it.
+        let location = if real || self.settings_open || self.new_thread_open {
             format!("{} / {}", project.name, machine.name)
+        } else {
+            machine.name.clone()
         };
         let root = column()
             .id("plait")
@@ -544,8 +503,12 @@ impl Render for Plait {
             }))
             .on_action(cx.listener(|this, _: &Conversation, _, cx| this.show_tab(false, cx)))
             .on_action(cx.listener(|this, _: &Changes, _, cx| this.show_tab(true, cx)))
-            .on_action(cx.listener(|this, _: &NextThread, _, cx| this.step_thread(true, cx)))
-            .on_action(cx.listener(|this, _: &PreviousThread, _, cx| this.step_thread(false, cx)))
+            .on_action(
+                cx.listener(|this, _: &NextThread, window, cx| this.step_thread(true, window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &PreviousThread, window, cx| {
+                this.step_thread(false, window, cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &NextFile, window, cx| this.step_file(true, window, cx)),
             )
@@ -556,6 +519,7 @@ impl Render for Plait {
             .on_action(cx.listener(|_, _: &BackTab, window, cx| window.focus_prev(cx)))
             .on_action(cx.listener(|_, _: &Close, window, _| window.remove_window()))
             .on_action(cx.listener(|_, _: &Minimize, window, _| window.minimize_window()))
+            .map(|root| self.on_jump_actions(root, cx))
             .size_full()
             .overflow_hidden()
             .bg(rgb(BG))
@@ -594,7 +558,7 @@ impl Render for Plait {
                             } else if real {
                                 self.live_conversation(wide, cx).into_any_element()
                             } else {
-                                self.conversation(wide, cx).into_any_element()
+                                self.idle(wide, cx).into_any_element()
                             }),
                     ),
             )
@@ -608,6 +572,7 @@ impl Render for Plait {
 
 pub fn menus(cx: &mut App) {
     composer::bind_keys(cx);
+    jump::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-w", Close, Some("Plait")),
@@ -617,8 +582,9 @@ pub fn menus(cx: &mut App) {
         KeyBinding::new("cmd-r", Refresh, Some("Plait")),
         KeyBinding::new("cmd-b", ToggleSidebar, Some("Plait")),
         KeyBinding::new("cmd-shift-d", ToggleDiagnostics, Some("Plait")),
-        KeyBinding::new("cmd-1", Conversation, Some("Plait")),
-        KeyBinding::new("cmd-2", Changes, Some("Plait")),
+        // Cmd-1 to Cmd-9 jump to sidebar items; see jump.rs.
+        KeyBinding::new("cmd-shift-1", Conversation, Some("Plait")),
+        KeyBinding::new("cmd-shift-2", Changes, Some("Plait")),
         KeyBinding::new("cmd-alt-down", NextThread, Some("Plait")),
         KeyBinding::new("cmd-alt-up", PreviousThread, Some("Plait")),
         KeyBinding::new("alt-down", NextFile, Some("Plait")),

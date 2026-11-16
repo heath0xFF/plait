@@ -36,7 +36,7 @@ does not test the downloaded-file approval flow on your Mac.
    **Settings** (Cmd-comma) to check the local host and choose an authenticated
    model. Reconnect if the client opened before the host was ready.
 4. Start a new real thread. Review each exact edit or command before approval.
-   Example machines and conversations remain visibly labeled fixtures.
+   The app shows only real threads; there is no sample conversation.
 
 The host is a **per-user LaunchAgent**, not a root daemon. It starts for the
 current graphical user when possible and at later graphical logins. If no

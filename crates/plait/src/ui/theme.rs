@@ -1,5 +1,5 @@
 use gpui::{prelude::*, *};
-use plait_core::{host, model::ThreadStatus};
+use plait_core::host;
 use std::borrow::Cow;
 
 pub const BG: u32 = 0x171819;
@@ -204,13 +204,19 @@ pub fn tag(text: impl Into<SharedString>, color: u32) -> Div {
         .child(text!(id = text.clone(), text))
 }
 
-pub fn status_color(status: ThreadStatus) -> u32 {
-    match status {
-        ThreadStatus::Ready => MINT,
-        ThreadStatus::Working => BLUE,
-        ThreadStatus::NeedsInput => AMBER,
-        ThreadStatus::Complete => VIOLET,
-    }
+/// Rounded, outlined label for metadata: a machine, a state. Callers add children.
+pub fn pill() -> Div {
+    row()
+        .gap(px(5.))
+        .h(px(20.))
+        .px(px(7.))
+        .min_w_0()
+        .flex_shrink_0()
+        .rounded_full()
+        .border_1()
+        .border_color(rgb(EDGE))
+        .text_size(px(11.))
+        .text_color(rgb(MUTED))
 }
 
 pub fn host_status_color(status: host::ThreadStatus) -> u32 {

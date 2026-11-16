@@ -2,11 +2,12 @@
 //!
 //! Blocking Git and host operations must run on the caller's background executor.
 
-pub mod fixtures;
 pub mod git;
 pub mod host;
 pub mod host_state;
 pub mod local_socket;
+pub mod machine;
 pub mod model;
+pub mod preferences;
 pub mod state;
 pub mod transcript;

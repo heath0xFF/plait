@@ -290,8 +290,9 @@ are unsigned and not notarized. There is no automatic updater. See
 - **Real:** native input, local host connection, model choice and authentication
   status, saved defaults, host threads, and read-only Git status/diffs. Host
   execution is still subject to the M2 safety validation below.
-- **Example:** the original preview conversations and the Marvin and Arthur
-  machine entries remain labeled fixtures. Selecting them never runs an agent.
+- **Nothing is sample data.** The sidebar shows the opened checkout on this
+  machine and its real host threads. Remote machines appear when remote
+  execution exists (M3).
 - **Not included:** remote execution, Git-write controls, a file editor, an
   embedded terminal, automatic updates, or mandatory worktrees.
 
@@ -301,7 +302,8 @@ are unsigned and not notarized. There is no automatic updater. See
 |---|---|
 | Cmd-O | Open a local repository |
 | Cmd-R | Refresh local Git status and invalidate cached diffs |
-| Cmd-1 / Cmd-2 | Conversation / Changes |
+| Cmd-1 … Cmd-9 | Jump to the Nth thread in the sidebar (Settings: threads, machines, or projects) |
+| Cmd-Shift-1 / Cmd-Shift-2 | Conversation / Changes |
 | Cmd-B | Show or hide the sidebar |
 | Cmd-Shift-D | Show or hide render timing diagnostics |
 | Cmd-comma | Open local host settings |

@@ -20,13 +20,18 @@ on waitForText(expected)
     error "Timed out waiting for: " & expected
 end waitForText
 
-on toggleReadTool()
-    tell application "System Events" to tell process "plait"
-        set root to group "Plait" of group 1 of window "Plait"
-        set toolRow to first group of root whose name starts with "Read · project context"
-        click button "Read · project context · mock tool event" of toolRow
-    end tell
-end toggleReadTool
+-- A fresh disposable checkout has no threads. With no host running the app
+-- says so; with a host it offers a new thread. Either is a real state.
+on waitForIdle()
+    repeat 100 times
+        try
+            set shown to my visibleText()
+            if shown contains "Not connected" or shown contains "No threads yet" then return
+        end try
+        delay 0.1
+    end repeat
+    error "Timed out waiting for the no-thread state"
+end waitForIdle
 
 on run arguments
     if (count arguments) is not 1 then error "Usage: smoke-macos.applescript dirty|clean|not-a-repository"
@@ -55,47 +60,24 @@ on run arguments
     tell application "System Events" to tell process "plait"
         click radio button "Conversation" of root
     end tell
-    delay 0.3
-    my assertThat(my visibleText() does not contain "README.md", "Tool details should start collapsed")
-    my toggleReadTool()
-    my waitForText("README.md")
-    my toggleReadTool()
-    delay 0.3
-    my assertThat(my visibleText() does not contain "README.md", "Tool details did not collapse")
-    my toggleReadTool()
-    tell application "System Events" to tell process "plait"
-        set tree to outline "Projects, machines, host threads and labeled fixtures" of root
-        perform action "AXPress" of row "Review Git boundaries, Needs input (mock)" of tree
-        perform action "AXPress" of row "Native desktop foundation, Ready (mock)" of tree
-    end tell
-    delay 0.3
-    my assertThat(my visibleText() does not contain "README.md", "Tool details leaked across thread selection")
+    my waitForIdle()
+    my assertThat(my visibleText() does not contain "mock", "Example data is shown")
     tell application "System Events" to tell process "plait"
         click radio button "Changes" of root
-        set tree to outline "Projects, machines, host threads and labeled fixtures" of root
+        -- Project and this machine. The disposable checkout has no threads.
+        set tree to outline "Projects, machines, and threads" of root
         set originalCount to count rows of tree
-        my assertThat(originalCount = 11, "Expected fresh fixture navigation")
+        my assertThat(originalCount = 2, "Expected one project on one machine")
         perform action "AXPress" of row 1 of tree
         delay 0.3
-        my assertThat((count rows of tree) < originalCount, "Project did not collapse")
+        my assertThat((count rows of tree) = 1, "Project did not collapse")
         perform action "AXPress" of row 1 of tree
         delay 0.3
         my assertThat((count rows of tree) = originalCount, "Project did not expand")
-        perform action "AXPress" of row "Zaphod, local Git" of tree
-        delay 0.3
-        my assertThat((count rows of tree) = originalCount - 2, "Machine did not collapse")
-        perform action "AXPress" of row "Zaphod, local Git" of tree
-        delay 0.3
-        perform action "AXPress" of row "Repository discovery, Working (mock)" of tree
-    end tell
-    my waitForText("Remote Git is not connected")
-    tell application "System Events" to tell process "plait"
-        perform action "AXPress" of row "A fresh conversation, Ready (mock)" of tree
         click radio button "Conversation" of root
     end tell
-    my waitForText("A quiet place to start")
+    my waitForIdle()
     tell application "System Events" to tell process "plait"
-        perform action "AXPress" of row "Native desktop foundation, Ready (mock)" of tree
         click button "Open repository…" of root
         repeat 50 times
             if exists window "Open" then exit repeat
@@ -121,5 +103,5 @@ on run arguments
         end repeat
     end tell
     my waitForText("+    queue_status();")
-    return "PASS: tool disclosure/reset, hierarchy, selection, remote/empty states, native picker/cancel, staged/unstaged diffs, rapid switching."
+    return "PASS: no-thread state without examples, hierarchy collapse, native picker/cancel, staged/unstaged diffs, rapid switching."
 end run
