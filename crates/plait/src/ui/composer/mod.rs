@@ -16,7 +16,7 @@ mod trigger;
 pub use commands::CommandId;
 pub use completion::{Completion, CompletionEvent, CompletionItem};
 
-use super::theme::{self, ButtonAction, EDGE, MUTED, RAIL, SUBTLE, TEXT};
+use super::theme::{self, BG, ButtonAction, EDGE, MUTED, RAIL, SUBTLE, TEXT};
 use commands::COMMANDS;
 use draft::Draft;
 use gpui::{prelude::*, *};
@@ -35,6 +35,9 @@ use unicode_segmentation::UnicodeSegmentation;
 const FOCUS_EDGE: u32 = 0x6f8fc4;
 /// Suggestions kept for one query; typing narrows the list faster than scrolling.
 const SUGGESTION_LIMIT: usize = 50;
+/// The suggestion list is narrower than a wide composer, so paths stay scannable.
+const SUGGESTION_WIDTH: f32 = 560.;
+const SUGGESTION_GUTTER: f32 = 8.;
 /// Two Escape presses this close together stop a run; one alone never does.
 const STOP_WINDOW: Duration = Duration::from_millis(1500);
 
@@ -307,10 +310,15 @@ impl Composer {
     /// Answer `ComposerEvent::FilesNeeded` with the checkout's files. Matching
     /// against them runs on the background executor.
     pub fn set_files(&mut self, files: MentionFiles, cx: &mut Context<Self>) {
-        if let (MentionFiles::Ready(current), MentionFiles::Ready(next)) = (&self.files, &files)
-            && Arc::ptr_eq(current, next)
-        {
-            return;
+        match (&self.files, &files) {
+            (MentionFiles::Ready(current), MentionFiles::Ready(next))
+                if Arc::ptr_eq(current, next) =>
+            {
+                return;
+            }
+            // While a newer list loads, the previous one is still the best answer.
+            (MentionFiles::Ready(_), MentionFiles::Loading) => return,
+            _ => {}
         }
         self.files = files;
         self.rank_files(cx);
@@ -839,6 +847,41 @@ impl Composer {
     }
 }
 
+/// Hooks for scene and layout tests, which have no keyboard.
+#[cfg(test)]
+impl Composer {
+    /// Focus the input and type `text` through the same path as a key press.
+    pub fn type_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus, cx);
+        self.edit(|draft| draft.insert(text), window, cx);
+    }
+
+    /// Accessible names of the open suggestions, best first.
+    pub fn suggestion_names(&self) -> Vec<String> {
+        let Some(list) = self.suggestions() else {
+            return Vec::new();
+        };
+        (0..)
+            .map_while(|index| list.item(index))
+            .map(|item| item.name.to_string())
+            .collect()
+    }
+
+    /// Enter with a suggestion list open. True when a suggestion took the key.
+    pub fn accept_suggestion(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.accept(None, window, cx)
+    }
+
+    /// The Up or Down key.
+    pub fn press_arrow(&mut self, down: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.arrow(down, window, cx);
+    }
+
+    pub fn text(&self) -> &str {
+        &self.draft.value.text
+    }
+}
+
 impl Focusable for Composer {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
@@ -999,14 +1042,18 @@ impl Composer {
                     let _ =
                         composer.update(cx, |this, cx| this.completion_event(event, window, cx));
                 })?;
+        // Conversation rows hang a few points left of the text edge. A strip of
+        // the surface color keeps their ends from showing beside the list.
         Some(
             div()
                 .absolute()
                 .bottom_full()
-                .left_0()
+                .left(px(-SUGGESTION_GUTTER))
                 .w_full()
-                .max_w(px(560.))
+                .max_w(px(SUGGESTION_WIDTH + SUGGESTION_GUTTER))
+                .pl(px(SUGGESTION_GUTTER))
                 .pb(px(6.))
+                .bg(rgb(BG))
                 .child(list),
         )
     }

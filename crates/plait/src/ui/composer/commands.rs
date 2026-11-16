@@ -80,10 +80,17 @@ pub(super) fn matching(commands: &'static [Command], query: &str, busy: bool) ->
         .filter(|command| busy || !command.needs_run)
         .filter_map(|command| {
             let by_name = fuzzy_match(query, command.name);
+            // A description is prose: only an unbroken run in it is a real match.
             let by_detail = by_name
                 .is_none()
                 .then(|| fuzzy_match(query, command.detail))
-                .flatten();
+                .flatten()
+                .filter(|found| {
+                    found
+                        .positions
+                        .windows(2)
+                        .all(|pair| pair[0] + 1 == pair[1])
+                });
             let score = by_name.as_ref().or(by_detail.as_ref())?.score;
             Some((
                 by_name.is_some(),
@@ -125,8 +132,9 @@ mod tests {
 
     #[test]
     fn typing_narrows_by_name_first_and_description_second() {
-        assert_eq!(names("sett", false), ["settings"]);
-        assert_eq!(names("set", false)[0], "settings");
+        assert_eq!(names("set", false), ["settings"]);
+        // Scattered letters in a description do not count: "Show The diFFs".
+        assert!(names("stff", false).is_empty());
         assert_eq!(names("st", false)[0], "settings");
         assert!(!names("st", false).contains(&"stop"));
         assert_eq!(names("st", true)[0], "stop");

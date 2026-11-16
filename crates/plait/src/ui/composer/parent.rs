@@ -46,7 +46,7 @@ impl Plait {
 
     /// Start the read-only file listing if this epoch has none, then report
     /// what is known. The read itself runs on the background executor.
-    fn supply_files(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn supply_files(&mut self, cx: &mut Context<Self>) {
         self.state.repository.request_files();
         self.pump(cx);
         self.deliver_files(cx);

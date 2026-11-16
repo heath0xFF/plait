@@ -1,7 +1,7 @@
 //! The draft's text area: wrapped layout, auto-growing height, and painting.
 
 use super::Composer;
-use crate::ui::theme::{BLUE, SUBTLE, TEXT};
+use crate::ui::theme::{BLUE, EDGE, SUBTLE, TEXT};
 use gpui::*;
 use std::{collections::HashMap, ops::Range, rc::Rc};
 
@@ -37,6 +37,22 @@ pub(super) fn reveal(scroll: Pixels, cursor_top: Pixels, height: Pixels) -> Pixe
 pub(super) fn clamp_scroll(scroll: Pixels, rows: usize, height: Pixels) -> Pixels {
     let overflow = (px(rows as f32 * LINE_HEIGHT) - height).max(px(0.));
     scroll.clamp(px(0.), overflow)
+}
+
+/// Top and length of the position marker for a draft taller than its box, or
+/// `None` when everything fits. It shows that text continues out of view.
+pub(super) fn scroll_marker(
+    scroll: Pixels,
+    rows: usize,
+    height: Pixels,
+) -> Option<(Pixels, Pixels)> {
+    let content = px(rows as f32 * LINE_HEIGHT);
+    if content <= height || height <= px(0.) {
+        return None;
+    }
+    let length = (height * (height / content)).max(px(LINE_HEIGHT).min(height));
+    let travelled = (scroll / (content - height)).clamp(0., 1.);
+    Some(((height - length) * travelled, length))
 }
 
 /// One wrapped line on screen and the draft bytes it shows.
@@ -317,6 +333,16 @@ impl Element for InputElement {
                     }
                 }
             });
+            // Drawn in the box's right padding, clear of the wrapped text.
+            if let Some((top, length)) =
+                scroll_marker(input.scroll, input.layout.rows.len(), bounds.size.height)
+            {
+                let origin = point(bounds.right() + px(5.), bounds.top() + top);
+                window.paint_quad(
+                    fill(Bounds::new(origin, size(px(3.), length)), rgb(EDGE))
+                        .corner_radii(px(1.5)),
+                );
+            }
             if input.paint_error != failure {
                 input.paint_error = failure;
                 cx.notify();
@@ -362,7 +388,9 @@ fn paint_placeholder(
 #[cfg(test)]
 mod tests {
     // Not a glob: GPUI exports its own `test` attribute.
-    use super::{LINE_HEIGHT, MIN_ROW_LIMIT, clamp_scroll, input_height, reveal, row_limit};
+    use super::{
+        LINE_HEIGHT, MIN_ROW_LIMIT, clamp_scroll, input_height, reveal, row_limit, scroll_marker,
+    };
     use gpui::px;
 
     #[test]
@@ -400,6 +428,26 @@ mod tests {
         assert_eq!(reveal(line(5.), line(6.), height), line(5.));
         // A one-line box always scrolls to the cursor's line.
         assert_eq!(reveal(px(0.), line(7.), line(1.)), line(7.));
+    }
+
+    #[test]
+    fn the_marker_appears_only_on_overflow_and_spans_the_box() {
+        let height = px(4. * LINE_HEIGHT);
+        assert_eq!(scroll_marker(px(0.), 4, height), None);
+        assert_eq!(scroll_marker(px(0.), 0, height), None);
+        assert_eq!(scroll_marker(px(0.), 9, px(0.)), None);
+        // Eight rows in a four-row box: the marker is half the box.
+        let half = px(2. * LINE_HEIGHT);
+        assert_eq!(scroll_marker(px(0.), 8, height), Some((px(0.), half)));
+        assert_eq!(scroll_marker(height, 8, height), Some((half, half)));
+        assert_eq!(
+            scroll_marker(height / 2., 8, height),
+            Some((half / 2., half))
+        );
+        // A very long draft keeps a marker large enough to see, inside the box.
+        let (top, length) = scroll_marker(px(1e6), 5000, height).unwrap();
+        assert_eq!(length, px(LINE_HEIGHT));
+        assert_eq!(top + length, height);
     }
 
     #[test]
