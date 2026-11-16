@@ -43,11 +43,10 @@ impl Plait {
         } else if self.host.threads.is_empty() {
             (
                 "No threads yet",
-                if self.next_approval_mode() == Some(ApprovalMode::Auto) {
-                    "Start a thread in this checkout. The agent edits and runs sandboxed commands without asking; files you had already changed stay protected."
-                } else {
-                    "Start a thread in this checkout. Every edit and command waits for your approval."
-                }
+                plait_core::host::policy::idle_detail(
+                    self.next_approval_mode() != Some(ApprovalMode::Auto),
+                    self.command_policy(),
+                )
                 .into(),
                 Some("New thread"),
             )

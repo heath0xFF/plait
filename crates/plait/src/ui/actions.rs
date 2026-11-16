@@ -8,6 +8,11 @@
 //!
 //! Editing keys that belong to one control (the composer, the text field, and
 //! the palette's list) are bound by those controls and are not listed here.
+//!
+//! The second half of this file is the rules of the shortcut editor as plain
+//! functions over that map: what a row is bound to, which keystrokes are
+//! refused, which actions a keystroke would collide with, and how an
+//! assignment changes the map. The editor's view is in settings_keyboard.rs.
 
 use super::{jump::*, *};
 use std::{collections::BTreeMap, rc::Rc};
@@ -44,6 +49,17 @@ impl AppAction {
     fn context(&self) -> Option<&'static str> {
         (self.id != "app.quit").then_some("Plait")
     }
+
+    /// The default as a keystroke. Defaults are single keystrokes; a test checks.
+    pub fn default_key(&self) -> Option<Keystroke> {
+        parsed(self.key?)?.into_iter().next()
+    }
+
+    /// Focus movement is how the keyboard reaches every control, and it has no
+    /// menu item, so it always keeps a shortcut.
+    pub fn required(&self) -> bool {
+        self.id.starts_with("focus.")
+    }
 }
 
 const fn entry(
@@ -70,6 +86,7 @@ use Place::{Hidden, Menu as Item, MenuGroup as Group};
 #[rustfmt::skip]
 pub(super) const ACTIONS: &[AppAction] = &[
     entry("app.settings", "Settings…", "Plait", Some("cmd-,"), Item, || Box::new(Settings)),
+    entry("settings.providers", "Provider Settings", "Plait", None, Item, || Box::new(ProviderSettings)),
     entry("app.check_for_updates", "Check for Updates…", "Plait", None, Item, || Box::new(CheckForUpdates)),
     entry("app.quit", "Quit Plait", "Plait", Some("cmd-q"), Group, || Box::new(Quit)),
     entry("thread.new", "New Thread", "File", Some("cmd-n"), Item, || Box::new(NewThread)),
@@ -112,10 +129,18 @@ pub(super) const KEY_LABELS: OperatingSystem = if cfg!(target_os = "macos") {
     OperatingSystem::Linux
 };
 
+/// A binding written in GPUI notation as keystrokes. `None` when it is empty
+/// or any part of it does not parse.
+fn parsed(keystrokes: &str) -> Option<Vec<Keystroke>> {
+    let keys = keystrokes
+        .split_whitespace()
+        .map(|keystroke| Keystroke::parse_with_os(keystroke, KEY_LABELS).ok())
+        .collect::<Option<Vec<_>>>()?;
+    (!keys.is_empty()).then_some(keys)
+}
+
 fn parses(keystrokes: &str) -> bool {
-    let mut parts = keystrokes.split_whitespace().peekable();
-    parts.peek().is_some()
-        && parts.all(|keystroke| Keystroke::parse_with_os(keystroke, KEY_LABELS).is_ok())
+    parsed(keystrokes).is_some()
 }
 
 /// The keystroke an action is bound to: its override when that is usable,
@@ -182,10 +207,415 @@ pub(super) fn install(cx: &mut App, overrides: &KeyOverrides) {
     // Controls bind their own editing keys.
     composer::bind_keys(cx);
     text_field::bind_keys(cx);
+    // Everything bound so far belongs to text entry.
+    let editing = cx
+        .key_bindings()
+        .borrow()
+        .bindings()
+        .filter_map(|binding| match binding.keystrokes() {
+            [only] => Some(only.inner().clone()),
+            _ => None,
+        })
+        .collect();
+    cx.set_global(EditingKeys(editing));
     palette::bind_keys(cx);
     selection::bind_keys(cx);
     bind(cx, overrides);
     cx.set_menus(menus());
+}
+
+/// The keys the composer and text fields bind for themselves, read from their
+/// own bindings each time the keymap is installed.
+struct EditingKeys(Vec<Keystroke>);
+
+impl Global for EditingKeys {}
+
+/// Keys that edit text. An application shortcut on one of them would not fire
+/// while typing, so the shortcut editor refuses them.
+pub(super) fn editing_keys(cx: &App) -> &[Keystroke] {
+    cx.try_global::<EditingKeys>()
+        .map_or(&[], |keys| keys.0.as_slice())
+}
+
+/// What an action is bound to now. Empty when it is unbound.
+pub(super) fn bound(action: &AppAction, overrides: &KeyOverrides) -> Vec<Keystroke> {
+    keystroke(action, overrides)
+        .and_then(parsed)
+        .unwrap_or_default()
+}
+
+/// Keystrokes as the menus show them: `⌘⇧N`.
+pub(super) fn label(keys: &[Keystroke]) -> String {
+    let shown = keys.iter().map(|key| key.display(KEY_LABELS).to_string());
+    shown.collect::<Vec<_>>().join(" ")
+}
+
+fn key_name(key: &str) -> String {
+    let mut letters = key.chars();
+    letters.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(letters).collect()
+    })
+}
+
+/// The modifiers held for `key`, then the key, each named by `names`.
+fn named(key: &Keystroke, names: [&str; 5]) -> Vec<String> {
+    let held = [
+        key.modifiers.control,
+        key.modifiers.alt,
+        key.modifiers.platform,
+        key.modifiers.shift,
+        key.modifiers.function,
+    ];
+    let mut parts = held
+        .into_iter()
+        .zip(names)
+        .filter(|(down, _)| *down)
+        .map(|(_, name)| name.to_owned())
+        .collect::<Vec<_>>();
+    parts.push(key_name(&key.key));
+    parts
+}
+
+/// Keystrokes in words, for assistive technology: `Command Shift N`.
+pub(super) fn spoken(keys: &[Keystroke]) -> String {
+    let names = ["Control", "Option", "Command", "Shift", "Function"];
+    let words = keys.iter().map(|key| named(key, names).join(" "));
+    words.collect::<Vec<_>>().join(", then ")
+}
+
+impl super::Plait {
+    pub(super) fn shortcut_label(&self, id: &str) -> String {
+        ACTIONS
+            .iter()
+            .find(|action| action.id == id)
+            .map(|action| label(&bound(action, &self.preferences.value.keymap)))
+            .unwrap_or_default()
+    }
+
+    pub(super) fn shortcut_aria(&self, id: &str) -> String {
+        ACTIONS
+            .iter()
+            .find(|action| action.id == id)
+            .map(|action| {
+                bound(action, &self.preferences.value.keymap)
+                    .iter()
+                    .map(|key| named(key, ["Control", "Alt", "Meta", "Shift", "Fn"]).join("+"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default()
+    }
+}
+
+const JUMP: &str = "jump.";
+
+/// One line of the shortcut editor and of the documented table: one action,
+/// or the nine sidebar jumps, which share their modifiers and change as a set.
+#[derive(Clone, Copy)]
+pub(super) struct Shortcut {
+    pub actions: &'static [AppAction],
+}
+
+/// Every action as editor rows, in table order.
+pub(super) fn shortcuts() -> Vec<Shortcut> {
+    ACTIONS
+        .chunk_by(|a, b| a.id.starts_with(JUMP) && b.id.starts_with(JUMP))
+        .map(|actions| Shortcut { actions })
+        .collect()
+}
+
+/// What a row is bound to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Binding {
+    Unbound,
+    Keys(Vec<Keystroke>),
+    /// The jump set, from its first keystroke to its last.
+    Range(Keystroke, Keystroke),
+    /// Jumps that no longer share modifiers: edited in the file, or one of
+    /// them gave its keystroke to another action.
+    Mixed,
+}
+
+impl Binding {
+    /// As the menus would show it. Empty when unbound.
+    pub fn label(&self) -> String {
+        let one = |key: &Keystroke| label(std::slice::from_ref(key));
+        match self {
+            Self::Unbound => String::new(),
+            Self::Keys(keys) => label(keys),
+            Self::Range(first, last) => format!("{} – {}", one(first), one(last)),
+            Self::Mixed => "Mixed".into(),
+        }
+    }
+
+    /// In words, for assistive technology.
+    pub fn spoken(&self) -> String {
+        let one = |key: &Keystroke| spoken(std::slice::from_ref(key));
+        match self {
+            Self::Unbound => "none".into(),
+            Self::Keys(keys) => spoken(keys),
+            Self::Range(first, last) => format!("{} to {}", one(first), one(last)),
+            Self::Mixed => "mixed".into(),
+        }
+    }
+}
+
+impl Shortcut {
+    pub fn is_set(&self) -> bool {
+        self.actions.len() > 1
+    }
+
+    pub fn title(&self) -> &'static str {
+        if self.is_set() {
+            "Jump to Sidebar Item 1–9"
+        } else {
+            self.actions[0].title
+        }
+    }
+
+    pub fn category(&self) -> &'static str {
+        self.actions[0].category
+    }
+
+    /// The keystroke each action would get if `pressed` were recorded on this
+    /// row. The jump set takes the modifiers and keeps its numbers.
+    pub fn candidate(&self, pressed: &Keystroke) -> Result<Vec<Keystroke>, String> {
+        let with_key = |key: &str| Keystroke {
+            modifiers: pressed.modifiers,
+            key: key.to_owned(),
+            // What the key would type is not part of a binding.
+            key_char: None,
+        };
+        if !self.is_set() {
+            return Ok(vec![with_key(&pressed.key)]);
+        }
+        let numbers = self.actions.iter().map(|action| &action.id[JUMP.len()..]);
+        if !numbers.clone().any(|number| number == pressed.key) {
+            return Err(
+                "The nine jumps change together. Hold the modifiers you want and press a number, such as ⌃1."
+                    .into(),
+            );
+        }
+        Ok(numbers.map(with_key).collect())
+    }
+
+    /// The default keystroke of each action. Empty unless every action has one.
+    pub fn defaults(&self) -> Vec<Keystroke> {
+        let keys = self.actions.iter().map(AppAction::default_key);
+        keys.collect::<Option<Vec<_>>>().unwrap_or_default()
+    }
+
+    pub fn binding(&self, overrides: &KeyOverrides) -> Binding {
+        let mut bound = self.actions.iter().map(|action| bound(action, overrides));
+        if !self.is_set() {
+            return match bound.next() {
+                Some(keys) if !keys.is_empty() => Binding::Keys(keys),
+                _ => Binding::Unbound,
+            };
+        }
+        let bound = bound.collect::<Vec<_>>();
+        if bound.iter().all(Vec::is_empty) {
+            return Binding::Unbound;
+        }
+        // A set is its first keystroke's modifiers on every number.
+        let expected = bound[0]
+            .first()
+            .and_then(|first| self.candidate(first).ok());
+        let single = bound.iter().map(|keys| match keys.as_slice() {
+            [only] => Some(only.clone()),
+            _ => None,
+        });
+        match (expected, single.collect::<Option<Vec<_>>>()) {
+            (Some(expected), Some(actual)) if expected == actual => {
+                let last = actual.len() - 1;
+                Binding::Range(actual[0].clone(), actual[last].clone())
+            }
+            _ => Binding::Mixed,
+        }
+    }
+
+    /// Whether any action of the row is bound to something other than its default.
+    pub fn changed(&self, overrides: &KeyOverrides) -> bool {
+        self.actions.iter().any(|action| {
+            let default = action.default_key().into_iter().collect::<Vec<_>>();
+            bound(action, overrides) != default
+        })
+    }
+
+    /// A saved entry for this row that is not a keystroke. Its default applies.
+    pub fn unusable<'a>(&self, overrides: &'a KeyOverrides) -> Option<&'a str> {
+        self.actions.iter().find_map(|action| {
+            let saved = overrides.get(action.id)?;
+            (!saved.is_empty() && !parses(saved)).then_some(saved.as_str())
+        })
+    }
+
+    /// Whether every search term is in the row's title, menu, or shortcut,
+    /// written as the menus show it (`⌘N`), as the file does (`cmd-n`), or in
+    /// words (`command n`).
+    pub fn matches(&self, overrides: &KeyOverrides, query: &str) -> bool {
+        let binding = self.binding(overrides);
+        let written = self.actions.iter().map(|action| {
+            let keys = bound(action, overrides);
+            let notation = keys.iter().map(|key| key.unparse(KEY_LABELS));
+            notation.collect::<Vec<_>>().join(" ")
+        });
+        let text = [
+            self.title().to_owned(),
+            self.category().to_owned(),
+            binding.label(),
+            binding.spoken(),
+            written.collect::<Vec<_>>().join(" "),
+        ]
+        .join("\n")
+        .to_lowercase();
+        let query = query.to_lowercase();
+        query.split_whitespace().all(|term| text.contains(term))
+    }
+}
+
+/// Shortcuts macOS acts on before, or instead of, the application.
+const SYSTEM_KEYS: &[(&str, &str)] = &[
+    ("cmd-tab", "switches applications"),
+    ("cmd-shift-tab", "switches applications"),
+    ("cmd-space", "opens Spotlight"),
+    ("ctrl-space", "switches the input source"),
+    ("cmd-`", "cycles windows"),
+    ("cmd-shift-3", "takes a screenshot"),
+    ("cmd-shift-4", "takes a screenshot"),
+    ("cmd-shift-5", "takes a screenshot"),
+    ("cmd-shift-q", "logs out"),
+    ("ctrl-cmd-q", "locks the screen"),
+    ("cmd-alt-escape", "opens Force Quit"),
+    ("cmd-alt-d", "hides the Dock"),
+    ("ctrl-up", "opens Mission Control"),
+    ("ctrl-down", "shows application windows"),
+    ("ctrl-left", "moves between Spaces"),
+    ("ctrl-right", "moves between Spaces"),
+];
+
+/// Why one keystroke must not become an application shortcut, if anything
+/// stops it. `editing` are the keys the composer and text fields bind.
+fn reserved(key: &Keystroke, editing: &[Keystroke]) -> Option<String> {
+    let only = std::slice::from_ref(key);
+    let shown = label(only);
+    let held = key.modifiers;
+    if key.is_modifier_key() {
+        return Some("A modifier alone is not a shortcut. Hold it and press a key.".into());
+    }
+    // Shift and Option still type: a capital, or a character such as ß.
+    let types = key.key.chars().count() == 1 || key.key == "space";
+    if types && !(held.platform || held.control || held.function) {
+        return Some(format!(
+            "{shown} types a character, so it would stop text entry. Add Command or Control."
+        ));
+    }
+    if matches!(key.key.as_str(), "enter" | "tab" | "escape") && !held.modified() {
+        return Some(format!(
+            "{shown} confirms, moves focus, or cancels throughout Plait. Add a modifier."
+        ));
+    }
+    if editing.contains(key) {
+        return Some(format!(
+            "{shown} edits text in the composer and text fields, where it would not reach this action."
+        ));
+    }
+    let system = |(keys, effect): &(&str, &'static str)| {
+        (parsed(keys)?.as_slice() == only).then_some(*effect)
+    };
+    if let Some(effect) = SYSTEM_KEYS.iter().find_map(system) {
+        return Some(format!(
+            "{shown} {effect} on macOS and does not reach Plait."
+        ));
+    }
+    // What is saved must read back as the same keystroke.
+    if parsed(&key.unparse(KEY_LABELS)).as_deref() != Some(only) {
+        return Some("That key cannot be saved as a shortcut.".into());
+    }
+    None
+}
+
+/// Why `keys` must not become the shortcuts of `shortcut`'s actions, if
+/// anything stops it. An action's own default is always allowed: Tab moves
+/// focus by default, though no other action may take it.
+pub(super) fn refusal(
+    shortcut: &Shortcut,
+    keys: &[Keystroke],
+    editing: &[Keystroke],
+) -> Option<String> {
+    let mut pairs = shortcut.actions.iter().zip(keys);
+    pairs.find_map(|(action, key)| {
+        (action.default_key().as_ref() != Some(key))
+            .then(|| reserved(key, editing))
+            .flatten()
+    })
+}
+
+/// Other actions bound to one of `keys` now. A longer sequence that starts
+/// with one counts: the two would wait on each other.
+pub(super) fn conflicts(
+    shortcut: &Shortcut,
+    keys: &[Keystroke],
+    overrides: &KeyOverrides,
+) -> Vec<&'static AppAction> {
+    let own = |action: &AppAction| shortcut.actions.iter().any(|own| own.id == action.id);
+    ACTIONS
+        .iter()
+        .filter(|action| !own(action))
+        .filter(|action| {
+            bound(action, overrides)
+                .first()
+                .is_some_and(|first| keys.contains(first))
+        })
+        .collect()
+}
+
+/// Record one action's binding. An entry equal to the default is removed, so
+/// the map holds only what differs. `None` unbinds.
+fn set(overrides: &mut KeyOverrides, action: &AppAction, key: Option<&Keystroke>) {
+    if key == action.default_key().as_ref() {
+        overrides.remove(action.id);
+        return;
+    }
+    let keys = key.map(|key| key.unparse(KEY_LABELS)).unwrap_or_default();
+    overrides.insert(action.id.to_owned(), keys);
+}
+
+/// Bind `keys` to the actions of `shortcut`, and unbind the `displaced`
+/// actions that held them.
+pub(super) fn assign(
+    overrides: &mut KeyOverrides,
+    shortcut: &Shortcut,
+    keys: &[Keystroke],
+    displaced: &[&AppAction],
+) {
+    for action in displaced {
+        set(overrides, action, None);
+    }
+    for (action, key) in shortcut.actions.iter().zip(keys) {
+        set(overrides, action, Some(key));
+    }
+}
+
+/// Leave the row's actions without a shortcut.
+pub(super) fn unbind(overrides: &mut KeyOverrides, shortcut: &Shortcut) {
+    for action in shortcut.actions {
+        set(overrides, action, None);
+    }
+}
+
+/// Return every action in the table to its default. Entries for IDs this
+/// client does not know belong to another version and stay.
+pub(super) fn reset_all(overrides: &mut KeyOverrides) {
+    for action in ACTIONS {
+        overrides.remove(action.id);
+    }
+}
+
+/// Entries in the saved keymap for actions this client does not have.
+pub(super) fn unknown(overrides: &KeyOverrides) -> usize {
+    let known = |id: &String| ACTIONS.iter().any(|action| action.id == id);
+    overrides.keys().filter(|id| !known(id)).count()
 }
 
 /// `cmd-shift-n` as documentation writes it: `Cmd-Shift-N`.
@@ -206,19 +636,25 @@ fn documented(keystroke: &str) -> String {
     parts.collect::<Vec<_>>().join("-")
 }
 
-/// The default shortcuts as the Markdown table in docs/MACOS.md.
+/// The default shortcuts as the Markdown table in docs/MACOS.md. The nine
+/// jumps are one row there, as they are in the shortcut editor.
 #[cfg(test)]
 fn keyboard_table() -> String {
     let mut table = String::from("| Shortcut | Action | ID |\n| --- | --- | --- |\n");
-    for action in ACTIONS {
-        if let Some(key) = action.key {
-            table.push_str(&format!(
-                "| {} | {} | `{}` |\n",
-                documented(key),
-                action.title,
-                action.id
-            ));
-        }
+    for shortcut in shortcuts() {
+        let first = &shortcut.actions[0];
+        let last = &shortcut.actions[shortcut.actions.len() - 1];
+        let (Some(from), Some(to)) = (first.key, last.key) else {
+            continue;
+        };
+        let (from, to) = (documented(from), documented(to));
+        let row = if shortcut.is_set() {
+            let (title, first, last) = (shortcut.title(), first.id, last.id);
+            format!("| {from} to {to} | {title} | `{first}` to `{last}` |\n")
+        } else {
+            format!("| {from} | {} | `{}` |\n", first.title, first.id)
+        };
+        table.push_str(&row);
     }
     table
 }
@@ -228,6 +664,60 @@ mod tests {
     // Named imports: a glob would bring in GPUI's own `test` attribute.
     use super::{ACTIONS, KeyOverrides, documented, keyboard_table, keystroke, menus, parses};
     use std::collections::HashSet;
+
+    #[test]
+    fn recording_rejects_text_and_reserved_keys_and_reassigns_conflicts() {
+        let shortcuts = super::shortcuts();
+        let sidebar = shortcuts
+            .iter()
+            .find(|row| row.actions[0].id == "view.toggle_sidebar")
+            .unwrap();
+        let parsed = |key: &str| super::parsed(key).unwrap();
+        for key in [
+            "a",
+            "shift-a",
+            "alt-a",
+            "enter",
+            "tab",
+            "escape",
+            "cmd-space",
+            "cmd-tab",
+        ] {
+            assert!(
+                super::refusal(sidebar, &parsed(key), &[]).is_some(),
+                "{key}"
+            );
+        }
+        assert!(super::refusal(sidebar, &parsed("cmd-c"), &parsed("cmd-c")).is_some());
+        let mut saved = KeyOverrides::new();
+        let keys = parsed("cmd-k");
+        let displaced = super::conflicts(sidebar, &keys, &saved);
+        assert_eq!(displaced.len(), 1);
+        assert_eq!(displaced[0].id, "palette.toggle");
+        super::assign(&mut saved, sidebar, &keys, &displaced);
+        assert_eq!(saved["palette.toggle"], "");
+        assert_eq!(super::bound(&sidebar.actions[0], &saved), keys);
+        saved.insert("future.action".into(), "cmd-y".into());
+        super::reset_all(&mut saved);
+        assert_eq!(saved.len(), 1);
+        assert!(saved.contains_key("future.action"));
+    }
+
+    #[test]
+    fn sidebar_jump_keys_change_as_one_set() {
+        let shortcuts = super::shortcuts();
+        let jumps = shortcuts.iter().find(|row| row.is_set()).unwrap();
+        let pressed = super::parsed("ctrl-4").unwrap().remove(0);
+        let keys = jumps.candidate(&pressed).unwrap();
+        assert_eq!(keys.len(), 9);
+        let mut saved = KeyOverrides::new();
+        super::assign(&mut saved, jumps, &keys, &[]);
+        assert!(matches!(jumps.binding(&saved), super::Binding::Range(_, _)));
+        assert_eq!(keys[0].key, "1");
+        assert_eq!(keys[8].key, "9");
+        super::unbind(&mut saved, jumps);
+        assert_eq!(jumps.binding(&saved), super::Binding::Unbound);
+    }
 
     #[test]
     fn ids_are_unique_and_default_keystrokes_parse_without_collisions() {

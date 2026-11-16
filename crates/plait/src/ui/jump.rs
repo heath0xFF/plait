@@ -99,6 +99,7 @@ impl Plait {
                         }
                     }
                 }
+                super::actions::install(cx, &this.preferences.value.keymap);
                 cx.notify();
             });
         })
@@ -122,6 +123,7 @@ impl Plait {
         if state.value == value && state.revision > 0 {
             return;
         }
+        super::actions::install(cx, &value.keymap);
         state.value = value.clone();
         state.revision += 1;
         state.group = Some(group);
@@ -186,20 +188,17 @@ impl Plait {
                     } else {
                         Toggled::False
                     })
-                    .aria_label(format!("Command 1 to 9 jump to {}", target.label()))
+                    .aria_label(format!("Sidebar shortcuts jump to {}", target.label()))
                     .on_activate(cx, move |this, _, cx| this.set_jump_target(target, cx)),
             );
         }
         settings::section("Keyboard")
             .child(settings::setting(
-                "⌘1 – ⌘9 jump to",
+                "Sidebar jumps select",
                 "Counted in sidebar order. A machine or project opens its first thread.",
                 choices,
             ))
-            .child(tag(
-                "⌘K opens the command palette, which lists every command with its shortcut.",
-                SUBTLE,
-            ))
+            .child(self.shortcut_editor(cx))
             .when_some(
                 self.preference_note(Some(PreferenceGroup::Keyboard)),
                 |el, note| el.child(tag(note, SUBTLE)),

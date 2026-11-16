@@ -6,6 +6,7 @@
 use crate::{host::ModelChoice, model::Project};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -42,6 +43,17 @@ pub const FAVORITE_LIMIT: usize = 64;
 pub const RECENT_LIMIT: usize = 8;
 /// Longer identifiers are not remembered, so full lists always fit the file limit.
 const MODEL_KEY_LIMIT: usize = 512;
+
+/// Shortcut entries kept. A full keymap and full model lists fit the file limit.
+pub const KEYMAP_LIMIT: usize = 128;
+/// Longer action IDs and keystrokes are not remembered.
+const KEYMAP_ID_LIMIT: usize = 64;
+const KEYMAP_KEYS_LIMIT: usize = 48;
+
+/// Shortcuts that replace the defaults: action ID to keystroke, such as
+/// `"thread.new": "cmd-t"`. An empty keystroke leaves the action unbound.
+/// The desktop decides what an ID and a keystroke mean; this is only storage.
+pub type Keymap = BTreeMap<String, String>;
 
 /// A model chosen on this desktop: an identifier, never a credential.
 /// Unlike the wire type, unknown fields are ignored so a newer file still loads.
@@ -86,6 +98,9 @@ pub struct Preferences {
     pub favorite_models: Vec<ModelKey>,
     /// Models used to start threads from this desktop, newest first.
     pub recent_models: Vec<ModelKey>,
+    /// Shortcuts changed on this desktop. Action IDs this client does not know
+    /// are kept, so an entry written by a newer client survives an older one.
+    pub keymap: Keymap,
 }
 
 impl Preferences {
@@ -117,6 +132,21 @@ impl Preferences {
         self.recent_models.truncate(RECENT_LIMIT);
     }
 
+    /// Replace the shortcut overrides, within the limits a load applies.
+    pub fn set_keymap(&mut self, keymap: Keymap) {
+        self.keymap = keymap;
+        self.trim_keymap();
+    }
+
+    /// Entries past the limits are dropped from the end of the ID order.
+    fn trim_keymap(&mut self) {
+        self.keymap
+            .retain(|id, keys| id.len() <= KEYMAP_ID_LIMIT && keys.len() <= KEYMAP_KEYS_LIMIT);
+        while self.keymap.len() > KEYMAP_LIMIT {
+            self.keymap.pop_last();
+        }
+    }
+
     /// A hand-edited file may repeat entries or exceed the limits.
     fn normalize(mut self) -> Self {
         for list in [&mut self.favorite_models, &mut self.recent_models] {
@@ -125,6 +155,7 @@ impl Preferences {
         }
         trim_oldest(&mut self.favorite_models, FAVORITE_LIMIT);
         self.recent_models.truncate(RECENT_LIMIT);
+        self.trim_keymap();
         self
     }
 }
@@ -136,6 +167,11 @@ fn trim_oldest(list: &mut Vec<ModelKey>, limit: usize) {
 
 /// The per-user location, from the environment. `None` without a home directory.
 pub fn default_path() -> Option<PathBuf> {
+    // A development instance must not write the installed desktop's choices.
+    if let Some(path) = std::env::var_os("PLAIT_DESKTOP_PREFERENCES_FILE") {
+        let path = PathBuf::from(path);
+        return path.is_absolute().then_some(path);
+    }
     let home = std::env::var_os("HOME").map(PathBuf::from);
     if cfg!(target_os = "macos") {
         return home.map(|home| home.join("Library/Application Support/Plait/desktop.json"));
@@ -250,6 +286,11 @@ mod tests {
         }
     }
 
+    fn keymap(entries: &[(&str, &str)]) -> Keymap {
+        let owned = |(id, keys): &(&str, &str)| (id.to_string(), keys.to_string());
+        entries.iter().map(owned).collect()
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let path =
             std::env::temp_dir().join(format!("plait-preferences-{}-{name}", std::process::id()));
@@ -271,6 +312,7 @@ mod tests {
         };
         chosen.toggle_favorite(&choice("openai-codex", "gpt-5.6-luna"));
         chosen.record_recent(&choice("openrouter", "anthropic/claude-fable-5"));
+        chosen.set_keymap(keymap(&[("thread.new", "cmd-t"), ("app.quit", "")]));
         save(&path, &chosen).unwrap();
         assert_eq!(load(&path), Ok(chosen));
         // No temporary file is left beside the saved one.
@@ -321,6 +363,7 @@ mod tests {
         assert!(!loaded.hide_inspector);
         assert!(loaded.favorite_models.is_empty());
         assert!(loaded.recent_models.is_empty());
+        assert!(loaded.keymap.is_empty());
         // Saving it again keeps the old settings and adds the new fields.
         save(&path, &loaded).unwrap();
         assert_eq!(load(&path), Ok(loaded));
@@ -341,6 +384,56 @@ mod tests {
         fs::write(&path, r#"{"recent_models": [{"provider": "p"}]}"#).unwrap();
         assert!(load(&path).unwrap_err().contains("invalid"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_keymap_loads_as_written_and_keeps_entries_this_client_does_not_know() {
+        let root = scratch("keymap");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("desktop.json");
+        // The file is storage only: an unknown ID, an empty keystroke, and a
+        // keystroke no client can parse all load and save unchanged.
+        fs::write(
+            &path,
+            r#"{"keymap": {"thread.new": "cmd-t", "later.action": "cmd-l", "app.quit": "", "view.changes": "not a key"}}"#,
+        )
+        .unwrap();
+        let loaded = load(&path).unwrap();
+        let expected = keymap(&[
+            ("app.quit", ""),
+            ("later.action", "cmd-l"),
+            ("thread.new", "cmd-t"),
+            ("view.changes", "not a key"),
+        ]);
+        assert_eq!(loaded.keymap, expected);
+        save(&path, &loaded).unwrap();
+        assert_eq!(load(&path).unwrap().keymap, expected);
+        let written = fs::read_to_string(&path).unwrap();
+        assert!(written.contains("\"later.action\": \"cmd-l\""), "{written}");
+        // A keystroke must be a string; anything else is a malformed file.
+        fs::write(&path, r#"{"keymap": {"thread.new": 7}}"#).unwrap();
+        assert!(load(&path).unwrap_err().contains("invalid"));
+        fs::write(&path, r#"{"keymap": ["cmd-t"]}"#).unwrap();
+        assert!(load(&path).unwrap_err().contains("invalid"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_keymap_is_bounded_in_entries_and_length() {
+        let long = "x".repeat(KEYMAP_ID_LIMIT + 1);
+        let mut preferences = Preferences::default();
+        let mut entries = (0..KEYMAP_LIMIT + 5)
+            .map(|index| (format!("action.{index:03}"), "cmd-k".to_owned()))
+            .collect::<Keymap>();
+        entries.insert(long.clone(), "cmd-l".into());
+        entries.insert("too.long".into(), "k".repeat(KEYMAP_KEYS_LIMIT + 1));
+        preferences.set_keymap(entries);
+        assert_eq!(preferences.keymap.len(), KEYMAP_LIMIT);
+        assert!(!preferences.keymap.contains_key(&long));
+        assert!(!preferences.keymap.contains_key("too.long"));
+        // The first entries in ID order are the ones kept.
+        assert!(preferences.keymap.contains_key("action.000"));
+        assert!(!preferences.keymap.contains_key("action.130"));
     }
 
     #[test]
@@ -417,6 +510,15 @@ mod tests {
                 .iter()
                 .any(|key| *key == oversized)
         );
+        // With the longest keymap a load keeps, the file still loads.
+        let id = "i".repeat(KEYMAP_ID_LIMIT - 3);
+        let keys = "k".repeat(KEYMAP_KEYS_LIMIT);
+        preferences.set_keymap(
+            (0..KEYMAP_LIMIT + 5)
+                .map(|index| (format!("{id}{index:03}"), keys.clone()))
+                .collect(),
+        );
+        assert_eq!(preferences.keymap.len(), KEYMAP_LIMIT);
         let bytes = serde_json::to_vec_pretty(&preferences).unwrap();
         assert!((bytes.len() as u64) < FILE_LIMIT, "{} bytes", bytes.len());
     }

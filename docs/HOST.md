@@ -476,7 +476,7 @@ grants require separate protocol, persistence, and permission review.
 ## Provider sign-in
 
 These operations change which providers the host can use while it runs. The
-desktop Settings UI that calls them is not shipped yet. They are additions, not
+desktop Settings UI in source builds calls them. They are additions, not
 a protocol version: each accepts the optional `protocol_version` and replies the
 same for every version. A host without them rejects the operation name with
 `invalid_request`.
@@ -682,9 +682,9 @@ name the field at fault and never repeat its value.
 
 Each canonical checkout has a command policy: `sandboxed`, the default, or
 `trusted`. It decides how the `command` tool runs for runs in that checkout.
-Trusted mode is opt-in per project. The host operations below are implemented;
-**the desktop control that sets the policy is not shipped yet**, so the app
-uses the sandbox unless a client sends the operation.
+Trusted mode is opt-in per project. Source builds expose it under Settings →
+Approvals → Command policy, with explicit confirmation of its consequences.
+The host keeps sandboxed mode until a client sends the operation.
 
 ```json
 {"op":"command_policy","checkout":"/absolute/checkout"}
@@ -697,7 +697,7 @@ Git working tree and is resolved to its canonical root, as in `list_threads`.
 `policy` is `sandboxed` or `trusted`; anything else is `invalid_request`. Both
 operations accept the optional `protocol_version` and reply the same way for
 every version. A host without them rejects the unknown operation with
-`invalid_request`; a client treats that host as sandboxed. No existing request
+`invalid_request`; the desktop reports that policy could not be loaded. No existing request
 or reply changes: `create_thread`, `submit`, and snapshots carry no policy. A
 snapshot does not yet report the policy its run used.
 

@@ -116,16 +116,13 @@ host="/Library/Application Support/Plait/Host/releases/$build_id"
 
 #### Signing in from Plait
 
-> **Not yet shipped.** The host in source builds after v0.1.0-preview.2 has the
-> [provider sign-in operations](HOST.md#provider-sign-in). The Settings UI
-> that uses them does not exist yet, and no real provider sign-in has been run
-> through them. Until it ships, use the Pi CLI method below.
-
-Once the Settings UI ships, first-time authentication stays inside the app and
-needs no host restart:
+Source builds after v0.1.0-preview.2 provide **Settings → Providers**. The host
+must support the [provider operations](HOST.md#provider-sign-in); an older host
+shows an update requirement. These controls have scripted and scene coverage;
+live provider sign-in acceptance remains open.
 
 - **Subscription** (for example Claude Pro or Max, or ChatGPT Plus or Pro): choose
-  the provider and sign in. Plait opens the provider's page in your browser. The
+  the provider and sign in. Use **Open in browser** after checking the displayed destination. The
   browser normally returns to the host by itself; if it cannot, paste the code
   or the final address into Plait. Some providers show a short code to type on
   their page instead.
@@ -135,12 +132,23 @@ needs no host restart:
   optional key, and model IDs. **Check connection** lists the models it reports.
 - **Sign out** removes the stored sign-in or key for one provider.
 
+Closing the provider form cancels a pending sign-in. API keys and sign-in answers
+are masked, have a reveal control, and are cleared when sent or closed. They are
+not copied into desktop preferences, the recovery journal, accessibility values,
+or clipboard copy. A connection check consumes an entered key without saving it;
+paste it again before saving a new endpoint. Endpoint removal requires confirmation.
+
+**Settings → Approvals → Command policy** changes the current checkout between
+Sandboxed and Trusted. Trusted requires confirmation of full user access, network,
+Git writes, and the ability to change already-modified files. It affects the next
+run; an active run retains its original policy. The approval default is independent.
+
 The desktop never receives a stored credential. Changes apply to new threads and
 new messages at once. A run already in progress continues with the providers it
 started with. Existing threads retain their exact saved model; changing the
 default affects only new threads.
 
-#### Until then: the Pi CLI
+#### Pi CLI fallback
 
 The host payload includes the pinned Pi CLI:
 
@@ -212,8 +220,19 @@ For a prepared development checkout and a first source-change task, see
 
 These are the default shortcuts for application actions. The table is generated
 from the action table in `crates/plait/src/ui/actions.rs`, and a test fails when
-the two differ. The ID is the action's stable name. Rebinding is not available
-in the app yet.
+the two differ. The ID is the action's stable name. **Settings → Keyboard**
+records shortcuts, searches actions, clears a binding, and restores defaults.
+Conflicts name the affected actions and require **Reassign**. Text-editing and
+common system shortcuts are refused. Escape cancels recording; the key being
+recorded never runs its normal action. The nine sidebar jumps change together.
+Menus keep Settings and Quit reachable even when their shortcuts are cleared.
+
+Overrides live in `~/Library/Application Support/Plait/desktop.json` under
+`keymap`, for example `"keymap": {"thread.new": "cmd-t", "app.quit": ""}`.
+An empty string unbinds; an invalid keystroke keeps the default. Unknown action
+IDs survive saves. Menus and palette hints update immediately. For an isolated
+development instance, set `PLAIT_DESKTOP_PREFERENCES_FILE` to an absolute file
+path alongside separate `PLAIT_HOST_STORE` and `PLAIT_DESKTOP_STATE_DIR` paths.
 
 | Shortcut | Action | ID |
 | --- | --- | --- |
@@ -235,15 +254,7 @@ in the app yet.
 | Option-Down | Next Changed File | `git.next_file` |
 | Option-Up | Previous Changed File | `git.previous_file` |
 | Cmd-M | Minimize | `window.minimize` |
-| Cmd-1 | Jump to Sidebar Item 1 | `jump.1` |
-| Cmd-2 | Jump to Sidebar Item 2 | `jump.2` |
-| Cmd-3 | Jump to Sidebar Item 3 | `jump.3` |
-| Cmd-4 | Jump to Sidebar Item 4 | `jump.4` |
-| Cmd-5 | Jump to Sidebar Item 5 | `jump.5` |
-| Cmd-6 | Jump to Sidebar Item 6 | `jump.6` |
-| Cmd-7 | Jump to Sidebar Item 7 | `jump.7` |
-| Cmd-8 | Jump to Sidebar Item 8 | `jump.8` |
-| Cmd-9 | Jump to Sidebar Item 9 | `jump.9` |
+| Cmd-1 to Cmd-9 | Jump to Sidebar Item 1–9 | `jump.1` to `jump.9` |
 | Tab | Focus Next Control | `focus.next` |
 | Shift-Tab | Focus Previous Control | `focus.previous` |
 

@@ -38,8 +38,9 @@ over once with `scripts/update-installed-macos.sh`.
 ## Start working
 
 1. Open **Plait** and choose **Open repository…** (Cmd-O).
-2. Open **Settings** (Cmd-comma) and select an authenticated model.
-   [Set up Pi authentication](docs/MACOS.md#authentication-and-status) if needed.
+2. Open **Settings** (Cmd-comma) and select an authenticated model. Source builds
+   offer **Providers** for sign-in, API keys, and custom servers; see
+   [authentication setup](docs/MACOS.md#authentication-and-status) for the preview.
 3. Start a thread. Review each edit and command before **Allow once**.
 4. Read the results, inspect **Changes**, and continue in the same conversation.
    Use **Stop** to cancel work; closing the desktop is not Stop.
@@ -97,7 +98,7 @@ This is the **M2 local preview**, not a complete IDE.
   access to your configured provider. Source builds of the host after
   v0.1.0-preview.2 also have an opt-in, per-project
   [trusted command mode](docs/HOST.md#command-policy) that lifts these limits;
-  no desktop control sets it yet.
+  source builds expose it under Settings → Approvals, with explicit confirmation.
 - Conversation and tool views show bounded previews, not the full stored history.
 
 Mac CI verifies the installed app, sandbox, and recovery with scripted providers.

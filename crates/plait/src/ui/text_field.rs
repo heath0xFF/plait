@@ -104,10 +104,17 @@ struct Snapshot {
     head: usize,
 }
 
+impl Drop for Snapshot {
+    fn drop(&mut self) {
+        plait_core::host::providers::wipe(&mut self.text);
+    }
+}
+
 /// Editing state of one line. Offsets are UTF-8 bytes on grapheme boundaries.
 /// Plain data, so the editing rules are tested without a window.
 #[derive(Default)]
 pub(super) struct Line {
+    sensitive: bool,
     value: Snapshot,
     /// Text an input method is still composing.
     marked: Option<Range<usize>>,
@@ -251,7 +258,7 @@ impl Line {
     }
 
     fn remember(&mut self, before: Snapshot, typed: bool, starts_word: bool) {
-        if before.text == self.value.text {
+        if self.sensitive || before.text == self.value.text {
             return;
         }
         let continues = typed && self.typing && !starts_word;
@@ -395,6 +402,8 @@ pub(super) struct TextField {
     name: SharedString,
     placeholder: SharedString,
     role: Role,
+    secret: bool,
+    revealed: bool,
     shaped: Option<ShapedLine>,
     /// The line revision `shaped` was built from; older geometry is not trusted.
     shaped_revision: u64,
@@ -419,6 +428,8 @@ impl TextField {
             name: name.into(),
             placeholder: placeholder.into(),
             role: Role::TextInput,
+            secret: false,
+            revealed: false,
             shaped: None,
             shaped_revision: 0,
             bounds: None,
@@ -426,6 +437,44 @@ impl TextField {
             selecting: false,
             input_changed: false,
             paint_error: None,
+        }
+    }
+
+    /// Secret fields never expose a value to accessibility or clipboard, and have no undo.
+    pub fn secret(mut self) -> Self {
+        self.secret = true;
+        self.line.sensitive = true;
+        self
+    }
+
+    pub fn reveal(&mut self, cx: &mut Context<Self>) {
+        self.revealed = !self.revealed;
+        self.shaped = None;
+        cx.notify();
+    }
+
+    pub fn revealed(&self) -> bool {
+        self.revealed
+    }
+
+    pub fn take_secret(&mut self, cx: &mut Context<Self>) -> plait_core::host::providers::Secret {
+        let text = std::mem::take(&mut self.line.value.text);
+        self.line = Line {
+            sensitive: self.secret,
+            ..Default::default()
+        };
+        self.shaped = None;
+        self.scroll = px(0.);
+        self.input_changed = true;
+        cx.notify();
+        plait_core::host::providers::Secret::new(text)
+    }
+
+    fn display_offset(&self, offset: usize) -> usize {
+        if self.secret && !self.revealed {
+            self.line.text()[..offset].graphemes(true).count() * "•".len()
+        } else {
+            offset
         }
     }
 
@@ -477,6 +526,9 @@ impl TextField {
     }
 
     fn copy(&self, cx: &mut App) {
+        if self.secret {
+            return;
+        }
         let selected = self.line.selected_text();
         if !selected.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(selected.into()));
@@ -502,7 +554,7 @@ impl TextField {
         if self.line.text().is_empty() {
             px(0.)
         } else {
-            line.x_for_index(offset)
+            line.x_for_index(self.display_offset(offset))
         }
     }
 
@@ -523,8 +575,16 @@ impl TextField {
         if self.line.text().is_empty() {
             return 0;
         }
-        self.line
-            .snap(line.closest_index_for_x(position.x - bounds.left() + self.scroll))
+        let index = line.closest_index_for_x(position.x - bounds.left() + self.scroll);
+        if self.secret && !self.revealed {
+            self.line
+                .text()
+                .grapheme_indices(true)
+                .nth(index / "•".len())
+                .map_or(self.line.text().len(), |(offset, _)| offset)
+        } else {
+            self.line.snap(index)
+        }
     }
 
     fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -563,7 +623,11 @@ impl EntityInputHandler for TextField {
     ) -> Option<String> {
         let range = self.line.byte_range(range);
         *actual = Some(self.line.utf16_range(range.clone()));
-        Some(self.line.text()[range].into())
+        Some(if self.secret {
+            "•".repeat(self.line.text()[range].encode_utf16().count())
+        } else {
+            self.line.text()[range].into()
+        })
     }
 
     fn selected_text_range(
@@ -718,6 +782,8 @@ impl Element for LineElement {
             let empty = field.line.text().is_empty();
             let text: SharedString = if empty {
                 field.placeholder.clone()
+            } else if field.secret && !field.revealed {
+                "•".repeat(field.line.text().graphemes(true).count()).into()
             } else {
                 field.line.text().to_owned().into()
             };
@@ -740,7 +806,7 @@ impl Element for LineElement {
             let cursor = if empty {
                 px(0.)
             } else {
-                line.x_for_index(field.line.value.head)
+                field.x_for(&line, field.line.value.head)
             };
             let width = bounds.size.width;
             if cursor < field.scroll {
@@ -827,7 +893,11 @@ impl Render for TextField {
             .id(("text-field", cx.entity_id()))
             .role(self.role)
             .aria_label(self.name.clone())
-            .aria_value(self.line.text().to_owned())
+            .aria_value(if self.secret {
+                String::new()
+            } else {
+                self.line.text().to_owned()
+            })
             .aria_placeholder(self.placeholder.clone())
             .on_a11y_action(AccessibleAction::SetValue, move |data, _, cx| {
                 if let Some(gpui::accesskit::ActionData::Value(text)) = data {
@@ -961,6 +1031,20 @@ mod tests {
 
     fn state(line: &Line) -> (&str, usize, usize) {
         (line.text(), line.value.anchor, line.value.head)
+    }
+
+    #[test]
+    fn secret_edits_never_build_undo_history() {
+        let mut line = Line {
+            sensitive: true,
+            ..Default::default()
+        };
+        line.insert("sample secret");
+        line.select_all();
+        line.insert("replacement");
+        line.undo(false);
+        assert_eq!(line.text(), "replacement");
+        assert!(line.undo.is_empty() && line.redo.is_empty());
     }
 
     #[test]

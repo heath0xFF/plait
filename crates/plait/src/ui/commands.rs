@@ -19,6 +19,7 @@ pub(super) enum Command {
     /// An application action, dispatched as its menu item or shortcut would be.
     Action(Box<dyn Action>),
     OpenThread(String),
+    SignIn(String),
     NewThread(ModelChoice),
     /// A model chosen in the model picker. The picker's purpose gives it meaning.
     Model(ModelChoice),
@@ -29,6 +30,7 @@ impl Clone for Command {
         match self {
             Self::Action(action) => Self::Action(action.boxed_clone()),
             Self::OpenThread(id) => Self::OpenThread(id.clone()),
+            Self::SignIn(id) => Self::SignIn(id.clone()),
             Self::NewThread(choice) => Self::NewThread(choice.clone()),
             Self::Model(choice) => Self::Model(choice.clone()),
         }
@@ -112,7 +114,7 @@ impl Plait {
                 .hint(
                     numbers
                         .get(&index)
-                        .map(|number| format!("⌘{number}"))
+                        .map(|number| self.shortcut_label(&format!("jump.{number}")))
                         .unwrap_or_default(),
                 );
                 if self.host.selected.as_ref() == Some(&thread.id) {
@@ -157,6 +159,20 @@ impl Plait {
         let mut items = self.thread_items();
         items.extend(action_items(window));
         items.extend(self.new_thread_items());
+        items.extend(
+            self.providers
+                .rows
+                .iter()
+                .filter(|provider| provider.sign_in.is_some())
+                .map(|provider| {
+                    Item::new(
+                        format!("sign-in:{}", provider.id),
+                        format!("Sign in to {}", provider.name),
+                        Command::SignIn(provider.id.clone()),
+                    )
+                    .section("Providers")
+                }),
+        );
         items
     }
 
@@ -275,6 +291,12 @@ impl Plait {
     ) {
         match command {
             Command::Action(action) => window.dispatch_action(action, cx),
+            Command::SignIn(provider) => {
+                self.show_settings(true, window, cx);
+                self.settings_section = 1;
+                self.close_provider_form(cx);
+                self.start_provider_sign_in(provider, cx);
+            }
             Command::OpenThread(id) => {
                 // The list can change while the palette is open.
                 if self.host.threads.iter().any(|thread| thread.id == id) {

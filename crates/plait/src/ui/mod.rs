@@ -13,6 +13,9 @@ mod palette;
 mod selection;
 mod session;
 mod settings;
+mod settings_keyboard;
+mod settings_policy;
+mod settings_providers;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod snapshot;
 mod text_field;
@@ -41,6 +44,7 @@ actions!(
         Minimize,
         OpenRepository,
         Settings,
+        ProviderSettings,
         CheckForUpdates,
         Refresh,
         ToggleSidebar,
@@ -73,6 +77,11 @@ pub struct Plait {
     live_layout: Vec<plait_core::transcript::Slot>,
     formatted: std::sync::Arc<plait_core::markdown::Transcript>,
     settings_open: bool,
+    settings_section: usize,
+    settings_scroll: ScrollHandle,
+    keyboard: settings_keyboard::KeyboardState,
+    policy: settings_policy::PolicyState,
+    providers: settings_providers::ProviderState,
     /// A new thread was requested: open it when the host confirms creation,
     /// unless the user has gone elsewhere in the meantime.
     new_thread_open: bool,
@@ -122,6 +131,11 @@ impl Plait {
             live_layout: Vec::new(),
             formatted: Default::default(),
             settings_open: false,
+            settings_section: 0,
+            settings_scroll: ScrollHandle::new(),
+            keyboard: Default::default(),
+            policy: Default::default(),
+            providers: Default::default(),
             new_thread_open: false,
             overlay: None,
             inspector_note: false,
@@ -148,7 +162,12 @@ impl Plait {
         this.pump(cx);
         this.load_preferences(cx);
         // An open picker shows host state; keep it current as replies land.
-        cx.observe_self(|this, cx| this.sync_picker(cx)).detach();
+        cx.observe_self(|this, cx| {
+            this.sync_picker(cx);
+            this.sync_policy(cx);
+            this.sync_provider_settings(cx);
+        })
+        .detach();
         this.reconnect_host(window, cx);
         // Test scenes stay offline.
         if !cfg!(test) {
@@ -302,6 +321,14 @@ impl Plait {
         self.close_overlay(false, window, cx);
         window.focus(&self.focus, cx);
         self.settings_open = open;
+        self.settings_scroll.set_offset(point(px(0.), px(0.)));
+        self.cancel_recording(cx);
+        if open {
+            self.prepare_keyboard(cx);
+            self.prepare_providers(cx);
+        } else {
+            self.close_provider_form(cx);
+        }
         self.new_thread_open = false;
         cx.notify();
     }
@@ -401,7 +428,7 @@ impl Plait {
             .border_color(rgb(BORDER))
             .child(
                 icon_button("toggle-sidebar", "panel", "Toggle sidebar")
-                    .aria_keyshortcuts("Meta+B")
+                    .aria_keyshortcuts(self.shortcut_aria("view.toggle_sidebar"))
                     .on_activate(cx, |this, window, cx| this.toggle_sidebar(window, cx)),
             )
             .child(
@@ -432,12 +459,12 @@ impl Plait {
                 segmented()
                     .child(
                         segment("conversation-tab", "Conversation", !self.show_changes)
-                            .aria_keyshortcuts("Meta+Shift+1")
+                            .aria_keyshortcuts(self.shortcut_aria("view.conversation"))
                             .on_click(cx.listener(|this, _, _, cx| this.show_tab(false, cx))),
                     )
                     .child(
                         segment("changes-tab", "Changes", self.show_changes)
-                            .aria_keyshortcuts("Meta+Shift+2")
+                            .aria_keyshortcuts(self.shortcut_aria("view.changes"))
                             // The accessible name stays "Changes"; the count is visual.
                             .when_some(changed, |el, count| {
                                 el.child(
@@ -461,7 +488,7 @@ impl Plait {
                         "Git inspector (needs a wider window)"
                     },
                 )
-                .aria_keyshortcuts("Meta+Alt+B")
+                .aria_keyshortcuts(self.shortcut_aria("view.toggle_inspector"))
                 .on_activate(cx, |this, window, cx| this.toggle_inspector(window, cx)),
             )
     }
@@ -638,6 +665,10 @@ impl Render for Plait {
             .on_action(
                 cx.listener(|this, _: &Quit, window, cx| this.close_desktop(true, window, cx)),
             )
+            .on_action(cx.listener(|this, _: &ProviderSettings, window, cx| {
+                this.show_settings(true, window, cx);
+                this.settings_section = 1;
+            }))
             .on_action(cx.listener(|_, _: &Minimize, window, _| window.minimize_window()))
             .map(|root| self.on_jump_actions(root, cx))
             .map(|root| self.on_selection_actions(root, cx))

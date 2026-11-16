@@ -96,8 +96,8 @@ for the exact protocol, storage location, launch commands, and safety policy.
 The host owns model discovery, Pi authentication, thread persistence, and the
 default model. The desktop receives availability, not credentials. The host's
 [provider sign-in operations](HOST.md#provider-sign-in) take a pasted key or
-sign-in code from a client once and store it in Pi's files; the Settings UI for
-them is planned.
+sign-in code from a client once and store it in Pi's files. Settings → Providers
+calls these operations and refreshes the model catalog after changes.
 Each thread keeps its exact provider/model pair and thinking level until a
 client changes them between runs ([protocol version 3](HOST.md#model-and-thinking-level)).
 Saving a default does not change an existing thread.
@@ -143,8 +143,8 @@ command needs a one-call approval with full arguments; in `auto` mode, the
 desktop default with a version 2 host, they run without a prompt. File helpers own checkout writes; command execution reads the checkout and uses
 private scratch space for build output. A project can instead be set to the
 opt-in trusted [command policy](HOST.md#command-policy), in which commands run
-as the user and may write the checkout; the desktop control for it is not
-shipped yet. Stop revokes pending approvals and
+as the user and may write the checkout. Settings → Approvals offers the policy
+with a deliberate confirmation of Trusted access. Stop revokes pending approvals and
 cancels work. Interrupted work must not replay automatically after host failure.
 These boundaries need the tests listed in HOST.md before valuable-repository use.
 
@@ -327,7 +327,9 @@ desktop installation live in `plait_core::preferences`, saved as JSON at
 `~/Library/Application Support/Plait/desktop.json` on macOS
 (`$XDG_CONFIG_HOME/plait/desktop.json` or `~/.config/plait/desktop.json`
 elsewhere). It holds what Cmd-1 to Cmd-9 select, the approval default, whether
-the Git inspector is hidden, and favorite and recently used models. The model
+the Git inspector is hidden, favorite and recently used models, and shortcut
+overrides by stable action ID. `PLAIT_DESKTOP_PREFERENCES_FILE` selects an
+absolute preferences path for an isolated development instance. The model
 lists are provider and model identifiers only, bounded in length and count; the
 file never holds a credential.
 
@@ -520,7 +522,10 @@ only place application shortcuts are bound. It takes a map of action ID to
 keystroke; an entry replaces the default, an empty entry unbinds, and an entry
 that does not parse leaves the default in place. `actions::install` clears and
 rebinds everything and rebuilds the menus, so a keymap can be applied again at
-run time. No keymap is loaded today; the map is empty. The menu bar, the command
+run time. Settings → Keyboard records shortcuts through GPUI's pre-dispatch
+keystroke interceptor, detects conflicts, and rejects text-entry and common
+system keys. Overrides load from desktop preferences; unknown IDs survive.
+The menu bar, the command
 palette's entries and shortcut hints, and the table in [MACOS.md](MACOS.md) come
 from the same table, and a test compares the document with it. Editing keys that
 belong to one control (the composer, the text field, the palette list) are bound
@@ -550,6 +555,26 @@ words, and cannot be chosen. The default model is marked wherever models are
 listed. Choosing a default sends the host's `set_default_model` request at
 once; the picker footer and Settings report Saving, the host's confirmation, or
 the failure. Nothing is shown as saved before the host answers.
+
+### Provider settings and command policy
+
+`ui/settings_providers.rs` renders the host's catalog, subscription flow state,
+API-key form, and custom endpoint editor. `host/providers.rs` defines typed
+requests and tolerant replies; `host/sign_in.rs` projects each flow into its
+available controls. Status polling runs only while its form is open and pending.
+Host epochs and form generations reject stale replies. Closing an in-flight
+start cancels the returned flow instead of reopening the form.
+
+Secret fields omit accessibility values and clipboard copy, keep no undo history,
+and move their value into a redacted request on send. Request buffers and owned
+secret strings are overwritten on disposal. They never enter desktop preferences
+or the recovery journal; this is not a claim to erase every allocator or OS copy.
+The host remains the credential owner. No sign-in URL opens without a click.
+
+`ui/settings_policy.rs` reads the canonical checkout's policy on connection or
+checkout change. A response must match that checkout and its host epoch. Until
+it arrives the UI says the policy is unknown, never promises a sandbox. A trusted
+change needs explicit confirmation; the host's response determines the shown value.
 
 ### New threads
 

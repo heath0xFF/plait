@@ -165,7 +165,7 @@ impl Plait {
         let signed_in = models.iter().filter(|model| model.authenticated);
         let usable = signed_in.clone().count();
         if usable == 0 {
-            return Some("No model is signed in. Sign in to a provider on the host, then reconnect. Finish active work before restarting the host to load new credentials.".into());
+            return Some("No model is signed in. Add a provider above; its models become available as soon as the host confirms.".into());
         }
         let providers = |models: &mut dyn Iterator<Item = &plait_core::host::Model>| {
             models
@@ -210,7 +210,7 @@ impl Plait {
         section("Models")
             .child(setting(
                 "Default model for new threads",
-                "New threads start with this model. Choosing another saves it on the host at once. Existing threads keep the model they were created with.",
+                "New threads start with this model. Choosing another saves it on the host at once. Existing threads are unchanged; their own model control changes them between runs.",
                 control,
             ))
             .when_some(saved, |el, choice| {
@@ -229,7 +229,7 @@ impl Plait {
                 el.child(tag(summary, SUBTLE))
             })
             .child(tag(
-                "Authentication stays on the host. The desktop shows availability only; it never reads or saves credentials.",
+                "Authentication stays on the host. Keys and sign-in answers entered here are sent once and never saved in desktop preferences.",
                 SUBTLE,
             ))
             .when_some(
@@ -240,7 +240,13 @@ impl Plait {
 
     pub(super) fn settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div().flex().flex_1().min_h_0().px_6().py_5().child(
-            page("settings-page")
+            column()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .max_w(px(CONTENT_WIDTH))
+                .mx_auto()
+                .gap_3()
                 .child(
                     row()
                         .flex_shrink_0()
@@ -257,10 +263,54 @@ impl Plait {
                     el.child(state_line(format!("Desktop preferences: {note}"), AMBER))
                 })
                 .child(self.host_status(cx))
-                .child(self.model_settings(cx))
-                .child(self.approval_settings(cx))
-                .child(self.keyboard_settings(cx))
-                .child(self.build_details(cx)),
+                .child({
+                    let mut tabs = row().gap_1().flex_wrap();
+                    for (index, label) in ["Models", "Providers", "Approvals", "Keyboard", "About"]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        tabs = tabs.child(
+                            toned_button(
+                                ("settings-section", index),
+                                label,
+                                if self.settings_section == index {
+                                    Tone::Selected
+                                } else {
+                                    Tone::Ghost
+                                },
+                            )
+                            .role(Role::Tab)
+                            .aria_selected(self.settings_section == index)
+                            .on_activate(cx, move |this, _, cx| {
+                                this.cancel_recording(cx);
+                                if index != 1 {
+                                    this.close_provider_form(cx);
+                                }
+                                this.settings_section = index;
+                                this.settings_scroll.set_offset(point(px(0.), px(0.)));
+                                cx.notify();
+                            }),
+                        );
+                    }
+                    tabs
+                })
+                .child(
+                    page("settings-page")
+                        .track_scroll(&self.settings_scroll)
+                        .child(match self.settings_section {
+                            1 => self.provider_settings(cx).into_any_element(),
+                            2 => column()
+                                .gap_4()
+                                .when(!self.policy.confirm, |el| {
+                                    el.child(self.approval_settings(cx))
+                                })
+                                .child(self.policy_settings(cx))
+                                .into_any_element(),
+                            3 => self.keyboard_settings(cx).into_any_element(),
+                            4 => self.build_details(cx).into_any_element(),
+                            _ => self.model_settings(cx).into_any_element(),
+                        }),
+                ),
         )
     }
 
@@ -313,10 +363,8 @@ impl Plait {
         }
         let detail = if self.host.connected && self.host.protocol() < 2 {
             "This host asks before every edit and command. Update the host to use Automatic."
-        } else if ask {
-            "Each edit and command waits for Allow once."
         } else {
-            "The agent edits files and runs commands without asking. Files you had already changed stay protected; commands cannot write the checkout or reach the network. Applies from your next message."
+            plait_core::host::policy::approval_detail(ask, self.command_policy())
         };
         section("Approvals")
             .child(setting("Edits and commands", detail, choices))

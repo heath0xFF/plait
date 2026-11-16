@@ -75,9 +75,12 @@ optional wide-window Git inspector. Keep machine and thread context visible.
   headings before a search and disappear during one. The model picker adds a
   favorite star, outlined or filled, and Set default on every usable row; the
   current default carries a mint Default label instead.
-- **Settings.** Host status and Reconnect first, then ruled sections: Models,
-  Approvals, Keyboard, About and updates. Each setting is a label and one line
-  of meaning on the left and its control on the right. A choice applies when
+- **Settings.** Host status and Reconnect first, then Models, Providers,
+  Approvals, Keyboard, and About tabs. The heading and tabs stay visible while
+  the active section scrolls. Each setting is a label and one line
+  of meaning on the left and its control on the right. Provider forms occupy their section while open; keys are masked, with explicit reveal. Trusted command access needs a
+  consequence summary and a separate confirmation. Shortcut recording shows
+  conflicts in place and lets the person cancel or reassign. A choice applies when
   made; its saved or failed state is a dot and a sentence beneath it.
 - **Approval.** A bordered card above the composer shows the exact arguments,
   the risk, protected dirty paths, and Deny once / Allow once.

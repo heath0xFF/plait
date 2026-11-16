@@ -806,7 +806,12 @@ fn keys_drive_the_palette_and_picker() {
     press(&mut harness, "cmd-k");
     assert_eq!(
         shown(&mut harness).len(),
-        2 + 18 + 5,
+        2 + super::actions::ACTIONS
+            .iter()
+            .filter(|action| action.place != super::actions::Place::Hidden
+                && action.id != "palette.toggle")
+            .count()
+            + 5,
         "threads, commands, models"
     );
     press(&mut harness, "escape");
@@ -913,6 +918,7 @@ fn walk(output: Option<&Path>) {
         draft_walk(&mut harness, &repository, suffix);
         composer_walk(&mut harness, &repository, suffix);
         settings_walk(&mut harness, &repository, suffix);
+        settings_controls_walk(&mut harness, &repository, suffix);
         palette_walk(&mut harness, &repository, suffix);
         picker_walk(&mut harness, &repository, suffix);
         new_thread_walk(&mut harness, &repository, suffix);
@@ -1621,4 +1627,246 @@ fn snapshot() {
     };
     std::fs::create_dir_all(&output).unwrap();
     walk(Some(&output));
+}
+
+/// Settings controls use injected catalogs and inert sign-in fixtures.
+fn settings_controls_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
+    use super::{
+        actions,
+        settings_providers::{EndpointForm, Form},
+        text_field::TextField,
+    };
+    use plait_core::host::{policy::CommandPolicy, providers::*, sign_in::*};
+    harness.connect(repository, false);
+    harness.update(|plait, window, cx| {
+        plait.show_settings(true, window, cx);
+        plait.settings_section = 3;
+        plait
+            .keyboard
+            .search
+            .as_ref()
+            .unwrap()
+            .update(cx, |field, cx| field.set_text("sidebar", cx));
+    });
+    harness.capture(&format!("keyboard-filtered-{suffix}"));
+    let sidebar = actions::shortcuts()
+        .iter()
+        .position(|row| row.actions[0].id == "view.toggle_sidebar")
+        .unwrap();
+    harness.update(|plait, window, cx| plait.record_shortcut(sidebar, window, cx));
+    harness.capture(&format!("keyboard-recording-{suffix}"));
+    harness.keystroke("cmd-k");
+    harness.update(|plait, _, _| {
+        assert!(
+            plait.overlay.is_none(),
+            "recording intercepted the command palette"
+        )
+    });
+    harness.capture(&format!("keyboard-conflict-{suffix}"));
+    harness.update(|plait, window, cx| plait.record_shortcut(sidebar, window, cx));
+    harness.draw();
+    harness.keystroke("ctrl-shift-b");
+    harness.update(|plait, _, _| assert!(plait.sidebar));
+    harness.draw();
+    harness.keystroke("cmd-b");
+    harness.update(|plait, _, _| assert!(plait.sidebar, "old shortcut no longer runs"));
+    harness.keystroke("ctrl-shift-b");
+    harness.update(|plait, _, _| assert!(!plait.sidebar, "new shortcut runs"));
+    harness.capture(&format!("keyboard-customized-{suffix}"));
+    harness.update(|plait, _, cx| {
+        plait.sidebar = true;
+        plait.preferences.value.keymap.clear();
+        actions::install(cx, &plait.preferences.value.keymap);
+        plait
+            .keyboard
+            .search
+            .as_ref()
+            .unwrap()
+            .update(cx, |field, cx| field.set_text("", cx));
+    });
+    harness.capture(&format!("keyboard-default-{suffix}"));
+    harness.update(|plait, _, _| {
+        plait.settings_section = 1;
+        plait.providers.loaded = true;
+        plait.providers.rows = vec![
+            Provider {
+                id: "sample-subscription".into(),
+                name: "Sample subscription provider".into(),
+                kind: ProviderKind::Builtin,
+                authenticated: true,
+                credential: Credential::SignIn,
+                model_count: 3,
+                sign_in: Some(SignInMethod {
+                    name: "Sign in".into(),
+                    subscription: true,
+                }),
+                api_key: Some(KeyMethod {
+                    name: "API key".into(),
+                }),
+                endpoint: None,
+            },
+            Provider {
+                id: "openrouter".into(),
+                name: "Sample API provider".into(),
+                kind: ProviderKind::Builtin,
+                authenticated: false,
+                credential: Credential::None,
+                model_count: 8,
+                sign_in: None,
+                api_key: Some(KeyMethod {
+                    name: "API key".into(),
+                }),
+                endpoint: None,
+            },
+        ];
+    });
+    harness.capture(&format!("providers-list-{suffix}"));
+    harness.update(|plait, _, cx| {
+        plait.providers.form = Some(Form::Key {
+            provider: "sample-provider".into(),
+            field: cx.new(|cx| TextField::new("Provider API key", "Paste here", cx).secret()),
+        });
+    });
+    harness.update(|plait, window, cx| {
+        let Some(Form::Key { field, .. }) = &plait.providers.form else {
+            panic!("key form");
+        };
+        field.update(cx, |field, cx| field.set_text("synthetic credential", cx));
+        window.focus(&field.focus_handle(cx), cx);
+        cx.write_to_clipboard(ClipboardItem::new_string(
+            "untouched fixture clipboard".into(),
+        ));
+    });
+    harness.draw();
+    harness.keystroke("cmd-a");
+    harness.keystroke("cmd-c");
+    harness.update(|plait, _, cx| {
+        assert_eq!(
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref(),
+            Some("untouched fixture clipboard")
+        );
+        let Some(Form::Key { field, .. }) = &plait.providers.form else {
+            panic!("key form");
+        };
+        let sent = field.update(cx, |field, cx| field.take_secret(cx));
+        assert!(!sent.is_empty());
+        assert!(field.read(cx).text().is_empty());
+    });
+    harness.keystroke("cmd-z");
+    harness.update(|plait, _, cx| {
+        let Some(Form::Key { field, .. }) = &plait.providers.form else {
+            panic!("key form");
+        };
+        assert!(
+            field.read(cx).text().is_empty(),
+            "a sent key cannot be restored with undo"
+        );
+    });
+    harness.capture(&format!("provider-api-key-{suffix}"));
+    for (name, state, code, input, error) in [
+        ("browser", SignInState::Waiting, None, None, None),
+        (
+            "device",
+            SignInState::Waiting,
+            Some("SAMPLE-CODE".to_owned()),
+            None,
+            None,
+        ),
+        (
+            "paste",
+            SignInState::Waiting,
+            None,
+            Some(SignInInput {
+                kind: InputKind::Code,
+                message: "Paste the sample sign-in code".into(),
+                placeholder: None,
+                required: false,
+                choices: vec![],
+            }),
+            None,
+        ),
+        (
+            "failed",
+            SignInState::Failed,
+            None,
+            None,
+            Some(Failure {
+                code: "sample_failure".into(),
+                message: "Sample sign-in was not completed.".into(),
+            }),
+        ),
+    ] {
+        harness.update(|plait, _, cx| {
+            plait.providers.rows.clear();
+            plait.providers.form = Some(Form::Flow {
+                state: SignIn {
+                    id: "sample-flow".into(),
+                    provider: "sample-provider".into(),
+                    state,
+                    url: Some("https://example.invalid/sign-in".into()),
+                    user_code: code,
+                    input,
+                    message: None,
+                    expires_in_seconds: 120,
+                    error,
+                },
+                field: cx.new(|cx| TextField::new("Sign-in answer", "Paste here", cx).secret()),
+            });
+        });
+        harness.capture(&format!("provider-sign-in-{name}-{suffix}"));
+    }
+    harness.update(|plait, _, cx| {
+        let field = |label, text: &str, cx: &mut Context<Plait>| {
+            cx.new(|cx| {
+                let mut f = TextField::new(label, "", cx);
+                f.set_text(text, cx);
+                f
+            })
+        };
+        plait.providers.form = Some(Form::Endpoint(EndpointForm {
+            id: None,
+            name: field("Endpoint name", "Sample local server", cx),
+            url: field("Endpoint base URL", "http://localhost:8000/v1", cx),
+            models: field("Endpoint model IDs", "sample-model", cx),
+            key: cx.new(|cx| TextField::new("Endpoint API key", "Optional", cx).secret()),
+            checked: Some(EndpointCheck {
+                reachable: true,
+                reason: None,
+                status: Some(200),
+                model_ids: vec!["sample-model".into(), "sample-alternative".into()],
+                truncated: false,
+            }),
+        }));
+    });
+    harness.capture(&format!("provider-endpoint-{suffix}"));
+    harness.update(|plait, _, cx| {
+        plait.close_provider_form(cx);
+        plait.settings_section = 2;
+        plait.policy.key = Some((plait.host.epoch, plait.host.checkout.clone()));
+        plait.policy.value = Some(CommandPolicy::Sandboxed);
+    });
+    harness.update(|plait, _, _| {
+        assert_eq!(plait.command_policy(), Some(CommandPolicy::Sandboxed));
+        plait.policy.key.as_mut().unwrap().0 += 1;
+        assert_eq!(
+            plait.command_policy(),
+            None,
+            "a stale policy must not label this connection sandboxed"
+        );
+        plait.policy.key.as_mut().unwrap().0 -= 1;
+    });
+    harness.capture(&format!("policy-sandboxed-{suffix}"));
+    harness.update(|plait, _, _| plait.policy.confirm = true);
+    harness.capture(&format!("policy-confirm-trusted-{suffix}"));
+    harness.update(|plait, _, _| {
+        plait.policy.confirm = false;
+        plait.policy.value = Some(CommandPolicy::Trusted);
+    });
+    harness.capture(&format!("policy-trusted-{suffix}"));
+    harness.update(|plait, window, cx| {
+        plait.show_settings(false, window, cx);
+        plait.settings_section = 0;
+    });
 }
