@@ -37,9 +37,18 @@ optional wide-window Git inspector. Keep machine and thread context visible.
   aligned to the text edge; expand them in place for details. Give each row a
   full author/context label for assistive technology.
 - **Composer.** One raised, rounded box holds the draft, its hint, and a single
-  send control that becomes Stop while the agent works. Directly beneath it, a
-  context line names the Project, Machine, and checkout branch, the thread's
+  send control that becomes Stop while the agent works. The draft is one line
+  with placeholder text when empty and grows as it is written, to about a third
+  of the window; past that it scrolls, with a thin position marker in the right
+  padding. The hint always says what the keys do now. Directly beneath the box,
+  a context line names the Project, Machine, and checkout branch, the thread's
   saved model, and the approval rule.
+- **Suggestions.** `@` lists files and `/` lists local commands in one compact
+  list that floats just above the composer, at most eight 28-point rows and 560
+  points wide. A file row shows the name first, then its directory. Matched
+  characters are brighter and heavier, not colored; the selected row uses the
+  neutral selection fill. Keyboard focus stays in the draft. A chosen file
+  becomes its plain path in the text, so the message shows exactly what is sent.
 - **Approval.** A bordered card above the composer shows the exact arguments,
   the risk, protected dirty paths, and Deny once / Allow once.
 - **Git.** Changed files are 28-point rows: a one-letter state, file name first,
