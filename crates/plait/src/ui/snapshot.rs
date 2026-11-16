@@ -1,20 +1,28 @@
-//! Linux-only layout snapshots rendered by GPUI's headless renderer.
+//! Scene snapshots of the root view, rendered by GPUI's headless renderers.
 //!
-//! These images check layout, density, and color on a machine without a
-//! display. They use Linux fonts and a software renderer, so they are not a
-//! substitute for inspecting the native macOS window.
+//! No window opens: GPUI's test platform lays out and paints the real root
+//! view, and a headless renderer draws the scene into an offscreen texture.
+//! On macOS that is Metal with Core Text, the renderer and text system the app
+//! uses. On Linux it is wgpu on a software Vulkan driver with Linux fonts, so
+//! those images check layout, density, and color only.
+//!
+//! Neither platform exercises a native window, real input events, or the
+//! accessibility tree an assistive client reads.
 //!
 //! ```sh
-//! PLAIT_SNAPSHOT_DIR=/tmp/plait-snapshots \
-//!   cargo test --locked -p plait snapshot -- --ignored
+//! bash scripts/snapshots.sh /tmp/plait-snapshots
 //! ```
+//!
+//! To add a scene, put its sample state in a small function beside the others,
+//! then call `harness.capture("name-{suffix}")` from `walk` or a `*_walk`
+//! helper. Every scene runs at both window sizes.
 
 use super::{Plait, composer::Composer, theme::Assets};
 use gpui::{prelude::*, *};
 use plait_core::{
     host::{
-        Approval, ApprovalKind, ApprovalMode, Message, MessageRole, Model, ModelChoice, Snapshot,
-        Status, ThreadStatus, ThreadSummary, Tool, ToolStatus,
+        Approval, ApprovalKind, ApprovalMode, HostError, Message, MessageRole, Model, ModelChoice,
+        Snapshot, Status, ThreadStatus, ThreadSummary, Tool, ToolStatus,
     },
     model::DiffMode,
     state::Load,
@@ -27,6 +35,63 @@ use std::{
 };
 
 const THREAD: &str = "thr_5791c2e4";
+
+/// Set in the child process that draws scenes. Names its scratch home.
+const SCENE_HOME: &str = "PLAIT_SCENE_HOME";
+
+/// Whether this process may build the root view.
+///
+/// `Plait::new` probes the local host socket and reads desktop preferences,
+/// both found through `HOME`. On a developer's machine those belong to a
+/// running Plait, so the test process itself never draws. It re-runs the named
+/// test in a child whose home and host store are empty scratch directories and
+/// reports the child's result. Only that child returns `true`.
+fn isolated(test: &str) -> bool {
+    if let Some(home) = std::env::var_os(SCENE_HOME) {
+        assert_eq!(std::env::var_os("HOME"), Some(home), "scene home");
+        assert!(std::env::var_os("PLAIT_HOST_STORE").is_some(), "host store");
+        return true;
+    }
+    let home = std::env::temp_dir().join(format!("plait-scene-{}-{test}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).expect("scratch home");
+    // libtest names omit the crate: `ui::snapshot::<test>`.
+    let module = module_path!().split_once("::").expect("module path").1;
+    let output = Command::new(std::env::current_exe().expect("test binary"))
+        .args(["--exact", &format!("{module}::{test}")])
+        .args(["--include-ignored", "--test-threads=1", "--nocapture"])
+        .env(SCENE_HOME, &home)
+        .env("HOME", &home)
+        .env("PLAIT_HOST_STORE", home.join("host"))
+        .env("PLAIT_DESKTOP_STATE_DIR", home.join("desktop"))
+        .env_remove("XDG_CONFIG_HOME")
+        .output()
+        .expect("re-run the test binary");
+    let _ = std::fs::remove_dir_all(&home);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // A filter that matched nothing also exits successfully.
+    assert!(
+        output.status.success() && stdout.contains("1 passed"),
+        "isolated run of {test} failed:\n{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    false
+}
+
+/// Real text shaping for the headless window, with the app's own fonts.
+#[cfg(target_os = "macos")]
+fn text_system() -> Arc<dyn PlatformTextSystem> {
+    // Core Text, as in the app. The Mac platform needs the main thread; this does not.
+    Arc::new(gpui_apple::AppleTextSystem::new())
+}
+
+/// Real text shaping for the headless window, with the fonts installed here.
+#[cfg(target_os = "linux")]
+fn text_system() -> Arc<dyn PlatformTextSystem> {
+    // Without a display server the Linux platform has no text system.
+    // Metrics differ from macOS.
+    Arc::new(gpui_wgpu::CosmicTextSystem::new("DejaVu Sans"))
+}
 
 fn git(repository: &Path, arguments: &[&str]) {
     let status = Command::new("git")
@@ -176,6 +241,76 @@ fn thread_snapshot(checkout: &Path, approval: bool) -> Snapshot {
     }
 }
 
+/// One sample tool call, ordered after the last sample message.
+fn tool(id: &str, name: &str, status: ToolStatus, input: &str, output: &str) -> Tool {
+    Tool {
+        id: id.into(),
+        name: name.into(),
+        status,
+        input: input.into(),
+        output: output.into(),
+        after: Some(Some("m3".into())),
+    }
+}
+
+/// Finished tool calls in each end state, on a thread the host stopped with an error.
+fn tool_states(snapshot: &mut Snapshot) {
+    snapshot.status = ThreadStatus::Error;
+    snapshot.live_text.clear();
+    snapshot.tools = vec![
+        tool(
+            "t1",
+            "edit",
+            ToolStatus::Done,
+            "{\"path\":\"src/review.rs\"}",
+            "Replaced 1 line.",
+        ),
+        tool(
+            "t2",
+            "command",
+            ToolStatus::Done,
+            "{\"command\":\"cargo test\"}",
+            "Sample test output: 24 tests passed.",
+        ),
+        tool(
+            "t3",
+            "command",
+            ToolStatus::Error,
+            "{\"command\":\"cargo clippy -- -D warnings\"}",
+            "Sample error output: exit status 101.",
+        ),
+        tool(
+            "t4",
+            "edit",
+            ToolStatus::Interrupted,
+            "{\"path\":\"notes.md\"}",
+            "",
+        ),
+    ];
+    snapshot.error = Some(HostError {
+        code: "sample_error".into(),
+        message: "Sample host error. This is a rendering fixture, not an agent run.".into(),
+    });
+    snapshot.truncated = true;
+}
+
+/// The sample turn completed: nothing is streaming and no tool is running.
+fn finished_turn(snapshot: &mut Snapshot) {
+    snapshot.status = ThreadStatus::Idle;
+    snapshot.live_text.clear();
+    snapshot.tools[1].status = ToolStatus::Done;
+    snapshot.tools[1].output = "Sample test output: 24 tests passed.".into();
+    snapshot.messages.push(Message {
+        id: "m4".into(),
+        role: MessageRole::Assistant,
+        text: "Sample result. The refresh is queued and the tests pass.\n\n- `src/review.rs` queues the read\n- 24 tests passed".into(),
+    });
+}
+
+/// An unsent message of several lines, as typed into the composer.
+const DRAFT: &str =
+    "Also notify when the queue is empty.\nKeep the public signature of refresh() as it is.";
+
 struct Harness {
     cx: HeadlessAppContext,
     window: WindowHandle<Plait>,
@@ -185,9 +320,7 @@ struct Harness {
 
 impl Harness {
     fn new(repository: &Path, output: Option<&Path>, width: f32, height: f32) -> Self {
-        // Without a display server the Linux platform has no text system, so
-        // shape with the fonts installed here. Metrics differ from macOS.
-        let text_system = Arc::new(gpui_wgpu::CosmicTextSystem::new("DejaVu Sans"));
+        let text_system = text_system();
         let render = output.is_some();
         let mut cx = HeadlessAppContext::with_platform(text_system, Arc::new(Assets), move || {
             if render {
@@ -319,6 +452,9 @@ impl Harness {
 
 #[core::prelude::v1::test]
 fn desktop_recovery_does_not_rebind_saved_work_or_clear_a_newer_revision() {
+    if !isolated("desktop_recovery_does_not_rebind_saved_work_or_clear_a_newer_revision") {
+        return;
+    }
     let scratch = std::env::temp_dir().join(format!("plait-recovery-ui-{}", std::process::id()));
     let repository = fixture_repository(&scratch);
     let mut harness = Harness::new(&repository, None, 900., 600.);
@@ -400,6 +536,8 @@ fn walk(output: Option<&Path>) {
         harness.update(|plait, _, cx| plait.toggle_live_tool("t1", cx));
         harness.capture(&format!("live-approval-{suffix}"));
         streaming_walk(&mut harness, &repository, suffix);
+        tool_states_walk(&mut harness, &repository, suffix);
+        draft_walk(&mut harness, &repository, suffix);
         harness.update(|plait, _, _| plait.settings_open = true);
         harness.capture(&format!("settings-{suffix}"));
         harness.update(|plait, _, _| {
@@ -504,18 +642,58 @@ fn streaming_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.update(|plait, _, _| assert!(!plait.expanded_live_tools.contains("t2")));
 }
 
+/// Done, failed, and interrupted tool calls, two of them expanded, with the
+/// host's error line and the clipped-history note.
+fn tool_states_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
+    harness.connect(repository, false);
+    harness.change_snapshot(tool_states);
+    harness.update(|plait, _, cx| {
+        // The sidebar and composer follow the thread's status, as a host update would set it.
+        plait.host.threads[0].status = ThreadStatus::Error;
+        plait.sync_composer(cx);
+        plait.toggle_live_tool("t2", cx);
+        plait.toggle_live_tool("t3", cx);
+        plait.live_scroll.scroll_to_end();
+    });
+    harness.capture(&format!("live-tools-{suffix}"));
+    // Later scenes show the usual thread list again.
+    harness.connect(repository, false);
+}
+
+/// A finished turn with an unsent draft, so the composer is ready to send.
+fn draft_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
+    harness.connect(repository, false);
+    harness.change_snapshot(finished_turn);
+    harness.update(|plait, _, cx| {
+        plait.host.threads[0].status = ThreadStatus::Idle;
+        plait.composers[THREAD].update(cx, |composer, cx| {
+            composer.restore_draft(DRAFT.into(), 1, None, cx);
+        });
+        plait.sync_composer(cx);
+        plait.live_scroll.scroll_to_end();
+    });
+    harness.capture(&format!("live-draft-{suffix}"));
+    harness.connect(repository, false);
+}
+
 // The glob import above brings in `gpui::test`; these are plain tests.
 
 /// Layout and paint run for every view. GPUI reports some misuse, such as a
 /// second hover style on one element, only when the element is drawn.
 #[core::prelude::v1::test]
 fn every_view_draws() {
+    if !isolated("every_view_draws") {
+        return;
+    }
     walk(None);
 }
 
 #[core::prelude::v1::test]
 #[ignore = "writes PNG files; set PLAIT_SNAPSHOT_DIR and pass --ignored"]
 fn snapshot() {
+    if !isolated("snapshot") {
+        return;
+    }
     let Some(output) = std::env::var_os("PLAIT_SNAPSHOT_DIR").map(PathBuf::from) else {
         panic!("Set PLAIT_SNAPSHOT_DIR to an output directory.");
     };
