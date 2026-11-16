@@ -390,6 +390,7 @@ given as an endpoint. `not_found`: unknown provider, endpoint, or sign-in ID.
 provider ID, an `answer_sign_in` when no input is pending, or a `models.json` the
 host will not rewrite. `internal`: Pi could not store, remove, or reload. Messages
 name the field at fault and never repeat its value.
+
 ## Command policy
 
 Each canonical checkout has a command policy: `sandboxed`, the default, or
