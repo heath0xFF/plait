@@ -10,7 +10,7 @@ full sandboxed workspace tests pass on macOS. Review every approved action;
 Linux execution and remote Plait connections are not supported yet. See
 [verification](docs/VERIFICATION.md) and the [Arthur handoff](docs/HANDOFF.md).
 
-[Build and run](#run-the-desktop) · [Contribute](CONTRIBUTING.md) · [MIT license](LICENSE)
+[Download previews](https://github.com/heath0xFF/plait/releases) · [Install and update](docs/MACOS.md) · [Build and run](#run-the-desktop) · [Contribute](CONTRIBUTING.md) · [MIT license](LICENSE)
 
 Plait is an agent-native development environment designed around persistent coding agents, distributed execution, and first-class Git workflows.
 

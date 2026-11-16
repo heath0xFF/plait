@@ -7,12 +7,50 @@ a flight without working internet is not an offline agent environment.
 The bundle declares macOS 15, but packaging CI uses macOS 26. Older-system
 runtime acceptance is not yet complete.
 
+## Download and install
+
+Published previews live on the [GitHub releases page](https://github.com/heath0xFF/plait/releases).
+Download the **DMG**, open it, then run **Install Plait.pkg**. The disk image also
+has **Update Client.pkg** for an already-installed host build. This is an
+installer-based app and host, not a drag-to-Applications client that silently
+omits the execution runtime.
+
+For a command-line installation or update, download and inspect the installer:
+
+```sh
+curl --proto '=https' -fL \
+  https://raw.githubusercontent.com/heath0xFF/plait/main/scripts/install.sh \
+  -o install-plait.sh
+less install-plait.sh
+bash install-plait.sh --allow-unsigned
+```
+
+The short form is:
+
+```sh
+curl --proto '=https' -fsSL https://raw.githubusercontent.com/heath0xFF/plait/main/scripts/install.sh | bash -s -- --allow-unsigned
+```
+
+Run it as your normal user, not under `sudo`. It requests
+administrator access only for the package installation. The flag explicitly
+accepts the unsigned preview; the script does not change Gatekeeper or remove
+quarantine attributes.
+
+The script uses the newest published release, including previews.
+`--version v0.1.0-preview.1` pins a release; `--component client` updates only the app.
+`--download ~/Downloads` checks and saves the package without installing it.
+It verifies the package against the release's SHA-256 metadata over HTTPS.
+This detects corruption, not publisher identity; it is not a signed updater.
+An already-installed identical host is left alone and the default installation
+selects only the client. No active process is stopped.
+
 ## Packages
 
 `bash scripts/build-macos.sh` produces:
 
 | Artifact | Purpose |
 | --- | --- |
+| `Plait-…-macos-arm64.dmg` | Finder download containing the combined installer, client update, and instructions |
 | `Plait-Installer-…-macos-arm64.pkg` | Install both components; Customize can select either one |
 | `Plait-Client-…-macos-arm64.pkg` | Install or update only `/Applications/Plait.app` |
 | `Plait-Host-…-macos-arm64.pkg` | Install or stage only the host, Node, and pinned runtime |
@@ -153,7 +191,9 @@ The workflow launches the installed client and captures its window when the
 runner has a display. These are scripted checks, not live-model acceptance or
 personal-machine validation. See [verification](VERIFICATION.md) for results.
 
-Download the packages from a successful `plait-macos-arm64-…` workflow artifact.
-Artifacts expire after 14 days. The workflow does not publish a GitHub release
-or use signing secrets. [Issue #6](https://github.com/heath0xFF/plait/issues/6)
+Branch builds upload a `plait-macos-arm64-…` workflow artifact, which expires
+after 14 days. Version tags run the complete Mac checks again, then a separate
+publish job creates an immutable GitHub prerelease with the DMG, packages,
+installer script, and checksums. A failed build or installer test publishes
+nothing. The job does not use signing secrets. [Issue #6](https://github.com/heath0xFF/plait/issues/6)
 tracks Developer ID signing, notarization, and verified automatic update delivery.

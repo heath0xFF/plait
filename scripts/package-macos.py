@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 
 from release_macos import build_installers, manifest, write_json
+from distribution_macos import build_distribution
 
 ROOT = Path(__file__).resolve().parent.parent
 BUNDLE_ID = "dev.plait.desktop"
@@ -106,6 +107,7 @@ def main():
         verify_bundle(unpacked / "Plait.app")
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         installers = build_installers(bundle, version, host_version, revision, work)
+        installers += build_distribution(installers, version, revision, work)
         # Only replace generated output after both the bundle and its archive pass verification.
         destination = dist / "Plait.app"
         if destination.exists():
