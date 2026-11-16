@@ -116,7 +116,7 @@ impl Plait {
                             .border_color(rgb(EDGE))
                             .text_color(rgb(MUTED))
                     }
-                    Kind::List(depth) => body = body.pl(px(depth as f32 * 12.)),
+                    Kind::List { depth, .. } => body = body.pl(px(depth as f32 * 12.)),
                     _ => {}
                 }
                 body.child(text).into_any_element()
