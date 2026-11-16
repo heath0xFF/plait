@@ -8,7 +8,7 @@ mod markdown;
 mod navigation;
 mod session;
 mod settings;
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod snapshot;
 pub mod theme;
 mod update;

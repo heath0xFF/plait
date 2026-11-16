@@ -28,7 +28,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
   settings.rs           model choice, auth status, defaults, and reconnect
   changes.rs            real local status and diff views
   theme.rs              tokens, original controls, embedded glyphs
-  snapshot.rs           Linux-only headless layout checks (tests only)
+  snapshot.rs           windowless scene snapshots on macOS and Linux (tests only)
 
 crates/plait-core/src/
 host.rs                 bounded Unix-socket framing and requests; background only
@@ -347,20 +347,46 @@ launch time. Instrumentation does not write a log from the UI thread.
 The [ADEMark plan](ADEMARK.md) tracks external performance goals and the local
 transport probe. These probes do not measure native input-to-pixel latency.
 
-### Layout checks without a Mac
+### Scene snapshots without a window
 
-`ui/snapshot.rs` is a Linux-only test module. It opens the real root view in
-GPUI's headless test platform, walks every view at 1380 × 860 and 900 × 600,
-and draws each one. `cargo test -p plait` runs that walk without a renderer, so
-layout and paint errors fail the test. With `PLAIT_SNAPSHOT_DIR` set and
-`--ignored`, the same walk renders PNG files through GPUI's headless wgpu
-renderer. Host data in these scenes is injected sample state; no socket is
-opened and no agent runs. The repository is a disposable fixture.
+`ui/snapshot.rs` is a test module for macOS and Linux. It opens the real root
+view in GPUI's test platform, which has no native window, walks every view at
+1380 × 860 and 900 × 600, and draws each one. `cargo test -p plait` runs that
+walk without a renderer, so layout and paint errors fail the test.
+`bash scripts/snapshots.sh <directory>` runs the same walk with a headless
+renderer and writes one PNG per scene, at twice the logical size.
 
-The images use Linux fonts and a software renderer. They check layout, density,
-and color. They are **not** a check of the macOS renderer, system fonts,
-accessibility tree, or input. The harness needs GPUI's `test-support` feature,
-enabled only for Linux test builds; release and macOS builds do not compile it.
+| | Renderer | Text |
+|-|-|-|
+| macOS | GPUI's Metal renderer, drawing into an offscreen texture | Core Text, with the system font and Menlo |
+| Linux | GPUI's wgpu renderer on a software Vulkan driver | cosmic-text, with the fonts installed there |
+
+On macOS the scene is drawn by the same renderer and shaped by the same text
+system and fonts as the app, so glyphs, wrapping, and truncation come from the
+code the app runs. On Linux they do not; those images check layout, density,
+and color only.
+
+Neither is the native window. The images do **not** show or check:
+
+- the title bar, or the height it takes from a 1380 × 860 window;
+- presentation through the window's layer, display color management, or a
+  display that is not 2×;
+- hover, pressed, and focus states that follow real pointer and key events,
+  the text caret, IME, or scrolling by input. Scenes set view state directly;
+- the accessibility tree, which the harness never reads;
+- animation, frame timing, or latency. Each image is one frame.
+
+Host data in these scenes is injected sample state held in small functions in
+the test module. The repository is a disposable fixture. Building the root view
+probes the host socket and reads desktop preferences, so each scene test
+re-runs itself in a child process whose home directory and host store are empty
+scratch directories. It cannot reach a running host or a user's saved state.
+The images do show the machine's name and a temporary path, so they are
+inspected locally, not committed.
+
+The harness needs GPUI's `test-support` feature. It is a dev-dependency feature
+for macOS and Linux test builds; `cargo build` and release builds do not
+compile it.
 
 ## Dependency decision
 
