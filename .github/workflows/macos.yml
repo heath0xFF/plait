@@ -3,6 +3,7 @@ name: macOS build
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -19,6 +20,7 @@ jobs:
     timeout-minutes: 60
     env:
       MACOSX_DEPLOYMENT_TARGET: '15.0'
+      PLAIT_RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -88,10 +90,13 @@ jobs:
           name: plait-macos-arm64-${{ github.sha }}
           path: |
             dist/*.zip
+            dist/*.dmg
+            dist/install.sh
+            dist/release.json
             dist/*.sha256
             dist/*.pkg
             dist/Plait-Release-*.json
-            dist/installed-client.png
+            dist/installed-client*.png
             dist/installed-client.log
           if-no-files-found: error
           retention-days: 14
@@ -107,3 +112,44 @@ jobs:
             target/build-tools
             target/release-inputs
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.ref_name }}
+      ARTIFACT: plait-macos-arm64-${{ github.sha }}
+    steps:
+      - name: Download the tested build and verify every checksum
+        run: |
+          gh run download "$GITHUB_RUN_ID" -n "$ARTIFACT" -D release
+          (cd release && sha256sum -c ./*.sha256)
+      - name: Publish an immutable preview
+        run: |
+          printf '%s\n' \
+            '## Install' \
+            'Download the DMG, open it, and run **Install Plait.pkg**.' \
+            'For an identical host build, use **Update Client.pkg** instead.' \
+            '' \
+            '**Unsigned local preview. Not notarized. Do not disable Gatekeeper.**' \
+            'Apple Silicon; macOS 15+ declared, tested on macOS 26.' \
+            '' \
+            'The host includes Node and the runtime. Model credentials and project build tools are not included.' \
+            'Client updates leave agent work running. Host updates are staged until an explicit session restart.' \
+            '' \
+            'Native code display, copy controls, saved drafts, and safe submission recovery are included.' \
+            'The installed coding/reconnect test uses a scripted provider and real sandboxed Cargo commands, not a live model.' \
+            '' \
+            'The attached installed-client images show that labeled test, not a personal-account session.' \
+            'See docs/MACOS.md, docs/SELF-HOSTING.md, and docs/VERIFICATION.md at this tag for setup and limits.' > notes.md
+          gh release create "$RELEASE_TAG" --verify-tag --prerelease --draft \
+            --title "Plait $RELEASE_TAG — local preview" --notes-file notes.md \
+            release/*.dmg release/*.pkg release/*.zip release/*.sha256 \
+            release/install.sh release/release.json release/Plait-Release-*.json release/installed-client*.png
+          gh release edit "$RELEASE_TAG" --draft=false

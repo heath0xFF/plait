@@ -202,6 +202,8 @@ pub fn serve(
     if unsafe { libc::fcntl(lock.as_raw_fd(), libc::F_SETFD, 0) } < 0 {
         return Err(io::Error::last_os_error());
     }
+    let mut startup = crate::startup::Startup::new(&store);
+    startup.phase("starting_sidecar")?;
     let (notify_reader, notify_writer) = UnixStream::pair()?;
     // Keep change notifications separate from the serialized request/reply pipe.
     if unsafe { libc::fcntl(notify_writer.as_raw_fd(), libc::F_SETFD, 0) } < 0 {
@@ -225,7 +227,8 @@ pub fn serve(
     }
     let child = command.spawn();
     drop(notify_writer);
-    let mut child = child?;
+    let mut child = child.inspect_err(|error| startup.failed(error))?;
+    startup.child(child.id());
     let input = child
         .stdin
         .take()
@@ -239,12 +242,21 @@ pub fn serve(
         input,
         output,
     }));
-    let ready = sidecar.lock().unwrap().request(&json!({"op":"status"}))?;
+    startup.phase("waiting_for_runtime")?;
+    let ready = sidecar
+        .lock()
+        .unwrap()
+        .request(&json!({"op":"status"}))
+        .inspect_err(|error| startup.failed(error))?;
     if ready["ok"] != true {
-        return Err(io::Error::other("sidecar initialization failed"));
+        let error = io::Error::other("sidecar initialization failed");
+        startup.failed(&error);
+        return Err(error);
     }
+    startup.phase("binding_socket")?;
     let listener = UnixListener::bind(&socket_path)?;
     fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
+    startup.phase("ready")?;
     let notifications = Arc::new(Notifications::default());
     let relay = Arc::clone(&notifications);
     thread::spawn(move || {

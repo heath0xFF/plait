@@ -94,7 +94,7 @@ impl Plait {
         .pl(px(36.))
         // Category glyph colours from the brand kit: violet for threads.
         .child(icon("thread").text_color(rgb(VIOLET)))
-        .child(title(id.clone()).text_color(rgb(TEXT)))
+        .child(title(self.thread_title(&id)).text_color(rgb(TEXT)))
         .child(
             pill()
                 .child(dot(host_status_color(thread.status)))

@@ -4,6 +4,7 @@ mod fingerprint;
 mod installation;
 mod lease;
 mod service;
+mod startup;
 mod transport;
 
 use std::{

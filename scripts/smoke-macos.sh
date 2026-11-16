@@ -13,6 +13,7 @@ fi
 fixture=$(mktemp -d -t plait-smoke)
 # Fixture checks must not connect to the user's live host.
 export PLAIT_HOST_STORE="$fixture/host"
+export PLAIT_DESKTOP_STATE_DIR="$fixture/desktop"
 app_pid=''
 stop_app() {
     if [ -n "$app_pid" ]; then

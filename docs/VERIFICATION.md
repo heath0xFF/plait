@@ -1,5 +1,46 @@
 # Verification
 
+## Installable Mac preview candidate — 2026-11-16
+
+[Mac run 43845602435](https://github.com/heath0xFF/plait/actions/runs/43845602435)
+passed for source `78a7ad5` (build revision `d44491b4720b`). It checked formatting,
+strict Clippy, 86 Mac Rust tests, 105 source runtime tests, two recovery probes,
+and 21 packaging tests. The 105 runtime tests also passed with the installed
+host, Node, and production sidecar. Linux CI passed separately.
+
+The installed self-development probe used Pi's real provider decoder with a
+loopback scripted endpoint. It approved changes to a disposable copy of real
+Plait source, ran offline locked Cargo tests in the real command sandbox, closed
+a client subscription during work, restarted the host, and completed a follow-up.
+Request retries did not execute again. Message/tool IDs, the Git index, existing
+dirty work, and the original source checkout were checked. This is not a live
+model or personal-account test.
+
+DMGs were created, verified, mounted read-only, and checked against the component
+packages. The installer tests also used native Mac `plutil` for release-array
+and artifact lookup. The installed native client saved its checkout privately
+and reopened it without a checkout argument; its captured window was inspected.
+The managed host reached `ready` after 5,083 ms on this run. Issue #14 remains an
+intermittent-startup investigation, not a claimed fix; first-failure phase
+capture is now part of the gate.
+
+Later candidate checks cover saved-workspace identity conflicts and connect the
+actual installed client to the coding probe. That gate closes the client during
+an approved command, reopens the same thread and saved draft, and captures native
+active/completed views. It adds no sample-view code to the shipped app. The
+complete tag workflow must pass before a release becomes public.
+
+Local GPUI checks render the native Markdown blocks and settings at wide and
+minimum sizes, including the no-authentication state. Recovery tests cover
+private atomic writes, exclusive ownership, corruption, future versions,
+coalesced saves, preserved submission IDs/edit revisions, and refusal to reassign
+saved work to another checkout or model. Headless images are layout evidence,
+not Mac input-latency measurements.
+
+Unsigned/not-notarized status, personal-Mac Gatekeeper approval, live-provider
+quality, VoiceOver/IME use, and macOS 15 runtime acceptance remain separate
+limits. See [Mac setup](MACOS.md) and [self-development](SELF-HOSTING.md).
+
 ## Real data only, sidebar pills, Cmd-number jumps — Linux checks, 2026-11-16
 
 Branch `ui/sidebar-pills-shortcuts`. **Not built or inspected on macOS.**

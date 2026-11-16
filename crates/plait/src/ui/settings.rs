@@ -4,8 +4,10 @@ use gpui::{prelude::*, *};
 const MODEL_ROW_HEIGHT: f32 = 36.;
 
 /// Centered reading column for settings-style pages.
-fn page() -> Div {
+fn page(id: &'static str) -> Stateful<Div> {
     column()
+        .id(id)
+        .overflow_y_scroll()
         .flex_1()
         .min_h_0()
         .w_full()
@@ -87,15 +89,21 @@ impl Plait {
             })
             .when(!self.host.connected, |el| {
                 el.child(note(
-                    "Start the independent host with plait-host start, then Reconnect. Closing Plait does not stop running threads.",
+                    "The installed host normally starts at login. Reconnect does not restart it. Closing Plait does not stop accepted work.",
                 ))
             })
+            .when(self.host.status.as_ref().is_some_and(|status| !status.models.iter().any(|model| model.authenticated)), |el| {
+                el.child(note("No authenticated models. Sign in to Pi on this host. Finish active work before restarting the host to load new credentials."))
+            })
+            .child(button("open-setup-guide", "Setup and recovery guide").on_activate(cx, |_, _, cx| {
+                cx.open_url("https://github.com/heath0xFF/plait/blob/main/docs/MACOS.md");
+            }))
     }
 
     fn model_picker(&self, settings: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let list = column()
             .flex_1()
-            .min_h_0()
+            .min_h(px(108.))
             .rounded_lg()
             .border_1()
             .border_color(rgb(BORDER))
@@ -109,25 +117,57 @@ impl Plait {
         if status.models.is_empty() {
             return list.child(empty(
                 "No models available",
-                "The host returned an empty catalog. Configure Pi authentication on the host, then Reconnect.",
+                "The host returned an empty catalog. Use the setup guide above to configure the host.",
             ));
         }
-        list.child(
-            uniform_list(
-                if settings {
-                    "settings-models"
-                } else {
-                    "new-thread-models"
-                },
-                status.models.len(),
-                cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                    range
-                        .map(|index| this.model_choice(index, settings, cx))
-                        .collect::<Vec<_>>()
-                }),
-            )
-            .flex_1()
-            .min_h_0(),
+        let mut indices = status
+            .models
+            .iter()
+            .enumerate()
+            .filter(|(_, model)| self.show_all_models || model.authenticated)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        indices.sort_by_key(|index| !status.models[*index].authenticated);
+        let container = column().flex_1().min_h(px(144.)).gap_2().child(
+            row()
+                .justify_between()
+                .child(tag(format!("{} models shown", indices.len()), SUBTLE))
+                .child(
+                    button(
+                        "toggle-all-models",
+                        if self.show_all_models {
+                            "Authenticated only"
+                        } else {
+                            "Show all models"
+                        },
+                    )
+                    .on_activate(cx, |this, _, cx| {
+                        this.show_all_models = !this.show_all_models;
+                        cx.notify();
+                    }),
+                ),
+        );
+        if indices.is_empty() {
+            return container.child(list.child(empty("No authenticated models", "Use the setup guide above to sign in on the host. The desktop does not store credentials.")));
+        }
+        container.child(
+            list.child(
+                uniform_list(
+                    if settings {
+                        "settings-models"
+                    } else {
+                        "new-thread-models"
+                    },
+                    indices.len(),
+                    cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                        range
+                            .map(|index| this.model_choice(indices[index], settings, cx))
+                            .collect::<Vec<_>>()
+                    }),
+                )
+                .flex_1()
+                .min_h_0(),
+            ),
         )
     }
 
@@ -242,7 +282,7 @@ impl Plait {
             );
         let can_save = !self.host.saving && self.host.available(self.host.settings_model.as_ref());
         div().flex().flex_1().min_h_0().px_6().py_5().child(
-            page()
+            page("settings-page")
                 .child(
                     row()
                         .justify_between()
@@ -253,7 +293,6 @@ impl Plait {
                         )),
                 )
                 .child(self.host_status(cx))
-                .child(self.keyboard_settings(cx))
                 .child(note(
                     "Authentication stays on the host. This page shows status only; it never reads or saves credentials.",
                 ))
@@ -298,7 +337,8 @@ Tone::Primary,
                                     .child(text!(message)),
                             )
                         }),
-                ),
+                )
+                .child(self.keyboard_settings(cx)),
         )
     }
 
@@ -308,7 +348,7 @@ Tone::Primary,
             && (self.host.pending_create.is_some()
                 || self.host.available(self.host.new_model.as_ref()));
         div().flex().flex_1().min_h_0().px_6().py_5().child(
-            page()
+            page("new-thread-page")
                 .child(
                     column()
                         .gap_1()

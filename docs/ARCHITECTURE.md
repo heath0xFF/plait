@@ -243,9 +243,46 @@ place; defaults apply. Saves replace the file atomically, and Settings says
 "Saved" only after the write succeeds. Only the newest save reports a result.
 Unknown fields are ignored so a newer client's file still loads.
 
-Cmd-N counts rows in sidebar order: host threads come before the examples on
-the local machine. A machine or project selects its first thread; a row with
+Cmd-N counts real host threads in sidebar order on the local machine. A machine or project selects its first thread; a row with
 no thread does nothing. Jumping expands collapsed parents.
+
+### Desktop recovery
+
+`plait-core::session` owns a private, versioned desktop journal. Its directory is
+next to `desktop.json` under `session/`; `PLAIT_DESKTOP_STATE_DIR` can select an
+absolute isolated directory for development. A lifetime writer lock prevents two
+clients from overwriting each other's drafts. Malformed, oversized, future-schema,
+or wrong-host state is left intact and blocks submission, not silently reset.
+
+The UI owns selection and composer changes. It queues immutable memory snapshots
+and coalesces disk saves after 250 ms. Background writes are serialized and atomic,
+with file and directory synchronization. Closing a window waits for its save;
+normal app shutdown also flushes the journal. Force quit and power loss cannot
+guarantee the last unsaved keystroke. No filesystem work runs in render.
+
+The journal keeps the last checkout/thread, readable titles, draft text/edit
+revisions, and unconfirmed submission IDs. It does not read or copy provider
+credential stores. Draft text is private local JSON, not application-encrypted.
+A submission's exact ID and text must be durable before the socket request starts.
+Reopening never submits automatically. Explicit retry uses that same ID, and a
+matching accepted-input event can resolve it. The composer revision guard survives
+restart, so an acknowledgement cannot erase a subsequently edited draft. The host
+protocol and durable conversation schema are unchanged.
+
+### Native conversation text
+
+`plait-core::markdown` projects CommonMark into plain blocks and style ranges on
+the background executor. `pulldown-cmark` is pinned to 0.13.0 with default features
+disabled; its MIT-licensed source and event API were checked at that version.
+No HTML renderer or web view is used. HTML, image destinations, and links remain
+text: no image fetch, script execution, or automatic URL opening. Unchanged
+messages retain their parsed projection while the live answer changes. Excessive
+block counts fall back to the original text rather than dropping content.
+
+The native view draws headings, paragraphs, lists, quotes, emphasis, inline code,
+and horizontally scrollable fenced code. Copy controls copy the message source,
+code block, or tool details. These are still bounded host previews, not paginated
+history. Git refreshes after an observed busy-to-complete transition.
 
 Conversation events use GPUI's variable-height `list`. User messages render as
 right-aligned bubbles; agent replies remain open text. Tool details start

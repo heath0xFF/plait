@@ -9,6 +9,9 @@
   external diff, and textconv. Normal development commits are permitted.
 - Show only real data in the app: no sample threads or placeholder machines.
   Test scenes may inject sample state, never in a shipped view. Do not imply execution.
+- Build original application code and design. Do not copy or port competitor code,
+  assets, or distinctive UI. Compare user outcomes, not implementation details.
+  Declared, pinned dependencies are permitted; retain their licenses.
 - Pin dependencies. Check upstream source at the pinned revision before using APIs.
 - Use small functions, explicit errors, and short comments explaining why.
 - Test parsers, async result guards, and repository edge cases.

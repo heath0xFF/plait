@@ -1,17 +1,15 @@
 # Plait desktop design
 
 ## Direction
-BB is the primary look-and-feel reference, not just loose inspiration. See
-[the pinned reference checkout and study areas](docs/UI-REFERENCES.md).
-Keep Plait's native GPUI implementation, Project → Machine → Thread hierarchy,
-independent host, Git focus, safety rules, and supplied branding. This is a
-working developer tool, not a marketing surface.
+Plait is an original native development tool, not a port or a reskin. Design
+from its own workflow: Project → Machine → Thread, independent execution,
+clear approvals, and fast review of real changes. Use the owner's branding.
+Do not copy competitor source, assets, or distinctive UI.
 
-What Plait takes from BB: one compact chrome row, flat single-line navigation
-rows, open assistant text with quiet user bubbles, compact tool disclosure, and
-a raised composer with the thread's context directly beneath it. What it does
-not take: BB's palette, icons, spawned-agent hierarchy, task board, plugins, or
-required worktrees.
+Earlier design work compared BB's density and conversation layout. Those notes
+are history, not a requirement to match BB. See [the comparison policy](docs/UI-REFERENCES.md).
+Judge future changes by task completion, clarity, keyboard use, accessibility,
+and measured responsiveness. This is a working developer tool, not a marketing surface.
 
 ## Layout
 Compact Project → Machine → Thread rail; conversation or diff workspace;
@@ -56,7 +54,7 @@ optional wide-window Git inspector. Keep machine and thread context visible.
 - Main text: #e8eaf0. Secondary text: #9da5b4. Labels and hints: #7f8696.
 - Mint #94dec5: local/read-only state, additions, the chosen option.
 - Blue #93b8f5: running work, modifications, hunk headers, keyboard focus.
-- Violet #c0adf3: examples and completed sample threads.
+- Violet #c0adf3: thread identity.
 - Amber #e4c58d: attention/limits. Rose #f0a6ac: errors/deletions.
 
 Accents carry state, not decoration: selection and hover are neutral. The one

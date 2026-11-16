@@ -10,11 +10,11 @@ full sandboxed workspace tests pass on macOS. Review every approved action;
 Linux execution and remote Plait connections are not supported yet. See
 [verification](docs/VERIFICATION.md) and the [Arthur handoff](docs/HANDOFF.md).
 
-[Build and run](#run-the-desktop) · [Contribute](CONTRIBUTING.md) · [MIT license](LICENSE)
+[Download previews](https://github.com/heath0xFF/plait/releases) · [Install and update](docs/MACOS.md) · [Build Plait with Plait](docs/SELF-HOSTING.md) · [Build and run](#run-the-desktop) · [Contribute](CONTRIBUTING.md) · [MIT license](LICENSE)
 
 Plait is an agent-native development environment designed around persistent coding agents, distributed execution, and first-class Git workflows.
 
-It combines the conversational experience of BB, the integrated development tools of Orca, and the independent remote-machine architecture of Rex.
+Its design joins clear agent conversations, first-class development tools, and independent machine hosts. Plait's application code and design are original; competitors are comparison points, not implementation sources.
 
 Plait is not a terminal emulator, a traditional IDE, or an agent orchestration platform.
 
@@ -97,7 +97,7 @@ The main workspace supports:
 - Process and log inspection
 - Live HTML, Markdown, and MDX previews
 
-The interface should take inspiration from BB's simplicity and visual quality, without copying its architecture.
+The interface should make real work clear and easy to review. Do not copy competitor code, assets, or distinctive UI; compare task outcomes and measured performance instead.
 
 ### Git
 
@@ -267,7 +267,9 @@ cargo build --locked --release
 cargo run --locked --release -- /absolute/path/to/repository
 ```
 
-Omit the path to inspect the current directory. Use **Open repository…** (Cmd-O)
+Omit the path to restore the last checkout and thread, or inspect the current
+directory on first launch. Drafts and unconfirmed submission IDs are saved locally;
+reopening never sends a task automatically. Use **Open repository…** (Cmd-O)
 to select another folder. The native picker accepts directories; Git validates
 the selection in the background. Nothing is staged, committed, or discarded.
 

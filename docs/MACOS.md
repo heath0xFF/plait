@@ -7,12 +7,50 @@ a flight without working internet is not an offline agent environment.
 The bundle declares macOS 15, but packaging CI uses macOS 26. Older-system
 runtime acceptance is not yet complete.
 
+## Download and install
+
+Published previews live on the [GitHub releases page](https://github.com/heath0xFF/plait/releases).
+Download the **DMG**, open it, then run **Install Plait.pkg**. The disk image also
+has **Update Client.pkg** for an already-installed host build. This is an
+installer-based app and host, not a drag-to-Applications client that silently
+omits the execution runtime.
+
+For a command-line installation or update, download and inspect the installer:
+
+```sh
+curl --proto '=https' -fL \
+  https://raw.githubusercontent.com/heath0xFF/plait/main/scripts/install.sh \
+  -o install-plait.sh
+less install-plait.sh
+bash install-plait.sh --allow-unsigned
+```
+
+The short form is:
+
+```sh
+curl --proto '=https' -fsSL https://raw.githubusercontent.com/heath0xFF/plait/main/scripts/install.sh | bash -s -- --allow-unsigned
+```
+
+Run it as your normal user, not under `sudo`. It requests
+administrator access only for the package installation. The flag explicitly
+accepts the unsigned preview; the script does not change Gatekeeper or remove
+quarantine attributes.
+
+The script uses the newest published release, including previews.
+`--version v0.1.0-preview.1` pins a release; `--component client` updates only the app.
+`--download ~/Downloads` checks and saves the package without installing it.
+It verifies the package against the release's SHA-256 metadata over HTTPS.
+This detects corruption, not publisher identity; it is not a signed updater.
+An already-installed identical host is left alone and the default installation
+selects only the client. No active process is stopped.
+
 ## Packages
 
 `bash scripts/build-macos.sh` produces:
 
 | Artifact | Purpose |
 | --- | --- |
+| `Plait-…-macos-arm64.dmg` | Finder download containing the combined installer, client update, and instructions |
 | `Plait-Installer-…-macos-arm64.pkg` | Install both components; Customize can select either one |
 | `Plait-Client-…-macos-arm64.pkg` | Install or update only `/Applications/Plait.app` |
 | `Plait-Host-…-macos-arm64.pkg` | Install or stage only the host, Node, and pinned runtime |
@@ -24,7 +62,10 @@ and Rust host have ad-hoc signatures. The bundled Node binary retains its
 upstream signature. A checksum detects corruption; it does not prove publisher
 identity. Check the source and artifact origin before using macOS's explicit
 per-app or per-installer approval. Do not disable Gatekeeper. CI installation
-does not test the downloaded-file approval flow on your Mac.
+does not test the downloaded-file approval flow on your Mac. If macOS blocks the
+installer, review its origin, then use the explicit **Open Anyway** option in
+System Settings → Privacy & Security if offered. If machine policy forbids it,
+stop; this preview provides no security-policy bypass.
 
 ## First installation
 
@@ -82,6 +123,30 @@ you intend them to use Plait's approval and sandbox rules. Finish any host work,
 then restart the host session to load new credentials. The simplest restart is
 to log out and back in. Existing threads retain their exact saved model;
 changing the default affects only new threads.
+
+## Workspace recovery
+
+Plait restores the last checkout and selected thread. It also saves draft text
+and uncertain submission IDs. Reopening never sends or replays a task. **Retry
+safely** uses the original request ID. An acknowledgement cannot clear a draft
+that you edited after sending. Settings shows authenticated models first; **Show
+all models** includes unavailable choices without making them selectable.
+
+The Mac recovery journal is
+`~/Library/Application Support/Plait/session/desktop.json`. It is private local
+JSON, not encrypted by Plait, and can contain sensitive prompt text. Normal
+window close and Cmd-Q wait for a save. Force quit and power loss can lose the
+last unsaved keystrokes. Accepted work remains in the independent host store.
+
+If recovery reports an error, do not delete or reset the journal. Close duplicate
+Plait clients first. Keep a copy of the file before repair; malformed or unknown
+versions are left intact. A conflicting saved checkout/model disables sending
+for that thread rather than moving an old draft or request to a new identity.
+For development with a different `PLAIT_HOST_STORE`, use a separate absolute
+`PLAIT_DESKTOP_STATE_DIR`. Reconnect does not erase local state or restart work.
+
+For a prepared development checkout and a first source-change task, see
+[Build Plait with Plait](SELF-HOSTING.md).
 
 ## Independent updates
 
@@ -153,7 +218,9 @@ The workflow launches the installed client and captures its window when the
 runner has a display. These are scripted checks, not live-model acceptance or
 personal-machine validation. See [verification](VERIFICATION.md) for results.
 
-Download the packages from a successful `plait-macos-arm64-…` workflow artifact.
-Artifacts expire after 14 days. The workflow does not publish a GitHub release
-or use signing secrets. [Issue #6](https://github.com/heath0xFF/plait/issues/6)
+Branch builds upload a `plait-macos-arm64-…` workflow artifact, which expires
+after 14 days. Version tags run the complete Mac checks again, then a separate
+publish job creates an immutable GitHub prerelease with the DMG, packages,
+installer script, and checksums. A failed build or installer test publishes
+nothing. The job does not use signing secrets. [Issue #6](https://github.com/heath0xFF/plait/issues/6)
 tracks Developer ID signing, notarization, and verified automatic update delivery.

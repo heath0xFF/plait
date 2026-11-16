@@ -130,7 +130,7 @@ fn thread_snapshot(checkout: &Path, approval: bool) -> Snapshot {
             message(
                 "m2",
                 MessageRole::Assistant,
-                "I’ll change refresh() to queue the read and notify when it is ready. The edit is limited to src/review.rs; nothing else in the checkout is touched.",
+                "## Planned change\n\nI’ll change `refresh()` to **queue the read**, then notify when it is ready.\n\n```rust\npub fn refresh() {\n    queue_status();\n    notify_when_ready();\n}\n```\n\nThe edit is limited to `src/review.rs`.",
             ),
             message("m3", MessageRole::User, "Go ahead."),
         ],
@@ -241,6 +241,10 @@ impl Harness {
         self.update(|plait, _, _| {
             let previous = plait.host.snapshot.clone().expect("sample snapshot");
             change(Arc::make_mut(plait.host.snapshot.as_mut().unwrap()));
+            plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
+                &plait.formatted,
+                plait.host.snapshot.as_ref().unwrap(),
+            ));
             plait.refresh_live_list(Some(&previous));
         });
     }
@@ -286,15 +290,71 @@ impl Harness {
             // Mirror select_host_thread without opening a socket.
             plait.host.selected = Some(THREAD.into());
             plait.host.snapshot = Some(Arc::new(thread_snapshot(&checkout, approval)));
+            plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
+                &plait.formatted,
+                plait.host.snapshot.as_ref().unwrap(),
+            ));
             plait.settings_open = false;
             plait.new_thread_open = false;
             plait.show_changes = false;
             let composer = cx.new(|cx| Composer::new(window, cx));
             plait.composers.insert(THREAD.into(), composer);
             plait.refresh_live_list(None);
+            plait
+                .session
+                .data
+                .get_or_insert_with(|| plait_core::session::Session::empty("/fixture-host".into()));
+            plait.capture_session(cx);
             plait.sync_composer(cx);
         });
     }
+}
+
+#[core::prelude::v1::test]
+fn desktop_recovery_does_not_rebind_saved_work_or_clear_a_newer_revision() {
+    let scratch = std::env::temp_dir().join(format!("plait-recovery-ui-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.update(|plait, window, cx| {
+        let pending = plait
+            .host
+            .submissions
+            .begin(THREAD, "first".into())
+            .unwrap();
+        plait.composers[THREAD].update(cx, |composer, cx| {
+            composer.restore_draft("first".into(), 7, Some(("first".into(), 6)), cx);
+        });
+        plait.capture_session(cx);
+        let saved = plait.session.data.as_ref().unwrap().threads[THREAD].clone();
+        plait.host.threads[0].model.model_id = "a-different-model".into();
+        let snapshot = Arc::make_mut(plait.host.snapshot.as_mut().unwrap());
+        snapshot.model = plait.host.threads[0].model.clone();
+        snapshot.messages.push(Message {
+            id: format!("request-{}", pending.request_id),
+            role: MessageRole::User,
+            text: "first".into(),
+        });
+        let composer = cx.new(|cx| Composer::new(window, cx));
+        plait.restore_composer(THREAD, &composer, cx);
+        assert_eq!(composer.read(cx).saved_draft().0, "");
+        plait.composers.insert(THREAD.into(), composer.clone());
+        plait.capture_session(cx);
+        plait.record_snapshot(cx);
+        assert_eq!(plait.session.data.as_ref().unwrap().threads[THREAD], saved);
+        assert!(!plait.session_accepts_thread(THREAD));
+        assert!(plait.host.submissions.pending(THREAD).is_some());
+        // Only the matching identity can reconcile the accepted request, not a reused thread ID.
+        plait.host.threads[0].model = choice();
+        Arc::make_mut(plait.host.snapshot.as_mut().unwrap()).model = choice();
+        plait.restore_composer(THREAD, &composer, cx);
+        plait.record_snapshot(cx);
+        assert!(plait.host.submissions.pending(THREAD).is_none());
+        assert_eq!(composer.read(cx).saved_draft().0, "first");
+        assert_eq!(composer.read(cx).saved_draft().1, 7);
+    });
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
 }
 
 /// Every view at the default size and at the minimum window size.
@@ -335,6 +395,13 @@ fn walk(output: Option<&Path>) {
         streaming_walk(&mut harness, &repository, suffix);
         harness.update(|plait, _, _| plait.settings_open = true);
         harness.capture(&format!("settings-{suffix}"));
+        harness.update(|plait, _, _| {
+            for model in &mut plait.host.status.as_mut().unwrap().models {
+                model.authenticated = false;
+            }
+        });
+        harness.capture(&format!("settings-no-auth-{suffix}"));
+        harness.update(|plait, _, _| plait.host.status = Some(status()));
         harness.update(|plait, _, cx| plait.open_new_thread(cx));
         harness.capture(&format!("new-thread-{suffix}"));
         harness.update(|plait, _, _| plait.new_thread_open = false);
@@ -393,6 +460,10 @@ fn streaming_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
             Arc::make_mut(plait.host.snapshot.as_mut().unwrap())
                 .live_text
                 .push_str(" another streamed word");
+            plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
+                &plait.formatted,
+                plait.host.snapshot.as_ref().unwrap(),
+            ));
             plait.refresh_live_list(Some(&previous));
             assert_eq!(plait.live_scroll.bounds_for_item(anchor.item_ix), measured);
             let current = plait.live_scroll.logical_scroll_top();
