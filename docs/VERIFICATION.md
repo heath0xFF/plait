@@ -133,7 +133,21 @@ release baseline and have development evidence only:
 No test contacts a provider. Pi's real sign-in flows for Anthropic, OpenAI, and
 the others, including the browser redirect to the loopback listener and token
 refresh afterward, have not been run through the host. They need acceptance
-with real accounts once the Settings UI exists.
+with real accounts through Settings → Providers.
+
+## Settings interaction coverage
+
+Source builds have wide and narrow scenes for provider lists, browser and device
+sign-in, optional code entry, failed sign-in, masked API keys, endpoint model
+selection, command policy, and Trusted confirmation. These inject host replies;
+they do not authenticate to a real provider or save a real credential.
+
+Shortcut scenes send keys through GPUI dispatch to prove that recording intercepts
+an existing command, conflicts name it, and rebinding removes the old shortcut.
+Secret-field checks keep clipboard contents unchanged and prove that a sent value
+cannot return through Undo. Pure client tests cover request encoding, tolerant
+replies, sign-in states, endpoint validation, and policy copy. Native IME, token
+refresh, and full VoiceOver acceptance remain separate checks.
 
 ## Known gaps
 

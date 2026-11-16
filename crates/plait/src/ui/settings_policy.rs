@@ -132,14 +132,16 @@ impl Plait {
             );
         }
         settings::section("Command policy")
-            .child(settings::setting(
-                "This checkout",
-                current.map_or(
-                    "Policy has not loaded from the host.",
-                    CommandPolicy::meaning,
-                ),
-                choices,
-            ))
+            .when(!self.policy.confirm, |el| {
+                el.child(settings::setting(
+                    "This checkout",
+                    current.map_or(
+                        "Policy has not loaded from the host.",
+                        CommandPolicy::meaning,
+                    ),
+                    choices,
+                ))
+            })
             .child(tag(
                 self.host.checkout.to_string_lossy().into_owned(),
                 SUBTLE,
