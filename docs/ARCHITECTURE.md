@@ -21,10 +21,12 @@ ui/                     GPUI layout, actions, focus, lists, theme
   navigation.rs         Project → Machine → Thread
   conversation.rs       no-thread state and the Git inspector
   live_conversation.rs  real host messages, ordered tools, and approvals
+  selection.rs          text selection, copy, and link clicks in the conversation
+  tool_card.rs          one line per tool call, its details, and grouped runs
   composer.rs           native input, IME, clipboard, undo, submit/stop events
   host.rs               background host requests and event subscriptions
   session.rs            desktop restore/save coordination and submission guards
-  markdown.rs           native conversation blocks and copy controls
+  markdown.rs           native conversation blocks: prose, code, tables, diffs
   settings.rs           model choice, auth status, defaults, and reconnect
   changes.rs            real local status and diff views
   theme.rs              tokens, original controls, embedded glyphs
@@ -42,6 +44,10 @@ machine.rs              this machine's display name
 preferences.rs          desktop-only preferences and Cmd-number order
 session.rs              private desktop journal, identity checks, writer lock
 markdown.rs             plain text blocks and style ranges, parsed off render
+highlight.rs            lexical syntax classes for fenced and tool code
+diff.rs                 line diff of an edit's old and new text
+tool_view.rs            what each tool call shows, and grouping of long runs
+selection.rs            selection order, ranges, word bounds, and copied text
 git.rs                  synchronous, read-only Git adapter; background only
 ```
 
@@ -294,22 +300,65 @@ protocol and durable conversation schema are unchanged.
 
 ### Native conversation text
 
-`plait-core::markdown` projects CommonMark into plain blocks and style ranges on
-the background executor. `pulldown-cmark` is pinned to 0.13.0 with default features
-disabled; its MIT-licensed source and event API were checked at that version.
-No HTML renderer or web view is used. HTML, image destinations, and links remain
-text: no image fetch, script execution, or automatic URL opening. Unchanged
-messages retain their parsed projection while the live answer changes. Excessive
-block counts fall back to the original text rather than dropping content.
+`plait-core::markdown` projects CommonMark, with tables, strikethrough, and task
+lists, into plain blocks and style ranges on the background executor.
+`pulldown-cmark` is pinned to 0.13.0 with default features disabled; its
+MIT-licensed source and event API were checked at that version. No HTML renderer
+or web view is used. HTML stays text and an image is never fetched: its
+description and address are shown as text. Unchanged rows retain their
+projection while the live answer changes. Excessive block counts fall back to
+the original text rather than dropping content, and an oversized table becomes
+tab-separated text.
 
-The native view draws headings, paragraphs, lists, quotes, emphasis, inline code,
-and horizontally scrollable fenced code. Copy controls copy the message source,
-code block, or tool details. These are still bounded host previews, not paginated
-history. Git refreshes after an observed busy-to-complete transition.
+A link is data, not an action. Only an `http` or `https` destination without
+whitespace or control characters becomes one, whether written as a Markdown link
+or as a bare URL in prose; every other destination stays inert text beside its
+label. The view underlines a link, shows its address at the edge of the
+conversation while the pointer rests on it, and opens it in the default browser
+only when a click starts and ends on it. Nothing opens on its own.
+
+Fenced code and tool content are tokenized by `plait-core::highlight`, a small
+original lexer with no dependency. It assigns lexical classes (comment, keyword,
+string, number, type, function, key, punctuation) for Rust,
+TypeScript/JavaScript, Python, shell, JSON, TOML, YAML, Markdown, diff, C/C++,
+and Go; any other label stays plain. It has no grammar and cannot fail, so
+partial code from a streaming answer is colored as far as it goes. A parser
+with per-language grammars was not adopted: it would add a C build and several
+megabytes for a view that only needs code to be scannable. The classes map onto
+the existing palette; see [DESIGN.md](../DESIGN.md).
+
+`plait-core::tool_view` prepares what each tool call shows from its bounded
+arguments and result: `edit` as a line diff of old against new text
+(`plait-core::diff`), `write` as the new file highlighted by its extension,
+`command` as a prompt line and its output, and `read` as the first lines of the
+file. Arguments that the host clipped or that are not the expected JSON are
+shown as received, with a note. The same pass plans groups: a finished run of
+five or more consecutive calls folds under one line with its count and kinds,
+and the run a busy thread is still adding to keeps its latest three calls in
+view. These are still bounded host previews, not paginated history. Git
+refreshes after an observed busy-to-complete transition.
+
+Conversation text can be selected with the pointer: drag, double-click for a
+word, triple-click for a block or a line of code, and shift-click to extend,
+within a message or across messages and opened tool details. Every piece of
+text paints through one element that records its laid-out position for the
+frame; pointer events map those records to a row, block, and byte offset using
+GPUI's text layout, and `plait-core::selection` decides order, ranges, and the
+copied text. The selection is drawn as a background on the text runs and is
+kept by row identity, so it survives streaming and list changes. Cmd-C copies
+it once a press in the conversation has moved focus there; the composer keeps
+its own Cmd-C while it has focus. Copy controls for a message's source, a code
+block, and a tool's details appear when the pointer is over their row or when
+they take keyboard focus. Selection follows only rows that are on screen: a
+drag does not scroll the list by itself, though the wheel still does.
 
 Conversation events use GPUI's variable-height `list`. User messages render as
 right-aligned bubbles; agent replies remain open text. Tool details start
 collapsed. Disclosure state belongs to the UI and clears on thread selection.
+A call folded into a closed group keeps its list row and draws nothing, so row
+identity and the scroll anchor do not depend on grouping; rows whose folding
+changes are remeasured. A control to jump to the newest row appears while the
+reader is elsewhere in the history, and says when content has arrived since.
 Live transcript changes are planned in `plait-core::transcript`, without GPUI.
 Ordered stable IDs retain existing rows, including after history-tail clipping.
 Structural changes use `splice`; changed content uses `remeasure_items` so the
@@ -371,8 +420,11 @@ Neither is the native window. The images do **not** show or check:
 - the title bar, or the height it takes from a 1380 × 860 window;
 - presentation through the window's layer, display color management, or a
   display that is not 2×;
-- hover, pressed, and focus states that follow real pointer and key events,
-  the text caret, IME, or scrolling by input. Scenes set view state directly;
+- hover, pressed, and focus states that follow native pointer and key events,
+  the text caret, IME, or scrolling by input. Most scenes set view state
+  directly. The reading scenes deliver pointer and key events through GPUI's
+  own dispatch to check text selection, copy, and link hover; that exercises
+  hit-testing and handlers, not the operating system's event path;
 - the accessibility tree, which the harness never reads;
 - animation, frame timing, or latency. Each image is one frame.
 

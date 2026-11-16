@@ -33,9 +33,25 @@ optional wide-window Git inspector. Keep machine and thread context visible.
 - **Pills** are for metadata (machine, state), not for every label, so they
   stay meaningful.
 - **Conversation.** Right-aligned, neutral user bubbles. Agent replies remain
-  open text on the conversation surface. Tool events are compact disclosure rows
-  aligned to the text edge; expand them in place for details. Give each row a
-  full author/context label for assistive technology.
+  open text on the conversation surface. Position says who is speaking, so
+  messages carry no visible author label; give each row a full author/context
+  label for assistive technology. Copy controls stay out of sight until the
+  pointer is over their row or they take keyboard focus. The answer being
+  written ends with a still dot and the word "Writing…". Away from the newest
+  row, one control at the bottom of the conversation jumps back to it.
+- **Conversation text.** All message text is selectable; the selection is a
+  neutral fill. Links are blue and underlined, and their address appears at the
+  bottom edge of the conversation before a click. Lists hang their wrapped
+  lines from the text, not the marker. Tables size columns to their content with a
+  quiet header row and scroll sideways when wide.
+- **Tool calls.** One compact line each: disclosure chevron, tool name, the
+  path or command, a short fact such as `+2 −1`, and a state label only when
+  the call did not simply finish. Opened in place, `edit` shows a line diff,
+  `write` the new file, `command` a `$` prompt line and its output, and `read`
+  the first lines of the file. A failed command says "Failed" above output
+  outlined in rose. A long run of calls folds under one line that names their
+  count and kinds and any failures; a turn in progress keeps its latest calls
+  in view.
 - **Composer.** One raised, rounded box holds the draft, its hint, and a single
   send control that becomes Stop while the agent works. Directly beneath it, a
   context line names the Project, Machine, and checkout branch, the thread's
@@ -57,6 +73,14 @@ optional wide-window Git inspector. Keep machine and thread context visible.
 
 Accents carry state, not decoration: selection and hover are neutral. The one
 affirmative action in a view (Send, Create, Save) is light on dark.
+
+Code uses the same palette for syntax, and nowhere else is color read this way:
+violet keywords, mint strings, amber numbers and constants, blue types, keys,
+and attributes, secondary-text punctuation, and hint-colored comments. Function
+names and plain identifiers stay main text. Diff lines keep the Git meaning:
+a `+` or `−` gutter mark with a mint or rose line tint at 12% opacity. Selected
+text is white at 18% opacity, so it reads the same on every surface. Inline
+code is main text on the panel color.
 
 System sans-serif at 11–15 points, with 13 points for body and navigation; Menlo
 at 12 points for code. Conversation content, the composer, and settings pages
