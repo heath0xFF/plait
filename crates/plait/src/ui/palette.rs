@@ -457,6 +457,15 @@ impl Palette {
         self.field.update(cx, |field, cx| field.set_text(query, cx));
     }
 
+    /// Titles of the listed items, top to bottom, for tests of real key input.
+    #[cfg(test)]
+    pub fn shown(&self) -> Vec<String> {
+        let items = self.rows.iter().filter_map(Row::item);
+        items
+            .map(|index| self.items[index].title.to_string())
+            .collect()
+    }
+
     pub fn set_note(&mut self, note: Option<SharedString>, cx: &mut Context<Self>) {
         self.options.note = note;
         cx.notify();

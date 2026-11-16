@@ -587,6 +587,117 @@ fn new_thread_keeps_its_request_id_and_overlays_return_focus() {
     std::fs::remove_dir_all(scratch).unwrap();
 }
 
+/// Draw, then deliver one key as the platform would: bindings first, then text input.
+fn press(harness: &mut Harness, key: &'static str) {
+    harness.capture("keys");
+    let window = harness.window.into();
+    harness
+        .cx
+        .update_window(window, |_, window, cx| {
+            window.dispatch_keystroke(Keystroke::parse(key).expect("keystroke"), cx);
+        })
+        .expect("key");
+    harness.settle();
+}
+
+fn shown(harness: &mut Harness) -> Vec<String> {
+    harness
+        .window
+        .update(&mut harness.cx, |plait, _, cx| {
+            let overlay = plait.overlay.as_ref().expect("open overlay");
+            overlay.palette.read(cx).shown()
+        })
+        .expect("window update")
+}
+
+/// Real key events reach the palette: Cmd-K opens it, typing filters, the
+/// arrows move, Enter runs, and Escape returns focus.
+#[core::prelude::v1::test]
+fn keys_drive_the_palette_and_picker() {
+    if !isolated("keys_drive_the_palette_and_picker") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-keys-ui-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    let focused = |harness: &mut Harness| {
+        harness
+            .window
+            .update(&mut harness.cx, |_, window, cx| window.focused(cx))
+            .expect("window update")
+    };
+    let before = focused(&mut harness);
+
+    press(&mut harness, "cmd-k");
+    assert_eq!(
+        shown(&mut harness).len(),
+        2 + 18 + 5,
+        "threads, commands, models"
+    );
+    press(&mut harness, "escape");
+    harness.update(|plait, _, _| assert!(plait.overlay.is_none()));
+    assert!(focused(&mut harness) == before, "Escape returns focus");
+
+    // Typed letters go to the search field and rank the list.
+    press(&mut harness, "cmd-k");
+    for key in ["s", "i", "d", "e"] {
+        press(&mut harness, key);
+    }
+    assert_eq!(shown(&mut harness)[0], "Toggle Sidebar");
+    press(&mut harness, "backspace");
+    press(&mut harness, "e");
+    press(&mut harness, "enter");
+    harness.update(|plait, _, _| {
+        assert!(plait.overlay.is_none());
+        assert!(!plait.sidebar, "Enter ran the selected command");
+    });
+
+    // Down moves to the second thread; Enter opens it and focuses its composer.
+    press(&mut harness, "cmd-k");
+    press(&mut harness, "down");
+    press(&mut harness, "enter");
+    harness.update(|plait, window, cx| {
+        assert_eq!(plait.host.selected.as_deref(), Some("thr_0c44a9d1"));
+        let composer = plait.composers["thr_0c44a9d1"].focus_handle(cx);
+        assert!(window.focused(cx) == Some(composer));
+        // Selecting dropped the sample connection; restore it for the picker.
+        plait.host.connected = true;
+        plait.host.error = None;
+    });
+
+    // Cmd-Shift-N asks for a model. Tab stays inside the overlay.
+    press(&mut harness, "cmd-shift-n");
+    assert_eq!(shown(&mut harness).len(), 42, "the whole catalog is listed");
+    let field = focused(&mut harness);
+    press(&mut harness, "tab");
+    assert!(focused(&mut harness) == field);
+    for key in ["a", "s", "t", "r", "a"] {
+        press(&mut harness, key);
+    }
+    assert_eq!(shown(&mut harness), vec!["GPT-6 Astra"]);
+    // Cmd-Return saves the default without closing; no host answers here.
+    press(&mut harness, "cmd-enter");
+    harness.update(|plait, _, _| {
+        assert!(plait.overlay.is_some());
+        let astra = ModelChoice {
+            provider: "openai-codex".into(),
+            model_id: "gpt-6-astra".into(),
+        };
+        assert_eq!(plait.host.settings_model, Some(astra));
+        // The host's default is unchanged, and the state says so.
+        assert_eq!(
+            plait.host.status.as_ref().unwrap().default_model,
+            Some(choice())
+        );
+        let (state, _) = plait.default_model_state().expect("save state");
+        assert!(state.contains("not saved"), "{state}");
+    });
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
 /// Every view at the default size and at the minimum window size.
 fn walk(output: Option<&Path>) {
     let scratch = std::env::temp_dir().join(format!(

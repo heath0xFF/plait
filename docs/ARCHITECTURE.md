@@ -445,6 +445,13 @@ scratch directories. It cannot reach a running host or a user's saved state.
 The images do show the machine's name and a temporary path, so they are
 inspected locally, not committed.
 
+Two tests in the same module send key events to that window instead of setting
+state: Cmd-K, typed letters, the arrows, Return, Cmd-Return, Tab, and Escape
+reach the palette and model picker through GPUI's key dispatch and text input
+path, and New Thread keeps the request ID of an unconfirmed creation. They
+check routing, focus return, and ranking. They do **not** check a native key
+event, an input method, the caret, or pointer input.
+
 The harness needs GPUI's `test-support` feature. It is a dev-dependency feature
 for macOS and Linux test builds; `cargo build` and release builds do not
 compile it.
