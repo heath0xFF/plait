@@ -19,16 +19,16 @@ impl Plait {
         cx: &mut Context<Self>,
     ) {
         match event {
-            ComposerEvent::Command(id) => self.run_command(*id, window, cx),
+            ComposerEvent::Command(id) => self.run_composer_command(*id, window, cx),
             ComposerEvent::FilesNeeded => self.supply_files(cx),
             ComposerEvent::Submit(_) | ComposerEvent::Stop => {}
         }
     }
 
     /// Each command is something a menu item or button already does.
-    fn run_command(&mut self, id: CommandId, window: &mut Window, cx: &mut Context<Self>) {
+    fn run_composer_command(&mut self, id: CommandId, window: &mut Window, cx: &mut Context<Self>) {
         match id {
-            CommandId::NewThread => self.open_new_thread(cx),
+            CommandId::NewThread => self.new_thread(None, window, cx),
             CommandId::ShowChanges => self.show_tab(true, cx),
             CommandId::ShowConversation => self.show_tab(false, cx),
             CommandId::StopRun => self.control_thread(None, window, cx),

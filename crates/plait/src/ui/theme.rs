@@ -19,6 +19,8 @@ pub const SUBTLE: u32 = 0x7f8696;
 pub const SELECTED: u32 = 0x2b2d31;
 /// Outline of raised controls such as the composer and approval card.
 pub const EDGE: u32 = 0x3a3d45;
+/// Focus edge of a text input: quieter than the ring on small controls.
+pub const FOCUS_EDGE: u32 = 0x6f8fc4;
 /// Translucent so one hover step reads the same on every surface.
 pub const HOVER: u32 = 0xffffff0d;
 
@@ -363,6 +365,16 @@ impl AssetSource for Assets {
             "panel" => {
                 r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><g fill="none" stroke="black" stroke-width="1.4" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="M6.5 3v10"/></g></svg>"#
             }
+            "panel-right" => {
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><g fill="none" stroke="black" stroke-width="1.4" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="M9.5 3v10"/></g></svg>"#
+            }
+            // Outline and filled forms: the shape says whether a favorite is set.
+            "star" => {
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M8 2.8 9.41 6.46 13.33 6.67 10.28 9.14 11.29 12.93 8 10.8 4.71 12.93 5.72 9.14 2.67 6.67 6.59 6.46Z" fill="none" stroke="black" stroke-width="1.3" stroke-linejoin="round"/></svg>"#
+            }
+            "star-filled" => {
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M8 2.8 9.41 6.46 13.33 6.67 10.28 9.14 11.29 12.93 8 10.8 4.71 12.93 5.72 9.14 2.67 6.67 6.59 6.46Z" fill="black" stroke="black" stroke-width="1.3" stroke-linejoin="round"/></svg>"#
+            }
             "send" => {
                 r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M8 12.5v-9M4.5 7 8 3.5 11.5 7" fill="none" stroke="black" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>"#
             }
@@ -406,6 +418,9 @@ mod tests {
             "plus",
             "sliders",
             "panel",
+            "panel-right",
+            "star",
+            "star-filled",
             "send",
             "stop",
             "refresh",

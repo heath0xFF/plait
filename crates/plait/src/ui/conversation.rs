@@ -79,8 +79,7 @@ impl Plait {
                         if reconnect {
                             this.reconnect_host(window, cx);
                         } else {
-                            window.focus(&this.focus, cx);
-                            this.open_new_thread(cx);
+                            this.new_thread(None, window, cx);
                         }
                     }),
             );
@@ -96,9 +95,11 @@ impl Plait {
                         .flex_shrink_0()
                         .px_6()
                         .pb_3()
-                        .child(self.environment(None, None)),
+                        .child(self.environment(self.new_thread_note(), None)),
                 ),
             )
-            .when(wide, |el| el.child(self.inspector(cx)))
+            .when(self.shows_inspector(wide), |el| {
+                el.child(self.inspector(cx))
+            })
     }
 }

@@ -1,4 +1,4 @@
-use super::{OpenRepository, Plait, theme::*};
+use super::{OpenRepository, Plait, model_picker::ModelPurpose, theme::*};
 use gpui::{prelude::*, *};
 
 /// One-line title that gives way to the trailing state.
@@ -140,6 +140,47 @@ impl Plait {
         tree
     }
 
+    /// New thread, the model it will start with, and a way to pick another.
+    fn new_thread_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let model = self.new_thread_model().map(|model| model.name.clone());
+        let name = match &model {
+            Some(model) => format!("New thread with {model}"),
+            None => "New thread: choose a model…".to_owned(),
+        };
+        row()
+            .gap(px(1.))
+            .child(
+                nav_row("new-local-thread", name, false)
+                    .aria_keyshortcuts("Meta+N")
+                    .w_auto()
+                    .flex_1()
+                    .child(icon("plus").text_color(rgb(MINT)))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_color(rgb(TEXT))
+                            .child("New thread"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(11.))
+                            .text_color(rgb(SUBTLE))
+                            .child(model.unwrap_or_else(|| "Choose a model…".into())),
+                    )
+                    .on_activate(cx, |this, window, cx| this.new_thread(None, window, cx)),
+            )
+            .child(
+                icon_button("new-thread-model", "down", "New thread with another model…")
+                    .aria_keyshortcuts("Meta+Shift+N")
+                    .on_activate(cx, |this, window, cx| {
+                        this.open_model_picker(ModelPurpose::NewThread, window, cx)
+                    }),
+            )
+    }
+
     fn actions(&self, cx: &mut Context<Self>) -> impl IntoElement {
         // The first row centers on the 44-point header beside it.
         column()
@@ -148,15 +189,7 @@ impl Plait {
             .pt(px((CHROME_HEIGHT - ROW_HEIGHT) / 2.))
             .pb_1()
             .gap(px(1.))
-            .child(
-                nav_row("new-local-thread", "New thread on the local host…", false)
-                    .child(icon("plus").text_color(rgb(MINT)))
-                    .child(title("New thread").text_color(rgb(TEXT)))
-                    .on_activate(cx, |this, window, cx| {
-                        window.focus(&this.focus, cx);
-                        this.open_new_thread(cx);
-                    }),
-            )
+            .child(self.new_thread_row(cx))
             .child(
                 nav_row("open-repository", "Open repository…", false)
                     .aria_keyshortcuts("Meta+O")

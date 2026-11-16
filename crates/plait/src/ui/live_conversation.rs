@@ -494,6 +494,8 @@ Tone::Filled,
             .min_h_0()
             .items_stretch()
             .child(main)
-            .when(wide, |el| el.child(self.inspector(cx)))
+            .when(self.shows_inspector(wide), |el| {
+                el.child(self.inspector(cx))
+            })
     }
 }

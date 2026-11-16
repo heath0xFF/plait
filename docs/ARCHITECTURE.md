@@ -18,6 +18,11 @@ crates/plait/src/
 main.rs                 native app lifecycle, window, startup
 ui/                     GPUI layout, actions, focus, lists, theme
   mod.rs                UI state and background-task dispatch
+  actions.rs            every application action: ID, title, menu, default key
+  commands.rs           command palette sources and the overlay above the workspace
+  palette.rs            search field over a ranked list; ranking off the UI thread
+  model_picker.rs       model catalog as a palette; default, favorites, new thread
+  text_field.rs         single-line input: IME, selection, clipboard, undo
   navigation.rs         Project → Machine → Thread
   conversation.rs       no-thread state and the Git inspector
   live_conversation.rs  real host messages, ordered tools, and approvals
@@ -33,7 +38,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
   host.rs               background host requests and event subscriptions
   session.rs            desktop restore/save coordination and submission guards
   markdown.rs           native conversation blocks and copy controls
-  settings.rs           model choice, auth status, defaults, and reconnect
+  settings.rs           host status and the Models, Approvals, Keyboard, About sections
   changes.rs            real local status and diff views
   theme.rs              tokens, original controls, embedded glyphs
   snapshot.rs           windowless scene snapshots on macOS and Linux (tests only)
@@ -48,6 +53,7 @@ state.rs                selection, collapse state, request queue, cache
 model.rs                plain Rust data, no GPUI
 machine.rs              this machine's display name
 preferences.rs          desktop-only preferences and Cmd-number order
+fuzzy.rs                subsequence matching and scoring for pickers
 session.rs              private desktop journal, identity checks, writer lock
 markdown.rs             plain text blocks and style ranges, parsed off render
 git.rs                  synchronous, read-only Git adapter; background only
@@ -295,13 +301,17 @@ Model defaults and credentials belong to the host. Choices that belong to one
 desktop installation live in `plait_core::preferences`, saved as JSON at
 `~/Library/Application Support/Plait/desktop.json` on macOS
 (`$XDG_CONFIG_HOME/plait/desktop.json` or `~/.config/plait/desktop.json`
-elsewhere). Today it holds one setting: what Cmd-1 to Cmd-9 select.
+elsewhere). It holds what Cmd-1 to Cmd-9 select, the approval default, whether
+the Git inspector is hidden, and favorite and recently used models. The model
+lists are provider and model identifiers only, bounded in length and count; the
+file never holds a credential.
 
 The file is read and written on the background executor. A missing file means
 defaults. A malformed or oversized file is reported in Settings and left in
 place; defaults apply. Saves replace the file atomically, and Settings says
 "Saved" only after the write succeeds. Only the newest save reports a result.
-Unknown fields are ignored so a newer client's file still loads.
+Unknown fields are ignored so a newer client's file still loads, and a file
+written before a field existed loads with that field's default.
 
 Cmd-1 to Cmd-9 count real host threads in sidebar order on the local machine.
 A machine or project selects its first thread; a row with no thread does nothing.
@@ -425,9 +435,60 @@ The sidebar is 272 points on wide windows, 240 on narrow windows. Below 1150
 points, the conversation's 280-point Git inspector is removed; Git remains available in
 the Changes tab. The minimum window is 900 × 600. Cmd-B hides the sidebar.
 
+Cmd-Option-B hides the inspector on wide windows and the choice is saved; on a
+narrow window the same control says that Git is in Changes.
+
 Controls have focus rings, tab stops, accessible names, and semantic roles.
 Thread state has both a color and a text label.
 No decorative animation is used.
+
+### Actions and shortcuts
+
+`ui/actions.rs` lists every application action once: a stable string ID, a
+title, the menu it belongs to, and a default keystroke. `actions::bind` is the
+only place application shortcuts are bound. It takes a map of action ID to
+keystroke; an entry replaces the default, an empty entry unbinds, and an entry
+that does not parse leaves the default in place. `actions::install` clears and
+rebinds everything and rebuilds the menus, so a keymap can be applied again at
+run time. No keymap is loaded today; the map is empty. The menu bar, the command
+palette's entries and shortcut hints, and the table in [MACOS.md](MACOS.md) come
+from the same table, and a test compares the document with it. Editing keys that
+belong to one control (the composer, the text field, the palette list) are bound
+by that control.
+
+### Command palette and model picker
+
+`ui/palette.rs` is one view: a single-line search field over a list, drawn as a
+centered overlay that blocks the workspace behind it. It knows nothing about
+what its items do. A caller passes items (title, detail, section, state, and a
+command) and receives the chosen command. The command palette lists threads,
+the action table, and "New thread with" each signed-in model; the model picker
+lists the host's catalog under Favorites, Recent, and each provider. Adding a
+source is a function that returns items and a `Command` variant.
+
+Ranking is a pure function from the search text and plain item data to rows. It
+runs on the background executor, guarded by a query counter so only the newest
+result is shown. Enter ranks synchronously when a result is still pending, so
+the choice always matches the text in the field. Rows use `uniform_list`; only
+visible rows are built, which matters for a catalog of well over a thousand
+models. Focus stays in the search field and the selected row is reported to
+assistive technology as the active descendant. Escape, or a click outside,
+closes the overlay and returns focus to where it was.
+
+Models that are not signed in are listed after every usable one, marked in
+words, and cannot be chosen. The default model is marked wherever models are
+listed. Choosing a default sends the host's `set_default_model` request at
+once; the picker footer and Settings report Saving, the host's confirmation, or
+the failure. Nothing is shown as saved before the host answers.
+
+### New threads
+
+New Thread sends `create_thread` with the saved default model and focuses the
+new thread's composer; there is no intermediate page. When no default can be
+used, the model picker opens and the thread is created on selection. An
+unconfirmed creation keeps its request ID: the workspace shows it with a retry
+that reuses that ID, and a new request is not sent while it is pending. A model
+is recorded as recently used only after the host confirms the thread.
 
 The app records root-view construction time, peak construction time,
 selection-handler-to-render time, and startup-to-first-render time. View →
@@ -475,6 +536,13 @@ re-runs itself in a child process whose home directory and host store are empty
 scratch directories. It cannot reach a running host or a user's saved state.
 The images do show the machine's name and a temporary path, so they are
 inspected locally, not committed.
+
+Two tests in the same module send key events to that window instead of setting
+state: Cmd-K, typed letters, the arrows, Return, Cmd-Return, Tab, and Escape
+reach the palette and model picker through GPUI's key dispatch and text input
+path, and New Thread keeps the request ID of an unconfirmed creation. They
+check routing, focus return, and ranking. They do **not** check a native key
+event, an input method, the caret, or pointer input.
 
 The harness needs GPUI's `test-support` feature. It is a dev-dependency feature
 for macOS and Linux test builds; `cargo build` and release builds do not

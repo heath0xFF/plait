@@ -15,10 +15,12 @@ optional wide-window Git inspector. Keep machine and thread context visible.
 
 - **Chrome.** One 44-point header: sidebar toggle, thread title, a muted
   `project / machine` on wide windows, state dot with a text label, and the
-  Conversation / Changes switch. The sidebar's first action row centers on the
+  Conversation / Changes switch, then the Git inspector toggle, mirroring the
+  sidebar toggle at the other end. The sidebar's first action row centers on the
   same 44 points. No second header, tab strip, or permanent footer.
 - **Rail.** No in-app logo: the app icon and window carry the brand. The rail
-  starts with two actions, New thread and Open repository. Projects are plain
+  starts with two actions, New thread and Open repository. New thread names the
+  model it will use; the control beside it opens the model picker. Projects are plain
   section headers. Machines are outlined pills with their icon and name.
   Every tree row is 28 points and one line. Category glyphs use the Plait
   vector kit in `assets/branding`: mint projects, blue machines, violet
@@ -49,6 +51,18 @@ optional wide-window Git inspector. Keep machine and thread context visible.
   characters are brighter and heavier, not colored; the selected row uses the
   neutral selection fill. Keyboard focus stays in the draft. A chosen file
   becomes its plain path in the text, so the message shows exactly what is sent.
+- **Palette and picker.** One centered overlay, at most 620 points wide: a
+  search field, up to twelve 28-point rows, and a footer of key hints. The
+  workspace behind is dimmed, not blurred or shadowed. Selection is the neutral
+  fill. Matched letters are heavier, not tinted. A row reads title, then a
+  muted detail, then state in words, then its shortcut. Sections have plain
+  headings before a search and disappear during one. The model picker adds a
+  favorite star, outlined or filled, and Set default on every usable row; the
+  current default carries a mint Default label instead.
+- **Settings.** Host status and Reconnect first, then ruled sections: Models,
+  Approvals, Keyboard, About and updates. Each setting is a label and one line
+  of meaning on the left and its control on the right. A choice applies when
+  made; its saved or failed state is a dot and a sentence beneath it.
 - **Approval.** A bordered card above the composer shows the exact arguments,
   the risk, protected dirty paths, and Deny once / Allow once.
 - **Git.** Changed files are 28-point rows: a one-letter state, file name first,
