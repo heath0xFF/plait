@@ -347,3 +347,128 @@ fn large_previews_and_long_lines_are_bounded() {
     assert!(preview.lines[0].text.ends_with("[line clipped]"));
     assert!(preview.lines[0].text.len() < 2100);
 }
+
+fn listed(repo: &Repo) -> Vec<String> {
+    files(&repo.0).unwrap().paths
+}
+
+#[test]
+fn file_list_has_tracked_and_unignored_untracked_files_only() {
+    let repo = Repo::new();
+    fs::create_dir_all(repo.0.join("src/deep dir")).unwrap();
+    fs::create_dir(repo.0.join("build")).unwrap();
+    repo.write(".gitignore", "*.log\n/build/\n");
+    repo.write("src/main.rs", "fn main() {}\n");
+    repo.write("src/deep dir/mod.rs", "\n");
+    repo.write("removed.txt", "gone\n");
+    repo.commit();
+    fs::remove_file(repo.0.join("removed.txt")).unwrap();
+    repo.write("src/main.rs", "fn main() { changed() }\n");
+    repo.write("untracked.md", "new\n");
+    repo.write("debug.log", "ignored\n");
+    repo.write("build/output", "ignored\n");
+    let index = fs::read(repo.0.join(".git/index")).unwrap();
+    let list = files(&repo.0).unwrap();
+    assert_eq!(
+        list.paths,
+        [
+            ".gitignore",
+            "src/deep dir/mod.rs",
+            "src/main.rs",
+            "untracked.md"
+        ]
+    );
+    assert!(!list.truncated);
+    assert_eq!(list.skipped, 0);
+    assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(), index);
+    assert!(!repo.0.join(".git/index.lock").exists());
+}
+
+#[test]
+fn file_list_is_relative_to_the_checkout_from_a_subdirectory() {
+    let repo = Repo::new();
+    fs::create_dir(repo.0.join("nested")).unwrap();
+    repo.write("top.txt", "\n");
+    repo.write("nested/inner.txt", "\n");
+    repo.commit();
+    assert_eq!(listed(&repo), ["nested/inner.txt", "top.txt"]);
+    let snapshot = status(&repo.0.join("nested")).unwrap();
+    assert_eq!(files(&snapshot.root).unwrap().paths, listed(&repo));
+}
+
+#[test]
+fn file_list_covers_empty_staged_conflicted_and_nested_repositories() {
+    let repo = Repo::new();
+    assert!(listed(&repo).is_empty());
+    repo.write("file", "base\n");
+    repo.git(&["add", "file"]);
+    assert_eq!(listed(&repo), ["file"]);
+    repo.commit();
+    repo.git(&["checkout", "-b", "other"]);
+    repo.write("file", "other\n");
+    repo.commit();
+    repo.git(&["checkout", "main"]);
+    repo.write("file", "main\n");
+    repo.commit();
+    let merge = Command::new("git")
+        .arg("-C")
+        .arg(&repo.0)
+        .args(["merge", "other"])
+        .output()
+        .unwrap();
+    assert!(!merge.status.success());
+    // Three index stages are still one file.
+    assert_eq!(listed(&repo), ["file"]);
+    repo.git(&["merge", "--abort"]);
+    // The outer fixture removes this nested repository with its own directory.
+    let nested = std::mem::ManuallyDrop::new(Repo(repo.0.join("vendor")));
+    fs::create_dir(&nested.0).unwrap();
+    nested.git(&["init", "-b", "main"]);
+    nested.write("inside.txt", "\n");
+    assert_eq!(listed(&repo), ["file"]);
+    assert!(files(&repo.0.join("missing")).is_err());
+}
+
+#[test]
+fn file_list_does_not_run_configured_filters_or_fsmonitor() {
+    let repo = Repo::new();
+    repo.write("file.txt", "base\n");
+    repo.write(".gitattributes", "*.txt filter=unsafe\n");
+    repo.commit();
+    let marker = repo.0.join("executed");
+    let touch = format!("touch '{}'", marker.display());
+    repo.git(&["config", "filter.unsafe.clean", &touch]);
+    repo.git(&["config", "filter.unsafe.process", &touch]);
+    repo.git(&["config", "filter.unsafe.required", "true"]);
+    repo.git(&["config", "core.fsmonitor", &touch]);
+    repo.write("file.txt", "changed\n");
+    assert_eq!(listed(&repo), [".gitattributes", "file.txt"]);
+    assert!(!marker.exists());
+}
+
+#[test]
+fn file_records_skip_unusable_names_and_bound_the_list() {
+    let list = parse_files(
+        b"? new file.rs\0H src/b.rs\0H src/a.rs\0M both\0M both\0R src/b.rs\0S sparse.rs\0? repo/\0H bad-\xff\0H line\nbreak\0",
+        false,
+        usize::MAX,
+    )
+    .unwrap();
+    assert_eq!(list.paths, ["both", "new file.rs", "src/a.rs"]);
+    assert_eq!(list.skipped, 2);
+    assert!(!list.truncated);
+
+    let clipped = parse_files(b"H a\0H b\0H partial-na", true, usize::MAX).unwrap();
+    assert_eq!(clipped.paths, ["a", "b"]);
+    assert!(clipped.truncated);
+
+    let bounded = parse_files(b"H c\0H a\0H b\0", false, 2).unwrap();
+    assert_eq!(bounded.paths, ["a", "b"]);
+    assert!(bounded.truncated);
+
+    assert!(parse_files(b"", false, 9).unwrap().paths.is_empty());
+    assert!(parse_files(b"H ../outside\0", false, 9).is_err());
+    assert!(parse_files(b"H /absolute\0", false, 9).is_err());
+    assert!(parse_files(b"Hmissing-space\0", false, 9).is_err());
+    assert!(parse_files(b"H \0", false, 9).is_err());
+}

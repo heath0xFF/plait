@@ -43,11 +43,17 @@ pub enum Job {
         key: DiffKey,
         snapshot: Arc<Snapshot>,
     },
+    /// The checkout's file list, for naming files in a prompt.
+    Files {
+        epoch: u64,
+        root: PathBuf,
+    },
 }
 
 pub enum Reply {
     Status(Result<Arc<Snapshot>, String>),
     Diff(Result<Arc<Diff>, String>),
+    Files(Result<Arc<git::FileList>, String>),
 }
 
 impl Job {
@@ -57,6 +63,7 @@ impl Job {
             Self::Diff { key, snapshot, .. } => Reply::Diff(
                 git::diff(&snapshot.root, &snapshot.changes[key.file], key.mode).map(Arc::new),
             ),
+            Self::Files { root, .. } => Reply::Files(git::files(root).map(Arc::new)),
         }
     }
 }
@@ -66,9 +73,13 @@ pub struct RepositoryState {
     pub snapshot: Load<Arc<Snapshot>>,
     pub diff: Load<Arc<Diff>>,
     pub selected: Option<DiffKey>,
+    /// Loaded on request and kept until the next refresh or checkout change.
+    pub files: Load<Arc<git::FileList>>,
     epoch: u64,
     running: bool,
     pending: Option<Job>,
+    // Separate from `pending`, so a file list and a diff cannot displace each other.
+    files_queued: bool,
     cache: HashMap<DiffKey, Arc<Diff>>,
 }
 
@@ -79,9 +90,11 @@ impl RepositoryState {
             snapshot: Load::Empty,
             diff: Load::Empty,
             selected: None,
+            files: Load::Empty,
             epoch: 0,
             running: false,
             pending: None,
+            files_queued: false,
             cache: HashMap::new(),
         };
         state.refresh();
@@ -98,6 +111,8 @@ impl RepositoryState {
         self.snapshot = Load::Loading;
         self.diff = Load::Empty;
         self.selected = None;
+        self.files = Load::Empty;
+        self.files_queued = false;
         self.cache.clear();
         self.pending = Some(Job::Status {
             epoch: self.epoch,
@@ -127,11 +142,42 @@ impl RepositoryState {
         }
     }
 
+    /// Changes on every refresh and checkout change; guards cached Git data.
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// Ask for the checkout's file list. A cached or already queued list is kept.
+    pub fn request_files(&mut self) {
+        if matches!(self.files, Load::Loading | Load::Ready(_)) {
+            return;
+        }
+        if let Load::Error(error) = &self.snapshot {
+            self.files = Load::Error(error.clone());
+            return;
+        }
+        self.files = Load::Loading;
+        self.files_queued = true;
+    }
+
+    /// Status and diffs go first. The list needs the root a status read reports.
+    fn files_job(&mut self) -> Option<Job> {
+        if !self.files_queued {
+            return None;
+        }
+        let root = self.snapshot.ready()?.root.clone();
+        self.files_queued = false;
+        Some(Job::Files {
+            epoch: self.epoch,
+            root,
+        })
+    }
+
     pub fn next_job(&mut self) -> Option<Job> {
         if self.running {
             return None;
         }
-        let job = self.pending.take()?;
+        let job = self.pending.take().or_else(|| self.files_job())?;
         self.running = true;
         Some(job)
     }
@@ -155,8 +201,20 @@ impl RepositoryState {
                             self.select(0, mode);
                         }
                     }
-                    Err(error) => self.snapshot = Load::Error(error),
+                    Err(error) => {
+                        // No status means no root to list files under.
+                        if std::mem::take(&mut self.files_queued) {
+                            self.files = Load::Error(error.clone());
+                        }
+                        self.snapshot = Load::Error(error);
+                    }
                 }
+            }
+            (Job::Files { epoch, .. }, Reply::Files(result)) if epoch == self.epoch => {
+                self.files = match result {
+                    Ok(files) => Load::Ready(files),
+                    Err(error) => Load::Error(error),
+                };
             }
             (Job::Diff { epoch, key, .. }, Reply::Diff(result)) if epoch == self.epoch => {
                 if let Ok(diff) = &result {
@@ -277,6 +335,96 @@ mod tests {
         s.select(0, DiffMode::Unstaged);
         assert_eq!(&*s.diff.ready().unwrap().lines[0].text, "old");
         assert!(s.next_job().is_none());
+    }
+
+    fn file_list(path: &str) -> Arc<git::FileList> {
+        Arc::new(git::FileList {
+            paths: vec![path.into()],
+            ..git::FileList::default()
+        })
+    }
+
+    #[test]
+    fn file_list_waits_for_status_and_is_cached_until_refresh() {
+        let mut s = RepositoryState::new("repo".into());
+        s.request_files();
+        assert!(matches!(s.files, Load::Loading));
+        let status = s.next_job().unwrap();
+        assert!(matches!(status, Job::Status { .. }));
+        s.complete(status, Reply::Status(Ok(snapshot())));
+        // The first changed file's diff was queued by the status result.
+        let diff = s.next_job().unwrap();
+        assert!(matches!(diff, Job::Diff { .. }));
+        assert!(s.next_job().is_none());
+        s.complete(
+            diff,
+            Reply::Diff(Ok(Arc::new(Diff::message("diff", Duration::ZERO)))),
+        );
+        let files = s.next_job().unwrap();
+        assert!(matches!(&files, Job::Files { root, .. } if root == std::path::Path::new("/repo")));
+        s.complete(files, Reply::Files(Ok(file_list("a"))));
+        assert_eq!(s.files.ready().unwrap().paths, ["a"]);
+        assert!(matches!(s.diff, Load::Ready(_)));
+        s.request_files();
+        assert!(s.next_job().is_none());
+
+        let epoch = s.epoch();
+        s.refresh();
+        assert_ne!(s.epoch(), epoch);
+        assert!(matches!(s.files, Load::Empty));
+    }
+
+    #[test]
+    fn stale_file_list_cannot_enter_a_new_epoch() {
+        let mut s = RepositoryState::new("old".into());
+        let status = s.next_job().unwrap();
+        s.complete(status, Reply::Status(Ok(snapshot())));
+        let diff = s.next_job().unwrap();
+        s.complete(
+            diff,
+            Reply::Diff(Ok(Arc::new(Diff::message("diff", Duration::ZERO)))),
+        );
+        s.request_files();
+        let old = s.next_job().unwrap();
+        s.open("new".into());
+        s.request_files();
+        s.complete(old, Reply::Files(Ok(file_list("old"))));
+        assert!(matches!(s.files, Load::Loading));
+        let status = s.next_job().unwrap();
+        s.complete(status, Reply::Status(Ok(snapshot())));
+        let diff = s.next_job().unwrap();
+        s.complete(diff, Reply::Diff(Err("gone".into())));
+        let current = s.next_job().unwrap();
+        s.complete(current, Reply::Files(Ok(file_list("new"))));
+        assert_eq!(s.files.ready().unwrap().paths, ["new"]);
+    }
+
+    #[test]
+    fn file_list_reports_a_failed_status_or_listing() {
+        let mut s = RepositoryState::new("repo".into());
+        s.request_files();
+        let status = s.next_job().unwrap();
+        s.complete(status, Reply::Status(Err("not a repository".into())));
+        assert!(matches!(&s.files, Load::Error(error) if error == "not a repository"));
+        assert!(s.next_job().is_none());
+        // A later request reports the same state without queueing work.
+        s.files = Load::Empty;
+        s.request_files();
+        assert!(matches!(s.files, Load::Error(_)));
+        assert!(s.next_job().is_none());
+
+        let mut s = RepositoryState::new("repo".into());
+        let status = s.next_job().unwrap();
+        s.complete(status, Reply::Status(Ok(snapshot())));
+        let diff = s.next_job().unwrap();
+        s.complete(diff, Reply::Diff(Err("gone".into())));
+        s.request_files();
+        let files = s.next_job().unwrap();
+        s.complete(files, Reply::Files(Err("too large".into())));
+        assert!(matches!(&s.files, Load::Error(error) if error == "too large"));
+        // An error is not cached: asking again retries.
+        s.request_files();
+        assert!(matches!(s.next_job(), Some(Job::Files { .. })));
     }
 
     #[test]
