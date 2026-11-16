@@ -1,7 +1,7 @@
 # Linux command sandbox — open design decision
 
-**Status:** investigation, not an enabled Linux backend. Recorded on Arthur on
-2026-11-15. The implementation choice is open; the current safety rules remain
+**Status:** investigation, not an enabled Linux backend. The implementation
+choice is open; the current safety rules remain
 in force. Landlock ABI 9 is a candidate requirement, not a product decision.
 
 ## Why this matters to the daemon architecture
@@ -18,7 +18,7 @@ and machine-scoped checkout state remain a separate slice.
 ## Required behavior versus implementation choice
 
 The current command contract is in [HOST.md](HOST.md). Preserve these rules
-unless Heath explicitly approves a revised contract:
+unless a revised contract is explicitly agreed and reviewed:
 
 - Commands read the checkout but cannot write it or its Git metadata. Approved
   file helpers remain the only checkout writers.
@@ -37,7 +37,7 @@ These are behavior requirements. Bubblewrap, Landlock, namespace layout, and
 system policy are implementation choices. Do not turn one investigated mechanism
 into a permanent requirement without checking the alternatives.
 
-## Observed on Arthur
+## Probe evidence — 2026-11-15
 
 | Item | Result |
 |---|---|
@@ -46,7 +46,7 @@ into a permanent requirement without checking the alternatives.
 | Bubblewrap | `0.11.1`, installed at `/usr/bin/bwrap` |
 | Unprivileged user namespaces | `kernel.unprivileged_userns_clone = 1` |
 | AppArmor restriction | `kernel.apparmor_restrict_unprivileged_userns = 1` |
-| Actual namespace probe | Bubblewrap `--unshare-all` succeeded as `heath` |
+| Actual namespace probe | Bubblewrap `--unshare-all` succeeded as an unprivileged user |
 | Landlock query | `landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION)` returned **8** |
 | Read-only socket probe | A sandbox connected to an outside fixture server through a read-only bind mount |
 
@@ -76,7 +76,7 @@ need a design and real negative tests.
 
 1. **Bubblewrap plus a newer Landlock ABI and any other required controls.**
    Keep scratch IPC while denying connections to outside pathname sockets.
-   This may require a newer kernel on Arthur and CI. Reject execution if any
+   This may require a newer kernel on development and CI hosts. Reject execution if any
    required control is missing; never silently use fewer restrictions.
 2. **A stricter first Linux command policy with no Unix-socket creation.**
    A syscall policy could reduce the IPC surface, but this breaks the current
@@ -122,10 +122,9 @@ why. Do not replace a failed security assertion with a skip.
 
 - [Local host contract](HOST.md)
 - [Architecture](ARCHITECTURE.md)
-- [Arthur continuation](HANDOFF.md)
 - [Linux Landlock userspace API](https://docs.kernel.org/userspace-api/landlock.html),
   especially pathname Unix sockets, ABI versions, and current limitations
-- Installed `bwrap --help` and `/usr/include/linux/landlock.h` on Arthur
+- Installed `bwrap --help` and `/usr/include/linux/landlock.h` from the probe environment
 
 No kernel settings, system policy, sandbox rules, or host protocol were changed
 by this investigation.

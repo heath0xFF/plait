@@ -2,8 +2,8 @@
 
 Plait is an early local preview for **Apple Silicon and macOS 15 or later**.
 The client and host are separate programs. Closing or updating the client does
-not stop accepted host work. Model requests still need provider connectivity;
-a flight without working internet is not an offline agent environment.
+not stop accepted host work. Model requests require access to the configured
+provider; installing Plait does not include a model or offline inference engine.
 The bundle declares macOS 15, but packaging CI uses macOS 26. Older-system
 runtime acceptance is not yet complete.
 
@@ -242,7 +242,7 @@ during a scripted command, and checks saved state after host activation. Its
 upgrade payload is explicitly labeled a disposable fixture and is not published.
 The workflow launches the installed client and captures its window when the
 runner has a display. These are scripted checks, not live-model acceptance or
-personal-machine validation. See [verification](VERIFICATION.md) for results.
+validation on your Mac. See [verification](VERIFICATION.md) for results.
 
 Branch builds upload a `plait-macos-arm64-…` workflow artifact, which expires
 after 14 days. Version tags run the complete Mac checks again, then a separate

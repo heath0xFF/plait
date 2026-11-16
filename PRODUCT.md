@@ -3,29 +3,32 @@
 <!-- impeccable:product-schema 1 -->
 
 ## Platform
-Native macOS desktop (Rust + GPUI). This is not a web surface.
+Native macOS desktop built with Rust + GPUI, not a web surface.
 
 ## Product and users
-A development environment for AI coding-agent work. The developer moves between
-Project → Machine → Thread, reads conversations, and inspects Git changes.
+A development environment for AI coding-agent work. Developers move between
+Project → Machine → Thread, read conversations, approve actions, and inspect
+Git changes. Execution belongs to an independent host, not the desktop window.
 
 ## Scope and truth
-[README.md](README.md) describes the current preview; [the roadmap](docs/ROADMAP.md)
-records planned work. The desktop shows only real data: the opened checkout's
-read-only Git and this machine's host threads. Remote machines are not shown
-until remote execution exists.
-Local agent execution and persistence exist. Remote execution, an embedded
-terminal, and automatic updates are not available.
+The [README](README.md) describes the current local preview;
+[the roadmap](docs/ROADMAP.md) separates planned work from shipped features.
+Views show real checkout, host, and thread data. Remote execution, Git-write
+controls, a file editor, an embedded terminal, and automatic updates are not
+available. Do not show placeholder machines or imply unperformed execution.
 
 ## Brand commitments
-Original native conversation layout, compact sidebar, charcoal surfaces, mint,
-blue and violet accents. Use the owner's ribbon-P vector kit for branding and
-category icons. Native keyboard behavior. No decorative animation.
+Original native layout, compact navigation, charcoal surfaces, and restrained
+mint, blue, and violet state colors. Use the [Plait artwork](assets/branding/README.md),
+native keyboard behavior, and text labels alongside status colors. No decorative
+animation. See [DESIGN.md](DESIGN.md) for layout and tokens.
 
 ## Principles
-Responsiveness first. No blocking I/O on the UI thread. No mandatory worktrees.
-No hidden execution or repository writes. Small, testable vertical slices.
+Responsiveness, explicit effects, and user control. No blocking I/O in render,
+mandatory worktrees, hidden execution, or speculative orchestration. Build small,
+testable changes with clear state, presentation, and execution boundaries.
 
 ## Decisions
-The user's brief supplies the product and visual direction and explicitly
-delegates M1 implementation decisions. No additional product assumptions needed.
+Current work stays within M2 local execution. Changes to shared contracts,
+permissions, or persistence require agreement and compatibility tests. Follow
+[Contributing](CONTRIBUTING.md) and the [originality policy](docs/ORIGINALITY.md).

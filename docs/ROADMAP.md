@@ -12,7 +12,7 @@ for acceptance evidence and open checks. **Current work stays within M2.**
 | M2 — Local agents | Real agent events, approved edits and commands, persistent threads, safe Stop and reconnect | Current local preview; hardening and live installed acceptance continue |
 | M3 — Remote execution | Authenticated host connections, remote project discovery, activity/Git updates, network recovery | Planned; Linux execution requires tested containment first |
 | M4 — Development tools | Git staging, commits and history; file browser/editor; review feedback; process and log views | Planned |
-| M5 — Previews | Sidelit integration for live HTML, Markdown and MDX; select content for agent feedback | Planned |
+| M5 — Previews | Live HTML, Markdown and MDX, automatic refresh, and selected-content feedback to the agent | Planned |
 | M6 — Multiple machines | Unified project navigation across independent hosts, including disconnected/reconnecting states | Planned |
 
 Do not build the whole roadmap at once. Each change must compile, run, and have
@@ -37,7 +37,7 @@ Use existing tools for interactive shells and debugging. A future Open in Rex
 integration and native mobile companion are possibilities, not current features.
 
 Build original application code and design. Compare other products by outcomes,
-not as source or layout templates. See [the reference policy](UI-REFERENCES.md).
+not as source or layout templates. See [the originality policy](ORIGINALITY.md).
 
 ## Performance goals
 

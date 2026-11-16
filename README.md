@@ -6,7 +6,7 @@ Open a repository, start a conversation, approve edits and commands, and review
 what changed. An independent host runs the agent, so closing the desktop does
 not stop accepted work. Reopen it to return to the same thread and saved draft.
 
-[Download preview](https://github.com/heath0xFF/plait/releases/tag/v0.1.0-preview.1) · [Setup guide](docs/MACOS.md) · [Contribute](CONTRIBUTING.md)
+[Download preview](https://github.com/heath0xFF/plait/releases/tag/v0.1.0-preview.1) · [Documentation](docs/README.md) · [Contribute](CONTRIBUTING.md)
 
 ![Plait showing a completed coding task, native code block, tool results, and saved draft](https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.1/installed-client-coding.png)
 
@@ -61,7 +61,7 @@ This is the **M2 local preview**, not a complete IDE.
 - Conversation and tool views show bounded previews, not the full stored history.
 
 Mac CI verifies the installed app, sandbox, and recovery with scripted providers.
-Personal-Mac/live-model acceptance is still separate. CI runs on macOS 26;
+Installed live-model and accessibility acceptance remain open. CI runs on macOS 26;
 older-system runtime coverage and other open checks are in
 [Verification](docs/VERIFICATION.md). Planned features are in the [roadmap](docs/ROADMAP.md).
 

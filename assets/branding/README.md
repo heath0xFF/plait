@@ -1,20 +1,17 @@
 # Plait artwork
 
-This directory contains the vector kit supplied by the project owner. The kit
-files are unchanged. See [README.txt](README.txt) for its provenance and editing
-notes: these vectors reconstruct the reference image; they are not its original
-source paths.
+This directory contains the Plait vector kit. Its SVGs reconstruct the supplied
+reference artwork; they are not the original source geometry.
+[README.txt](README.txt) records the provenance, limitations, and editing notes.
 
-- `marks/plait-mark-gradient.svg`: sidebar ribbon mark, rendered in full color.
-- `wordmarks/plait-wordmark-light.svg`: outlined sidebar lettering; no font needed.
+- `marks/`: ribbon-P artwork for branding; not shown inside the current app window.
+- `wordmarks/`: outlined lettering that needs no font; not used in current navigation.
 - `icons/`: category glyphs. GPUI uses the project, machine, thread, and Git paths
-  with the existing UI colors. Other glyphs remain available in the kit, but do
-  not add controls for features that do not exist.
+  with the UI's state colors. Do not add controls for unimplemented features.
 - `app-icon/plait-app-icon.svg`: editable app-icon master.
-- `app-icon/plait-app-icon-1024.png`: supplied export used to generate the macOS
-  icon set. When changing the master, export this PNG again at 1024 × 1024 with
-  transparency before building the app.
-- `gallery.html` and `plait-preview.*`: reference previews only, not app UI.
+- `app-icon/plait-app-icon-1024.png`: export used to generate the macOS icon set.
+  After editing the master, export this PNG at 1024 × 1024 with transparency.
+- `gallery.html` and `plait-preview.*`: artwork references, not application UI.
 
-The desktop embeds its SVGs at compile time. It does not read this directory
-at runtime. The app bundle contains the compiled `.icns`, not the whole kit.
+The desktop embeds SVGs at compile time; it does not read this directory at
+runtime. The app bundle contains the compiled `.icns`, not the whole kit.

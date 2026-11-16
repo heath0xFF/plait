@@ -3,13 +3,11 @@
 ## Direction
 Plait is an original native development tool, not a port or a reskin. Design
 from its own workflow: Project → Machine → Thread, independent execution,
-clear approvals, and fast review of real changes. Use the owner's branding.
-Do not copy competitor source, assets, or distinctive UI.
+clear approvals, and fast review of real changes. Use the Plait artwork and
+follow the [originality policy](docs/ORIGINALITY.md).
 
-Earlier design work compared BB's density and conversation layout. Those notes
-are history, not a requirement to match BB. See [the comparison policy](docs/UI-REFERENCES.md).
-Judge future changes by task completion, clarity, keyboard use, accessibility,
-and measured responsiveness. This is a working developer tool, not a marketing surface.
+Judge changes by task completion, clarity, keyboard use, accessibility, and
+measured responsiveness. Keep controls useful and state easy to inspect.
 
 ## Layout
 Compact Project → Machine → Thread rail; conversation or diff workspace;
@@ -22,7 +20,7 @@ optional wide-window Git inspector. Keep machine and thread context visible.
 - **Rail.** No in-app logo: the app icon and window carry the brand. The rail
   starts with two actions, New thread and Open repository. Projects are plain
   section headers. Machines are outlined pills with their icon and name.
-  Every tree row is 28 points and one line. Category glyphs use the owner's
+  Every tree row is 28 points and one line. Category glyphs use the Plait
   vector kit in `assets/branding`: mint projects, blue machines, violet
   threads, and light Git. Do not use a generic braid or a crop from the
   reference sheet. The Dock/Finder icon uses the kit's rounded tile. Host state

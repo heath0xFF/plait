@@ -1,610 +1,113 @@
 # Verification
 
-## Published preview — v0.1.0-preview.1
+Passing development tests, installed-package checks, and live-model acceptance
+are different kinds of evidence. This page records their scope. For commands
+and prerequisites, see [Contributing](../CONTRIBUTING.md#required-checks).
 
-[The release](https://github.com/heath0xFF/plait/releases/tag/v0.1.0-preview.1)
-was published from `de4f1fe` on 2026-11-16. [Tag workflow 43858368092](https://github.com/heath0xFF/plait/actions/runs/43858368092)
-passed the full build and publication gate: 88 Mac Rust tests, 105 runtime tests
-from source and again with the installed host/runtime, two durable recovery
-probes, 21 packaging tests, DMG mounting/content verification, and package and
-native-client acceptance. Linux checks passed on the same source commit.
+## Release baseline
 
-The installed coding probe now makes a behavior-preserving refactor and adds a
-regression test in a disposable copy of `plait-core`. It runs real sandboxed Cargo
-tests, closes the actual installed native client during the command, and reopens
-the same thread and saved draft. It then restarts the host and completes a
-follow-up without replay. Git diff/index checks, tool/message identities, and the
-untouched source checkout are asserted. The seed draft was supplied by the test;
-this does not establish live keyboard or IME behavior.
+- **Release:** [v0.1.0-preview.1](https://github.com/heath0xFF/plait/releases/tag/v0.1.0-preview.1)
+- **Source:** [`de4f1fe`](https://github.com/heath0xFF/plait/tree/de4f1fe115d585b7164a9f87d2900ea531812c07)
+- **Platform:** Apple Silicon, macOS 26 CI
 
-Inspected native captures from this exact release:
+The [release workflow](https://github.com/heath0xFF/plait/actions/runs/43858368092)
+passed before publication. [Linux CI](https://github.com/heath0xFF/plait/actions/runs/43855316624)
+also passed for that source commit. These results do not certify later changes
+or runtime behavior on older macOS versions.
+
+| Check | Evidence |
+| --- | --- |
+| Rust workspace | Formatting, strict Clippy, 88 Mac tests, release builds |
+| Production runtime | 105 tests from source and the same 105 with the installed host, Node, and sidecar |
+| Durable runtime recovery | Two separate credential-free process-crash probes |
+| Packaging | 21 tests, native `plutil`, package contents, and read-only DMG mount/content verification |
+| Installed host | Per-user service startup without a developer Node path; real command-sandbox tests |
+| Independent updates | Client replacement and staged host update preserve active work; activation follows cleanup |
+| Native recovery | Actual installed client is terminated during an accepted command, then reopens the same thread and unsent draft |
+| Public downloads | All 19 assets downloaded; all eight checksum files, release discovery, and component metadata checked |
+
+The staged host upgrade uses a labeled fixture with unchanged executable code.
+It does not establish compatibility with unknown future protocols or storage
+migrations. Checksums detect corruption, not publisher identity. The preview is
+**unsigned and not notarized**; see [Mac installation](MACOS.md).
+
+## Installed coding check
+
+`runtime/test/dogfood.macos.test.ts` connects the production runtime to a scripted
+loopback provider through Pi's real decoder. In a disposable copy of Plait source,
+it approves a refactor and regression test, runs offline locked Cargo tests,
+disconnects, retries the accepted request, restarts the host, and completes a
+follow-up. Assertions cover Git diffs, the unchanged index and pre-existing dirty
+work, stable tool/message identities, and absence of repeated execution.
+
+The installed-client gate launches the actual native app against that host. It
+terminates the client process during the command, then reopens it without a checkout argument.
+The restored draft is supplied by the test, not typed by a person. Reopening
+neither submits the draft nor calls the provider again.
+
+Inspected native captures from the release:
 
 - [Accepted command running](https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.1/installed-client-active.png)
-- [Reopened thread, native code block, and saved draft](https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.1/installed-client-coding.png)
-
-The response explicitly labels the scripted provider. No sample-view code is
-shipped. The release was private until all assets uploaded; published package,
-image, script, and metadata downloads are versioned. All 19 public assets were
-downloaded on Arthur; all eight checksum files passed. Unauthenticated release
-discovery and the published component index matched the tag and source revision.
-The tagged raw installer also matched the released script. Checksums detect
-corruption, not publisher identity. Packages are still unsigned and not notarized.
-
-The managed host reached `ready` at 14,019 ms on the tag run. This passed the
-current gate but reinforces issue #14's cold-start investigation. Do not report
-that earlier startup timeout as fixed. Personal-Mac Gatekeeper/authentication,
-a live-model source change, older-macOS runtime behavior, and accessibility/input
-acceptance remain open.
-
-## Installable Mac preview candidate — 2026-11-16
-
-[Mac run 43845602435](https://github.com/heath0xFF/plait/actions/runs/43845602435)
-passed for source `78a7ad5` (build revision `d44491b4720b`). It checked formatting,
-strict Clippy, 86 Mac Rust tests, 105 source runtime tests, two recovery probes,
-and 21 packaging tests. The 105 runtime tests also passed with the installed
-host, Node, and production sidecar. Linux CI passed separately.
-
-The installed self-development probe used Pi's real provider decoder with a
-loopback scripted endpoint. It approved changes to a disposable copy of real
-Plait source, ran offline locked Cargo tests in the real command sandbox, closed
-a client subscription during work, restarted the host, and completed a follow-up.
-Request retries did not execute again. Message/tool IDs, the Git index, existing
-dirty work, and the original source checkout were checked. This is not a live
-model or personal-account test.
-
-DMGs were created, verified, mounted read-only, and checked against the component
-packages. The installer tests also used native Mac `plutil` for release-array
-and artifact lookup. The installed native client saved its checkout privately
-and reopened it without a checkout argument; its captured window was inspected.
-The managed host reached `ready` after 5,083 ms on this run. Issue #14 remains an
-intermittent-startup investigation, not a claimed fix; first-failure phase
-capture is now part of the gate.
-
-Later candidate checks cover saved-workspace identity conflicts and connect the
-actual installed client to the coding probe. That gate closes the client during
-an approved command, reopens the same thread and saved draft, and captures native
-active/completed views. It adds no sample-view code to the shipped app. The
-complete tag workflow must pass before a release becomes public.
-
-Local GPUI checks render the native Markdown blocks and settings at wide and
-minimum sizes, including the no-authentication state. Recovery tests cover
-private atomic writes, exclusive ownership, corruption, future versions,
-coalesced saves, preserved submission IDs/edit revisions, and refusal to reassign
-saved work to another checkout or model. Headless images are layout evidence,
-not Mac input-latency measurements.
-
-Unsigned/not-notarized status, personal-Mac Gatekeeper approval, live-provider
-quality, VoiceOver/IME use, and macOS 15 runtime acceptance remain separate
-limits. See [Mac setup](MACOS.md) and [self-development](SELF-HOSTING.md).
-
-## Real data only, sidebar pills, Cmd-number jumps — Linux checks, 2026-11-16
-
-Branch `ui/sidebar-pills-shortcuts`. **Not built or inspected on macOS.**
-
-- Removed the sample projects, machines, threads, and conversations. The app
-  shows the opened checkout on this machine (named from its hostname) and its
-  real host threads. With no thread open, it says why and offers Reconnect or
-  New thread.
-- Removed the in-window logo. Machines are pills; thread state is a pill.
-- Cmd-1 to Cmd-9 jump to threads, or to machines or projects (Settings ›
-  Keyboard). Conversation and Changes moved to Cmd-Shift-1 and Cmd-Shift-2.
-  The choice is a desktop-only preference file; see ARCHITECTURE.md.
-- Formatting, strict workspace Clippy, and all workspace Rust tests pass. New
-  tests cover the preference file (missing, malformed, oversized, unknown
-  fields, failed save, atomic replacement), jump order, hostname display, and,
-  in the headless walk, Cmd-number selection and next/previous wrapping.
-- Every view was rendered headlessly at 1380 × 860 and 900 × 600 and inspected,
-  including the three no-thread states.
-- `scripts/smoke-macos.applescript` was rewritten for the new tree (one project,
-  one machine) and the no-thread state. **It has not been run.** It accepts
-  either "Not connected" or "No threads yet", depending on whether a host is
-  running on the Mac.
-
-## Cancellable desktop subscriptions — Linux checks, 2026-11-16
-
-Removed the desktop watch's one-second read timeout and repeated UI stale-watch
-checks. Explicit cancellation closes the old subscription on thread selection,
-reconnect, or view release, without a Stop request. A dedicated reader sleeps
-outside GPUI's shared worker pool. Its async inbox holds one latest snapshot,
-not a growing queue of intermediate snapshots.
-
-Checked formatting, strict workspace Clippy, 68 Rust tests, TypeScript, 86 runtime
-tests, and release headless builds. The GPUI layout/scroll-state walk still passes.
-Six new core tests cover an idle read lasting beyond the old polling interval,
-cancellation without a Stop request, initial-reply deadlines, async wake/closure,
-combined reply/event framing, identity checks before coalescing, and bounded
-delivery under 1,000 updates. Existing
-partial-frame, size-bound, stale-result, reconnect, and approval tests still pass.
-
-This is lifecycle and bounded-memory evidence, not a measured whole-app CPU,
-energy, or native typing-latency result. Native macOS checks remain the CI gate.
-
-## Incremental conversation rows — Linux checks, 2026-11-16
-
-Live snapshots now retain measured rows by stable message/tool identity. Only
-structural changes splice the list; content updates remeasure affected rows
-without clearing the scroll anchor. Disclosure follows tool IDs, so a new
-message or disappearing streaming row cannot expand the wrong tool.
-
-Checked formatting, strict workspace Clippy, 62 Rust tests, TypeScript, 86 runtime
-tests, and release headless builds. The optional PNG export was also run.
-Five new headless-state tests cover streaming/status updates, history clipping,
-row namespaces, identity resets/duplicate IDs, and 2,000 deterministic randomized
-insert/delete/reorder/content transitions. The 2,000-message state fixture
-invalidates one streaming row rather than 2,001 rows; this is not a latency result
-or a host-history feature.
-
-The real GPUI layout walk verifies that visible history rows remain measured
-through 20 streaming updates, that their scroll anchor stays fixed, and that
-clipping the first row adjusts the anchor without losing its pixel offset.
-Tool disclosure survives row movement and is removed when its tool disappears.
-Inspected these headless Linux renders at wide and narrow sizes:
-
-- [History held steady while streaming](screenshots/stream-history-linux.png)
-- [Correct tool still expanded after row movement](screenshots/stream-tool-linux.png)
-
-These are sample-state renders, not Mac input or ADEMark measurements. Commit
-`0cab4d4` passed Linux CI and macOS build/installed-client/real sandbox checks
-(macOS run `43825444052`). Inspected its
-[installed native window](screenshots/installed-macos-0cab4d4.png); that capture
-shows the labeled fixture view, not a live stream. Hands-on Mac streaming and
-typing latency remain unmeasured. No host protocol, storage, or permission change.
-
-## Event-driven host watches — Linux checks, 2026-11-16
-
-Replaced the 150 ms sidecar watch poll and the one-second child-process poll
-with a private notification channel. The public client protocol, durable schema,
-exact-call approval policy, and sandbox are unchanged. Each watch has one pending
-wakeup; backpressure coalesces changes instead of retaining snapshot queues.
-
-Checked on Arthur: formatting, strict workspace Clippy, 57 Rust tests, TypeScript,
-86 runtime tests, and debug/release host builds. The optional PNG export test
-remains ignored in the normal Rust suite. New cases cover notification bounds,
-coalescing, idle request counts, thread routing, disconnect cleanup, sidecar
-death, approval/Stop updates, and joining an active stream without polling.
-
-The release transport probe used a scripted sidecar and 40 latency samples per
-watcher count. It made no model requests and opened no desktop window:
-
-| Socket watchers | Delivery p50, before → after | Delivery p95, before → after | Idle sidecar watch reads over about 2 s |
-| --- | --- | --- | --- |
-| 1 | 95.11 → 0.88 ms | 133.97 → 10.44 ms | 13 → 0 |
-| 20 | 96.16 → 1.83 ms | 136.44 → 9.34 ms | 260 → 0 |
-
-[All samples and build details](performance/watch-2026-11-16.json) are preserved.
-This is one before/after batch on a development Linux machine, not a controlled
-macOS benchmark. It measures neither CPU usage nor input-to-pixel latency. The
-20-watcher case is not ADEMark's 20-thread workload. See the
-[ADEMark plan and probe command](ADEMARK.md). Mac installation and real sandbox
-acceptance for this change remain the macOS CI gate; no ADEMark result is claimed.
-
-## BB look-and-feel pass — Linux layout check only, 2026-11-16
-
-Branch `ui/bb-look-and-feel`, written on Arthur. This is a presentation change
-plus one UI state fix. **It has not been built, run, or inspected on macOS.**
-The host protocol, runtime, persistence, Git adapter, and composer editing logic
-are unchanged. See [DESIGN.md](../DESIGN.md) for the resulting layout.
-
-Checked on Arthur (Ubuntu 26.04, x86-64, Rust 1.98.1):
-
-- `cargo fmt --all -- --check` and strict Clippy for the complete workspace.
-- All 54 Rust tests in the workspace: 18 desktop, 30 core, 6 host.
-- A new desktop test opens the real root view in GPUI's headless test platform
-  and draws every view at 1380 × 860 and 900 × 600: example conversation,
-  expanded tool, Changes with a selected diff, an empty example thread, a remote
-  fixture, a live thread, a disconnected thread, a pending approval, Settings,
-  the new-thread page, and the window with the sidebar hidden. It caught a
-  duplicate GPUI hover style during this work.
-- The same walk rendered through GPUI's headless wgpu renderer on Mesa's software
-  Vulkan driver. Each image was inspected at both sizes. Nothing overflows or
-  overlaps at the 900 × 600 floor with DejaVu Sans, which is wider than the
-  macOS system font.
-- Fixed while testing: New thread followed by Cancel, starting from the empty
-  example thread, showed the first example thread with no messages. The
-  conversation list kept the previous thread's item count. The walk asserts it.
-
-Captures, all **headless Linux renders with sample host data**, not macOS:
-
-- [Example conversation with an expanded tool](screenshots/ui-linux-conversation.png)
-- [Live thread with a pending approval](screenshots/ui-linux-approval.png)
-- [Changes with staged and unstaged work](screenshots/ui-linux-changes.png)
-- [Live thread at 900 × 600](screenshots/ui-linux-narrow.png)
-
-Not checked, and required before this is treated as done:
-
-- The macOS build, Metal renderer, system fonts, and exact spacing.
-- `bash scripts/smoke-macos.sh`. Accessible names and roles it uses were kept:
-  the root group, the tree and its 11 rows, the Conversation / Changes and
-  Unstaged / Staged tabs, tool rows, file buttons, and Open repository. This was
-  checked by reading the script, not by running it.
-- VoiceOver, keyboard focus order, hover and focus appearance, and IME input in
-  the restyled composer box. Its focus edge now follows any focus, not only
-  keyboard focus.
-- A real host connection. Live-thread scenes use injected sample state.
-
-## Unicode boundary regression — local checks on Arthur
-
-A long accepted message with an emoji across the preview cut produced an
-unpaired UTF-16 surrogate. The Rust transport rejected the snapshot and closed
-the connection. Seven focused cases reproduced the message/transcript cuts,
-snapshot byte-budget cuts, and split command-output decoding before the fix.
-
-The shared text helpers now keep whole code points within the existing limits.
-Each command pipe decodes UTF-8 across reads. Local checks passed: 51 workspace
-Rust tests, strict Clippy, 52 portable runtime tests, and 12 package-planning
-tests. No selected tests were skipped. Tests cover read-tool result limits,
-stream bounds and incomplete UTF-8 at EOF, saved previews after host restart,
-and accepted-request deduplication without replay. The Mac suite also includes
-a real sandboxed split-output test. Its full workflow remains the Mac acceptance
-gate; Linux fixture tests do not establish containment. No protocol, durable
-schema, approval arguments, or sandbox rules changed.
-
-## macOS installer preview — verified 2026-11-16
-
-[Mac CI run 43782943308](https://github.com/heath0xFF/plait/actions/runs/43782943308)
-passed for installer source commit `b0bb0ab`, built at PR merge revision
-`602825800f06`. [Download its artifact](https://github.com/heath0xFF/plait/actions/runs/43782943308/artifacts/14189800596)
-and use `Plait-Installer-0.1.0-602825800f06-macos-arm64.pkg` for both components.
-The artifact also contains client-only and host-only packages, a portable client
-ZIP, component metadata, and checksums. Artifact retention is 14 days.
-
-Verified on macOS 26 / Apple Silicon:
-
-- Formatting, strict workspace Clippy, 49 Rust tests, and release builds.
-- All 58 source runtime tests, including real command containment and lifecycle.
-- Both offline Pi Durable recovery probes and 12 package-planning tests.
-- Architecture, bundle metadata, executable signatures, licenses, and expanded
-  package manifests for all three installers.
-- Combined installation, per-user LaunchAgent startup, and packaged Node/runtime
-  discovery without developer Node or inherited Node options.
-- All 58 runtime tests again using the installed host, Node, and runtime.
-- Client-only installation, rejected identical-host installation, and a staged
-  host upgrade during an active scripted command. The original managed host PID,
-  running command, old release files, and tool identities were preserved.
-- Stop cleanup before activation, then the same stopped thread, message IDs,
-  tool IDs, and cleared approval after the new host opened the saved store.
-- Installed native app launch and refusal to replace a running client.
-  [The captured app image](screenshots/macos-installed-preview.png) was inspected:
-  the local host is connected and the example thread is visibly labeled as a
-  fixture. This is a disposable CI checkout, not a live-model run.
-
-No selected tests were skipped, ignored, or filtered out. Downloaded artifact
-checksums also passed on Arthur. Linux strict workspace checks passed with
-51 Rust tests and 42 portable runtime tests; Linux command execution remains
-disabled. [Linux CI](https://github.com/heath0xFF/plait/actions/runs/43782943331)
-also passed.
-
-The checks found and fixed four packaging/test issues: an npm manifest-name
-collision, missing service account context, Node's nested test-runner skip, and
-PackageKit deleting old code under a shared host receipt. Host releases now use
-distinct receipts and one stable LaunchAgent label. The activation test waits
-for a fixture-only cleanup marker; Stop acknowledgement alone is not cleanup
-completion. Earlier failed runs did not publish installer artifacts.
-
-The headless checkpoint's Mac runner had untrusted compiler/root ownership.
-CI now uses macOS 26 and accepts known canonical Metal layouts without removing
-ownership or write-mode checks. No system security settings or ownership were
-changed to make tests pass.
-
-The staged upgrade is a labeled fixture with unchanged executable code, not a
-test of unknown future storage migrations. The packages remain unsigned and
-not notarized. Personal-Mac Gatekeeper approval, authentication, a live model
-turn, and older-macOS runtime acceptance are **not** established by these checks.
-Complete the personal-Mac checks before travel use; cloud models need working
-provider connectivity.
-
-## Portable daemon development checkpoint
-
-Verified on Arthur after the local-socket and runtime boundary changes:
-
-- `bash scripts/check.sh` passed: formatting, strict headless clippy, 34 Rust
-  tests (30 core and 4 host), a debug host build, pinned runtime installation,
-  TypeScript checking, 39 runtime tests, and core/host release builds.
-- Full workspace strict clippy and all 49 Rust tests also passed on Linux.
-- No selected tests were skipped, ignored, or filtered out.
-- Both full command-sandbox gates correctly returned an error on Linux before
-  running tests. Linux runtime tests explicitly verify denial at both the
-  TypeScript and Rust helper entry points.
-- Workflow `actionlint`, shell syntax, JavaScript syntax, and `git diff --check`
-  passed. The Mac policy/environment body matches the pre-refactor source.
-
-The 39 Linux runtime tests are **not** the older 39-test Mac sandbox suite below.
-They test independent daemon start, socket protocol limits, persistent models and
-request IDs, client disconnect/reconnect, approved file edits, Stop approval
-revocation, checkout leases, exact postimages, dirty-file protection, and crash
-recovery. Common guardian tests use a clearly labeled subprocess fixture to
-check cancellation, output drainage/bounds, spawn failure, and deadline cleanup.
-That fixture is not a containment mechanism.
-
-The test runner selects real command-sandbox and command-crash cases on macOS,
-and command-denial cases on Linux. All original Mac command tests remain. Mac
-checks, native UI inspection, and live-model acceptance had not been repeated
-at this checkpoint. Later Mac CI results are recorded above. Linux command
-execution and remote Plait connections remain unsupported.
-
-## Arthur headless core checkpoint (initial extraction)
-
-Verified on Arthur (Ubuntu x86-64, pinned Rust 1.98.1) after the core crate split:
-
-- `cargo fmt --all -- --check`
-- `cargo clippy --locked -p plait-core -p plait-host --all-targets -- -D warnings`
-- `cargo test --locked -p plait-core -p plait-host` — 31 tests passed:
-  28 core and 3 host tests. No tests were ignored or filtered out.
-- `cargo build --locked --release -p plait-core -p plait-host`
-- `cargo clippy --locked --workspace --all-targets -- -D warnings`
-- `cargo test --locked --workspace` — 46 tests passed, including the 15
-  desktop/composer tests. No tests were ignored or filtered out.
-- The headless dependency graph contains no GPUI packages. The default workspace
-  member is still the desktop. Existing dependency versions are unchanged.
-- `actionlint` passed for both workflows; `git diff --check` passed.
-
-The new Linux-only Git test creates a non-UTF-8 filename and verifies real status,
-preview, and tracked diff reads without changing the index or worktree. The
-existing 27 core tests moved with their production modules. Those six production
-modules are byte-for-byte unchanged; desktop source changes only rename imports
-from `plait` to `plait_core`.
-
-The full workspace test target also compiles on Arthur, but it does not validate
-a native window or the macOS renderer. The smaller headless CI job does not
-compile GPUI. Cargo can still fetch desktop dependency sources while resolving
-the workspace. The new hosted CI job has not been observed running yet.
-
-No Mac build, native UI inspection, TypeScript runtime suite, or live model run
-was repeated for this split. The native validation below records the earlier
-Mac checkpoint. Linux agent execution and remote connections remain unsupported;
-no sandbox checks were removed. See [HANDOFF.md](HANDOFF.md) for the remaining
-platform boundaries and the temporary Rex CLI workaround.
-
-## Arthur Linux containment investigation
-
-On 2026-11-15, an unprivileged Bubblewrap 0.11.1 namespace probe succeeded on
-Arthur. The Landlock ABI query returned 8. A second disposable probe confirmed
-that a process in `--unshare-all` namespaces could connect to an outside Unix
-server through a `--ro-bind` fixture directory. It received only a fixed test
-message. The server recorded one connection, and the fixture was removed.
-
-Runtime `npm ci --ignore-scripts` and `npm run check` also passed. The runtime
-safety suite was not run in this investigation, and no Linux command backend was
-enabled. No system security settings were changed. See
-[LINUX-SANDBOX.md](LINUX-SANDBOX.md) for the open design decision and test gates.
-
-## M2 validation — in progress
-
-The full workspace passes formatting, warning-free clippy, 45 Rust tests
-(27 library, 15 desktop/composer, and 3 host), and the release build. Runtime
-installation, TypeScript checking, and all 39 runtime tests pass after the final
-build-environment changes. No tests were skipped. A second independent safety
-review cleared the cache, toolchain, and sandbox changes.
-
-PID-scoped native checks used an isolated store and a disposable checkout:
-
-- Loaded the real Pi catalog and selected an exact provider/model.
-- Saved a default only after host acknowledgement.
-- Created a real thread without starting a task.
-- Entered text through native accessibility input; blank Send was disabled.
-- Changed the default and confirmed the existing thread kept its saved model.
-- Disconnected the host and confirmed the disabled composer retained its draft.
-- Inspected wide and 900 × 600 content-size windows. AeroSpace was temporarily
-  set to float only the test window, then its layout was restored.
-
-The checks used direct accessibility actions by element identity. GPUI's
-coordinate-based fallback could activate a neighboring model row after a resize;
-new host controls and Send/Stop now use explicit identity-bound actions.
-No global keystrokes were sent, and the existing user app was left untouched.
-
-- [Native settings and acknowledged default](screenshots/m2-settings.png)
-- [Retained draft while offline at 900 points](screenshots/m2-composer-offline-900.png)
-
-The real-provider acceptance script passed with `openai-codex/gpt-6-astra` in
-a disposable Rust repository: two exact approved edits, two sandboxed Cargo test
-runs, same-thread follow-up, observer reconnect, create/submit deduplication,
-and an unchanged Git index. Independent review cleared the core safety fixes.
-
-The real Plait checkout now builds and passes all 45 workspace tests inside the
-sandbox: 33.285 seconds with an empty private thread cache, then 1.026 seconds
-with the same cache. Fixed installed Metal/Git lookup, stable private Cargo
-paths, and scratch-only test fixtures resolved the earlier build failures.
-Negative tests cover outside process signals, sockets, TCP, and checkout writes.
-
-Native Send, accepted-draft clearing, exact edit approval, and command completion
-passed. The test window was closed during an observed sleep process and reopened
-on the same running thread. Host execution continued, request/tool identities
-were unchanged, and the real final response arrived. Native Stop then cancelled
-an approved active command: its sleep process exited and pending approval cleared.
-The old human conversation and fixture remained byte-for-byte unchanged.
-
-**An agent-authored change to Plait itself is not yet verified.** Real keyboard
-IME use and full VoiceOver coverage are not verified. That validation used the
-desktop-only development bundle; current installer work is recorded above.
-Linux Plait execution is not supported yet; see [the Arthur handoff](HANDOFF.md).
-
-The following sections record the historical M1 baseline, not M2 acceptance.
-
-## M1 environment
-
-Built and run on Zaphod: Apple Silicon, macOS 26.6.2, Rust 1.98.1.
-GPUI revision: `596dfdcf32d85d4d8d17a8887b4d0979ec7c5e14`.
-
-The first build found a missing Xcode Metal compiler. Installed it with
-`xcodebuild -downloadComponent MetalToolchain`, then rebuilt successfully.
-The pinned Rust toolchain was also installed. The system default Rust toolchain
-was not changed.
-
-## Automated checks
-
-Passed:
-
-- `cargo fmt --all -- --check`
-- `cargo clippy --locked --workspace --all-targets -- -D warnings`
-- `cargo test --locked --workspace` — **16 tests**
-- `cargo build --locked`
-- `cargo build --locked --release`
-- `bash -n scripts/smoke-macos.sh`
-- Native AppleScript compilation and `bash scripts/smoke-macos.sh`
-
-Rust tests cover:
-
-- NUL-delimited status, spaces/newlines, rename order, invalid relative paths,
-  and byte-preserving non-UTF-8 filename parsing.
-- Unborn and clean repositories, missing paths, detached HEAD, merge conflicts,
-  renames, deletion, binary files, and literal Git pathspecs.
-- Separate staged and unstaged diffs, correct unified line numbers, empty
-  untracked files, and no staged preview for untracked content.
-- Unchanged index bytes and working-file content after reads; no index lock.
-- Disabled external diff, textconv, and clean/process filters. A regression test
-  first reproduced Git executing a configured filter, then passed with filters
-  disabled.
-- Symlink/special-file refusal, parent-symlink containment, bounded output and
-  long lines, subprocess timeout and child reaping.
-- Repository epoch checks, stale file results, queued latest selection, cached
-  switching, valid thread navigation, and revealing collapsed parents.
-
-macOS rejects invalid UTF-8 filenames on this filesystem. That case is checked
-at the parser boundary, not by creating such a file on disk.
-
-## Native checks
-
-Launched debug and release binaries in a named Rex pane. Inspected rendered
-windows, application output, and the macOS accessibility tree.
-
-The final native smoke check uses **named accessibility controls only**. It
-creates its own temporary repositories and app processes, then verifies:
-
-- Project and machine collapse/expand.
-- Thread selection, remote disclosure, and empty conversations.
-- Native folder picker opening and cancellation.
-- Staged versus unstaged content, including rapid alternating selections.
-- Clean repository and invalid-directory states, with a recovery control.
-- Unchanged test index and working file after all UI operations.
-
-Earlier keyboard-driven automation could lose focus and send text to another
-application. It was removed. The final test has no global keystroke injection.
-A focus-loss bug found when hiding the sidebar was fixed by retaining root
-focus before removing a focused child.
-
-Manually checked the native picker selecting a directory, Conversation/Changes
-shortcuts, thread navigation, and close/quit. Visually inspected wide windows,
-1000 × 680, and the 900 × 600 content-size floor. The conversation inspector
-hides at narrow widths; Git remains available in Changes. Long paths truncate
-without pushing the diff out of the window.
-
-A 20,000-line untracked fixture showed the preview limit and rendered only the
-visible rows (22 diff-row accessibility groups in the inspected viewport), not
-10,000 UI elements at once.
-
-### Captures
-
-- [Conversation and local repository](screenshots/m1-conversation.png)
-- [Staged diff in a disposable real Git repository](screenshots/m1-diff.png)
-
-The Git data in the diff capture comes from actual CLI reads of a test repository.
-The conversation and thread statuses in both captures are labeled fixtures.
-
-## Performance observations
-
-One release session reported:
-
-| Instrument | Observation |
-|---|---:|
-| Main-entry to first root render | 89 ms |
-| Root-view construction in the captured diff | 44 µs |
-| Peak root-view construction after narrow resize | 121 µs |
-| Selection handler to next root render | 8.1 ms |
-| Local status, including safe-config reads | 65 ms |
-| Uncached tracked diff | 37 ms |
-
-These are sample observations, not a benchmark distribution. The footer's UI
-numbers exclude deferred list-row rendering, layout, GPU work, and presentation.
-Startup does not include OS process creation. Git timing includes background
-work; it is not UI blocking time. Cached diffs require no Git subprocess.
-
-**The 60 FPS and complete warm-launch targets are not yet validated.** Measure
-frame presentation and repeated launches before treating them as release gates.
-These M1 observations used the fixture desktop, with no idle polling or
-continuous animation. They do not describe the later M2 host's original polling
-transport; see the event-driven host checkpoint above.
-
-## Conversation refinement
-
-The BB-inspired M1 pass keeps user messages in right-aligned bubbles and agent
-replies as open text. Tool rows expand in place. The sidebar now holds the
-wordmark; the extra app-wide header is removed.
-
-Rechecked formatting, warning-free Clippy, all 16 Rust tests, and the release
-build. The native smoke suite also checks that tool details start collapsed,
-open on click, close again, and reset after a thread switch. Repository read-only
-checks still pass.
-
-Visually inspected 1380 × 860 and 900 × 600 windows, including expanded tool
-text at the narrow size. The Git inspector hides at the existing breakpoint;
-conversation content scrolls above the unavailable composer. Updated both M1
-screenshots. Full VoiceOver and sustained frame-rate checks remain outstanding.
-
-## macOS package and vector branding
-
-The development package builds with `bash scripts/build-macos.sh`. Checks pass
-for the property list, arm64 executable, system-only dynamic links, dependency
-notices, compiled icon, ad-hoc signature, and the extracted ZIP. The archive's
-SHA-256 checksum also passes.
-
-Imported the owner's vector kit unchanged, with its reconstruction notes. GPUI
-embeds the ribbon mark, outlined lettering, and category glyphs. The build uses
-the kit's supplied 1024-pixel app-icon export to generate all native icon sizes.
-No screenshot crops or replacement hand-drawn glyphs remain.
-
-Formatting, warning-free Clippy, 16 library tests plus one GPUI SVG rendering
-test, the release build, and the native accessibility smoke suite pass. The
-scripted Pi Durable probe and both SIGKILL recovery tests pass without model
-credentials. `actionlint` passes for the new macOS workflow; local checks do not
-establish that the hosted build has passed.
-
-Launched `dist/Plait.app` through Launch Services. Visually checked its full-color
-brand and navigation at 1380 × 860 and the 900 × 600 content-size floor. The
-narrow view keeps the brand and state labels and hides the Git inspector.
-AeroSpace was temporarily set to float only the test window for these checks;
-its tiled layout was restored afterward.
-
-- [Packaged app with vector branding](screenshots/macos-branding.png)
-
-This is still the M1 desktop. The package does not contain an agent host or
-updater. See [macOS packaging](MACOS.md) for distribution limits.
-
-## Known limitations
-
-- One selected local checkout. Path, selection, and collapse state are not saved.
-- All agent events and thread statuses are static fixtures. Marvin and Arthur
-  do not connect. There is no daemon, Pi integration, or agent execution.
-- Git refresh is manual. Refresh clears the diff cache and selects the first
-  changed file. External edits can make a cached snapshot stale.
-- No staging, discard, commit, history, editor, or terminal. Diff text is not an
-  editable or selectable code editor.
-- Each subprocess has a 10-second deadline. A job can contain several commands;
-  new selections wait behind the current job. Slow filesystem mounts can also
-  delay background file reads. The UI remains independent of that work.
-- Bare repositories are not supported. Dirty submodule contents are not scanned;
-  gitlink changes can be shown. Combined conflict patches remain readable text
-  but do not get full multi-parent line-number gutters.
-- Binary/non-UTF-8 content has no text preview. Large patches and long lines are
-  clipped with a notice. Untracked symlinks and special files are not followed.
-- Clean/process filters are disabled. Repositories that depend on filters, such
-  as Git LFS, can show raw-content differences rather than filter-normalized data.
-- The development app bundle is ad-hoc signed only. No Developer ID signing,
-  notarization, installer, or automatic updater. Downloaded builds may be blocked
-  by Gatekeeper. Cargo and `target/release/plait` remain supported.
-- Intel macOS, other operating systems, full VoiceOver behavior, and sustained
-  frame-rate/load testing have not been verified.
-
-## Next milestone
-
-M2 validation has started in [the isolated probe](../experiments/pi-durable/README.md).
-Published Pi 1.5.2 passed a live `openai-codex/gpt-6-astra` run using existing Pi
-authentication, real temporary-file read/edit tools, incremental state, observer
-detach/reattach, SQLite reopen, stable identity, and request deduplication.
-
-Separate scripted-provider SIGKILL tests now verify safe versus unsafe tool
-replay after reopening the Durable store. This is not desktop integration or
-Plait-host recovery verification. Next implement the independent host, native
-composer, and one local create/resume/stream/persist path with host-crash and
-client-reconnect tests. Keep the Git read-only
-boundary until the separate Git-write milestone. Do not add remote execution or
-orchestration as part of that first integration.
+- [Reopened thread, code block, and saved draft](https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.1/installed-client-coding.png)
+
+These checks establish real tool effects and native process recovery, not
+live-model quality, personal-account authentication, or keyboard/IME behavior.
+The response labels the scripted provider. No sample-view code ships in the app.
+
+## Coverage boundaries
+
+- **Rust/core:** Git parsing and repository edge cases, unchanged index/worktree
+  after reads, stale async results, protocol framing, peer identity, Unicode,
+  transcript updates, and private recovery journals.
+- **Runtime:** approvals and revocation, dirty-file protection, exact postimages,
+  request deduplication, host/sidecar failure, cancellation, and bounded output.
+- **macOS sandbox:** denied outside writes, network, sockets, signals, and cache
+  access; permitted private build output and scratch IPC. This is not a general
+  process container; see the [host contract](HOST.md#safety-boundary).
+- **Linux:** headless development and explicit command rejection. Scripted
+  lifecycle fixtures are not a working Linux containment backend.
+- **Headless UI:** wide/narrow layouts, scroll-state retention, and recovery
+  guards with injected test state. Linux fonts and software rendering do not
+  validate the Mac renderer or native input latency.
+
+The optional headless PNG export is ignored in the normal Rust suite and runs
+explicitly when requested. See [UI checks](../CONTRIBUTING.md#ui-checks).
+
+## Known gaps
+
+- [Managed-host startup (#14)](https://github.com/heath0xFF/plait/issues/14):
+  intermittent startup remains under investigation. The release reached `ready`
+  after 14,019 ms; a successful run is not a root-cause fix. First-failure phase
+  diagnostics are preserved by the installer checks.
+- [Journal lock lifecycle (#19)](https://github.com/heath0xFF/plait/issues/19):
+  a later Mac run failed the immediate flush/drop/reopen test with a writer-lock
+  conflict. The cause and production impact are not established; the earlier
+  release result does not resolve this failure.
+- Gatekeeper approval, installed authentication, and a live-model source change
+  on a user-managed Mac need separate acceptance. CI does not replace them.
+- The bundle targets macOS 15+, but CI currently runs on macOS 26. Older-system
+  runtime behavior, Intel macOS, and a native Linux client are not validated.
+- Full VoiceOver, keyboard focus, IME, and sustained typing/streaming checks
+  remain open for the installed release.
+- Conversation and tool previews are bounded. There is no paginated full-history
+  view, automatic updater, or published ADEMark result.
+
+## Manual release acceptance
+
+Use a disposable checkout and private host/session directories. Do not reuse
+another person's conversation, change OS security settings, or inject global
+keystrokes into their desktop.
+
+1. Install the downloaded package under normal macOS policy and authenticate
+   with an account authorized for the test.
+2. Check repository/model selection, native typing and IME, keyboard navigation,
+   VoiceOver, and the 900 × 600 minimum window.
+3. Ask for a small real source change and test. Review exact approvals, actual
+   output, the Git diff, and preservation of unrelated work.
+4. Close/reopen during work, then test Stop, provider failure, and recovery.
+   Confirm stable identities and no automatic replay.
+5. Check independent client/host updates, including cleanup before activation.
+
+Record the build, OS, model/provider, steps, and result. Do not publish credentials,
+private prompts, or authentication seeds. Performance claims need separate,
+repeatable measurements; see the [ADEMark plan](ADEMARK.md).

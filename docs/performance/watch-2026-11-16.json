@@ -1,6 +1,7 @@
 {
-  "description": "Internal scripted transport probe on Arthur. Not ADEMark or native UI measurements.",
+  "description": "Scripted Linux development transport probe. Not ADEMark or native UI measurements.",
   "notes": [
+    "Public copy: workstation name removed and binary paths made repository-relative; samples, versions, and hashes are unchanged.",
     "Baseline host built from 25bec03; only the new probe, scripted fixture, and draft documentation were present.",
     "After is the working-tree event-driven implementation in the commit containing this receipt. Its binary and sidecar hashes are recorded.",
     "The baseline probe did not record binary hashes or a dirty flag. Do not infer those fields.",
@@ -13,7 +14,7 @@
     "platform": "linux",
     "arch": "x64",
     "node": "v26.13.0",
-    "binary": "/home/heath/code/plait/target/release/plait-host",
+    "binary": "target/release/plait-host",
     "results": [
       {
         "watchers": 1,
@@ -135,7 +136,7 @@
     "platform": "linux",
     "arch": "x64",
     "node": "v26.13.0",
-    "binary": "/home/heath/code/plait/target/release/plait-host",
+    "binary": "target/release/plait-host",
     "results": [
       {
         "watchers": 1,

@@ -12,6 +12,9 @@
 - Build original application code and design. Do not copy or port competitor code,
   assets, or distinctive UI. Compare user outcomes, not implementation details.
   Declared, pinned dependencies are permitted; retain their licenses.
+- This repository is public. Keep docs current and reader-facing; omit personal
+  workstation details, session handoffs, private transcripts, and agent work logs.
+  Separate shipped behavior, planned work, and verification limits. Keep provenance.
 - Pin dependencies. Check upstream source at the pinned revision before using APIs.
 - Use small functions, explicit errors, and short comments explaining why.
 - Test parsers, async result guards, and repository edge cases.

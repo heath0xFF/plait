@@ -1,124 +1,93 @@
 # Contributing to Plait
 
-Plait is an early local preview for Apple Silicon macOS. The current work
-is M2: local, persistent agent execution. Read [README.md](README.md),
-[DESIGN.md](DESIGN.md), and [the architecture notes](docs/ARCHITECTURE.md) first.
+Plait is an early local macOS preview. Current work stays within **M2: persistent
+local agent execution**. Read the [README](README.md), [architecture](docs/ARCHITECTURE.md),
+and [design guide](DESIGN.md) before making changes.
 
-## Start here
+## Build from source
+
+For the native desktop, use an Apple Silicon Mac with Git, rustup, and full Xcode
+with Metal. Runtime work also needs Node 22.19+ and npm. Rustup selects the pinned
+`rust-toolchain.toml`; keep dependency versions and lockfiles unchanged unless a
+change explicitly requires an update.
+
+If Xcode reports a missing Metal compiler, run
+`xcodebuild -downloadComponent MetalToolchain`.
 
 ```sh
 git clone https://github.com/heath0xFF/plait.git
 cd plait
 cargo build --locked --release
-cargo run --locked --release -- /absolute/path/to/a/repository
+cargo run --locked --release -- /absolute/path/to/repository
 ```
 
-Install full Xcode and its Metal toolchain. If Metal is missing, run
-`xcodebuild -downloadComponent MetalToolchain`. Rustup uses the pinned
-`rust-toolchain.toml`. See [Mac build setup](docs/MACOS.md#build-and-verification)
-for packaging requirements. The client needs a running local host for agent
-work; use the [installed host](docs/MACOS.md) or [development host](docs/HOST.md).
-Omit the repository argument to restore the last checkout and thread.
-Linux and Intel macOS are not verified desktop targets. Linux can build and test
-the headless Rust crates; see the commands below. This does not enable Linux agent execution.
-Rex is useful for long jobs but is not required to build. The desktop itself
-does not need Node; the local host sidecar and isolated runtime probe do.
+Omit the repository argument to restore the last checkout and thread. Agent work
+requires a running [installed host](docs/MACOS.md) or [development host](docs/HOST.md).
+See [Mac packaging](docs/MACOS.md#build-and-verification) to build the app bundle
+and installers. Rex is optional development tooling, not a build dependency.
 
-## Work together
+## Propose a change
 
-- Pick an issue and comment before starting, so two people do not do the same work.
-- Use a branch and a small pull request. Forks work without collaborator access.
-- Keep `main` buildable. Worktrees are optional.
-- State what changed, how you checked it, and what you did not check.
-- Include screenshots for UI changes. Do not commit credentials, private
-  transcripts, local configuration, dependency directories, or build output.
-- Do not copy code from reference apps. Dependencies keep their own licenses.
+- Check existing issues and discuss scope before starting substantial work.
+- Use a focused branch and small pull request. Worktrees are optional.
+- Describe the change, checks, and remaining limits. Include screenshots for UI work.
+- Keep credentials, private transcripts, local settings, and build output out of Git.
+- Write public-facing docs about behavior, setup, and limits. Use issues and pull
+  requests for change history; keep personal machine and session notes out of docs.
+- Build original application code and design; follow the [originality policy](docs/ORIGINALITY.md).
+- Discuss changes to shared models, protocol, durable storage, or permission rules
+  before implementation. Preserve compatibility and test the failure paths.
 
 ## M2 work split
 
-The composer, native client, and independent host are now connected in code.
-Safety and full-loop validation are still in progress. Keep the ownership
-boundaries below when changing this slice.
+| Area | Responsibility |
+| --- | --- |
+| `crates/plait` | GPUI presentation, input, focus, and background-work dispatch |
+| `crates/plait-core` | Plain models, state transitions, local client, recovery, read-only Git; no GPUI |
+| `crates/plait-host` | Independent host lifetime, peer identity, filesystem/process helpers |
+| `runtime/` | Pi integration, approvals, durable execution, and platform command policy |
 
-### Native composer
+The composer owns editable text, selection, undo, and IME composition. It emits
+Submit/Stop events; the parent owns host requests and acceptance. Enter during
+IME composition must not submit. An acknowledgement clears only the draft
+revision that was sent. Offline input has a disabled state and a reason.
 
-`crates/plait/src/ui/composer.rs` and its focused tests implement a standalone
-GPUI input component. Keep it independent of models and processes.
+The host owns accepted work, not a window or event subscription. Closing a client
+must not stop a run; restarting a host must not replay an interrupted effect.
+Keep one active writer per checkout, preserve pre-existing dirty work, and retain
+exact-call approval and sandbox checks. Models and Git must remain independent
+of GPUI; filesystem and Git work must stay off the render thread.
 
-Component boundary:
-
-- The component owns the editable draft, selection, focus, and IME composition.
-- It emits `ComposerEvent::Submit(String)` and `ComposerEvent::Stop`.
-- The parent sets enabled/busy state. Offline means disabled, with a reason.
-- Enter submits; Shift-Enter inserts a line break. Enter during IME composition
-  must not submit. Empty or whitespace-only drafts must not submit.
-- A submit event does not clear the draft. The parent clears it only after the
-  host accepts it, and only if the draft has not changed since submission.
-- Support clipboard, undo/redo, keyboard focus, accessible labels, and the
-  900-point minimum window. Use GPUI's native text-input APIs, not a fake field.
-
-Expose only the component methods the parent needs. Coordinate any changes to
-`ui/mod.rs`, `conversation.rs`, or shared models before making them. The preview
-composer must not claim to send messages until the host is connected.
-
-### Local host and runtime — maintainer/agent track
-
-Own the Rust host, TypeScript Pi Durable sidecar, and their local protocol.
-Keep runtime and persistence independent of GPUI. Start with one local checkout.
-
-- One host owns the sidecar and the store's writer lock.
-- The local connection must be owner-only; expose no public network listener.
-- Create/resume/list threads with stable IDs and deduplicated submissions.
-- Stream typed state without blocking the UI. Bound messages and queued output.
-- A client disconnect stops its subscription, not the agent run.
-- Keep credentials on the host. Load project instructions explicitly.
-- Permit only one writing run per checkout. Existing dirty files must survive.
-- Test reconnect, abort, interrupted tools, malformed input, and host restart.
-
-The [probe](experiments/pi-durable/README.md) validates parts of the runtime. It
-is not the host implementation. Regular Pi extensions are not automatically
-compatible with Pi Durable.
-
-### Join the two tracks
-
-Agree on the host/client contract before connecting the component. The first
-end-to-end acceptance test is:
-
-1. Create a local thread and submit a task in a disposable repository.
-2. See real assistant and tool activity, then inspect the Git changes.
-3. Close the desktop while work is active; the host continues.
-4. Reopen the desktop and reconnect to the same thread without duplicate work.
-
-Remote hosts, orchestration, Git-write controls, and an embedded terminal are
-outside this slice.
+Remote execution, Git-write controls, unattended orchestration, and an embedded
+terminal are outside this milestone. See the [host contract](docs/HOST.md) for
+the complete safety boundary and the [roadmap](docs/ROADMAP.md) for later work.
 
 ## Required checks
 
-Start with the same command on macOS and Linux:
+The shared entry point is:
 
 ```sh
 bash scripts/check.sh
 ```
 
-Requirements on both: Git, Rustup, a C compiler/linker, and Node 22.19 or newer
-with npm. Use the pinned Rust toolchain. macOS also needs the Xcode/Metal tools
-listed above. The script installs runtime packages from the lockfile without
-package install scripts. Both CI workflows use this entry point.
+It installs runtime packages from the lockfile without npm lifecycle scripts,
+checks Rust and TypeScript, runs the selected platform tests, and builds release
+binaries. Both CI workflows use it. A C compiler/linker is required on Linux.
 
 | Check | macOS | Linux |
-|---|---|---|
+| --- | --- | --- |
 | Rust checks and release build | Complete workspace | Core and host |
 | Common daemon and file-safety tests | Yes | Yes |
-| Command lifecycle with a scripted helper | Yes | Yes; not a sandbox test |
+| Scripted command lifecycle | Yes | Yes; not containment evidence |
 | Real command sandbox | Seatbelt tests | Execution-denial tests only |
-| Native window inspection | Separate manual check | Not validated |
+| Native window inspection | Separate check | Not validated |
 
-`bash scripts/check.sh --require-command-sandbox` is the full command-safety gate.
-It runs on macOS and reports a blocking error on Linux. Do not treat a passing
-Linux development run as sandbox acceptance. The mechanism remains an
-[open design decision](docs/LINUX-SANDBOX.md).
+Use `bash scripts/check.sh --require-command-sandbox` for the full sandbox gate.
+It fails on Linux until a containment backend is implemented and validated.
+Do not remove command rejection or skip a safety assertion to make a port pass.
+See the [Linux sandbox decision](docs/LINUX-SANDBOX.md).
 
-For focused checks on macOS, use the complete workspace:
+Focused macOS workspace checks:
 
 ```sh
 cargo fmt --all -- --check
@@ -127,7 +96,7 @@ cargo test --locked --workspace
 cargo build --locked --release
 ```
 
-On Linux, check the headless core and Rust host helpers:
+Focused Linux headless checks:
 
 ```sh
 cargo fmt --all -- --check
@@ -136,44 +105,43 @@ cargo test --locked -p plait-core -p plait-host
 cargo build --locked --release -p plait-core -p plait-host
 ```
 
-`plait-core` owns models, client state, the local socket client, and read-only
-Git. It has no GPUI dependency. The desktop consumes this crate directly; do
-not copy its modules into another test target. The Linux CI job runs these
-checks plus the Node runtime suite, using scripted providers and temporary
-stores. No provider credentials are needed. Cargo can still fetch pinned desktop
-dependency sources to resolve the workspace, but the headless commands do not
-compile them. Keep `--locked`; do not update dependency versions
-as part of a platform port.
+The headless crates do not compile GPUI, though Cargo can fetch its pinned sources
+while resolving the workspace. A Linux pass is not native UI or sandbox acceptance.
+The Mac workspace and runtime safety suites remain required before merge.
 
-For focused runtime work, first build `plait-host`, then run `npm run check`
-and `npm test` in `runtime/`. The runner labels the selected platform coverage.
-Common tests and platform tests are separate; there are no test skips that imply
-unsupported execution is safe. `npm run test:sandbox` requires a real command
-sandbox and fails on Linux.
+For focused runtime work, build `plait-host`, then run `npm run check` and
+`npm test` in `runtime/`. The runner labels its platform coverage.
+`npm run test:sandbox` requires a real command sandbox and fails on Linux.
+No provider credentials are needed for the scripted suites.
 
-Keep both runtime and Rust-helper command rejection until Linux containment and
-cancellation tests pass. The macOS workspace and runtime safety suites remain
-required before merge.
+## UI checks
 
-For UI changes, inspect wide and narrow native windows. With Accessibility
-permission already granted, close Plait and run `bash scripts/smoke-macos.sh`.
-Do not inject global keystrokes into another person's desktop. The smoke script
-finds controls by accessible name and role; keep those stable or update it.
+Build and inspect wide and narrow native windows after UI changes. With macOS
+Accessibility permission already granted, close Plait and run:
 
-On Linux there is no native window, but you can still look at the layout:
+```sh
+bash scripts/smoke-macos.sh
+```
+
+The script uses disposable repositories and its own app processes. It finds
+controls by accessible name/role, not global keystrokes. Keep those identities
+stable or update the check. Do not alter OS permissions automatically.
+
+For Linux-only layout inspection:
 
 ```sh
 PLAIT_SNAPSHOT_DIR=/tmp/plait-snapshots \
   cargo test --locked -p plait snapshot -- --ignored
 ```
 
-This renders every view at 1380 × 860 and 900 × 600 to PNG files using GPUI's
-headless renderer and a software Vulkan driver (`mesa-vulkan-drivers`). The
-scenes use a disposable repository and injected sample host state. They show
-layout, density, and color with Linux fonts. They do not replace the native
-macOS inspection above. See [the architecture notes](docs/ARCHITECTURE.md#layout-checks-without-a-mac).
+This exports 1380 × 860 and 900 × 600 scenes through GPUI's headless renderer.
+It needs a software Vulkan driver such as `mesa-vulkan-drivers`. Scenes use
+injected test state and Linux fonts, not a live provider or the Mac renderer.
+See [verification boundaries](docs/VERIFICATION.md#coverage-boundaries).
 
-For the runtime probe:
+## Runtime probes and live acceptance
+
+The isolated, credential-free Pi integration probe is separate from host testing:
 
 ```sh
 cd experiments/pi-durable
@@ -181,27 +149,24 @@ npm ci --ignore-scripts
 npm test
 ```
 
-This test uses a scripted provider and temporary files. Live model checks are
-explicit opt-in and use your own account; see the probe README. No shared API
-keys are needed to contribute.
-
-### Live-agent acceptance
-
-After the scripted safety suite passes, an opt-in check can use your existing
-Pi account in a disposable Rust repository. It makes two turns with exact source
-edits and Cargo tests; it does not give the model this source checkout.
+See [the probe guide](experiments/pi-durable/README.md) for its scope.
+After the host safety suite passes, an opt-in live check can use your own Pi
+account in a disposable Rust repository. Run it from the repository root:
 
 ```sh
 node scripts/smoke-agent.mjs --self-test
 PI_PROVIDER=YOUR_PROVIDER PI_MODEL=YOUR_MODEL node scripts/smoke-agent.mjs --live
 ```
 
-Build `target/debug/plait-host` and install the runtime packages first.
-`PLAIT_HOST_BINARY` can select another built host. Fixtures remain in a private
-temporary directory for inspection. This does not replace installed native
-window-close/reopen, Stop, provider-failure, or process-crash checks. See
-[Verification](docs/VERIFICATION.md) for the full acceptance boundary.
+Build `target/debug/plait-host` and install runtime packages first.
+`PLAIT_HOST_BINARY` can select another built host. The check makes model requests
+on the selected account. It does not give the model this source checkout;
+fixtures remain in a private temporary directory for inspection.
+
+Neither probe replaces installed native, Stop, provider-failure, or crash checks.
+See [manual release acceptance](docs/VERIFICATION.md#manual-release-acceptance).
 
 ## License
 
 Contributions to Plait are made under the [MIT license](LICENSE).
+Dependencies retain their own licenses and notices.
