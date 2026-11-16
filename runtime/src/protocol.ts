@@ -68,7 +68,8 @@ export function legacy(snapshot: Snapshot) {
     tools: tools.map(({ after3: _after3, ...tool }) => tool),
     pending_approval,
     // Older clients know this failure only by its earlier generic code.
-    error: error?.code === 'turn_limit' ? { code: 'runtime_error', message: TURN_LIMIT } : error,
+    error: error?.code === 'turn_limit' ? { code: 'runtime_error', message: TURN_LIMIT }
+      : error?.code === 'context_compaction' ? { code: 'runtime_error', message: 'Agent ended without an answer (model_error). Inspect the transcript before retrying.' } : error,
     truncated,
     ...(approval_mode ? { approval_mode } : {}),
   };

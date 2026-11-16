@@ -38,6 +38,8 @@ test('cache preparation rejects symlink roots, insecure ownership modes and path
   await rm(target, { recursive: true }); await symlink(base, target);
   await assert.rejects(prepareBuildCache(cache), /symlink/);
   await rm(target); await mkdir(target, { mode: 0o755 });
+  // The rejection needs an insecure fixture even under a private umask.
+  await chmod(target, 0o755);
   await assert.rejects(prepareBuildCache(cache), /private/);
   await symlink(store, join(base, 'alias'));
   await assert.rejects(prepareBuildCache({ store: join(base, 'alias'), thread: randomUUID() }), /symlink/);

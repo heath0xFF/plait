@@ -51,8 +51,8 @@ development tests only:
   client's strict types.
 
 Not verified: a live model, a real provider's reasoning or usage figures, the
-installed package, and any desktop view, since no view uses these operations
-yet. Thread-list backpressure relies on the code path shared with `watch` and
+installed package with a live provider. Desktop integration is covered by the
+conversation, composer, and navigation checks below. Thread-list backpressure relies on the code path shared with `watch` and
 has no test of its own.
 
 ## Recovery and startup regressions
@@ -224,3 +224,36 @@ keystrokes into their desktop.
 Record the build, OS, model/provider, steps, and result. Do not publish credentials,
 private prompts, or authentication seeds. Performance claims need separate,
 repeatable measurements; see the [ADEMark plan](ADEMARK.md).
+
+## Self-hosting tool and context coverage
+
+Runtime integration tests exercise ranged reads beyond the former whole-file
+bound, exact edits guarded by a full fingerprint, Unicode page boundaries,
+unsafe paths, and stale edit rejection. Command-output tests cover scope,
+retention, explicit size limits, incomplete capture, database reopen, and a
+failed real sandboxed command whose earlier diagnostics remain readable after
+a host restart without rerunning it.
+
+Real-host tests trigger the pinned runtime's automatic compaction policy with
+a scripted provider. They verify that the model keeps the task goal, original
+history remains available, internal summaries do not become user messages,
+restart during summarization makes no new requests until submission, and a
+failed required summary can recover. They establish orchestration and storage
+behavior, not the quality of summaries produced by a live model.
+
+An installed source build was also exercised with a live provider on Plait's
+actual Rust and TypeScript code. The run made a cross-language change, added
+regression tests and documentation, accepted review corrections in follow-up
+messages, and completed a queued correction. Closing the desktop during work
+left the host running; reopening restored the selected thread and an unsent
+draft. The source installer’s active-run check refused to proceed while that run was active.
+
+With Trusted commands explicitly enabled for that checkout, the agent ran the
+ordinary full development gate: 332 Rust tests passed (one image-export test
+ignored), 187 runtime tests passed including the macOS sandbox tests, and the
+release-script suite passed 23 tests. Two permission fixtures were made explicit
+so the gate also passes under the host's private `0077` umask. No production
+permission checks or test assertions were weakened. This establishes a live
+project-development loop; it does not certify every provider, native input
+method, or long-running task. Automatic compaction remains covered by the
+scripted tests above rather than this live run.

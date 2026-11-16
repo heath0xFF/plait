@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use std::{
     ffi::CString,
     fs::File,
-    io::{self, Read, Write},
+    io::{self, Read, Seek, SeekFrom, Write},
     os::{
         fd::{AsRawFd, FromRawFd},
         unix::fs::MetadataExt,
@@ -104,22 +104,86 @@ fn parent(
     Ok((directory, (*name).to_owned()))
 }
 
-fn text(file: &mut File) -> io::Result<String> {
+fn text(file: &mut File, limit: u64) -> io::Result<String> {
     let meta = file.metadata()?;
-    if !meta.is_file() || meta.nlink() != 1 || meta.len() > 262144 {
+    if !meta.is_file() || meta.nlink() != 1 || meta.len() > limit {
         return Err(io::Error::other(
-            "expected a regular, single-link file under 256 KiB",
+            "expected a regular, single-link file within the size limit",
         ));
     }
     let mut value = String::new();
-    (&mut *file).take(262145).read_to_string(&mut value)?;
-    if value.len() > 262144 {
+    (&mut *file).take(limit + 1).read_to_string(&mut value)?;
+    if value.len() as u64 > limit {
         return Err(io::Error::other("file too large"));
     }
     if stamp(&meta) != stamp(&file.metadata()?) {
         return Err(io::Error::other("file changed while reading"));
     }
     Ok(value)
+}
+
+// Range reads never allocate the whole file and keep the same descriptor/path checks.
+fn read_range(file: &mut File, request: &Value) -> io::Result<Value> {
+    let offset = match request.get("offset") {
+        None => 0,
+        Some(value) => value
+            .as_u64()
+            .ok_or_else(|| io::Error::other("invalid read offset"))?,
+    };
+    let limit = match request.get("limit") {
+        None => 8192,
+        Some(value) => value
+            .as_u64()
+            .ok_or_else(|| io::Error::other("invalid read limit"))?,
+    };
+    if !(4..=12000).contains(&limit) {
+        return Err(io::Error::other("invalid read limit"));
+    }
+    let meta = file.metadata()?;
+    if !meta.is_file() || meta.nlink() != 1 {
+        return Err(io::Error::other("invalid file range"));
+    }
+    if offset > meta.len() {
+        return Err(io::Error::other("read offset beyond EOF"));
+    }
+    // A continuation byte alone could be corrupt data, not a split character.
+    let start = offset.saturating_sub(3);
+    file.seek(SeekFrom::Start(start))?;
+    let mut context = Vec::new();
+    (&mut *file)
+        .take(offset - start + 4)
+        .read_to_end(&mut context)?;
+    let boundary = (offset - start) as usize;
+    for index in 0..boundary {
+        // Only the crossing character needs to be valid, not the following bytes.
+        for end in boundary + 1..=context.len() {
+            if let Ok(value) = std::str::from_utf8(&context[index..end])
+                && value.chars().count() == 1
+            {
+                return Err(io::Error::other("read offset inside UTF-8 character"));
+            }
+        }
+    }
+    file.seek(SeekFrom::Start(offset))?;
+    let mut bytes = Vec::new();
+    (&mut *file).take(limit).read_to_end(&mut bytes)?;
+    let end = match std::str::from_utf8(&bytes) {
+        Ok(_) => bytes.len(),
+        Err(error) if error.error_len().is_none() && offset + (bytes.len() as u64) < meta.len() => {
+            error.valid_up_to()
+        }
+        Err(_) => {
+            return Err(io::Error::other("file contents are not valid UTF-8"));
+        }
+    };
+    let next = offset + end as u64;
+    let value = std::str::from_utf8(&bytes[..end]).map_err(io::Error::other)?;
+    if stamp(&meta) != stamp(&file.metadata()?) {
+        return Err(io::Error::other("file changed while reading"));
+    }
+    Ok(
+        json!({"text":value,"offset":offset,"next_offset":(next < meta.len()).then_some(next),"total_bytes":meta.len()}),
+    )
 }
 
 fn replace(
@@ -161,7 +225,10 @@ fn replace(
         let mut current = open_at(directory, name, libc::O_RDONLY)?;
         check_protected(&current, protected)?;
         let now = current.metadata()?;
-        if now.dev() != meta.dev() || now.ino() != meta.ino() || text(&mut current)? != before {
+        if now.dev() != meta.dev()
+            || now.ino() != meta.ino()
+            || text(&mut current, 8 * 1024 * 1024)? != before
+        {
             return Err(io::Error::other("file changed during approval or edit"));
         }
         if unsafe {
@@ -190,21 +257,32 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
     if args.len() != 3 && args.len() != 5 {
         return Err(io::Error::other("file expects action checkout path"));
     }
-    let request: Value = if args[0] == "edit" || args[0] == "write" {
+    let request: Value = if matches!(args[0].as_str(), "edit" | "write" | "read_range") {
         serde_json::from_reader(io::stdin().take(393217))?
     } else {
         Value::Null
     };
     let (directory, name) = parent(&args[1], &args[2], &request["protected"], &args[3..])?;
     let result = match args[0].as_str() {
-        "read" => {
+        "read_range" => {
+            let mut file = open_at(&directory, &name, libc::O_RDONLY)?;
+            read_range(&mut file, &request)?
+        }
+        "read" | "inspect" => {
             let mut file = open_at(&directory, &name, libc::O_RDONLY)?;
             let before = stamp(&file.metadata()?);
-            let value = text(&mut file)?;
+            let value = text(
+                &mut file,
+                if args[0] == "inspect" {
+                    8 * 1024 * 1024
+                } else {
+                    262144
+                },
+            )?;
             if before != stamp(&file.metadata()?) {
                 return Err(io::Error::other("file changed while reading"));
             }
-            json!({"text":value,"postimage":postimage(&file, &args[1], value.as_bytes())?})
+            json!({"text":if args[0] == "inspect" { "" } else { &value },"postimage":postimage(&file, &args[1], value.as_bytes())?})
         }
         "edit" | "write" => {
             let value = request["content"]
@@ -229,7 +307,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
                 // Opening a provenance-marked original for write can itself change ctime.
                 let mut file = open_at(&directory, &name, libc::O_RDONLY)?;
                 check_protected(&file, &request["protected"])?;
-                let before = text(&mut file)?;
+                let before = text(&mut file, 8 * 1024 * 1024)?;
                 if expected.is_empty() || before.matches(expected).count() != 1 {
                     return Err(io::Error::other("edit must match exactly once"));
                 }
@@ -248,7 +326,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
                     ));
                 }
                 let after = before.replacen(expected, value, 1);
-                if after.len() > 262144 {
+                if after.len() > 8 * 1024 * 1024 {
                     return Err(io::Error::other("result exceeds file bound"));
                 }
                 let replacement = replace(
@@ -273,6 +351,93 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn range(bytes: &[u8], request: Value) -> io::Result<Value> {
+        let path = std::env::temp_dir().join(format!(
+            "plait-range-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut file = File::options()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        file.write_all(bytes)?;
+        let result = read_range(&mut file, &request);
+        std::fs::remove_file(path)?;
+        result
+    }
+
+    #[test]
+    fn range_arguments_are_strict() {
+        for value in [
+            json!(null),
+            json!(-1),
+            json!(1.5),
+            json!("4"),
+            json!(true),
+            json!([]),
+            json!({}),
+        ] {
+            for field in ["offset", "limit"] {
+                let error = range(b"hello", json!({field: value})).unwrap_err();
+                assert_eq!(error.to_string(), format!("invalid read {field}"));
+            }
+        }
+        for limit in [0, 3, 12001, u64::MAX] {
+            assert_eq!(
+                range(b"hello", json!({"limit": limit}))
+                    .unwrap_err()
+                    .to_string(),
+                "invalid read limit"
+            );
+        }
+        assert_eq!(range(b"hello", json!({})).unwrap()["text"], "hello");
+    }
+
+    #[test]
+    fn range_offsets_and_unicode_boundaries() {
+        let bytes = "abc🚀z".as_bytes();
+        let page = range(bytes, json!({"offset": 0, "limit": 4})).unwrap();
+        assert_eq!(
+            page,
+            json!({"text":"abc", "offset":0, "next_offset":3, "total_bytes":8})
+        );
+        assert_eq!(
+            range(bytes, json!({"offset":3, "limit":4})).unwrap()["text"],
+            "🚀"
+        );
+        for offset in 4..7 {
+            assert_eq!(
+                range(bytes, json!({"offset":offset}))
+                    .unwrap_err()
+                    .to_string(),
+                "read offset inside UTF-8 character"
+            );
+        }
+        for bytes in [b"".as_slice(), bytes] {
+            assert_eq!(
+                range(bytes, json!({"offset":bytes.len()})).unwrap()["text"],
+                ""
+            );
+            assert_eq!(
+                range(bytes, json!({"offset":bytes.len() + 1}))
+                    .unwrap_err()
+                    .to_string(),
+                "read offset beyond EOF"
+            );
+        }
+        for bytes in [b"\xff".as_slice(), b"\x80abc", b"abc\xf0\x9f"] {
+            assert_eq!(
+                range(bytes, json!({})).unwrap_err().to_string(),
+                "file contents are not valid UTF-8"
+            );
+        }
+    }
+
     #[test]
     fn rejects_escapes_and_git_metadata() {
         for path in [

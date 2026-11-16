@@ -766,3 +766,13 @@ Upstream references:
 Plait uses the Apache-2.0 GPUI libraries, not the GPL-licensed Zed application UI
 crate. Its controls use GPUI's focus and action APIs. Dependency notices are
 included in release packages; see the [originality policy](ORIGINALITY.md).
+
+### Self-hosting tool output
+
+`tool-output.ts` stores bounded command logs in the host SQLite database. Tools
+return thread-scoped IDs rather than host paths; `read_output` pages the stored
+bytes without another command execution. Process capture is separate from the
+bounded live preview. Ranged source reads use a descriptor-checked Rust helper;
+edit admission inspects a complete fingerprint without transferring the whole
+file across the helper pipe. Context summaries remain in Pi's durable store but
+are omitted from the presentation projection, which retains original messages.

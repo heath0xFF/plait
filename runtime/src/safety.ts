@@ -102,7 +102,7 @@ export async function acquireCheckout(root: string) {
     return lease;
   } catch (error) { await lease.close(); throw error; }
 }
-export async function fileAction(root: string, action: string, path: string, input?: unknown, checkoutFd?: number, identity?: FileIdentity) {
+export async function fileAction<T = FileResult>(root: string, action: string, path: string, input?: unknown, checkoutFd?: number, identity?: FileIdentity) {
   safePath(path);
   const executable = process.env.PLAIT_HOST_EXE;
   if (!executable) fail('internal', 'Host file helper is not configured.');
@@ -112,8 +112,10 @@ export async function fileAction(root: string, action: string, path: string, inp
     });
     child.stdin!.on('error', () => {});
     child.stdin!.end(input === undefined ? undefined : JSON.stringify(input));
-    return await new Promise<FileResult>((resolve, reject) => {
+    return await new Promise<T>((resolve, reject) => {
       let output = ''; let diagnostic = '';
+      child.stdout!.setEncoding('utf8');
+      child.stderr!.setEncoding('utf8');
       child.stderr!.on('data', data => { diagnostic = (diagnostic + data).slice(-4096); });
       const timer = setTimeout(() => child.kill('SIGKILL'), 10000);
       child.stdout!.on('data', data => { output += data; if (output.length > 1048576) child.kill('SIGKILL'); });
@@ -123,6 +125,11 @@ export async function fileAction(root: string, action: string, path: string, inp
         if (code !== 0) {
           // Only fixed helper messages cross the boundary; never echo raw stderr.
           const reason = new Map([
+            ['plait-host: invalid read offset', 'Read denied: offset must be a non-negative integer byte offset.'],
+            ['plait-host: invalid read limit', 'Read denied: limit must be an integer from 4 to 12000 bytes.'],
+            ['plait-host: read offset beyond EOF', 'Read denied: offset is beyond the end of the file.'],
+            ['plait-host: read offset inside UTF-8 character', 'Read denied: offset is inside a UTF-8 character. Use the returned next offset.'],
+            ['plait-host: file contents are not valid UTF-8', 'Read denied: file contents are not valid UTF-8.'],
             ['plait-host: edit must match exactly once', 'Edit denied: old_text must match exactly once.'],
             ['plait-host: file identity or metadata changed after approval', 'Edit denied: file identity or metadata changed after approval.'],
             ['plait-host: file changed after approval was requested', 'Edit denied: file contents changed after approval was requested.'],

@@ -26,6 +26,12 @@ byte-for-byte unchanged and existing stores keep loading. The trusted command
 mode is opt-in per project; the current sandbox stays the default. The
 [host contract](HOST.md) records each addition when it lands.
 
+The remaining M2.5 self-hosting work is ranged file reads, retained command
+output with explicit limits, long-session compaction and restart coverage, and
+the complete development/install/continue workflow. Additive runtime tool
+schemas and private output storage are in scope; existing client protocol
+versions and the default sandbox policy remain compatible.
+
 ## Product structure
 
 **Project → Machine → Thread.** A project can have a checkout on more than one

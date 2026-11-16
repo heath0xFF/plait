@@ -5,6 +5,7 @@ import type { ModelChoice, Snapshot, InputRecord, Summary } from './protocol.ts'
 import { fail, inputMessage, queuedView } from './protocol.ts';
 import { boundSnapshot, pushMessage } from './transcript.ts';
 import { title } from './text.ts';
+import { CommandOutputs } from './tool-output.ts';
 import type { FileIdentity, Postimage } from './safety.ts';
 
 type Row = Record<string, unknown>;
@@ -29,6 +30,7 @@ const input = (row: Row): InputRecord => ({
 
 export class Store {
   db: DatabaseSync;
+  outputs: CommandOutputs;
   constructor(directory: string) {
     this.db = new DatabaseSync(join(directory, 'host.sqlite'));
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
@@ -41,6 +43,7 @@ export class Store {
       if (!this.db.prepare(`PRAGMA table_info(${table})`).all().some(row => row.name === column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
     }
     this.db.exec('CREATE INDEX IF NOT EXISTS threads_recent ON threads(updated_at DESC)');
+    this.outputs = new CommandOutputs(this.db);
     this.backfill();
     for (const snapshot of this.recoverable()) {
       if (snapshot.status === 'running' || snapshot.status === 'awaiting_approval') {

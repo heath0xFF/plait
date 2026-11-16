@@ -9,7 +9,7 @@ export async function restoreOwned(root: string, baseline: string[], records: Po
       safePath(record.path, ignored);
       // An ignored parent, submodule, or other dirty ancestor is never exempt.
       safePath(record.path, baseline.filter(path => pathKey(path) !== pathKey(record.path)));
-      const current = await fileAction(root, 'read', record.path, undefined, lease, identity);
+      const current = await fileAction(root, 'inspect', record.path, undefined, lease, identity);
       if (sameImage(record, current.postimage)) owned.set(pathKey(record.path), record);
     } catch {
       // Missing, changed, or unsafe files retain ordinary dirty-path protection.

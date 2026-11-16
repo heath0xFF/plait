@@ -191,7 +191,8 @@ test('a run keeps the policy it was admitted with; a change applies to the next 
   const ran = await until(() => f.watch(thread.id), value => value.status === 'idle');
   assert.equal(await readFile(join(f.repo, 'first.txt'), 'utf8'), 'one');
   // The command saw the host's HOME, which this file pointed at a disposable directory.
-  assert.equal(tool(ran, 'first-1')!.output, `FIRST ${home}`);
+  assert.equal(tool(ran, 'first-1')!.output.split('\n[Command output:')[0], `FIRST ${home}`);
+  assert.match(tool(ran, 'first-1')!.output, /read_output/);
 
   await f.submit(thread.id, 'submit-2');
   const second = await until(() => f.watch(thread.id), value => !!value.pending_approval);

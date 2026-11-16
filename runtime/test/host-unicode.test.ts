@@ -11,7 +11,8 @@ test('a read tool cannot split Unicode at its result limit', { timeout: 15000 },
   const done = await until(() => f.watch(thread.id), value => value.status === 'idle');
   const tool = done.tools.find(tool => tool.id === 'unicode-read-1');
   assert.equal(tool?.status, 'done');
-  assert.equal(tool?.output, 'x'.repeat(4096));
+  assert.match(tool?.output ?? '', /Continue with read\(.*"offset":8192/);
+  assert(!tool?.output.includes('�'));
   assert.equal((await request(f.store, { op: 'status' })).ok, true);
 });
 
