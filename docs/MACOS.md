@@ -217,6 +217,14 @@ For a prepared development checkout and a first source-change task, see
 
 ## Keyboard controls
 
+When focus is in the conversation, Home or Cmd-Up goes to the beginning of the
+loaded history and requests an earlier page when one is available. End or Cmd-Down
+returns to the latest messages. Text fields keep their usual editing shortcuts.
+Version 3 history also loads as you scroll toward the top; use **Load earlier**
+for an explicit page request and **Retry** after a failed read. Older hosts retain
+bounded previews. Completed reasoning expands with **Show reasoning**.
+
+
 ### Application shortcuts
 
 These are the default shortcuts for application actions. The table is generated

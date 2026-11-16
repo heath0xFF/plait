@@ -46,6 +46,19 @@ optional wide-window Git inspector. Keep machine and thread context visible.
   bottom edge of the conversation before a click. Lists hang their wrapped
   lines from the text, not the marker. Tables size columns to their content with a
   quiet header row and scroll sideways when wide.
+- **History and reasoning.** Earlier pages load near the top of the conversation;
+  a quiet line names loading, the beginning, or a failed read with Retry. Prepending
+  preserves the current row and its scroll position. Home/Cmd-Up goes to the
+  loaded beginning; End/Cmd-Down and Jump to latest return to the live end.
+  Reasoning is a separate, muted disclosure, initially closed after a response
+  finishes. Live reasoning opens in a bounded-height region. Both use the same
+  text selection and copy behavior as answers. Finished answers may carry a
+  small summary of observed tool steps and changed files. Do not invent durations
+  or identify who stopped a run when the host does not report that.
+- **Run state.** One text line above the composer names waiting, thinking, tool
+  execution, retry, completion, stop, interruption, or failure. Retries show the
+  attempt and remaining seconds. The status and any recovery action align to
+  the conversation column; raw protocol codes are not presentation.
 - **Tool calls.** One compact line each: disclosure chevron, tool name, the
   path or command, a short fact such as `+2 −1`, and a state label only when
   the call did not simply finish. Opened in place, `edit` shows a line diff,

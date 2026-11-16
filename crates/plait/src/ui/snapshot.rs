@@ -52,7 +52,8 @@ fn isolated(test: &str) -> bool {
         assert!(std::env::var_os("PLAIT_HOST_STORE").is_some(), "host store");
         return true;
     }
-    let home = std::env::temp_dir().join(format!("plait-scene-{}-{test}", std::process::id()));
+    // Unix sockets have a short pathname limit, including the temporary home.
+    let home = PathBuf::from("/tmp").join(format!("plait-scene-{}-{test}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
     std::fs::create_dir_all(&home).expect("scratch home");
     // libtest names omit the crate: `ui::snapshot::<test>`.
@@ -538,7 +539,7 @@ impl Harness {
     }
 
     fn change_snapshot(&mut self, change: impl FnOnce(&mut Snapshot)) {
-        self.update(|plait, _, _| {
+        self.update(|plait, _, cx| {
             let previous = plait.host.snapshot.clone().expect("sample snapshot");
             change(Arc::make_mut(plait.host.snapshot.as_mut().unwrap()));
             plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
@@ -546,6 +547,16 @@ impl Harness {
                 plait.host.snapshot.as_ref().unwrap(),
             ));
             plait.refresh_live_list(Some(&previous));
+            let snapshot = plait.host.snapshot.as_ref().unwrap();
+            if let Some(thread) = plait
+                .host
+                .threads
+                .iter_mut()
+                .find(|thread| thread.id == snapshot.id)
+            {
+                thread.status = snapshot.status;
+            }
+            plait.sync_composer(cx);
         });
     }
 
@@ -621,6 +632,7 @@ impl Harness {
             ];
             // Mirror select_host_thread without opening a socket.
             plait.host.selected = Some(THREAD.into());
+            plait.history = Default::default();
             plait.host.snapshot = Some(Arc::new(thread_snapshot(&checkout, approval)));
             plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
                 &plait.formatted,
@@ -914,6 +926,7 @@ fn walk(output: Option<&Path>) {
         streaming_walk(&mut harness, &repository, suffix);
         tool_states_walk(&mut harness, &repository, suffix);
         reading_walk(&mut harness, &repository, suffix);
+        history_walk(&mut harness, &repository, suffix);
         tool_cards_walk(&mut harness, &repository, suffix);
         draft_walk(&mut harness, &repository, suffix);
         composer_walk(&mut harness, &repository, suffix);
@@ -2084,4 +2097,286 @@ fn composer_v3_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         plait.session.loading = false;
     });
     harness.connect(repository, false);
+}
+
+fn stored_page(
+    items: Vec<plait_core::host::HistoryItem>,
+    before: Option<&str>,
+) -> plait_core::history::Page {
+    plait_core::history::prepare_page(
+        plait_core::host::HistoryPage {
+            items,
+            before: before.map(str::to_owned),
+        },
+        None,
+        |_, _| unreachable!("fixture has inline text"),
+    )
+    .unwrap()
+}
+
+fn install_history(plait: &mut Plait, cache: plait_core::history::History) {
+    let snapshot = cache.project(plait.host.snapshot.as_ref().unwrap());
+    let stored = snapshot.tools.iter().map(|tool| tool.id.clone()).collect();
+    plait.formatted = Arc::new(plait_core::markdown::Transcript::update_stored(
+        &plait.formatted,
+        &snapshot,
+        &stored,
+    ));
+    let previous = plait.history.display.replace(Arc::new(snapshot));
+    plait.history.cache = Arc::new(cache);
+    plait.history.enabled = true;
+    plait.host.status.as_mut().unwrap().protocol_version = 3;
+    plait.reconcile_live_list(previous.as_deref());
+}
+
+fn stored_message(
+    id: &str,
+    role: MessageRole,
+    text: &str,
+    reasoning: &str,
+) -> plait_core::host::HistoryItem {
+    plait_core::host::HistoryItem::Message {
+        id: id.into(),
+        role,
+        text: text.into(),
+        reasoning: reasoning.into(),
+        more: vec![],
+    }
+}
+
+fn history_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
+    use super::selection::Owner;
+    use plait_core::{history::History, host::HistoryItem};
+    harness.connect(repository, false);
+    harness.change_snapshot(|snapshot| {
+        snapshot.status = ThreadStatus::Idle;
+        snapshot.messages = vec![Message {
+            id: "h-answer".into(),
+            role: MessageRole::Assistant,
+            text: "The saved reply is complete.".into(),
+            reasoning: String::new(),
+        }];
+        snapshot.tools.clear();
+        snapshot.live_text.clear();
+    });
+    let items = || {
+        vec![
+        stored_message("h-user", MessageRole::User, "Review the queue and describe the change.", ""),
+        stored_message("h-think", MessageRole::Assistant, "", "Check the queue ownership first.\n\nThen follow the empty-queue transition and verify cancellation."),
+        HistoryItem::Tool { id: "h-tool".into(), name: "edit".into(), status: ToolStatus::Done, input: "{\"path\":\"src/queue.rs\",\"old_text\":\"notify();\",\"new_text\":\"notify_when_ready();\"}".into(), output: "Replaced one occurrence.".into(), more: vec![] },
+        stored_message("h-answer", MessageRole::Assistant, "The saved reply is complete.\n\nThe queue now notifies only after the next item becomes runnable. The reader keeps its place while earlier history arrives.", ""),
+    ]
+    };
+    harness.update(|plait, _, _| {
+        let mut cache = History::default();
+        cache.latest(stored_page(items(), None));
+        install_history(plait, cache);
+        plait.live_scroll.scroll_to(ListOffset::default());
+    });
+    harness.capture(&format!("history-reasoning-collapsed-{suffix}"));
+    harness.update(|plait, _, cx| plait.toggle_reasoning("h-think", cx));
+    harness.capture(&format!("history-reasoning-expanded-{suffix}"));
+    let position = harness
+        .window
+        .update(&mut harness.cx, |plait, _, _| {
+            plait.text_point(&Owner::Reasoning("h-think".into()), 0, 2)
+        })
+        .unwrap()
+        .expect("reasoning visible");
+    harness.pointer(PlatformInput::MouseDown(MouseDownEvent {
+        button: MouseButton::Left,
+        position,
+        click_count: 2,
+        ..Default::default()
+    }));
+    harness.pointer(PlatformInput::MouseUp(MouseUpEvent {
+        button: MouseButton::Left,
+        position,
+        click_count: 2,
+        ..Default::default()
+    }));
+    harness.keystroke("cmd-c");
+    harness.update(|plait, _, cx| {
+        assert_eq!(plait.selected_text().as_deref(), Some("Check"));
+        assert_eq!(
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref(),
+            Some("Check")
+        );
+    });
+    harness.capture(&format!("history-reasoning-selection-{suffix}"));
+    harness.update(|plait, _, _| {
+        plait.clear_reading_selection();
+        let mut cache = History::default();
+        let long = format!("Beginning of the complete reply.\n\n{}\n\nEnd of the complete reply.", "This paragraph remains in stored history even when the live snapshot no longer contains its beginning.\n\n".repeat(65));
+        cache.latest(stored_page(vec![stored_message("h-answer", MessageRole::Assistant, &long, "")], None));
+        install_history(plait, cache); plait.live_scroll.scroll_to(ListOffset::default());
+        assert!(plait.conversation_snapshot().unwrap().messages[0].text.len() > 4096);
+    });
+    harness.capture(&format!("history-full-message-{suffix}"));
+    harness.update(|plait, _, _| {
+        let text = "This is the first displayed part of a much larger stored message. Each part is explicit, and copying copies only the part on screen.";
+        let item = HistoryItem::Message { id: "h-answer".into(), role: MessageRole::Assistant, text: text.into(), reasoning: String::new(), more: vec![plait_core::host::More { field: plait_core::host::HistoryField::Text, reference: "fixture-part".into(), offset: text.len() as u64, length: 500_000 }] };
+        let entry = plait_core::history::Entry::from_inline(item, None).unwrap();
+        let mut cache = History::default(); cache.latest(plait_core::history::Page { entries: vec![Arc::new(entry)], before: None });
+        install_history(plait, cache);
+    });
+    harness.capture(&format!("history-text-parts-{suffix}"));
+
+    harness.update(|plait, _, _| {
+        plait.history.loading = Some(super::history::Load::Older);
+    });
+    harness.capture(&format!("history-loading-{suffix}"));
+    harness.update(|plait, _, _| {
+        plait.history.loading = None;
+        let mut cache = History::default();
+        cache.latest(stored_page((10..35).map(|i| stored_message(&format!("history-{i}"), if i % 2 == 0 { MessageRole::User } else { MessageRole::Assistant }, &format!("Sample history message {i}. This is stored fixture content, not an agent run."), "")).collect(), Some("earlier")));
+        install_history(plait, cache); plait.live_scroll.scroll_to(ListOffset { item_ix: 10, offset_in_item: px(5.) });
+        // No host request from the fixture's scroll callback.
+        plait.history.loading = Some(super::history::Load::Older);
+    });
+    harness.capture(&format!("history-scrolled-{suffix}"));
+    harness.pointer(PlatformInput::Scroll(ScrollEvent {
+        position: point(px(500.), px(200.)),
+        delta: ScrollDelta::Pixels(point(px(0.), px(100.))),
+        ..Default::default()
+    }));
+    harness.draw();
+    harness.update(|plait, _, _| {
+        let before = plait.live_scroll.logical_scroll_top();
+        let mut cache = (*plait.history.cache).clone();
+        cache.prepend(stored_page(
+            (0..10)
+                .map(|i| {
+                    stored_message(
+                        &format!("history-{i}"),
+                        MessageRole::Assistant,
+                        &format!("Earlier fixture message {i}."),
+                        "",
+                    )
+                })
+                .collect(),
+            None,
+        ));
+        install_history(plait, cache);
+        let after = plait.live_scroll.logical_scroll_top();
+        assert_eq!(after.item_ix, before.item_ix + 10);
+        assert_eq!(after.offset_in_item, before.offset_in_item);
+        plait.history.loading = None;
+    });
+    harness.capture(&format!("history-prepended-{suffix}"));
+    harness.keystroke("home");
+    harness.capture(&format!("history-beginning-{suffix}"));
+    harness.update(|plait, _, _| assert_eq!(plait.live_scroll.logical_scroll_top().item_ix, 0));
+    harness.keystroke("end");
+    harness.update(|plait, _, _| {
+        assert_eq!(
+            plait.live_scroll.logical_scroll_top().item_ix,
+            plait.live_count
+        )
+    });
+    harness.connect(repository, false);
+    harness.change_snapshot(|snapshot| { snapshot.live_text.clear(); snapshot.live_reasoning = "Checking how cancellation interacts with the next queued input.\n\nThe writer lease must be released before another run is admitted.".into(); });
+    harness.update(|plait, _, _| {
+        plait.history.enabled = true;
+    });
+    harness.capture(&format!("history-live-reasoning-{suffix}"));
+    for (name, state, error) in [
+        ("waiting", ThreadStatus::Running, None),
+        ("finished", ThreadStatus::Idle, None),
+        ("stopped", ThreadStatus::Stopped, None),
+        ("interrupted", ThreadStatus::Interrupted, None),
+        (
+            "failed",
+            ThreadStatus::Error,
+            Some(HostError {
+                code: "runtime_error".into(),
+                message: "The provider did not complete the request. Try another message.".into(),
+            }),
+        ),
+        (
+            "turn-limit",
+            ThreadStatus::Error,
+            Some(HostError {
+                code: "turn_limit".into(),
+                message: "Limit".into(),
+            }),
+        ),
+    ] {
+        harness.change_snapshot(|snapshot| {
+            snapshot.live_reasoning.clear();
+            snapshot.live_text.clear();
+            snapshot.tools.clear();
+            snapshot.status = state;
+            snapshot.error = error;
+        });
+        harness.capture(&format!("history-{name}-{suffix}"));
+    }
+    harness.change_snapshot(|snapshot| {
+        snapshot.status = ThreadStatus::Running;
+        snapshot.error = None;
+        snapshot.retry = Some(plait_core::host::Retry {
+            attempt: 2,
+            at: 5000,
+        });
+    });
+    harness.update(|plait, _, _| {
+        plait.history.now = 2000;
+    });
+    harness.capture(&format!("history-retry-{suffix}"));
+}
+
+#[core::prelude::v1::test]
+fn delayed_history_cannot_land_after_a_thread_switch() {
+    if !isolated("delayed_history_cannot_land_after_a_thread_switch") {
+        return;
+    }
+    use std::{
+        io::{BufRead, BufReader, Write},
+        os::unix::{fs::PermissionsExt, net::UnixListener},
+    };
+    let scratch = std::env::temp_dir().join(format!("plait-history-guard-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    let store = PathBuf::from(std::env::var_os("PLAIT_HOST_STORE").unwrap());
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let socket = store.join("host.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let mut line = String::new();
+        BufReader::new(socket.try_clone().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        assert!(line.contains("history"));
+        std::thread::sleep(Duration::from_millis(10));
+        socket.write_all(b"{\"ok\":true,\"result\":{\"items\":[{\"type\":\"message\",\"id\":\"old\",\"role\":\"assistant\",\"text\":\"Wrong thread\",\"reasoning\":\"\"}],\"before\":null}}\n").unwrap();
+    });
+    harness
+        .window
+        .update(&mut harness.cx, |plait, window, cx| {
+            plait.history.enabled = true;
+            plait.load_history(super::history::Load::Latest, window, cx);
+            // The request was scheduled for this thread; switch before its reply.
+            plait.host.select(Some("other-thread".into()));
+            plait.history = Default::default();
+        })
+        .unwrap();
+    harness.settle();
+    server.join().unwrap();
+    for _ in 0..10 {
+        harness.settle();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    harness.update(|plait, _, _| {
+        assert!(!plait.history.cache.loaded);
+        assert!(plait.history.display.is_none());
+    });
+    drop(harness);
+    std::fs::remove_file(socket).unwrap();
+    std::fs::remove_dir_all(scratch).unwrap();
 }

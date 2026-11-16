@@ -149,6 +149,24 @@ cannot return through Undo. Pure client tests cover request encoding, tolerant
 replies, sign-in states, endpoint validation, and policy copy. Native IME, token
 refresh, and full VoiceOver acceptance remain separate checks.
 
+## Paged conversation history
+
+Source builds with a version 3 host have core tests for history/live seams,
+duplicate IDs, full fields replacing clipped tails, late pages against newer
+snapshots, reasoning-only rows, UTF-16 continuations, explicit oversized text
+parts, memory eviction, and retained list identity when prepending. A scripted
+owner-only socket test delivers history after the selected thread changes and
+checks that the reply is discarded.
+
+The scene walk includes full stored text, loaded older history, loading, text
+parts, collapsed and expanded reasoning, selectable reasoning, live thinking,
+retry, and ended run states at both window sizes. It dispatches wheel and key
+events, selects and copies reasoning, and checks that prepending preserves the
+list's item and pixel offset. These are windowless GPUI checks. Native trackpad
+feel during page delivery, VoiceOver disclosure behavior, and live-provider
+history timing still need native acceptance. No provider calls are needed by
+these tests.
+
 ## Known gaps
 
 - Gatekeeper approval, installed authentication, and a live-model source change
@@ -160,8 +178,9 @@ refresh, and full VoiceOver acceptance remain separate checks.
 - Text selection, link clicks, and hover-revealed copy controls have not been
   checked with a native pointer in the installed app. Links inside conversation
   text are not reachable from the keyboard.
-- Conversation and tool previews are bounded. There is no paginated full-history
-  view, automatic updater, or published ADEMark result.
+- The released preview has bounded conversation/tool previews. Source builds have
+  a paged history view, with native and live-provider history acceptance still
+  open. There is no automatic updater or published ADEMark result.
 
 ## Manual release acceptance
 

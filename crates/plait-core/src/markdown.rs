@@ -555,12 +555,23 @@ pub struct Transcript {
     id: String,
     pub messages: HashMap<String, Arc<Message>>,
     pub live: Option<Arc<Message>>,
+    pub reasoning: HashMap<String, Arc<Message>>,
+    pub live_reasoning: Option<Arc<Message>>,
+    pub turn_summaries: HashMap<String, String>,
     pub tools: HashMap<String, Arc<ToolView>>,
     pub runs: Runs,
 }
 
 impl Transcript {
     pub fn update(previous: &Self, snapshot: &Snapshot) -> Self {
+        Self::update_stored(previous, snapshot, &std::collections::HashSet::new())
+    }
+
+    pub fn update_stored(
+        previous: &Self,
+        snapshot: &Snapshot,
+        stored: &std::collections::HashSet<String>,
+    ) -> Self {
         let previous = (previous.id == snapshot.id).then_some(previous);
         let messages = snapshot
             .messages
@@ -585,16 +596,45 @@ impl Transcript {
                 .cloned()
                 .unwrap_or_else(|| Arc::new(Message::parse(&snapshot.live_text)))
         });
+        let reasoning = snapshot
+            .messages
+            .iter()
+            .filter(|message| !message.reasoning.is_empty())
+            .map(|message| {
+                let cached = previous
+                    .and_then(|p| p.reasoning.get(&message.id))
+                    .filter(|cached| cached.source == message.reasoning);
+                (
+                    message.id.clone(),
+                    cached
+                        .cloned()
+                        .unwrap_or_else(|| Arc::new(Message::parse(&message.reasoning))),
+                )
+            })
+            .collect();
+        let live_reasoning = (!snapshot.live_reasoning.is_empty()).then(|| {
+            previous
+                .and_then(|p| p.live_reasoning.as_ref())
+                .filter(|cached| cached.source == snapshot.live_reasoning)
+                .cloned()
+                .unwrap_or_else(|| Arc::new(Message::parse(&snapshot.live_reasoning)))
+        });
         let tools = snapshot
             .tools
             .iter()
             .map(|tool| {
                 let cached = previous
                     .and_then(|p| p.tools.get(&tool.id))
-                    .filter(|cached| cached.shows(tool));
-                let view = cached
-                    .cloned()
-                    .unwrap_or_else(|| Arc::new(ToolView::new(tool)));
+                    .filter(|cached| {
+                        cached.shows(tool) && cached.is_stored() == stored.contains(&tool.id)
+                    });
+                let view = cached.cloned().unwrap_or_else(|| {
+                    Arc::new(if stored.contains(&tool.id) {
+                        ToolView::from_history(tool)
+                    } else {
+                        ToolView::new(tool)
+                    })
+                });
                 (tool.id.clone(), view)
             })
             .collect();
@@ -602,6 +642,9 @@ impl Transcript {
             id: snapshot.id.clone(),
             messages,
             live,
+            reasoning,
+            live_reasoning,
+            turn_summaries: crate::history::turn_summaries(snapshot),
             tools,
             runs: Runs::plan(snapshot),
         }

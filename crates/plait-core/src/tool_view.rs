@@ -50,6 +50,7 @@ pub struct ToolView {
     input: String,
     output: String,
     status: ToolStatus,
+    stored: bool,
     /// Short facts for the one-line row, such as `+3 −1` or `42 lines`.
     pub facts: Option<String>,
     pub sections: Vec<Section>,
@@ -57,14 +58,22 @@ pub struct ToolView {
 
 impl ToolView {
     pub fn new(tool: &Tool) -> Self {
+        Self::build(tool, false)
+    }
+
+    pub fn from_history(tool: &Tool) -> Self {
+        Self::build(tool, true)
+    }
+
+    fn build(tool: &Tool, stored: bool) -> Self {
         let arguments = serde_json::from_str::<serde_json::Value>(&tool.input).ok();
         let field = |name: &str| arguments.as_ref()?.get(name)?.as_str();
         let mut facts = None;
         let sections = match tool.name.as_str() {
             "edit" => edit(tool, &field, &mut facts),
             "write" => write(tool, &field, &mut facts),
-            "command" => command(tool, &field),
-            "read" => read(tool, &field, &mut facts),
+            "command" => command(tool, &field, stored),
+            "read" => read(tool, &field, &mut facts, stored),
             _ => None,
         };
         Self {
@@ -72,12 +81,17 @@ impl ToolView {
             input: tool.input.clone(),
             output: tool.output.clone(),
             status: tool.status,
+            stored,
             facts,
-            sections: sections.unwrap_or_else(|| raw(tool)),
+            sections: sections.unwrap_or_else(|| raw(tool, stored)),
         }
     }
 
     /// Whether this view was built from the tool as it is now.
+    pub fn is_stored(&self) -> bool {
+        self.stored
+    }
+
     pub fn shows(&self, tool: &Tool) -> bool {
         self.status == tool.status
             && self.name == tool.name
@@ -184,29 +198,39 @@ fn write(tool: &Tool, field: Field<'_>, facts: &mut Option<String>) -> Option<Ve
     Some(sections)
 }
 
-fn command(tool: &Tool, field: Field<'_>) -> Option<Vec<Section>> {
+fn command(tool: &Tool, field: Field<'_>, stored: bool) -> Option<Vec<Section>> {
     let mut sections = vec![Section {
         part: Part::Command,
         block: Block::code("sh", field("command")?.trim()),
         note: None,
     }];
     if !tool.output.is_empty() {
-        let note = clipped(&tool.output).then_some("Earlier output was clipped by the host.");
+        let note =
+            (!stored && clipped(&tool.output)).then_some("Earlier output was clipped by the host.");
         sections.push(plain(Part::Output, &tool.output, note));
     }
     Some(sections)
 }
 
-fn read(tool: &Tool, field: Field<'_>, facts: &mut Option<String>) -> Option<Vec<Section>> {
+fn read(
+    tool: &Tool,
+    field: Field<'_>,
+    facts: &mut Option<String>,
+    stored: bool,
+) -> Option<Vec<Section>> {
     let path = field("path")?;
     if failed(tool) || tool.output.is_empty() {
         let mut sections = Vec::new();
         failure(tool, &mut sections);
         return Some(sections);
     }
-    let partial = clipped(&tool.output);
+    let partial = !stored && clipped(&tool.output);
     let total = tool.output.lines().count();
-    let shown: Vec<&str> = tool.output.lines().take(PREVIEW_LINES).collect();
+    let shown: Vec<&str> = tool
+        .output
+        .lines()
+        .take(if stored { usize::MAX } else { PREVIEW_LINES })
+        .collect();
     if !partial {
         *facts = Some(line_count(&tool.output));
     }
@@ -228,11 +252,11 @@ fn read(tool: &Tool, field: Field<'_>, facts: &mut Option<String>) -> Option<Vec
 }
 
 /// Arguments that are clipped or unreadable are shown as they arrived.
-fn raw(tool: &Tool) -> Vec<Section> {
+fn raw(tool: &Tool, stored: bool) -> Vec<Section> {
     let mut sections = Vec::new();
     if !tool.input.is_empty() {
         let known = matches!(tool.name.as_str(), "read" | "edit" | "write" | "command");
-        let note = if clipped(&tool.input) {
+        let note = if !stored && clipped(&tool.input) {
             Some("The host kept only the end of these arguments.")
         } else if known {
             Some("These arguments could not be read, so they are shown as received.")
@@ -242,7 +266,8 @@ fn raw(tool: &Tool) -> Vec<Section> {
         sections.push(plain(Part::Input, &tool.input, note));
     }
     if !tool.output.is_empty() {
-        let note = clipped(&tool.output).then_some("Earlier output was clipped by the host.");
+        let note =
+            (!stored && clipped(&tool.output)).then_some("Earlier output was clipped by the host.");
         sections.push(plain(Part::Output, &tool.output, note));
     }
     sections
@@ -707,5 +732,36 @@ mod tests {
         let runs = Runs::plan(&snapshot);
         // Rows: two messages, the stream, then the tools.
         assert_eq!(shape(&runs), [(3, 5, 5, "5 steps · 5 read")]);
+    }
+}
+
+#[cfg(test)]
+mod stored_tests {
+    use super::*;
+    #[test]
+    fn stored_read_and_command_show_all_received_text_without_tail_warnings() {
+        let output = (0..80)
+            .map(|i| format!("line {i}: {}", "complete ".repeat(12)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let tool = Tool {
+            id: "read".into(),
+            name: "read".into(),
+            status: ToolStatus::Done,
+            input: "{\"path\":\"file.rs\"}".into(),
+            output: output.clone(),
+            after: Some(None),
+        };
+        let view = ToolView::from_history(&tool);
+        assert_eq!(view.sections[0].block.text, output);
+        assert!(view.sections[0].note.is_none());
+        let command = Tool {
+            name: "command".into(),
+            input: "{\"command\":\"test\"}".into(),
+            ..tool
+        };
+        let view = ToolView::from_history(&command);
+        assert_eq!(view.sections[1].block.text, output);
+        assert!(view.sections[1].note.is_none());
     }
 }

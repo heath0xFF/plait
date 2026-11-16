@@ -104,7 +104,11 @@ This is the **M2 local preview**, not a complete IDE.
   v0.1.0-preview.2 also have an opt-in, per-project
   [trusted command mode](docs/HOST.md#command-policy) that lifts these limits;
   source builds expose it under Settings → Approvals, with explicit confirmation.
-- Conversation and tool views show bounded previews, not the full stored history.
+- The released preview shows bounded conversation previews. Source builds with a
+  version 3 host load complete stored messages and tools, page backward through
+  history, and show reasoning. A response still being generated remains a live
+  preview until it is saved; exceptionally large stored fields have explicit
+  text-part controls.
 
 Mac CI verifies the installed app, sandbox, and recovery with scripted providers.
 Installed live-model and accessibility acceptance remain open. CI runs on macOS 26;

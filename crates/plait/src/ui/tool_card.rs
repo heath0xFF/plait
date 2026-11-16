@@ -57,7 +57,7 @@ impl Plait {
     }
 
     pub(super) fn toggle_live_tool(&mut self, id: &str, cx: &mut Context<Self>) {
-        let Some(snapshot) = self.host.snapshot.as_ref() else {
+        let Some(snapshot) = self.conversation_snapshot() else {
             return;
         };
         let Some(offset) = snapshot.tools.iter().position(|tool| tool.id == id) else {
@@ -135,7 +135,17 @@ impl Plait {
         let summary = place
             .filter(|place| place.leads())
             .map(|place| self.group_summary(place.run, open, cx));
-        let card = (!folded || open).then(|| self.tool_card(tool, row, folded, cx));
+        let card = (!folded || open).then(|| {
+            column()
+                .when(self.expanded_live_tools.contains(&tool.id), |el| {
+                    el.children(self.history_parts(
+                        plait_core::history::Key::Tool(tool.id.clone()),
+                        None,
+                        cx,
+                    ))
+                })
+                .child(self.tool_card(tool, row, folded, cx))
+        });
         (summary.is_some() || card.is_some()).then(|| {
             column()
                 .gap(px(2.))

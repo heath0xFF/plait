@@ -9,7 +9,6 @@ use plait_core::{
     transcript::{self, Update},
 };
 use serde::de::DeserializeOwned;
-use std::sync::Arc;
 
 pub(super) struct WatchLease {
     cancel: Option<host::CancelWatch>,
@@ -77,6 +76,7 @@ impl Plait {
             return;
         }
         self.host_watch = None;
+        self.history = Default::default();
         self.host.reconnect();
         self.sync_composer(cx);
         self.host_request(
@@ -131,6 +131,7 @@ impl Plait {
         window.focus(&self.focus, cx);
         self.host_watch = None;
         self.host.select(Some(id.clone()));
+        self.history = Default::default();
         self.settings_open = false;
         self.new_thread_open = false;
         self.show_changes = false;
@@ -210,23 +211,9 @@ impl Plait {
                     .detach();
                 return;
             }
-            let mut formatted = Arc::new(plait_core::markdown::Transcript::default());
             while let Some(result) = snapshots.next().await {
-                if let Ok(snapshot) = &result {
-                    let snapshot = snapshot.clone();
-                    let previous = formatted.clone();
-                    formatted = cx
-                        .background_executor()
-                        .spawn(async move {
-                            Arc::new(plait_core::markdown::Transcript::update(
-                                &previous, &snapshot,
-                            ))
-                        })
-                        .await;
-                }
-                let prepared = formatted.clone();
                 let keep = this
-                    .update_in(cx, |this, _, cx| {
+                    .update_in(cx, |this, window, cx| {
                         if !this.host.accepts_watch(epoch, watch_epoch, &id) {
                             return false;
                         }
@@ -251,8 +238,7 @@ impl Plait {
                                     cx.notify();
                                     return false;
                                 }
-                                this.formatted = prepared;
-                                this.refresh_live_list(previous.as_deref());
+                                this.conversation_changed(window, cx);
                                 this.record_snapshot(cx);
                                 if previous
                                     .as_ref()
@@ -309,11 +295,17 @@ impl Plait {
     }
 
     pub(super) fn refresh_live_list(&mut self, previous: Option<&Snapshot>) {
-        let next = self.host.snapshot.as_deref();
+        self.history.display = self.host.snapshot.clone();
+        self.reconcile_live_list(previous);
+    }
+
+    pub(super) fn reconcile_live_list(&mut self, previous: Option<&Snapshot>) {
+        let next = self.history.display.as_deref();
         match transcript::changes(previous, next) {
             Update::Reset(count) => {
                 self.live_scroll.reset(count);
                 self.expanded_live_tools.clear();
+                self.history.expanded.clear();
             }
             Update::Patch { splices, remeasure } => {
                 for splice in splices {
@@ -322,6 +314,11 @@ impl Plait {
                 for range in remeasure {
                     self.live_scroll.remeasure_items(range);
                 }
+                self.history.expanded.retain(|id| {
+                    next.is_some_and(|snapshot| {
+                        snapshot.messages.iter().any(|message| message.id == *id)
+                    })
+                });
                 self.expanded_live_tools.retain(|id| {
                     next.is_some_and(|snapshot| snapshot.tools.iter().any(|tool| tool.id == *id))
                 });
