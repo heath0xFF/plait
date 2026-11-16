@@ -1,8 +1,12 @@
-use super::{Plait, theme::*};
+use super::{
+    Plait,
+    selection::{Owner, Site},
+    theme::*,
+};
 use gpui::{prelude::*, *};
 use plait_core::{
-    host::{Approval, ApprovalMode, Message, MessageRole, Snapshot, Tool, ToolStatus},
-    transcript::{self, Row, Slot},
+    host::{Approval, ApprovalMode, Message, MessageRole, Snapshot},
+    transcript::{self, Row},
 };
 
 /// Full-width line above the conversation for host and submission state.
@@ -18,14 +22,9 @@ fn banner(tint: u32) -> Div {
         .border_color(rgb(BORDER))
 }
 
-fn tool_tint(status: ToolStatus) -> u32 {
-    match status {
-        ToolStatus::Running => BLUE,
-        ToolStatus::Done => SUBTLE,
-        ToolStatus::Error => RED,
-        ToolStatus::Interrupted => AMBER,
-    }
-}
+/// How far the copy control of an agent reply sits above its first line. It
+/// stays inside the row's top padding, so reaching it keeps the row hovered.
+const COPY_LIFT: f32 = 18.;
 
 impl Plait {
     /// The mode the next submission requests. Version 1 hosts always ask.
@@ -50,159 +49,96 @@ impl Plait {
         }
     }
 
-    fn live_message(&self, message: &Message, cx: &mut Context<Self>) -> AnyElement {
+    fn live_message(&self, message: &Message, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let user = message.role == MessageRole::User;
-        let body = if user { bubble() } else { prose() }
-            .id((
-                ElementId::from("live-message"),
-                SharedString::from(message.id.clone()),
-            ))
-            .role(Role::Group)
-            .aria_label(format!(
-                "{} message: {}",
-                if user { "Your" } else { "Assistant" },
-                message.text
-            ))
-            .child(
-                column()
-                    .gap_1()
-                    .child(
-                        row()
-                            .justify_between()
-                            .child(tag(if user { "You" } else { "Plait" }, SUBTLE))
-                            .child(
-                                button(
-                                    SharedString::from(format!("copy-message-{}", message.id)),
-                                    "Copy",
-                                )
-                                .aria_label("Copy message source")
-                                .on_activate(cx, {
-                                    let text = message.text.clone();
-                                    move |_, _, cx| {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(
-                                            text.clone(),
-                                        ))
-                                    }
-                                }),
-                            ),
-                    )
-                    .child(if !user {
-                        self.formatted
-                            .messages
-                            .get(&message.id)
-                            .map(|body| self.markdown(&message.id, body, cx))
-                            .unwrap_or_else(|| {
-                                prose().child(message.text.clone()).into_any_element()
-                            })
-                    } else {
-                        prose().child(message.text.clone()).into_any_element()
-                    }),
-            );
+        let site = Site {
+            owner: Owner::Message(message.id.clone().into()),
+            row: index,
+            block: 0,
+        };
+        let body = match self.formatted.messages.get(&message.id) {
+            Some(parsed) => self.markdown(&site, &parsed.blocks, &message.id, cx),
+            // The projection arrives with the snapshot; this is a one-frame fallback.
+            None => prose().child(message.text.clone()).into_any_element(),
+        };
+        let copy = quiet_button(
+            SharedString::from(format!("copy-message-{}", message.id)),
+            "Copy message",
+            row_group(index),
+        )
+        .aria_label("Copy message source")
+        .on_activate(cx, {
+            let text = message.text.clone();
+            move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
+        });
+        // Position says who is speaking; the label is for assistive technology.
+        let id = (
+            ElementId::from("live-message"),
+            SharedString::from(message.id.clone()),
+        );
+        let label = format!(
+            "{} message: {}",
+            if user { "Your" } else { "Assistant" },
+            message.text
+        );
         if user {
-            row().justify_end().child(body).into_any_element()
+            div()
+                .flex()
+                .justify_end()
+                .items_start()
+                .gap_1()
+                .child(copy.mt(px(6.)))
+                .child(
+                    bubble()
+                        .id(id)
+                        .role(Role::Group)
+                        .aria_label(label)
+                        .min_w_0()
+                        .child(body),
+                )
+                .into_any_element()
         } else {
             // A block, not a flex row, so long replies wrap at the column width.
-            body.into_any_element()
-        }
-    }
-
-    pub(super) fn toggle_live_tool(&mut self, id: &str, cx: &mut Context<Self>) {
-        let Some(snapshot) = self.host.snapshot.as_ref() else {
-            return;
-        };
-        let Some(offset) = snapshot.tools.iter().position(|tool| tool.id == id) else {
-            return;
-        };
-        let Some(index) = self
-            .live_layout
-            .iter()
-            .position(|slot| *slot == Slot::Tool(offset))
-        else {
-            return;
-        };
-        if !self.expanded_live_tools.remove(id) {
-            self.expanded_live_tools.insert(id.to_owned());
-        }
-        self.live_scroll.remeasure_items(index..index + 1);
-        cx.notify();
-    }
-
-    fn live_tool(&self, tool: &Tool, cx: &mut Context<Self>) -> AnyElement {
-        let expanded = self.expanded_live_tools.contains(&tool.id);
-        let id = tool.id.clone();
-        let subject = transcript::tool_subject(tool);
-        column()
-            .gap_1()
-            .child(
-                row().min_w_0().child(
-                    button(
-                        (
-                            ElementId::from("live-tool"),
-                            SharedString::from(tool.id.clone()),
-                        ),
-                        "",
-                    )
-                    .px_1()
-                    .ml(px(-TOOL_INSET))
-                    .min_w_0()
-                    .aria_label(format!(
-                        "{} tool{} · {}",
-                        tool.name,
-                        subject
-                            .as_ref()
-                            .map(|subject| format!(" {subject}"))
-                            .unwrap_or_default(),
-                        tool.status.label()
-                    ))
-                    .aria_expanded(expanded)
-                    .child(icon(if expanded { "down" } else { "right" }))
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .text_size(px(13.))
-                            .child(tool.name.clone()),
-                    )
-                    .when_some(subject.clone(), |el, subject| {
-                        el.child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .font_family(MONO)
-                                .text_size(px(12.))
-                                .text_color(rgb(MUTED))
-                                .child(subject),
-                        )
-                    })
-                    // Completion is the normal case; only call out the others.
-                    .when(tool.status != ToolStatus::Done, |el| {
-                        el.child(tag(tool.status.label(), tool_tint(tool.status)).flex_shrink_0())
-                    })
-                    .on_activate(cx, move |this, _, cx| this.toggle_live_tool(&id, cx)),
-                ),
-            )
-            .when(expanded, |el| {
-                el.child(
-                    code_block()
-                        .child(
-                            button(
-                                SharedString::from(format!("copy-tool-{}", tool.id)),
-                                "Copy tool details",
-                            )
-                            .on_activate(cx, {
-                                let text = format!("{}\n{}", tool.input, tool.output);
-                                move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
-                                }
-                            }),
-                        )
-                        .child(div().child(text!(tool.input.clone())))
-                        .child(
-                            div()
-                                .text_color(rgb(TEXT))
-                                .child(text!(tool.output.clone())),
-                        ),
+            div()
+                .id(id)
+                .role(Role::Group)
+                .aria_label(label)
+                .relative()
+                .child(body)
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(-COPY_LIFT))
+                        .right_0()
+                        .child(copy.h(px(COPY_LIFT)).bg(rgb(BG))),
                 )
-            })
+                .into_any_element()
+        }
+    }
+
+    /// The answer being written, with a still mark that it is not finished.
+    fn live_stream(&self, text: &str, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let site = Site {
+            owner: Owner::Stream,
+            row: index,
+            block: 0,
+        };
+        let body = match self.formatted.live.as_ref() {
+            Some(parsed) => self.markdown(&site, &parsed.blocks, "stream", cx),
+            None => prose().child(text.to_owned()).into_any_element(),
+        };
+        column()
+            .id("live-stream")
+            .role(Role::Group)
+            .aria_label(format!("Assistant is writing: {text}"))
+            .gap_2()
+            .child(body)
+            .child(
+                row()
+                    .gap(px(6.))
+                    .child(dot(BLUE))
+                    .child(tag("Writing…", MUTED)),
+            )
             .into_any_element()
     }
 
@@ -217,28 +153,26 @@ impl Plait {
         else {
             return div().into_any_element();
         };
-        let tool = matches!(row, Row::Tool(_));
-        let content = match row {
-            Row::Message(message) => self.live_message(message, cx),
-            Row::Streaming(text) => column()
-                .gap_1()
-                .child(tag("Assistant · streaming", BLUE))
-                .child(
-                    self.formatted
-                        .live
-                        .as_ref()
-                        .map(|body| self.markdown("stream", body, cx))
-                        .unwrap_or_else(|| {
-                            prose().child(text!(text.to_owned())).into_any_element()
-                        }),
-                )
-                .into_any_element(),
-            Row::Tool(tool) => self.live_tool(tool, cx),
+        // Top padding leaves room for a reply's copy control; a reply sits
+        // closer to the tool calls that follow it than to what came before.
+        let (content, top, bottom) = match row {
+            Row::Message(message) if message.role == MessageRole::User => {
+                (self.live_message(message, index, cx), 10., 4.)
+            }
+            Row::Message(message) => (self.live_message(message, index, cx), COPY_LIFT, 6.),
+            Row::Streaming(text) => (self.live_stream(text, index, cx), 14., 8.),
+            Row::Tool(tool) => match self.tool_row(tool, index, cx) {
+                Some(content) => (content, 1., 1.),
+                // Folded into a closed group: the row stays, with no height.
+                None => return div().into_any_element(),
+            },
         };
         div()
+            .group(row_group(index))
             .w_full()
             .px_6()
-            .py(if tool { px(2.) } else { px(10.) })
+            .pt(px(top))
+            .pb(px(bottom))
             .child(
                 div()
                     .w_full()
@@ -246,6 +180,83 @@ impl Plait {
                     .mx_auto()
                     .child(content),
             )
+            .into_any_element()
+    }
+
+    /// The list of rows with what floats over it: pointer handling for text
+    /// selection, the way back to the newest row, and a hovered link's address.
+    fn live_rows(&self, snapshot: &Snapshot, cx: &mut Context<Self>) -> AnyElement {
+        self.reconcile_tool_rows();
+        self.resolve_selection();
+        let away = self.live_scroll.logical_scroll_top().item_ix < self.live_count;
+        let size = (self.live_count, snapshot.live_text.len());
+        if !away {
+            self.reading.seen.set(size);
+        }
+        let unseen = self.reading.seen.get() != size;
+        div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .child(self.selection_surface(cx))
+            .child(
+                list(
+                    self.live_scroll.clone(),
+                    cx.processor(|this, index, _, cx| this.live_event(index, cx)),
+                )
+                .size_full(),
+            )
+            .when(away, |el| {
+                el.child(
+                    div()
+                        .absolute()
+                        .bottom(px(10.))
+                        .left_0()
+                        .right_0()
+                        .flex()
+                        .justify_center()
+                        .child(
+                            toned_button("jump-to-latest", "", Tone::Filled)
+                                .occlude()
+                                .gap(px(6.))
+                                .aria_label(if unseen {
+                                    "New activity. Jump to latest"
+                                } else {
+                                    "Jump to latest"
+                                })
+                                .when(unseen, |el| el.child(dot(BLUE)))
+                                .child(if unseen {
+                                    "New activity · Jump to latest"
+                                } else {
+                                    "Jump to latest"
+                                })
+                                .child(icon("down").text_color(rgb(TEXT)))
+                                .on_activate(cx, |this, _, cx| {
+                                    this.live_scroll.scroll_to_end();
+                                    cx.notify();
+                                }),
+                        ),
+                )
+            })
+            .when_some(self.reading.hovered_link.clone(), |el, url| {
+                el.child(
+                    div()
+                        .absolute()
+                        .bottom(px(6.))
+                        .left(px(8.))
+                        .max_w(relative(0.8))
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .bg(rgb(PANEL))
+                        .border_1()
+                        .border_color(rgb(EDGE))
+                        .text_size(px(11.))
+                        .text_color(rgb(MUTED))
+                        .truncate()
+                        .child(text!(id = "link-destination", format!("Opens {url}"))),
+                )
+            })
             .into_any_element()
     }
 
@@ -432,14 +443,10 @@ Tone::Filled,
                     "Send a message below. The saved provider and model will be used for every turn.",
                 )
                 .into_any_element()
+            } else if let Some(snapshot) = &snapshot {
+                self.live_rows(snapshot, cx)
             } else {
-                list(
-                    self.live_scroll.clone(),
-                    cx.processor(|this, index, _, cx| this.live_event(index, cx)),
-                )
-                .flex_1()
-                .min_h_0()
-                .into_any_element()
+                div().into_any_element()
             });
         if let Some(snapshot) = &snapshot {
             if snapshot.truncated {
@@ -496,4 +503,9 @@ Tone::Filled,
             .child(main)
             .when(wide, |el| el.child(self.inspector(cx)))
     }
+}
+
+/// Hover group for one conversation row, so its quiet controls appear together.
+fn row_group(row: usize) -> SharedString {
+    format!("conversation-row-{row}").into()
 }

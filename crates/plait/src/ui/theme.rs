@@ -21,6 +21,13 @@ pub const SELECTED: u32 = 0x2b2d31;
 pub const EDGE: u32 = 0x3a3d45;
 /// Translucent so one hover step reads the same on every surface.
 pub const HOVER: u32 = 0xffffff0d;
+/// Selected conversation text. Neutral, and translucent for the same reason.
+pub const SELECTION: u32 = 0xffffff2e;
+/// Line tints for a diff inside a tool result: mint additions, rose deletions.
+pub const ADDED_FILL: u32 = 0x94dec51f;
+pub const REMOVED_FILL: u32 = 0xf0a6ac1f;
+/// Outline of a failed command's output, beside its written state.
+pub const FAILED_EDGE: u32 = 0xf0a6ac66;
 
 /// Readable column for conversation text and the composer.
 pub const CONTENT_WIDTH: f32 = 760.;
@@ -104,6 +111,20 @@ pub fn toned_button(
         .map(|el| if raised { el.px_3() } else { el.px_2() })
         // Callers that pass no label supply their own children.
         .when(!label.is_empty(), |el| el.child(label))
+}
+
+/// Secondary action that stays out of sight until the pointer is over its
+/// `group` or it takes keyboard focus, so reading is not interrupted by chrome.
+pub fn quiet_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    group: impl Into<SharedString>,
+) -> Stateful<Div> {
+    button(id, label)
+        .h(px(22.))
+        .opacity(0.)
+        .group_hover(group, |s| s.opacity(1.))
+        .focus_visible(|s| s.border_color(rgb(BLUE)).opacity(1.))
 }
 
 /// Square glyph control. The name is the accessible label; no text is drawn.

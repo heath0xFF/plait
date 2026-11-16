@@ -12,7 +12,7 @@ use crate::{
 use std::collections::HashMap;
 
 /// A finished run folds under one line once it has this many calls.
-pub const GROUP_MIN: usize = 4;
+pub const GROUP_MIN: usize = 5;
 /// A run still in progress keeps this many of its latest calls in view.
 pub const LIVE_VISIBLE: usize = 3;
 /// Lines of a file shown for `read`.
@@ -655,29 +655,29 @@ mod tests {
     }
 
     #[test]
-    fn three_calls_stay_listed_and_four_fold() {
-        let runs = Runs::plan(&thread("u read read read a", ThreadStatus::Idle));
-        assert_eq!(shape(&runs)[0].2, 0);
+    fn four_calls_stay_listed_and_five_fold() {
         let runs = Runs::plan(&thread("u read read read read a", ThreadStatus::Idle));
-        assert_eq!(shape(&runs), [(1, 4, 4, "4 steps · 4 read")]);
+        assert_eq!(shape(&runs)[0].2, 0);
+        let runs = Runs::plan(&thread("u read read read read read a", ThreadStatus::Idle));
+        assert_eq!(shape(&runs), [(1, 5, 5, "5 steps · 5 read")]);
     }
 
     #[test]
     fn a_running_turn_keeps_its_latest_steps_in_view() {
-        let script = "u a read read read read a read edit read command edit read";
+        let script = "u a read read read read read a read edit read command edit read";
         let running = Runs::plan(&thread(script, ThreadStatus::Running));
         assert_eq!(
             shape(&running),
             [
                 // Followed by a message, so no longer the latest work.
-                (2, 4, 4, "4 steps · 4 read"),
-                (7, 6, 3, "3 earlier steps · 2 read, 1 edit"),
+                (2, 5, 5, "5 steps · 5 read"),
+                (8, 6, 3, "3 earlier steps · 2 read, 1 edit"),
             ]
         );
-        let latest = running.place("t12").unwrap();
+        let latest = running.place("t13").unwrap();
         assert!(!latest.folded());
-        assert!(running.place("t9").unwrap().folded());
-        assert!(!running.place("t10").unwrap().folded());
+        assert!(running.place("t10").unwrap().folded());
+        assert!(!running.place("t11").unwrap().folded());
 
         // One hidden call would cost a line and save none.
         let four = Runs::plan(&thread("u read read read read", ThreadStatus::Running));
@@ -692,19 +692,19 @@ mod tests {
         let finished = Runs::plan(&thread(script, ThreadStatus::Idle));
         assert_eq!(
             shape(&finished)[1],
-            (7, 6, 6, "6 steps · 3 read, 2 edit, 1 command")
+            (8, 6, 6, "6 steps · 3 read, 2 edit, 1 command")
         );
     }
 
     #[test]
     fn unordered_tools_from_an_old_host_form_one_trailing_run() {
-        let mut snapshot = thread("u a read read read read", ThreadStatus::Idle);
+        let mut snapshot = thread("u a read read read read read", ThreadStatus::Idle);
         for tool in &mut snapshot.tools {
             tool.after = None;
         }
         snapshot.live_text = "partial".into();
         let runs = Runs::plan(&snapshot);
         // Rows: two messages, the stream, then the tools.
-        assert_eq!(shape(&runs), [(3, 4, 4, "4 steps · 4 read")]);
+        assert_eq!(shape(&runs), [(3, 5, 5, "5 steps · 5 read")]);
     }
 }

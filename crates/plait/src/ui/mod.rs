@@ -6,11 +6,13 @@ mod jump;
 mod live_conversation;
 mod markdown;
 mod navigation;
+mod selection;
 mod session;
 mod settings;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod snapshot;
 pub mod theme;
+mod tool_card;
 mod update;
 
 use gpui::{prelude::*, *};
@@ -63,6 +65,7 @@ pub struct Plait {
     new_thread_open: bool,
     focus: FocusHandle,
     expanded_live_tools: HashSet<String>,
+    reading: selection::Reading,
     file_scroll: UniformListScrollHandle,
     diff_scroll: UniformListScrollHandle,
     show_changes: bool,
@@ -106,6 +109,7 @@ impl Plait {
             new_thread_open: false,
             focus,
             expanded_live_tools: HashSet::new(),
+            reading: Default::default(),
             file_scroll: UniformListScrollHandle::new(),
             diff_scroll: UniformListScrollHandle::new(),
             show_changes: false,
@@ -533,6 +537,7 @@ impl Render for Plait {
             )
             .on_action(cx.listener(|_, _: &Minimize, window, _| window.minimize_window()))
             .map(|root| self.on_jump_actions(root, cx))
+            .map(|root| self.on_selection_actions(root, cx))
             .size_full()
             .overflow_hidden()
             .bg(rgb(BG))
@@ -596,6 +601,7 @@ impl Render for Plait {
 pub fn menus(cx: &mut App) {
     composer::bind_keys(cx);
     jump::bind_keys(cx);
+    selection::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-w", Close, Some("Plait")),

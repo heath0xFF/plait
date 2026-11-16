@@ -450,15 +450,15 @@ impl Projection {
 
 /// Apply `change` to every style inside `range`, splitting spans at its ends
 /// and covering unstyled text, so the spans stay sorted and non-overlapping.
-fn restyle(
-    spans: &mut Vec<(Range<usize>, Style)>,
+pub fn restyle<T: Clone + Default>(
+    spans: &mut Vec<(Range<usize>, T)>,
     range: Range<usize>,
-    change: impl Fn(&mut Style),
+    change: impl Fn(&mut T),
 ) {
     if range.is_empty() {
         return;
     }
-    let changed = |mut style: Style| {
+    let changed = |mut style: T| {
         change(&mut style);
         style
     };
@@ -473,7 +473,7 @@ fn restyle(
         let inner = span.start.max(range.start)..span.end.min(range.end);
         let gap = uncovered..inner.start.min(range.end);
         if !gap.is_empty() {
-            out.push((gap, changed(Style::default())));
+            out.push((gap, changed(T::default())));
         }
         if inner.is_empty() {
             // Entirely after the range.
@@ -482,16 +482,16 @@ fn restyle(
             continue;
         }
         if span.start < inner.start {
-            out.push((span.start..inner.start, style));
+            out.push((span.start..inner.start, style.clone()));
         }
-        out.push((inner.clone(), changed(style)));
+        out.push((inner.clone(), changed(style.clone())));
         uncovered = inner.end;
         if inner.end < span.end {
             out.push((inner.end..span.end, style));
         }
     }
     if uncovered < range.end {
-        out.push((uncovered..range.end, changed(Style::default())));
+        out.push((uncovered..range.end, changed(T::default())));
     }
     *spans = out;
 }
@@ -907,7 +907,7 @@ mod tests {
         let mut spans = vec![(0..9, strong)];
         restyle(&mut spans, 3..5, |style| style.link = Some(1));
         assert_eq!(spans.len(), 3);
-        let mut spans = Vec::new();
+        let mut spans: Vec<(Range<usize>, Style)> = Vec::new();
         restyle(&mut spans, 3..5, |style| style.link = Some(1));
         assert_eq!(spans.len(), 1);
     }
