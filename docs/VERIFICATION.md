@@ -80,11 +80,14 @@ The response labels the scripted provider. No sample-view code ships in the app.
 - **Linux:** headless development and explicit command rejection. Scripted
   lifecycle fixtures are not a working Linux containment backend.
 - **Headless UI:** wide/narrow layouts, scroll-state retention, and recovery
-  guards with injected test state. Linux fonts and software rendering do not
-  validate the Mac renderer or native input latency.
+  guards with injected test state, on macOS and Linux. Exported macOS images use
+  the app's Metal renderer and Core Text offscreen; Linux images use Linux fonts
+  and software rendering. Neither validates the native window, input, focus
+  that follows input, the accessibility tree, or latency.
 
 The optional headless PNG export is ignored in the normal Rust suite and runs
-explicitly when requested. See [UI checks](../CONTRIBUTING.md#ui-checks).
+explicitly when requested; CI does not run it on either platform. See
+[UI checks](../CONTRIBUTING.md#ui-checks).
 
 ## Known gaps
 
