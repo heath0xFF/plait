@@ -1677,6 +1677,13 @@ fn settings_controls_walk(harness: &mut Harness, repository: &Path, suffix: &str
         )
     });
     harness.capture(&format!("keyboard-conflict-{suffix}"));
+    harness.keystroke("escape");
+    harness.update(|plait, _, _| {
+        assert!(
+            plait.keyboard.recording.is_none(),
+            "Escape dismisses a pending conflict"
+        )
+    });
     harness.update(|plait, window, cx| plait.record_shortcut(sidebar, window, cx));
     harness.draw();
     harness.keystroke("ctrl-shift-b");

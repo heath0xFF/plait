@@ -684,6 +684,7 @@ impl Render for Plait {
             .on_action(cx.listener(|_, _: &Minimize, window, _| window.minimize_window()))
             .map(|root| self.on_jump_actions(root, cx))
             .map(|root| self.on_selection_actions(root, cx))
+            .map(|root| self.on_keyboard_controls(root, cx))
             .size_full()
             .overflow_hidden()
             .bg(rgb(BG))

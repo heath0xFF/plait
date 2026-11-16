@@ -13,6 +13,22 @@ pub(super) struct KeyboardState {
 }
 
 impl Plait {
+    pub(super) fn on_keyboard_controls(
+        &self,
+        root: Stateful<Div>,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        root.capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+            if this.settings_open
+                && this.keyboard.recording.is_some()
+                && event.keystroke.key == "escape"
+            {
+                cx.stop_propagation();
+                this.cancel_recording(cx);
+            }
+        }))
+    }
+
     pub(super) fn prepare_keyboard(&mut self, cx: &mut Context<Self>) {
         if self.keyboard.search.is_none() {
             let search = cx.new(|cx| {
@@ -160,7 +176,10 @@ impl Plait {
             let recording = self.keyboard.recording == Some(index);
             let binding = shortcut.binding(keymap);
             let label = if recording {
-                "Press shortcut…".to_owned()
+                self.keyboard
+                    .candidate
+                    .as_ref()
+                    .map_or_else(|| "Press shortcut…".to_owned(), |keys| actions::label(keys))
             } else if binding.label().is_empty() {
                 "Unbound".into()
             } else {
