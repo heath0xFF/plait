@@ -120,6 +120,19 @@ The original accepted input remains in the private journal. The complete seriali
 snapshot is also limited to 512 KiB; older content is removed first. Approval
 arguments are never clipped. `truncated` flags clipping.
 
+## Internal authorization boundary
+
+Each accepted run gets a new in-memory authorization object. The only production
+policy is exact-call interactive approval. A thread ID, an earlier approval, or
+a recovered snapshot does not grant permission to another run. Recovery keeps
+authorization inactive; Stop and shutdown revoke it. Answers after cancellation
+or consumption return `not_found`, as before.
+
+Authorization and tool execution are separate. File checks and the command
+sandbox still apply after permission is granted. No wire operation, snapshot
+field, durable schema, unattended permission, or scheduler is added by this
+refactor. Future automation grants require a separate contract review.
+
 ## Safety boundary
 
 Load checkout `AGENTS.md` explicitly before execution. Model and thread settings

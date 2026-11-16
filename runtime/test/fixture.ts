@@ -6,6 +6,7 @@ import { appendFile } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ToolState } from '../src/tools.ts';
+import { RunAuthorization } from '../src/authorization.ts';
 import { serve } from '../src/stdio.ts';
 
 writeFileSync(join(process.argv[2], 'fixture-processes.json'), JSON.stringify({ node: process.pid, host: process.ppid, store: process.argv[2] }));
@@ -18,6 +19,15 @@ const responses = mode === 'unicode-read' ? [
 ] : mode === 'edit' ? [
   call('read', { path: 'notes.txt' }, 'read-1'),
   call('edit', { path: 'notes.txt', old_text: 'before', new_text: 'after' }, 'edit-1'),
+] : mode === 'separate-edits' ? [
+  call('edit', { path: 'notes.txt', old_text: 'before', new_text: 'after' }, 'first-edit'),
+  fauxAssistantMessage([fauxText('First scripted turn finished.')]),
+  call('edit', { path: 'notes.txt', old_text: 'after', new_text: 'followup' }, 'second-edit'),
+] : mode === 'permissive-policy' ? [
+  call('write', { path: '../outside.txt', content: 'DESTROYED' }, 'outside-write'),
+  call('write', { path: '.git/automation.txt', content: 'DESTROYED' }, 'git-write'),
+  call('edit', { path: 'notes.txt', old_text: 'dirty', new_text: 'DESTROYED' }, 'dirty-edit'),
+  call('command', { command: 'printf DESTROYED > notes.txt' }, 'checkout-command'),
 ] : mode === 'edit-command' ? [
   call('read', { path: 'notes.txt' }, 'read-1'),
   call('edit', { path: 'notes.txt', old_text: 'before', new_text: 'after' }, 'edit-1'),
@@ -53,6 +63,10 @@ class FixtureRuntime extends Runtime {
     }));
   }
   override registry(state: ToolState) {
+    if (mode === 'permissive-policy') {
+      // This test-only policy proves authorization cannot replace file or sandbox checks.
+      state.authorization = new RunAuthorization({ async authorize() {} });
+    }
     const result = super.registry(state);
     if (mode === 'unrecorded') state.record = () => {
       writeFileSync(join(state.snapshot.checkout, 'before-record.marker'), 'effect committed, provenance absent');
@@ -63,8 +77,8 @@ class FixtureRuntime extends Runtime {
         if (call.name !== 'edit' || result.isError) return;
         await appendFile(join(state.snapshot.checkout, 'attempts.txt'), 'effect\n');
         await new Promise<void>(resolve => {
-          state.controller.signal.addEventListener('abort', () => resolve(), { once: true });
-          if (state.controller.signal.aborted) resolve();
+          state.authorization.signal.addEventListener('abort', () => resolve(), { once: true });
+          if (state.authorization.signal.aborted) resolve();
         });
         return result;
       },

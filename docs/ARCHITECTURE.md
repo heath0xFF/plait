@@ -81,6 +81,27 @@ private scratch space for build output. Stop revokes pending approvals and
 cancels work. Interrupted work must not replay automatically after host failure.
 These boundaries need the tests listed in HOST.md before valuable-repository use.
 
+### Run authorization
+
+`runtime/src/authorization.ts` owns a run's activation and revocation. Each new
+admission gets a fresh authorization object; a saved thread does not carry
+permission into another turn. Recovery keeps it inactive until old tasks are
+stopped. Stop, completion, and host shutdown revoke it permanently.
+
+`runtime/src/approval.ts` implements the current interactive policy. It owns the
+exact-call prompt, one-use answers, cancellation, and snapshot updates. The tool
+registry asks the run for authorization without owning the approval lifecycle.
+Argument limits, dirty-path protection, checked file helpers, and command
+containment remain mandatory in `tools.ts` and its helpers. Authorization is
+checked again before an effect starts, so a late Allow cannot override Stop.
+
+This refactor does not add unattended grants, scheduling, protocol fields, or
+storage tables. Manual runs still require each approval. Tests include a clearly
+labeled permissive policy fixture to check that authorization cannot bypass file
+protection or command containment. On Linux, the command check proves denial,
+not a working sandbox. The automation requirement remains tracked in
+[issue #13](https://github.com/heath0xFF/plait/issues/13).
+
 ## Portable runtime and development
 
 The daemon uses the core's low-level local-socket checks, not its client state.

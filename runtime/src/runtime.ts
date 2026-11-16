@@ -17,8 +17,13 @@ import { registry } from './tools.ts';
 import type { ToolState } from './tools.ts';
 import { update } from './transcript.ts';
 import { restoreOwned } from './provenance.ts';
+import { RunAuthorization } from './authorization.ts';
+import { InteractiveApproval } from './approval.ts';
 
-type Session = ToolState & { harness?: Harness; root?: Conversation; watch?: ConversationWatch; finished?: Promise<void>; inputs: InputRecord[]; requestId: string };
+type Session = ToolState & {
+  harness?: Harness; root?: Conversation; watch?: ConversationWatch; finished?: Promise<void>;
+  inputs: InputRecord[]; requestId: string; approvals: InteractiveApproval; save(): void;
+};
 export class Runtime {
   store: Store;
   sessions = new Map<string, Session>();
@@ -69,20 +74,16 @@ export class Runtime {
         const id = String(request.thread_id);
         const snapshot = this.snapshot(id);
         const session = this.sessions.get(id);
-        if (session) {
-          session.controller.abort(); session.approval?.(false);
-          snapshot.status = 'stopped'; snapshot.pending_approval = null; this.store.save(snapshot);
-          void session.root?.abort(context).catch(() => {});
-        }
-        snapshot.status = 'stopped'; snapshot.pending_approval = null; this.store.save(snapshot);
+        snapshot.status = 'stopped'; snapshot.pending_approval = null;
+        session?.authorization.revoke();
+        this.store.save(snapshot);
+        if (session) void session.root?.abort(context).catch(() => {});
         return { thread: snapshot };
       }
       case 'approve': {
         const session = this.sessions.get(String(request.thread_id));
-        if (!session?.approval || session.snapshot.pending_approval?.id !== request.approval_id) fail('not_found', 'Approval is stale, stopped, or already answered.');
-        const resolve = session.approval; session.approval = undefined;
-        session.snapshot.pending_approval = null; session.snapshot.status = 'running'; session.save();
-        resolve(request.allow === true);
+        if (!session) fail('not_found', 'Approval is stale, stopped, or already answered.');
+        session.approvals.answer(String(request.approval_id), request.allow === true);
         return { thread: session.snapshot };
       }
       default: fail('invalid_request', 'Unknown operation.');
@@ -105,7 +106,7 @@ export class Runtime {
     const database = await openNodeSqliteDatabase(join(this.directory, `${snapshot.id}.sqlite`));
     await database.exec('PRAGMA synchronous=FULL');
     const harness = await Harness.open(await SqliteStorage.open(database), {
-      models: () => session.ready ? this.models : createModels(), registry: this.registry(session),
+      models: () => session.authorization.active ? this.models : createModels(), registry: this.registry(session),
       settings: { retry: { maxRetries: 0 }, stream: { timeoutMs: 60000 }, toolExecution: 'sequential' },
     }, context);
     session.harness = harness;
@@ -134,14 +135,17 @@ export class Runtime {
     this.active.set(snapshot.checkout, id);
     let accepted = false;
     let lease: FileHandle | undefined;
+    let authorization: RunAuthorization | undefined;
     try {
       await checkRoot(snapshot.checkout, this.store.rootIdentity(id));
       lease = await acquireCheckout(snapshot.checkout);
-      const session: Session = this.sessions.get(id) ?? {
+      const save = () => this.store.save(snapshot);
+      const approvals = new InteractiveApproval(snapshot, save);
+      authorization = new RunAuthorization(approvals);
+      const session: Session = {
         snapshot, baseline: [], protected: [], rootIdentity: this.store.rootIdentity(id), buildCache: { store: this.directory, thread: id }, owned: new Map(), inputs: [], requestId,
-        controller: new AbortController(), ready: false, save: () => this.store.save(snapshot), record: image => this.store.record(id, image),
+        authorization, approvals, lease, save, record: image => this.store.record(id, image),
       };
-      session.lease = lease; session.owned.clear(); session.controller = new AbortController();
       this.sessions.set(id, session);
       snapshot.status = 'running'; snapshot.error = null; snapshot.live_text = ''; snapshot.pending_approval = null;
       const result = { thread_id: id, request_id: requestId, accepted: true };
@@ -150,7 +154,13 @@ export class Runtime {
       accepted = true;
       session.finished = this.run(session, requestId, text);
       return result;
-    } finally { if (!accepted) { await lease?.close(); this.active.delete(snapshot.checkout); } }
+    } finally {
+      if (!accepted) {
+        authorization?.revoke();
+        if (authorization) this.sessions.delete(id);
+        await lease?.close(); this.active.delete(snapshot.checkout);
+      }
+    }
   }
   async run(session: Session, requestId: string, text: string) {
     const snapshot = session.snapshot;
@@ -168,8 +178,8 @@ export class Runtime {
       } catch (error) { if ((error as { code?: string }).code !== 'ENOENT') throw error; }
       await this.open(session);
       await session.root!.configure({ instructions }, context);
-      if (session.controller.signal.aborted) return;
-      session.ready = true;
+      if (session.authorization.signal.aborted) return;
+      session.authorization.activate();
       const submission = await session.root!.submit({ type: 'input', requestId, content: text }, context);
       await submission.wait(context);
       await session.root!.waitForIdle(context);
@@ -178,7 +188,7 @@ export class Runtime {
         snapshot.error = failure(error);
       }
     } finally {
-      session.ready = false; session.controller.abort(); session.approval?.(false);
+      session.authorization.revoke();
       snapshot.pending_approval = null; snapshot.live_text = '';
       await session.watch?.stop();
       await session.harness?.close(context);
@@ -195,7 +205,7 @@ export class Runtime {
         session.snapshot.status = 'interrupted'; session.snapshot.pending_approval = null;
         session.snapshot.error = { code: 'interrupted', message: 'Host stopped. Inspect effects before a new submission.' }; session.save();
       }
-      session.ready = false; session.controller.abort(); session.approval?.(false);
+      session.authorization.revoke();
     }
     for (const session of this.sessions.values()) {
       await session.harness?.close(context);
