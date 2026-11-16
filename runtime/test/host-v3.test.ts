@@ -413,6 +413,37 @@ test('retries are bounded and a persistent provider error stays private', { time
   assert(answered.messages.some(message => message.role === 'assistant'));
 });
 
+test('a failed run holds its queue, and a plain submission runs before it', { timeout: 40000 }, async t => {
+  const f = await setup(t, 'v3-retry-exhausted'); const thread = await f.create();
+  await submit3(f, thread.id, 's1', 'This will fail.');
+  assert.equal((await submit3(f, thread.id, 'f1', 'Queued behind the failure.', { when_busy: 'follow_up' })).ok, true);
+  await settled(f, thread.id, 's1');
+  const held = await watch3(f, thread.id);
+  assert.deepEqual([held.status, held.queued.map(item => item.request_id)], ['error', ['f1']]);
+  await delay(400);
+  assert.deepEqual(await watch3(f, thread.id), held);
+  // The plain submission runs now; the held input follows once that run answers.
+  assert.equal((await f.submit(thread.id, 's2', 'Try again.')).ok, true);
+  await settled(f, thread.id, 'f1');
+  const done = await until(() => watch3(f, thread.id), value => value.status === 'idle');
+  assert.deepEqual(done.queued, []);
+  assert.deepEqual(done.messages.map(message => message.role === 'user' ? message.id : 'assistant'), ['request-s1', 'request-s2', 'assistant', 'request-f1', 'assistant']);
+});
+
+test('Stop ends a run that is waiting to retry', { timeout: 40000 }, async t => {
+  const f = await setup(t, 'v3-retry-slow'); const thread = await f.create();
+  await submit3(f, thread.id, 's1', 'This will wait.');
+  const waiting = await until(() => watch3(f, thread.id), value => value.retry !== null);
+  assert.equal(waiting.status, 'running');
+  assert(waiting.retry!.at > Date.now() + 5000);
+  assert.equal((await v3<{ thread: Thread }>(f.store, { op: 'stop', thread_id: thread.id })).result.thread.status, 'stopped');
+  // Cleanup finishes long before the backoff would have.
+  assert.equal((await until(async () => JSON.parse(await readFile(join(f.store, `${thread.id}.settled`), 'utf8')), marker => marker.request_id === 's1', 5000)).status, 'stopped');
+  const stopped = await watch3(f, thread.id);
+  assert.deepEqual([stopped.status, stopped.retry], ['stopped', null]);
+  assert(!JSON.stringify(stopped).includes('SECRET_PROVIDER_TOKEN'));
+});
+
 test('the turn limit pauses the run with a distinct error and the next message continues', { timeout: 40000 }, async t => {
   const f = await setup(t, 'v3-turns'); const thread = await f.create();
   await submit3(f, thread.id, 's1', 'Read repeatedly.');

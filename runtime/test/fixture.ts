@@ -29,6 +29,7 @@ const responses = mode === 'v3-thinking' ? [
   overloaded(),
   fauxAssistantMessage([fauxText('Recovered after a transient provider error.')]),
 ] : mode === 'v3-retry-exhausted' ? [overloaded(), overloaded(), overloaded(), overloaded()]
+  : mode === 'v3-retry-slow' ? [overloaded()]
   : mode === 'v3-turns' ? Array.from({ length: 6 }, (_, index) => call('read', { path: 'notes.txt' }, `turn-${index}`))
   : mode === 'unicode-read' ? [
   call('read', { path: 'unicode.txt' }, 'unicode-read-1'),
@@ -111,7 +112,7 @@ class FixtureRuntime extends Runtime {
 }
 const runtime = new FixtureRuntime(process.argv[2], models, new Set(['faux']));
 // Short backoff and a small turn limit keep these scenarios fast; the policies are the production ones.
-if (mode?.startsWith('v3-retry')) runtime.retry = { enabled: true, maxRetries: 2, baseDelayMs: 40 };
+if (mode?.startsWith('v3-retry')) runtime.retry = { enabled: true, maxRetries: 2, baseDelayMs: mode === 'v3-retry-slow' ? 20000 : 40 };
 if (mode === 'v3-turns') runtime.maxTurns = 2;
 try { await serve(runtime); }
 finally { await runtime.close(); }
