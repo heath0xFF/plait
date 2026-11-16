@@ -90,10 +90,11 @@ accordingly. Do not report Linux host execution as working just because Pi runs.
 
 ## Arthur headless checkpoint
 
-The checkpoint is pushed as `ae8cab2` on `refactor/headless-core`, draft PR #9.
+The checkpoint was pushed as `ae8cab2` on `refactor/headless-core` in PR #9.
 Linux CI passed. Mac CI exposed an Xcode 16 Metal layout that the existing
-fixed-tool validator rejects; no sandbox assertions were removed.
-Current installer work is on `feat/macos-client-host-installer`.
+fixed-tool validator rejects; no sandbox assertions were removed. PR #10 fixed
+the Mac build path and passed the full installer checks. Both changes are now
+on `main` through merge `170f424`; PR #9 and PR #10 are merged.
 
 - Moved the six plain Rust modules and their tests into `crates/plait-core`.
   Production module contents were unchanged in that first extraction. The later
@@ -142,8 +143,9 @@ independent daemons and clients that can disconnect and reconnect.
   `npm run test:sandbox` refuse Linux full-sandbox acceptance. Runtime and direct
   Rust guardian entry points also deny Linux commands before execution.
 
-Next: re-run the full Mac checks and native client on a Mac, then select and test
-a Linux containment design. Linux file-helper tests now cover root replacement,
+The installer Mac checks and native launch now pass. Personal-Mac installed
+live-model acceptance remains separate. Select and test a Linux containment
+design before enabling commands there. Linux file-helper tests cover root replacement,
 postimages, protected files, aliases, and crash recovery, but do not establish
 all filesystem-race or command-containment guarantees. No remote transport or
 protocol/schema change was added. Do not add an unsandboxed fallback or expose

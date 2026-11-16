@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { fail, HostError } from '../protocol.ts';
+import { clipTail } from '../text.ts';
 
 export const COMMAND_TIMEOUT_MS = 15 * 60 * 1000;
 type GuardianCommand = {
@@ -36,12 +37,13 @@ export async function runGuardian(command: GuardianCommand, signal: AbortSignal,
     };
     child.stdin!.on('error', () => {});
     signal.addEventListener('abort', cancel, { once: true });
-    const collect = (data: Buffer) => {
-      const chunk = data.toString();
-      result = (result + chunk).slice(-16384);
-      output(chunk.slice(-4096));
+    const collect = (chunk: string) => {
+      result = clipTail(result + chunk, 16384);
+      output(clipTail(chunk, 4096));
     };
-    child.stdout!.on('data', collect); child.stderr!.on('data', collect);
+    // Pipe chunks can split UTF-8 bytes; each stream needs its own decoder.
+    child.stdout!.setEncoding('utf8').on('data', collect);
+    child.stderr!.setEncoding('utf8').on('data', collect);
     child.once('error', () => finish(new HostError('permission_denied', 'Command guardian could not start.')));
     child.once('exit', () => {
       // Unsupported detached descendants must not hold the output subscription open.

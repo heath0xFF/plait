@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { writeFileSync } from 'node:fs';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -45,6 +46,39 @@ test('guardian drains final output and bounds retained and streamed text', async
   assert(result.endsWith('FINAL_OUTPUT'));
   assert.equal(result.length, 16384);
   assert(chunks.every(chunk => chunk.length <= 4096));
+});
+
+test('guardian decodes split UTF-8 independently on stdout and stderr', { timeout: 5000 }, async t => {
+  const { root, run } = await setup(t);
+  const chunks: string[] = [];
+  const result = await run('unicode', undefined, chunk => {
+    chunks.push(chunk);
+    for (const marker of ['STDOUT_READY', 'STDERR_READY']) {
+      if (chunk.includes(marker)) writeFileSync(join(root, marker), 'SCRIPTED_FIXTURE_ONLY');
+    }
+  });
+  assert(result.includes('€')); assert(result.includes('🚀'));
+  assert(!result.includes('�'));
+  assert.equal(chunks.join(''), result);
+});
+
+test('guardian bounds do not create unpaired Unicode surrogates', async t => {
+  const { run } = await setup(t);
+  const chunks: string[] = [];
+  const result = await run('unicode-bounds', undefined, chunk => chunks.push(chunk));
+  assert(result.length <= 16384);
+  assert.equal(Buffer.from(result).toString(), result);
+  for (const chunk of chunks) {
+    assert(chunk.length <= 4096);
+    assert.equal(Buffer.from(chunk).toString(), chunk);
+  }
+});
+
+test('guardian flushes incomplete UTF-8 at normal end of output', async t => {
+  const { run } = await setup(t);
+  const chunks: string[] = [];
+  assert.equal(await run('incomplete-utf8', undefined, chunk => chunks.push(chunk)), '�');
+  assert.equal(chunks.join(''), '�');
 });
 
 test('guardian errors retain bounded diagnostics', async t => {

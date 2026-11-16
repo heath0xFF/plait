@@ -1,5 +1,22 @@
 # Verification
 
+## Unicode boundary regression — local checks on Arthur
+
+A long accepted message with an emoji across the preview cut produced an
+unpaired UTF-16 surrogate. The Rust transport rejected the snapshot and closed
+the connection. Seven focused cases reproduced the message/transcript cuts,
+snapshot byte-budget cuts, and split command-output decoding before the fix.
+
+The shared text helpers now keep whole code points within the existing limits.
+Each command pipe decodes UTF-8 across reads. Local checks passed: 51 workspace
+Rust tests, strict Clippy, 52 portable runtime tests, and 12 package-planning
+tests. No selected tests were skipped. Tests cover read-tool result limits,
+stream bounds and incomplete UTF-8 at EOF, saved previews after host restart,
+and accepted-request deduplication without replay. The Mac suite also includes
+a real sandboxed split-output test. Its full workflow remains the Mac acceptance
+gate; Linux fixture tests do not establish containment. No protocol, durable
+schema, approval arguments, or sandbox rules changed.
+
 ## macOS installer preview — verified 2026-11-16
 
 [Mac CI run 43782943308](https://github.com/heath0xFF/plait/actions/runs/43782943308)

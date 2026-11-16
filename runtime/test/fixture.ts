@@ -13,7 +13,9 @@ const models = createModels();
 const faux = fauxProvider({ tokensPerSecond: 120, tokenSize: { min: 1, max: 1 } });
 const call = (name: string, args: Record<string, string>, id: string) => fauxAssistantMessage([fauxToolCall(name, args, { id })], { stopReason: 'toolUse' });
 const mode = process.env.PLAIT_TEST_SCENARIO;
-const responses = mode === 'edit' ? [
+const responses = mode === 'unicode-read' ? [
+  call('read', { path: 'unicode.txt' }, 'unicode-read-1'),
+] : mode === 'edit' ? [
   call('read', { path: 'notes.txt' }, 'read-1'),
   call('edit', { path: 'notes.txt', old_text: 'before', new_text: 'after' }, 'edit-1'),
 ] : mode === 'edit-command' ? [

@@ -93,7 +93,10 @@ clients connect. The wire protocol is unchanged.
 `command/supervisor.ts` owns bounded output, cancellation, timeout, and guardian
 cleanup. Spawn failures clear their timer/listener. Final output is drained, with
 a one-second drain bound after guardian exit so an unsupported detached process
-cannot keep a subscription open.
+cannot keep a subscription open. Each output pipe decodes UTF-8 across read
+boundaries. `runtime/src/text.ts` keeps text cuts on whole Unicode code points
+within the existing UTF-16 budgets. Accepted-input previews, transcript fields,
+and tool output use these helpers; the original input journal is not clipped.
 
 `bash scripts/check.sh` is the common development entry point. Runtime test
 selection is explicit: common daemon/file tests on both systems, real sandbox

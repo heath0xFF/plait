@@ -113,7 +113,10 @@ Message roles: `user`, `assistant`. Tool statuses: `running`, `done`, `error`,
 Approval kind is `edit` or `command`. Approval is bound to one tool call; it is
 not blanket permission. Stop and restart revoke pending approvals.
 Messages: latest 100, 4096 characters each. Tools: latest 50, 4096 characters
-per input/output. Live text: latest 16384 characters. The complete serialized
+per input/output. Live text: latest 16384 characters. These text budgets count
+UTF-16 code units; clipping keeps whole Unicode code points and does not increase
+the budget. Command stdout and stderr each decode UTF-8 across pipe chunks.
+The original accepted input remains in the private journal. The complete serialized
 snapshot is also limited to 512 KiB; older content is removed first. Approval
 arguments are never clipped. `truncated` flags clipping.
 

@@ -1,5 +1,7 @@
+import { clipTail } from './text.ts';
+
 export type InputRecord = { request_id: string; text: string; entry: number | null; anchor: number };
-export const inputMessage = (input: InputRecord) => ({ id: `request-${input.request_id}`, role: 'user' as const, text: input.text.slice(-4096) });
+export const inputMessage = (input: InputRecord) => ({ id: `request-${input.request_id}`, role: 'user' as const, text: clipTail(input.text, 4096) });
 
 export type ModelChoice = { provider: string; model_id: string };
 export type Status = 'idle' | 'running' | 'awaiting_approval' | 'stopped' | 'interrupted' | 'error';
