@@ -83,7 +83,8 @@ def launch_agent(installed):
         "RunAtLoad": True,
         "KeepAlive": {"SuccessfulExit": False},
         "ThrottleInterval": 10,
-        "ProcessType": "Background",
+        # This service answers desktop requests, not discretionary background work.
+        "ProcessType": "Standard",
         "EnvironmentVariables": {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
     }
 

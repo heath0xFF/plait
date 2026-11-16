@@ -59,6 +59,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertNotIn("UserName", agent)
         self.assertNotIn("PLAIT_HOST_STORE", agent["EnvironmentVariables"])
         self.assertEqual(agent["KeepAlive"], {"SuccessfulExit": False})
+        self.assertEqual(agent["ProcessType"], "Standard")
 
     def test_host_updates_never_force_restart_and_client_package_does_not_touch_host(self):
         script = host_postinstall(HOST_BASE / "releases/0.1.0-aabb")

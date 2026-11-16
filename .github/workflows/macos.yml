@@ -83,7 +83,7 @@ jobs:
       - name: Build and verify client and host installers
         run: bash scripts/build-macos.sh
       - name: Install and test packaged client and daemon
-        run: bash scripts/smoke-installer-macos.sh
+        run: PLAIT_COMPARE_STARTUP_POLICIES=1 bash scripts/smoke-installer-macos.sh
       - name: Upload development package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
