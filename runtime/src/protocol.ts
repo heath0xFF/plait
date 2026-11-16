@@ -47,6 +47,7 @@ const fields: Record<string, string[]> = {
   create_thread: ['checkout', 'provider', 'model_id', 'request_id'],
   submit: ['thread_id', 'request_id', 'text'], stop: ['thread_id'],
   approve: ['thread_id', 'approval_id', 'allow'], watch: ['thread_id'],
+  command_policy: ['checkout'], set_command_policy: ['checkout', 'policy'],
 };
 export function validate(value: unknown): Request {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail('invalid_request', 'Expected an object.');

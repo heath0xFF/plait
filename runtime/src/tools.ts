@@ -4,6 +4,10 @@ import type { ToolExecutionApi } from '@earendil-works/pi-durable';
 import type { Context } from '@earendil-works/chord/context';
 import { fileAction, safePath, dirtyPaths, ignoredPaths, pathKey, sameImage } from './safety.ts';
 import { command } from './command.ts';
+import { trustedCommand } from './command/trusted.ts';
+import { TRUSTED_COMMAND_DESCRIPTION } from './command/policy.ts';
+import type { CommandPolicy } from './command/policy.ts';
+import type { LoginEnvironment } from './command/login-environment.ts';
 import type { FileIdentity, Postimage } from './safety.ts';
 import type { BuildCache } from './build-cache.ts';
 import { fail } from './protocol.ts';
@@ -19,6 +23,10 @@ export type ToolState = {
   buildCache: BuildCache;
   owned: Map<string, Postimage>;
   record(image: Postimage): void;
+  // Read once at admission. Absent means sandboxed, the default.
+  commandPolicy?: CommandPolicy;
+  forget?(path: string): void;
+  loginEnvironment?: Promise<LoginEnvironment>;
 };
 export function registry(state: ToolState) {
   const result = createRegistry();
@@ -33,6 +41,7 @@ export function registry(state: ToolState) {
     description: name === 'read' ? 'Read a UTF-8 regular file inside the checkout.'
       : name === 'edit' ? 'Replace one unique exact old_text with new_text. May require approval; dirty paths are protected.'
       : name === 'write' ? 'Create a new file only; never overwrite. May require approval.'
+      : state.commandPolicy === 'trusted' ? TRUSTED_COMMAND_DESCRIPTION
       : 'Run a command (may require approval): checkout read-only, writes only to private TMPDIR and this thread\'s CARGO_HOME/CARGO_TARGET_DIR cache, no external network or checkout/Git writes, 15 minute limit. Tests may use scratch-local Git repositories and Unix sockets. Do not start background services. Use offline locked builds.',
     parameters: { type: 'object', properties: schemas[name], required: Object.keys(schemas[name]), additionalProperties: false },
     replay: 'unsafe' as const,
@@ -63,10 +72,13 @@ export function registry(state: ToolState) {
         }
         await state.authorization.authorize(Object.freeze({
           toolId: api.callId, name, arguments: args, dirtyPaths: Object.freeze([...state.baseline]),
+          ...(state.commandPolicy === 'trusted' ? { commandPolicy: state.commandPolicy } : {}),
         }), signal);
         // Stop can arrive between authorization and this continuation.
         state.authorization.check(signal);
-        if (name === 'command') text = await command(state.snapshot.checkout, args.command, state.baseline,
+        // Trusted mode is a separate path; it never loosens the sandboxed one.
+        if (name === 'command' && state.commandPolicy === 'trusted') text = await trustedCommand(state, args.command, signal, chunk => api.output(chunk));
+        else if (name === 'command') text = await command(state.snapshot.checkout, args.command, state.baseline,
           signal, chunk => api.output(chunk), state.lease?.fd, state.rootIdentity, state.buildCache);
         else {
           const result = await fileAction(state.snapshot.checkout, name, args.path,
