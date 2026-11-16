@@ -1,9 +1,13 @@
-import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { cleanupSessionResources } from '@earendil-works/pi-ai';
 import { Runtime } from './runtime.ts';
+import { Providers } from './providers.ts';
+import { piProviders } from './pi-providers.ts';
 import { serve } from './stdio.ts';
 
-const models = await ModelRuntime.create({ allowModelNetwork: false });
-const runtime = new Runtime(process.argv[2], models, new Set(models.getAvailableSnapshot().map(model => model.provider)));
+const source = piProviders();
+const registry = await source.load();
+const runtime = new Runtime(process.argv[2], registry.models, registry.authenticated);
+runtime.providers = new Providers(runtime, source, registry);
+// Closing the runtime also cancels pending sign-ins and waits for credential writes.
 try { await serve(runtime); }
-finally { await runtime.close(); await models.settleCredentialWrites(); cleanupSessionResources(); }
+finally { await runtime.close(); cleanupSessionResources(); }

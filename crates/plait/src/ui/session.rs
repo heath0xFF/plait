@@ -6,7 +6,6 @@ use plait_core::{
     host::{MessageRole, ThreadSummary},
     host_state::HostState,
     session::{self, Draft, Journal, Session, Thread},
-    state::project_name,
 };
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
@@ -81,8 +80,11 @@ impl Plait {
                             })
                         }).detach();
                         for (id, thread) in &data.threads {
-                            if let Some(pending) = &thread.pending {
+                            for pending in thread.pending.iter().chain(&thread.pending_submissions) {
                                 this.host.submissions.restore(id.clone(), pending.clone());
+                            }
+                            for pending in &thread.queued_submissions {
+                                this.host.submissions.restore_accepted(id.clone(), pending.clone());
                             }
                         }
                         let selected = data.selected.clone();
@@ -159,21 +161,50 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.host.creating || self.host.pending_create.is_some() {
+            self.notice =
+                Some("Resolve the pending thread creation before changing checkout.".into());
+            cx.notify();
+            return;
+        }
         self.capture_session(cx);
-        self.state.projects[0].name = project_name(&path);
+        let mut preferences = self.preferences.value.clone();
+        preferences.navigation.open(&path);
+        self.persist_navigation(preferences, cx);
+        self.host.submissions.disconnected();
+        self.history = Default::default();
         let epoch = self.host.epoch + 1;
         let submissions = std::mem::take(&mut self.host.submissions);
-        self.host = HostState::new(path.clone());
-        self.host.epoch = epoch;
+        let live = self.host.protocol() >= 3 && self.host.connected;
+        if live {
+            self.host.checkout = path.clone();
+            self.host.epoch = epoch;
+            self.host.select(None);
+            self.host.submitting = false;
+            if self.host.saving {
+                self.host.saving = false;
+                self.host.save_message =
+                    Some("Save not confirmed. Reconnect to reload the saved default.".into());
+            }
+        } else {
+            self.host = HostState::new(path.clone());
+            self.host.epoch = epoch;
+        }
         self.host.submissions = submissions;
         self.host_watch = None;
         self.session.restore_thread = None;
+        self.navigation.managing = None;
+        self.navigation.rename = None;
+        self.navigation.menu = None;
         self.settings_open = false;
         self.new_thread_open = false;
         self.file_scroll = UniformListScrollHandle::new();
         self.notice = None;
         self.state.repository.open(path);
-        self.reconnect_host(window, cx);
+        self.rebuild_projects(cx);
+        if !live {
+            self.reconnect_host(window, cx);
+        }
         self.pump(cx);
         self.capture_session(cx);
     }
@@ -275,6 +306,15 @@ impl Plait {
                         submitted: submitted.clone(),
                     },
                     pending: self.host.submissions.pending(&summary.id).cloned(),
+                    pending_submissions: self
+                        .host
+                        .submissions
+                        .all(&summary.id)
+                        .iter()
+                        .skip(1)
+                        .cloned()
+                        .collect(),
+                    queued_submissions: self.host.submissions.accepted(&summary.id).to_vec(),
                 },
             ) {
                 self.session.note = Some(error);
@@ -310,14 +350,26 @@ impl Plait {
         }));
     }
 
-    pub(super) fn thread_title(&self, id: &str) -> String {
-        self.session
-            .data
+    pub(super) fn summary_title(&self, summary: &ThreadSummary) -> String {
+        summary
+            .title
             .as_ref()
-            .and_then(|data| data.threads.get(id))
-            .filter(|_| self.session_accepts_thread(id))
-            .map(|thread| thread.title.clone())
             .filter(|title| !title.is_empty())
+            .cloned()
+            .or_else(|| {
+                self.saved_thread(summary)
+                    .map(|thread| thread.title.clone())
+                    .filter(|title| !title.is_empty())
+            })
+            .unwrap_or_else(|| format!("Thread {}", summary.id.chars().take(8).collect::<String>()))
+    }
+
+    pub(super) fn thread_title(&self, id: &str) -> String {
+        self.host
+            .threads
+            .iter()
+            .find(|thread| thread.id == id)
+            .map(|summary| self.summary_title(summary))
             .unwrap_or_else(|| format!("Thread {}", id.chars().take(8).collect::<String>()))
     }
 
@@ -329,16 +381,12 @@ impl Plait {
         if !self.session_accepts_thread(&id) {
             return;
         }
-        if let Some(pending) = self.host.submissions.pending(&id).cloned()
-            && snapshot
-                .messages
-                .iter()
-                .any(|message| message.id == format!("request-{}", pending.request_id))
-        {
-            self.host.submissions.finish(&id, &pending.request_id);
+        let accepted = self.host.submissions.observe(snapshot);
+        let accepted_any = !accepted.is_empty();
+        for pending in accepted {
             if let Some(composer) = self.composers.get(&id) {
                 composer.update(cx, |composer, cx| {
-                    composer.clear_if_unchanged(&pending.text, cx);
+                    composer.acknowledge(&pending.text, pending.draft_revision, cx);
                 });
             }
         }
@@ -353,8 +401,13 @@ impl Plait {
             .data
             .as_ref()
             .and_then(|data| data.threads.get(&id))
-            .is_some_and(|thread| thread.pending.as_ref() != self.host.submissions.pending(&id));
-        if title_missing || pending_changed {
+            .is_some_and(|thread| {
+                thread.pending.as_ref() != self.host.submissions.pending(&id)
+                    || thread.pending_submissions.as_slice()
+                        != self.host.submissions.all(&id).get(1..).unwrap_or_default()
+                    || thread.queued_submissions.as_slice() != self.host.submissions.accepted(&id)
+            });
+        if title_missing || pending_changed || accepted_any {
             self.capture_session(cx);
         }
     }

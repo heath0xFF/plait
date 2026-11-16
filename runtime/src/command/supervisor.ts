@@ -3,13 +3,13 @@ import { fail, HostError } from '../protocol.ts';
 import { clipTail } from '../text.ts';
 
 export const COMMAND_TIMEOUT_MS = 15 * 60 * 1000;
+// A request is either a Seatbelt profile or the explicit trusted entry, never both.
 type GuardianCommand = {
   root: string;
   text: string;
-  policy: string;
   env: NodeJS.ProcessEnv;
   checkoutFd?: number;
-};
+} & ({ policy: string } | { trusted: true });
 
 // Only platform policy preparation may supply a production guardian request.
 export async function runGuardian(command: GuardianCommand, signal: AbortSignal, output: (chunk: string) => void, timeoutMs = COMMAND_TIMEOUT_MS): Promise<string> {
@@ -17,7 +17,9 @@ export async function runGuardian(command: GuardianCommand, signal: AbortSignal,
   const executable = process.env.PLAIT_HOST_EXE;
   if (!executable) fail('internal', 'Host command guardian is not configured.');
   return await new Promise<string>((resolve, reject) => {
-    const child = spawn(executable, ['command', command.root, command.policy, command.text], {
+    const args = 'trusted' in command ? ['trusted-command', command.root, command.text]
+      : ['command', command.root, command.policy, command.text];
+    const child = spawn(executable, args, {
       cwd: command.root, env: command.env,
       stdio: ['pipe', 'pipe', 'pipe', process.env.PLAIT_LOCK_FD ? Number(process.env.PLAIT_LOCK_FD) : 'ignore', command.checkoutFd ?? 'ignore'],
     });

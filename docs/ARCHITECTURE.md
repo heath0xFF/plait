@@ -18,31 +18,56 @@ crates/plait/src/
 main.rs                 native app lifecycle, window, startup
 ui/                     GPUI layout, actions, focus, lists, theme
   mod.rs                UI state and background-task dispatch
-  navigation.rs         Project → Machine → Thread
+  actions.rs            every application action: ID, title, menu, default key
+  commands.rs           command palette sources and the overlay above the workspace
+  palette.rs            search field over a ranked list; ranking off the UI thread
+  model_picker.rs       model catalog as a palette; default, favorites, new thread
+  text_field.rs         single-line input: IME, selection, clipboard, undo
+  navigation.rs         virtualized projects and threads, filtering and management
+  navigation_host.rs    cross-checkout listing, live summaries, and notifications
   conversation.rs       no-thread state and the Git inspector
   live_conversation.rs  real host messages, ordered tools, and approvals
-  composer.rs           native input, IME, clipboard, undo, submit/stop events
+  selection.rs          text selection, copy, and link clicks in the conversation
+  tool_card.rs          one line per tool call, its details, and grouped runs
+  composer/             native input, IME, clipboard, undo, and its events
+    draft.rs            text, selection, undo, acceptance guard, prompt recall
+    history.rs          prompts already sent in the thread
+    input.rs            wrapped layout, auto-growing height, painting
+    trigger.rs          `@` and `/` detection and the inserted mention text
+    completion.rs       reusable suggestion list: state and rendering
+    mentions.rs         background file ranking and its stale-result guard
+    commands.rs         the local command table
+    parent.rs           what the window supplies and performs for a composer
   host.rs               background host requests and event subscriptions
+  history.rs            bounded history reads, projection dispatch, and reading controls
   session.rs            desktop restore/save coordination and submission guards
-  markdown.rs           native conversation blocks and copy controls
-  settings.rs           model choice, auth status, defaults, and reconnect
+  markdown.rs           native conversation blocks: prose, code, tables, diffs
+  settings.rs           host status and the Models, Approvals, Keyboard, About sections
   changes.rs            real local status and diff views
   theme.rs              tokens, original controls, embedded glyphs
-  snapshot.rs           Linux-only headless layout checks (tests only)
+  snapshot.rs           windowless scene snapshots on macOS and Linux (tests only)
 
 crates/plait-core/src/
 host.rs                 bounded Unix-socket framing and requests; background only
 host/watch.rs           cancellable reader and bounded async snapshot delivery
 host_state.rs           host selection, request identity, and stale-result guards
 transcript.rs           stable row identity and incremental list-change plans
+history.rs              stored/live merging, text parts, memory limits, run wording
 local_socket.rs         owner-only paths and OS peer-identity checks
 state.rs                selection, collapse state, request queue, cache
 model.rs                plain Rust data, no GPUI
 machine.rs              this machine's display name
 preferences.rs          desktop-only preferences and Cmd-number order
+fuzzy.rs                subsequence matching and scoring for pickers
+navigation.rs           project grouping, activity tracking, filtering, and jump order
 session.rs              private desktop journal, identity checks, writer lock
 markdown.rs             plain text blocks and style ranges, parsed off render
+highlight.rs            lexical syntax classes for fenced and tool code
+diff.rs                 line diff of an edit's old and new text
+tool_view.rs            what each tool call shows, and grouping of long runs
+selection.rs            selection order, ranges, word bounds, and copied text
 git.rs                  synchronous, read-only Git adapter; background only
+fuzzy.rs                case-insensitive subsequence matching for pickers
 ```
 
 The desktop imports `plait_core`; the core has no GPUI dependencies. Core and
@@ -53,11 +78,12 @@ The core uses Unix filesystem and socket APIs; it is not a Windows port.
 Filesystem, socket, and Git operations run on the background executor.
 
 A Linux build does not enable agent command execution. The runtime still rejects
-non-macOS commands, and the Rust command guardian still requires Seatbelt. Linux
+non-macOS commands under either command policy, and the Rust command guardian
+rejects both its sandboxed and trusted entries there. Linux
 containment and cancellation need a separate safety review. Local peer identity
 is checked with `getpeereid` on macOS and `SO_PEERCRED` on Linux.
-Both platforms use the same local protocol (version 1, with opt-in version 2)
-and the same ownership boundaries.
+Both platforms use the same local protocol (version 1, with opt-in versions 2
+and 3) and the same ownership boundaries.
 
 The Linux sandbox mechanism is an open decision. An unprivileged namespace
 probe succeeded, but a read-only bind mount still permitted access to an outside
@@ -71,10 +97,23 @@ writer lock. The desktop is a client, not the owner of an agent run. Window
 closure drops subscriptions; it does not stop execution. See [HOST.md](HOST.md)
 for the exact protocol, storage location, launch commands, and safety policy.
 
-The host owns model discovery, existing Pi authentication, thread persistence,
-and the default model. The desktop receives availability, not credentials.
-Each thread keeps its exact provider/model pair. Saving a default does not
-change an existing thread.
+The host owns model discovery, Pi authentication, thread persistence, and the
+default model. The desktop receives availability, not credentials. The host's
+[provider sign-in operations](HOST.md#provider-sign-in) take a pasted key or
+sign-in code from a client once and store it in Pi's files. Settings → Providers
+calls these operations and refreshes the model catalog after changes.
+Each thread keeps its exact provider/model pair and thinking level until a
+client changes them between runs ([protocol version 3](HOST.md#model-and-thinking-level)).
+Saving a default does not change an existing thread.
+
+The host also owns each thread's title, timestamps, archive flag, and the queue
+of inputs waiting behind a run. A snapshot is the bounded live tail of a thread.
+The complete conversation is read on demand, in pages, from the thread's saved
+conversation store; an idle thread's store is opened read-only for that, so a
+history read cannot recover or run anything. The desktop loads stored history,
+shows reasoning, and uses live summaries, host-owned titles, rename, and archive.
+Composer controls configure models and thinking and submit follow-up or steering
+messages through the same negotiated version 3 contract.
 
 The desktop uses bounded snapshot subscriptions. Runtime state changes signal
 the host through a private inherited Unix socket, separate from request/reply
@@ -85,24 +124,35 @@ wait on both the wakeup and client disconnect. Channel EOF replaces the host's
 periodic child-process check. Client protocol version 1 and durable schemas are
 unchanged; the internal channel ships with the host/runtime update unit.
 
+A thread-list subscription uses the same wakeup path with one reserved
+notification name, sent only when a thread's summary changes. The host repeats
+the bounded listing and sends the summaries that differ, so streamed text costs
+list watchers nothing.
+
 The desktop owns a cancellation lease for its selected subscription. Selection,
 reconnect, and view release drop that lease; socket shutdown runs on the background
 executor and does not send Stop. A dedicated reader keeps idle socket waits off
 GPUI's shared worker pool. A one-slot async inbox delivers the newest snapshot
-without periodic UI wakeups or an unbounded event queue. Thread ID, model, and
+without periodic UI wakeups or an unbounded event queue. Thread ID and
 checkout are checked before coalescing, so an invalid frame cannot be hidden by
-a later valid one. Initial replies and
+a later valid one. The model is not pinned: it can change between runs. The
+thread-list reader shares this machinery and delivers the merged list. Initial replies and
 partial frames retain absolute deadlines; an idle established watch has no timer.
 
 A repository epoch, watch epoch, and thread ID guard each async result. An uncertain submission keeps its request
 ID for an explicit retry. Reconnect loads state; it does not submit a new task.
 The composer keeps its draft until acceptance and clears it only if its edit
-revision still matches the submitted draft. Each thread has its own composer.
+revision still matches the submitted draft. Each pending request retains its own
+revision, queue mode, and approval mode, so out-of-order replies cannot erase a
+newer draft or change a retry’s authorization. Each thread has its own composer.
 
 Each run is submitted with an approval mode. In `ask` mode every file change and
 command needs a one-call approval with full arguments; in `auto` mode, the
 desktop default with a version 2 host, they run without a prompt. File helpers own checkout writes; command execution reads the checkout and uses
-private scratch space for build output. Stop revokes pending approvals and
+private scratch space for build output. A project can instead be set to the
+opt-in trusted [command policy](HOST.md#command-policy), in which commands run
+as the user and may write the checkout. Settings → Approvals offers the policy
+with a deliberate confirmation of Trusted access. Stop revokes pending approvals and
 cancels work. Interrupted work must not replay automatically after host failure.
 These boundaries need the tests listed in HOST.md before valuable-repository use.
 
@@ -120,10 +170,18 @@ registry asks the run for authorization without owning the approval lifecycle.
 Argument limits, dirty-path protection, checked file helpers, and command
 containment remain mandatory in `tools.ts` and its helpers. Authorization is
 checked again before an effect starts, so a late Allow cannot override Stop.
+Command containment is a property of the checkout's command policy, not of the
+approval mode: a run reads the policy once at admission, and only a trusted
+project takes the separate uncontained path. File-tool checks apply to both.
 
 The submitting desktop chooses the mode for one run (see
-[protocol version 2](HOST.md#protocol-version-2)). There is no persisted grant,
-scheduling, or new storage table. Tests include a clearly
+[protocol version 2](HOST.md#protocol-version-2)). There is no persisted grant.
+A version 3 input [queued behind a run](HOST.md#messages-during-a-run) keeps the
+mode it was submitted with and, when it starts, is admitted like any submission
+with a fresh authorization object. A steering input joins the active run and
+uses that run's authorization. Stop clears the queue; a failed run or a restart
+holds it. A model request that fails transiently is retried with backoff; tool
+calls are marked unsafe to replay and are never repeated. Tests include a clearly
 labeled permissive policy fixture to check that authorization cannot bypass file
 protection or command containment. On Linux, the command check proves denial,
 not a working sandbox. The automation requirement remains tracked in
@@ -148,6 +206,16 @@ boundaries. `runtime/src/text.ts` keeps text cuts on whole Unicode code points
 within the existing UTF-16 budgets. Accepted-input previews, transcript fields,
 and tool output use these helpers; the original input journal is not clipped.
 
+`command/policy.ts` owns the per-checkout command policy, its two host
+operations, and the trusted wording for instructions, the tool description, and
+approvals. `command/login-environment.ts` reads the account's login-shell
+environment for trusted commands. `command/trusted.ts` runs a trusted command
+through the same supervisor and guardian. Before the command it drops
+ownership records that had already drifted; afterwards it refreshes the records
+of this thread's files that the command changed and reports changes to
+pre-existing dirty paths.
+`tools.ts` chooses the path from the policy the run was admitted with.
+
 `bash scripts/check.sh` is the common development entry point. Runtime test
 selection is explicit: common daemon/file tests on both systems, real sandbox
 tests on macOS, and command-denial tests on Linux. The full sandbox gate fails
@@ -170,13 +238,19 @@ current snapshot's cache, but cannot replace another selected file.
 
 Diffs are loaded on demand. Up to eight diffs are cached per status snapshot.
 Refresh clears that cache. Threads within a checkout share its Git state.
+
+The checkout's file list is a third job, started only when a composer asks for
+it. It has its own queue slot, so it cannot displace a diff, and it runs after
+status because it needs the root that status reports. The list is kept until
+the epoch changes; a failed read is not cached, so the next request retries.
 Git reads do not start SSH or network connections. Remote transport is not
 implemented.
 
 ## Git boundary
 
-Public operations are `status(path)` and `diff(root, change, mode)`. Both return
-data or a user-facing error. There are no write operations.
+Public operations are `status(path)`, `diff(root, change, mode)`, and
+`files(root)`. Each returns data or a user-facing error. There are no write
+operations.
 
 - Git CLI, not libgit2. Use porcelain v1 with NUL-delimited paths.
 - Keep paths as `PathBuf`/OS bytes. Lossy text is for display only.
@@ -194,6 +268,13 @@ data or a user-facing error. There are no write operations.
   concurrently. A job includes multiple subprocesses, so its total deadline can
   be longer than 10 seconds.
 - Reject oversized status rather than showing an incomplete file list.
+- `files` lists tracked files plus untracked files that are not ignored, with
+  one `ls-files` call under the same hardening and limits. It reads names, not
+  contents. Files deleted from the worktree, sparse-checkout entries, and
+  nested repositories are left out. A list over 8 MiB or 200,000 paths is
+  clipped and marked, because a picker can still use part of it. Names that are
+  not UTF-8 or contain control characters are counted and skipped: they cannot
+  be typed into a message unchanged.
 - Limit displayed patches to 10,000 lines and 2,000 characters per line.
   A clipped preview is labeled. Unified source line numbers are parsed in the
   background, as is the widest-line index used for horizontal scrolling.
@@ -234,7 +315,7 @@ waiting run. Releases other than the active one are then removed.
 `plait-host update` applies the same steps on machines without the app.
 
 This changes launch configuration, not the frozen protocol or durable thread
-schema. The client accepts protocol versions 1 and 2. Future protocol
+schema. The client accepts protocol versions 1 through 3. Future protocol
 and storage changes need a separate compatibility review. Developer ID signing
 and notarization are not implemented. See [Mac installation](MACOS.md) for
 paths and operational limits.
@@ -253,17 +334,55 @@ Model defaults and credentials belong to the host. Choices that belong to one
 desktop installation live in `plait_core::preferences`, saved as JSON at
 `~/Library/Application Support/Plait/desktop.json` on macOS
 (`$XDG_CONFIG_HOME/plait/desktop.json` or `~/.config/plait/desktop.json`
-elsewhere). Today it holds one setting: what Cmd-1 to Cmd-9 select.
+elsewhere). It holds what Cmd-1 to Cmd-9 select, the approval default, whether
+the Git inspector is hidden, favorite and recently used models, and shortcut
+overrides by stable action ID. `PLAIT_DESKTOP_PREFERENCES_FILE` selects an
+absolute preferences path for an isolated development instance. The model
+lists are provider and model identifiers only, bounded in length and count; the
+file never holds a credential. The navigation section also stores opened and
+hidden checkout paths, up to 1,000 observed thread activity stamps and unread
+markers, and the notification preference. Older files load with empty navigation
+state; thread content stays in the host and draft journal.
 
 The file is read and written on the background executor. A missing file means
 defaults. A malformed or oversized file is reported in Settings and left in
 place; defaults apply. Saves replace the file atomically, and Settings says
-"Saved" only after the write succeeds. Only the newest save reports a result.
-Unknown fields are ignored so a newer client's file still loads.
+"Saved" only after the write succeeds. Writes are serialized, with intervening
+changes coalesced to the newest snapshot; only the newest save reports a result.
+An unsafe or failed load disables writes for that window, preserving the file.
+Unknown fields are ignored so a newer client's file still loads, and a file
+written before a field existed loads with that field's default.
 
-Cmd-1 to Cmd-9 count real host threads in sidebar order on the local machine.
-A machine or project selects its first thread; a row with no thread does nothing.
-Jumping expands collapsed parents.
+Cmd-1 to Cmd-9 count matching real host threads in project order on the local
+machine. A machine or project selects its first matching thread; an empty row
+does nothing. Jumping expands collapsed parents.
+
+### Projects and thread activity
+
+With protocol version 3, the desktop subscribes before paging the complete thread
+list across checkouts. Live summaries replace their matching rows; old listings
+are replaced on reconnect. The host watches its newest 200 threads. Older loaded
+threads remain readable and explicitly refreshable, with this limit shown above
+the list. A failed watch is reported as paused updates rather than current data.
+No subscription is polled while idle.
+
+Projects come from host checkout paths and opened folders. Hidden projects stay
+in the host and can be reopened through the palette. Folder availability checks
+run in the background. Successful Git status results normalize a selected
+subdirectory or symlink to its checkout root. Switching projects preserves
+per-thread composers and pending request IDs, changes the repository epoch, and
+cancels only the selected snapshot subscription. It never sends Stop.
+
+A completion, failure, interruption, stop, or approval change marks an unseen
+thread until it is opened. Observations and unread markers persist in desktop
+preferences. The initial listing updates markers but does not post notifications.
+While another thread is visible or the window is inactive, later attention-worthy
+changes request window attention and post a GPUI system notification. Opening a
+notification selects its thread. Alerts off suppresses both external signals,
+while in-app markers remain. GPUI checks for a bundle identifier before using
+macOS UserNotifications and requests authorization on first delivery. Unbundled
+builds and denied authorization retain in-app markers and the attention request.
+No test posts a real system notification.
 
 ### Desktop recovery
 
@@ -292,24 +411,175 @@ matching accepted-input event can resolve it. The composer revision guard surviv
 restart, so an acknowledgement cannot erase a subsequently edited draft. The host
 protocol and durable conversation schema are unchanged.
 
+### Composer
+
+The composer owns editable text and reports intent as events: Submit (text, edit
+revision, and whether to steer), Stop, a
+chosen local command, and a request for the checkout's files. The window owns
+host requests and Git reads and performs the commands. `Draft` holds every
+editing rule without GPUI, so the rules are unit-tested.
+
+The input is one line when empty and grows with the wrapped draft to about a
+third of the window height, with a floor of four lines, then scrolls. Its
+height comes from a measured layout at the final width. The conversation list
+is bottom-aligned, so it stays pinned to its newest row as the input grows.
+Wrapped rows are kept between frames. Moving the cursor shapes nothing, and an
+edit reshapes only the lines whose text changed, so a large paste stays
+responsive. Undo keeps at most 100 steps and 4 MiB of draft text.
+
+Up on the first visual line recalls prompts sent in the thread, newest first.
+Down walks forward and finally returns the draft, its selection, and its undo
+history unchanged. Recall adds no undo step; editing a recalled prompt makes
+the previous draft one undo step. Every recall step advances the edit
+revision, so an acknowledgement for an earlier submission cannot clear recalled
+text. The saved draft is the one being written, not the prompt on screen.
+Sending a recalled prompt unchanged returns to that draft. History comes from
+the host snapshot's user messages. The host keeps only the tail of a long
+prompt, so prompts sent from this composer are also remembered exactly, for
+the life of the window.
+
+Typing `@` at the start of a word lists checkout files; `/` as the first
+character of an otherwise empty draft lists local commands. Both use one
+suggestion list, `composer::Completion`: plain state and a render function
+that never takes focus. The file list comes from `git::files` through the
+repository state. Ranking runs on the background executor with
+`plait_core::fuzzy`; a result is applied only if it belongs to the newest
+query and the list is still open. Accepting a file replaces `@query` with the
+checkout-relative path and a space, such as `src/main.rs `. A path with spaces
+or other word-ending punctuation is wrapped in backticks. Nothing is attached
+and no file is read: the agent receives the text a person would have typed.
+Commands are a table in `composer/commands.rs`; each maps to an action the app
+already has.
+
+Escape closes the suggestion list, then leaves recall. While the agent works,
+two Escape presses within 1.5 seconds stop the run; one press only arms the
+gesture, and any edit or cursor movement cancels it.
+
+The scene walk draws the composer empty, with several lines, past its height
+limit, and with each suggestion list open, at both window sizes. One scene
+types a mention, lists the fixture repository through Git, and accepts the
+result. The scenes do **not** exercise key events, IME, pointer selection,
+wheel scrolling, or the accessibility tree; those have had no check in a
+native window. The editing rules behind them are unit-tested.
+
+### Queue and per-thread controls
+
+A version 3 composer can send during a run: Enter follows up, Option-Enter
+steers, and Stop remains a separate control. The core `Submissions` collection
+tracks each outstanding request independently. Request ID, full text, queue
+mode, approval mode, and draft revision are written before socket I/O. A queued
+snapshot item acknowledges a request just as its accepted message does. Sending
+flags are transient; reopening and reconnecting never submit on their own.
+The legacy journal `pending` field holds the first outstanding item;
+`pending_submissions` holds the rest. Additive `queued_submissions` preserves
+exact local text for cancelling a queued message back into the draft. Queues
+owned by the host remain authoritative; this local cache starts no work.
+
+`ui/thread_controls.rs` presents model, thinking, approval, context usage, and
+the input queue. Model changes are refused during a run. Thinking choices come
+from the catalog, and request replies are guarded by host epoch, selected
+thread, and request sequence. The subscription owns snapshot order; control
+replies do not replace a newer event. Saved thread identity is ID and checkout;
+a model change preserves draft recovery. Pure usage formatting and thresholds
+live in `plait-core::compose`, with no GPUI dependency.
+
 ### Native conversation text
 
-`plait-core::markdown` projects CommonMark into plain blocks and style ranges on
-the background executor. `pulldown-cmark` is pinned to 0.13.0 with default features
-disabled; its MIT-licensed source and event API were checked at that version.
-No HTML renderer or web view is used. HTML, image destinations, and links remain
-text: no image fetch, script execution, or automatic URL opening. Unchanged
-messages retain their parsed projection while the live answer changes. Excessive
-block counts fall back to the original text rather than dropping content.
+`plait-core::markdown` projects CommonMark, with tables, strikethrough, and task
+lists, into plain blocks and style ranges on the background executor.
+`pulldown-cmark` is pinned to 0.13.0 with default features disabled; its
+MIT-licensed source and event API were checked at that version. No HTML renderer
+or web view is used. HTML stays text and an image is never fetched: its
+description and address are shown as text. Unchanged rows retain their
+projection while the live answer changes. Excessive block counts fall back to
+the original text rather than dropping content, and an oversized table becomes
+tab-separated text.
 
-The native view draws headings, paragraphs, lists, quotes, emphasis, inline code,
-and horizontally scrollable fenced code. Copy controls copy the message source,
-code block, or tool details. These are still bounded host previews, not paginated
-history. Git refreshes after an observed busy-to-complete transition.
+A link is data, not an action. Only an `http` or `https` destination without
+whitespace or control characters becomes one, whether written as a Markdown link
+or as a bare URL in prose; every other destination stays inert text beside its
+label. The view underlines a link, shows its address at the edge of the
+conversation while the pointer rests on it, and opens it in the default browser
+only when a click starts and ends on it. Nothing opens on its own.
+
+Fenced code and tool content are tokenized by `plait-core::highlight`, a small
+original lexer with no dependency. It assigns lexical classes (comment, keyword,
+string, number, type, function, key, punctuation) for Rust,
+TypeScript/JavaScript, Python, shell, JSON, TOML, YAML, Markdown, diff, C/C++,
+and Go; any other label stays plain. It has no grammar and cannot fail, so
+partial code from a streaming answer is colored as far as it goes. A parser
+with per-language grammars was not adopted: it would add a C build and several
+megabytes for a view that only needs code to be scannable. The classes map onto
+the existing palette; see [DESIGN.md](../DESIGN.md).
+
+`plait-core::tool_view` prepares what each tool call shows from its bounded
+arguments and result: `edit` as a line diff of old against new text
+(`plait-core::diff`), `write` as the new file highlighted by its extension,
+`command` as a prompt line and its output, and `read` as the first lines of the
+file. Arguments that the host clipped or that are not the expected JSON are
+shown as received, with a note. The same pass plans groups: a finished run of
+five or more consecutive calls folds under one line with its count and kinds,
+and the run a busy thread is still adding to keeps its latest three calls in
+view. Version 3 stored tool fields replace bounded live previews; opened read results
+show all loaded lines. Version 1 and 2 hosts keep the bounded-preview behavior.
+Git refreshes after an observed busy-to-complete transition.
+
+`plait-core::history` keeps a reading window of at most 600 stored items and
+16 MiB of field text. The projected snapshot, Markdown blocks, and syntax spans
+are additional bounded representations of that window. One page hydrates up to
+2 MiB beyond its inline text. An oversized field is read in parts of roughly
+262,144 UTF-16 units, with explicit Next part and Start over controls; copying
+copies the displayed part. Every continuation must advance on the declared
+UTF-16 boundary and finish at the declared length.
+
+The host snapshot stays the authoritative live state for submissions and status.
+A separate display snapshot combines stored items with its live tail, preserving
+full stored fields and the newest tool status. Reading older pages evicts the
+newer end when needed and labels the detached window; Latest reopens the live
+end. Forward paging is not available. Ordinary forward scrolling works within
+the loaded window. Evicted older pages can be loaded again, including when an
+eviction cuts through a page. A missing history seam resets to the newest page
+instead of implying that two separated ranges are contiguous.
+
+History socket reads and Markdown/tool projection run on the background executor.
+There is one history read and one projection in flight per view. New snapshots
+coalesce while projection runs; host epoch, watch epoch, thread ID, and projection
+revision reject stale delivery. Pages arriving after newer live state are merged
+with that state. Prepending uses the existing stable-ID list splices, so the
+current item and pixel offset survive. The scene harness verifies that invariant.
+
+Reasoning has its own stable row identity and parsed blocks. Completed reasoning
+starts collapsed; live reasoning has a compact, scrollable body. Disclosure and
+selection survive ordinary snapshot updates. Replacing an oversized text part
+clears selection because its offsets now refer to another part. Run-state copy
+uses only host facts: no invented stop actor or per-turn duration. Completed
+answers summarize observed tool steps and successfully edited or written paths.
+A response still streaming can only show the host's bounded live tail; its full
+stored text loads after the host saves it.
+
+Conversation text can be selected with the pointer: drag, double-click for a
+word, triple-click for a block or a line of code, and shift-click to extend,
+within a message or across messages and opened tool details. Every piece of
+text paints through one element that records its laid-out position for the
+frame; pointer events map those records to a row, block, and byte offset using
+GPUI's text layout, and `plait-core::selection` decides order, ranges, and the
+copied text. The selection is drawn as a background on the text runs and is
+kept by row identity, so it survives streaming and list changes. Cmd-C copies
+it once a press in the conversation has moved focus there; the composer keeps
+its own Cmd-C while it has focus. Copy controls for a message's source, a code
+block, and a tool's details appear when the pointer is over their row or when
+they take keyboard focus. Dragging past the top or bottom edge scrolls the list
+one step for each pointer movement; it does not keep scrolling while the
+pointer rests. Rows between the two ends are copied whether or not they are on
+screen; a tool's details are copied only while they are open.
 
 Conversation events use GPUI's variable-height `list`. User messages render as
 right-aligned bubbles; agent replies remain open text. Tool details start
 collapsed. Disclosure state belongs to the UI and clears on thread selection.
+A call folded into a closed group keeps its list row and draws nothing, so row
+identity and the scroll anchor do not depend on grouping; rows whose folding
+changes are remeasured. A control to jump to the newest row appears while the
+reader is elsewhere in the history, and says when content has arrived since.
 Live transcript changes are planned in `plait-core::transcript`, without GPUI.
 Ordered stable IDs retain existing rows, including after history-tail clipping.
 Structural changes use `splice`; changed content uses `remeasure_items` so the
@@ -333,9 +603,83 @@ The sidebar is 272 points on wide windows, 240 on narrow windows. Below 1150
 points, the conversation's 280-point Git inspector is removed; Git remains available in
 the Changes tab. The minimum window is 900 × 600. Cmd-B hides the sidebar.
 
+Cmd-Option-B hides the inspector on wide windows and the choice is saved; on a
+narrow window the same control says that Git is in Changes.
+
 Controls have focus rings, tab stops, accessible names, and semantic roles.
 Thread state has both a color and a text label.
 No decorative animation is used.
+
+### Actions and shortcuts
+
+`ui/actions.rs` lists every application action once: a stable string ID, a
+title, the menu it belongs to, and a default keystroke. `actions::bind` is the
+only place application shortcuts are bound. It takes a map of action ID to
+keystroke; an entry replaces the default, an empty entry unbinds, and an entry
+that does not parse leaves the default in place. `actions::install` clears and
+rebinds everything and rebuilds the menus, so a keymap can be applied again at
+run time. Settings → Keyboard records shortcuts through GPUI's pre-dispatch
+keystroke interceptor, detects conflicts, and rejects text-entry and common
+system keys. Overrides load from desktop preferences; unknown IDs survive.
+The menu bar, the command
+palette's entries and shortcut hints, and the table in [MACOS.md](MACOS.md) come
+from the same table, and a test compares the document with it. Editing keys that
+belong to one control (the composer, the text field, the palette list) are bound
+by that control.
+
+### Command palette and model picker
+
+`ui/palette.rs` is one view: a single-line search field over a list, drawn as a
+centered overlay that blocks the workspace behind it. It knows nothing about
+what its items do. A caller passes items (title, detail, section, state, and a
+command) and receives the chosen command. The command palette lists threads,
+the action table, and "New thread with" each signed-in model; the model picker
+lists the host's catalog under Favorites, Recent, and each provider. Adding a
+source is a function that returns items and a `Command` variant.
+
+Ranking is a pure function from the search text and plain item data to rows. It
+runs on the background executor, guarded by a query counter so only the newest
+result is shown. Enter ranks synchronously when a result is still pending, so
+the choice always matches the text in the field. Rows use `uniform_list`; only
+visible rows are built, which matters for a catalog of well over a thousand
+models. Focus stays in the search field and the selected row is reported to
+assistive technology as the active descendant. Escape, or a click outside,
+closes the overlay and returns focus to where it was.
+
+Models that are not signed in are listed after every usable one, marked in
+words, and cannot be chosen. The default model is marked wherever models are
+listed. Choosing a default sends the host's `set_default_model` request at
+once; the picker footer and Settings report Saving, the host's confirmation, or
+the failure. Nothing is shown as saved before the host answers.
+
+### Provider settings and command policy
+
+`ui/settings_providers.rs` renders the host's catalog, subscription flow state,
+API-key form, and custom endpoint editor. `host/providers.rs` defines typed
+requests and tolerant replies; `host/sign_in.rs` projects each flow into its
+available controls. Status polling runs only while its form is open and pending.
+Host epochs and form generations reject stale replies. Closing an in-flight
+start cancels the returned flow instead of reopening the form.
+
+Secret fields omit accessibility values and clipboard copy, keep no undo history,
+and move their value into a redacted request on send. Request buffers and owned
+secret strings are overwritten on disposal. They never enter desktop preferences
+or the recovery journal; this is not a claim to erase every allocator or OS copy.
+The host remains the credential owner. No sign-in URL opens without a click.
+
+`ui/settings_policy.rs` reads the canonical checkout's policy on connection or
+checkout change. A response must match that checkout and its host epoch. Until
+it arrives the UI says the policy is unknown, never promises a sandbox. A trusted
+change needs explicit confirmation; the host's response determines the shown value.
+
+### New threads
+
+New Thread sends `create_thread` with the saved default model and focuses the
+new thread's composer; there is no intermediate page. When no default can be
+used, the model picker opens and the thread is created on selection. An
+unconfirmed creation keeps its request ID: the workspace shows it with a retry
+that reuses that ID, and a new request is not sent while it is pending. A model
+is recorded as recently used only after the host confirms the thread.
 
 The app records root-view construction time, peak construction time,
 selection-handler-to-render time, and startup-to-first-render time. View →
@@ -347,20 +691,56 @@ launch time. Instrumentation does not write a log from the UI thread.
 The [ADEMark plan](ADEMARK.md) tracks external performance goals and the local
 transport probe. These probes do not measure native input-to-pixel latency.
 
-### Layout checks without a Mac
+### Scene snapshots without a window
 
-`ui/snapshot.rs` is a Linux-only test module. It opens the real root view in
-GPUI's headless test platform, walks every view at 1380 × 860 and 900 × 600,
-and draws each one. `cargo test -p plait` runs that walk without a renderer, so
-layout and paint errors fail the test. With `PLAIT_SNAPSHOT_DIR` set and
-`--ignored`, the same walk renders PNG files through GPUI's headless wgpu
-renderer. Host data in these scenes is injected sample state; no socket is
-opened and no agent runs. The repository is a disposable fixture.
+`ui/snapshot.rs` is a test module for macOS and Linux. It opens the real root
+view in GPUI's test platform, which has no native window, walks every view at
+1380 × 860 and 900 × 600, and draws each one. `cargo test -p plait` runs that
+walk without a renderer, so layout and paint errors fail the test.
+`bash scripts/snapshots.sh <directory>` runs the same walk with a headless
+renderer and writes one PNG per scene, at twice the logical size.
 
-The images use Linux fonts and a software renderer. They check layout, density,
-and color. They are **not** a check of the macOS renderer, system fonts,
-accessibility tree, or input. The harness needs GPUI's `test-support` feature,
-enabled only for Linux test builds; release and macOS builds do not compile it.
+| | Renderer | Text |
+|-|-|-|
+| macOS | GPUI's Metal renderer, drawing into an offscreen texture | Core Text, with the system font and Menlo |
+| Linux | GPUI's wgpu renderer on a software Vulkan driver | cosmic-text, with the fonts installed there |
+
+On macOS the scene is drawn by the same renderer and shaped by the same text
+system and fonts as the app, so glyphs, wrapping, and truncation come from the
+code the app runs. On Linux they do not; those images check layout, density,
+and color only.
+
+Neither is the native window. The images do **not** show or check:
+
+- the title bar, or the height it takes from a 1380 × 860 window;
+- presentation through the window's layer, display color management, or a
+  display that is not 2×;
+- hover, pressed, and focus states that follow native pointer and key events,
+  the text caret, IME, or scrolling by input. Most scenes set view state
+  directly. The reading scenes deliver pointer and key events through GPUI's
+  own dispatch to check text selection, copy, and link hover; that exercises
+  hit-testing and handlers, not the operating system's event path;
+- the accessibility tree, which the harness never reads;
+- animation, frame timing, or latency. Each image is one frame.
+
+Host data in these scenes is injected sample state held in small functions in
+the test module. The repository is a disposable fixture. Building the root view
+probes the host socket and reads desktop preferences, so each scene test
+re-runs itself in a child process whose home directory and host store are empty
+scratch directories. It cannot reach a running host or a user's saved state.
+The images do show the machine's name and a temporary path, so they are
+inspected locally, not committed.
+
+Two tests in the same module send key events to that window instead of setting
+state: Cmd-K, typed letters, the arrows, Return, Cmd-Return, Tab, and Escape
+reach the palette and model picker through GPUI's key dispatch and text input
+path, and New Thread keeps the request ID of an unconfirmed creation. They
+check routing, focus return, and ranking. They do **not** check a native key
+event, an input method, the caret, or pointer input.
+
+The harness needs GPUI's `test-support` feature. It is a dev-dependency feature
+for macOS and Linux test builds; `cargo build` and release builds do not
+compile it.
 
 ## Dependency decision
 

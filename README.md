@@ -38,16 +38,27 @@ over once with `scripts/update-installed-macos.sh`.
 ## Start working
 
 1. Open **Plait** and choose **Open repository…** (Cmd-O).
-2. Open **Settings** (Cmd-comma) and select an authenticated model.
-   [Set up Pi authentication](docs/MACOS.md#authentication-and-status) if needed.
+2. Open **Settings** (Cmd-comma) and select an authenticated model. Source builds
+   offer **Providers** for sign-in, API keys, and custom servers; see
+   [authentication setup](docs/MACOS.md#authentication-and-status) for the preview.
 3. Start a thread. Review each edit and command before **Allow once**.
 4. Read the results, inspect **Changes**, and continue in the same conversation.
    Use **Stop** to cancel work; closing the desktop is not Stop.
+
+Source builds after v0.1.0-preview.2 also show projects across checkouts, live
+thread status, unread activity, search, rename, and archive. Opening another
+project keeps each thread's draft. See [project navigation](docs/MACOS.md#projects-and-threads)
+for live-list limits and notifications.
 
 Code blocks, tool details, and message text have copy controls. Threads and drafts
 restore on reopening; no task is sent automatically. See
 [keyboard controls](docs/MACOS.md#keyboard-controls) and
 [Build Plait with Plait](docs/SELF-HOSTING.md) for the edit → test → review loop.
+
+Source builds with a version 3 host also queue follow-ups and steering while an
+agent works, and let you change a thread's model and thinking level between
+runs. The composer shows waiting inputs and the latest context usage. See
+[working during a run](docs/MACOS.md#working-during-a-run).
 
 ## How it works
 
@@ -94,8 +105,15 @@ This is the **M2 local preview**, not a complete IDE.
   no file editor, embedded terminal, mandatory worktree, or automatic updater.
 - Commands cannot use external networking or write the checkout. Approved file
   tools make edits; build output goes to private caches. Model requests need
-  access to your configured provider.
-- Conversation and tool views show bounded previews, not the full stored history.
+  access to your configured provider. Source builds of the host after
+  v0.1.0-preview.2 also have an opt-in, per-project
+  [trusted command mode](docs/HOST.md#command-policy) that lifts these limits;
+  source builds expose it under Settings → Approvals, with explicit confirmation.
+- The released preview shows bounded conversation previews. Source builds with a
+  version 3 host load complete stored messages and tools, page backward through
+  history, and show reasoning. A response still being generated remains a live
+  preview until it is saved; exceptionally large stored fields have explicit
+  text-part controls.
 
 Mac CI verifies the installed app, sandbox, and recovery with scripted providers.
 Installed live-model and accessibility acceptance remain open. CI runs on macOS 26;

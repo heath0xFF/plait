@@ -9,11 +9,10 @@ use plait_core::{
     transcript::{self, Update},
 };
 use serde::de::DeserializeOwned;
-use std::sync::Arc;
 
 pub(super) struct WatchLease {
-    cancel: Option<host::CancelWatch>,
-    executor: BackgroundExecutor,
+    pub(super) cancel: Option<host::CancelWatch>,
+    pub(super) executor: BackgroundExecutor,
 }
 impl Drop for WatchLease {
     fn drop(&mut self) {
@@ -28,7 +27,7 @@ impl Drop for WatchLease {
 }
 
 impl Plait {
-    fn host_request<T: DeserializeOwned + Send + 'static>(
+    pub(super) fn host_request<T: DeserializeOwned + Send + 'static>(
         &mut self,
         mut request: Request,
         window: &mut Window,
@@ -77,6 +76,14 @@ impl Plait {
             return;
         }
         self.host_watch = None;
+        self.history = Default::default();
+        self.navigation.watch = None;
+        self.navigation.generation += 1;
+        self.navigation.loading = false;
+        if self.navigation.managing.take().is_some() {
+            self.navigation.error =
+                Some("Thread change not confirmed. Refresh to check before trying again.".into());
+        }
         self.host.reconnect();
         self.sync_composer(cx);
         self.host_request(
@@ -107,6 +114,10 @@ impl Plait {
         if !self.host.connected {
             return;
         }
+        if self.host.protocol() >= 3 {
+            self.watch_all_threads(window, cx);
+            return;
+        }
         let checkout = self.host.checkout.clone();
         self.host_request::<host::ThreadsReply>(
             Request::ListThreads { checkout },
@@ -115,6 +126,7 @@ impl Plait {
             |this, result, window, cx| match result {
                 Ok(reply) => {
                     this.host.threads = reply.threads;
+                    this.rebuild_projects(cx);
                     this.restore_thread_selection(window, cx);
                 }
                 Err(error) => this.host.error = Some(error.to_string()),
@@ -128,9 +140,31 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let Some(checkout) = self
+            .host
+            .threads
+            .iter()
+            .find(|thread| thread.id == id)
+            .map(|thread| thread.checkout.clone())
+        else {
+            return;
+        };
+        if checkout != self.host.checkout {
+            if self.host.creating || self.host.pending_create.is_some() {
+                self.notice =
+                    Some("Resolve the pending thread creation before changing checkout.".into());
+                cx.notify();
+                return;
+            }
+            self.change_checkout(checkout, window, cx);
+        }
+        self.mark_thread_read(&id, cx);
+        self.navigation.menu = None;
+        self.navigation.rename = None;
         window.focus(&self.focus, cx);
         self.host_watch = None;
         self.host.select(Some(id.clone()));
+        self.history = Default::default();
         self.settings_open = false;
         self.new_thread_open = false;
         self.show_changes = false;
@@ -147,8 +181,13 @@ impl Plait {
                     return;
                 }
                 match event {
-                    ComposerEvent::Submit(text) => this.submit_message(text.clone(), window, cx),
+                    ComposerEvent::Submit {
+                        text,
+                        revision,
+                        steer,
+                    } => this.submit_message(text.clone(), *revision, *steer, window, cx),
                     ComposerEvent::Stop => this.control_thread(None, window, cx),
+                    other => this.composer_event(other, window, cx),
                 }
             })
             .detach();
@@ -205,23 +244,9 @@ impl Plait {
                     .detach();
                 return;
             }
-            let mut formatted = Arc::new(plait_core::markdown::Transcript::default());
             while let Some(result) = snapshots.next().await {
-                if let Ok(snapshot) = &result {
-                    let snapshot = snapshot.clone();
-                    let previous = formatted.clone();
-                    formatted = cx
-                        .background_executor()
-                        .spawn(async move {
-                            Arc::new(plait_core::markdown::Transcript::update(
-                                &previous, &snapshot,
-                            ))
-                        })
-                        .await;
-                }
-                let prepared = formatted.clone();
                 let keep = this
-                    .update_in(cx, |this, _, cx| {
+                    .update_in(cx, |this, window, cx| {
                         if !this.host.accepts_watch(epoch, watch_epoch, &id) {
                             return false;
                         }
@@ -246,8 +271,7 @@ impl Plait {
                                     cx.notify();
                                     return false;
                                 }
-                                this.formatted = prepared;
-                                this.refresh_live_list(previous.as_deref());
+                                this.conversation_changed(window, cx);
                                 this.record_snapshot(cx);
                                 if previous
                                     .as_ref()
@@ -304,11 +328,17 @@ impl Plait {
     }
 
     pub(super) fn refresh_live_list(&mut self, previous: Option<&Snapshot>) {
-        let next = self.host.snapshot.as_deref();
+        self.history.display = self.host.snapshot.clone();
+        self.reconcile_live_list(previous);
+    }
+
+    pub(super) fn reconcile_live_list(&mut self, previous: Option<&Snapshot>) {
+        let next = self.history.display.as_deref();
         match transcript::changes(previous, next) {
             Update::Reset(count) => {
                 self.live_scroll.reset(count);
                 self.expanded_live_tools.clear();
+                self.history.expanded.clear();
             }
             Update::Patch { splices, remeasure } => {
                 for splice in splices {
@@ -317,6 +347,11 @@ impl Plait {
                 for range in remeasure {
                     self.live_scroll.remeasure_items(range);
                 }
+                self.history.expanded.retain(|id| {
+                    next.is_some_and(|snapshot| {
+                        snapshot.messages.iter().any(|message| message.id == *id)
+                    })
+                });
                 self.expanded_live_tools.retain(|id| {
                     next.is_some_and(|snapshot| snapshot.tools.iter().any(|tool| tool.id == *id))
                 });
@@ -353,14 +388,13 @@ impl Plait {
                 Ok(reply) if reply.thread.model == choice => {
                     this.host.pending_create = None;
                     if !this.host.threads.iter().any(|thread| thread.id == reply.thread.id) {
-                        this.host.threads.insert(0, host::ThreadSummary {
-                            id: reply.thread.id.clone(), checkout: reply.thread.checkout.clone(),
-                            model: reply.thread.model.clone(), status: reply.thread.status,
-                        });
+                        this.host.threads.insert(0, host::ThreadSummary::from(&reply.thread));
                     }
                     if this.new_thread_open && this.host.watch_epoch == selection_epoch {
                         this.select_host_thread(reply.thread.id, window, cx);
+                        this.focus_composer(window, cx);
                     }
+                    this.record_recent_model(&choice, cx);
                     this.load_threads(window, cx);
                 }
                 Ok(_) => this.host.error = Some("Host returned a different model. Creation is unconfirmed; reconnect before retrying.".into()),
@@ -377,15 +411,33 @@ impl Plait {
         cx.notify();
     }
 
-    fn submit_message(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn submit_message(
+        &mut self,
+        text: String,
+        revision: u64,
+        steer: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(id) = self.host.selected.clone() else {
             return;
         };
         if !self.can_submit() {
             return;
         }
-        match self.host.submissions.begin(&id, text) {
-            Ok(_) => self.retry_submission(window, cx),
+        let mode = (self.host.protocol() >= 3).then_some(if steer {
+            host::QueueMode::Steer
+        } else {
+            host::QueueMode::FollowUp
+        });
+        match self.host.submissions.begin_with(
+            &id,
+            text,
+            self.next_approval_mode(),
+            mode,
+            Some(revision),
+        ) {
+            Ok(pending) => self.retry_submission_id(&id, &pending.request_id, window, cx),
             Err(error) => {
                 self.host.error = Some(error);
                 cx.notify();
@@ -397,67 +449,80 @@ impl Plait {
         let Some(id) = self.host.selected.clone() else {
             return;
         };
-        if !self.host.connected || self.host.submitting || !self.session.ready() {
-            return;
-        }
         let Some(pending) = self.host.submissions.pending(&id).cloned() else {
             return;
         };
-        if self.session.required
-            && !self
-                .host
-                .threads
-                .iter()
-                .find(|thread| thread.id == id)
-                .is_some_and(|thread| self.saved_thread(thread).is_some())
-        {
-            self.host.error = Some(
-                "Saved submission identity does not match this thread. Nothing was sent.".into(),
-            );
-            cx.notify();
+        self.retry_submission_id(&id, &pending.request_id, window, cx);
+    }
+
+    pub(super) fn retry_submission_id(
+        &mut self,
+        id: &str,
+        request_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.host.connected || !self.session.ready() || !self.session_accepts_thread(id) {
             return;
         }
+        let Some(pending) = self.host.submissions.get(id, request_id).cloned() else {
+            return;
+        };
+        if (pending.when_busy.is_some() && self.host.protocol() < 3)
+            || (pending.approval.is_some() && self.host.protocol() < 2)
+        {
+            self.host.error =
+                Some("This message needs a newer host. Update before retrying.".into());
+            return;
+        }
+        if !self.host.submissions.start_send(id, request_id) {
+            return;
+        }
+        let id = id.to_owned();
         let composer = self.composers.get(&id).cloned();
         self.host.submitting = true;
         self.host.error = None;
         self.sync_composer(cx);
         self.host_request::<host::SubmitReply>(
-            Request::submit(
-                id.clone(),
-                pending.request_id.clone(),
-                pending.text.clone(),
-                self.next_approval_mode(),
-            ),
+            pending.request(&id),
             window,
             cx,
             move |this, result, _, cx| {
-                this.host.submitting = false;
                 match result {
                     Ok(reply)
                         if reply.accepted
                             && reply.thread_id == id
                             && reply.request_id == pending.request_id =>
                     {
-                        this.host.submissions.finish(&id, &pending.request_id);
+                        this.host.submissions.confirm(&id, &pending.request_id);
                         if let Some(composer) = composer {
                             composer.update(cx, |composer, cx| {
-                                composer.clear_if_unchanged(&pending.text, cx);
+                                composer.acknowledge(&pending.text, pending.draft_revision, cx);
                             });
                         }
                     }
-                    Ok(_) => {
-                        this.host.error = Some(
-                            "Submission was not confirmed. Retry safely with the same request ID."
-                                .into(),
-                        )
-                    }
+                    Ok(_) => this.host.submissions.uncertain(
+                        &pending.request_id,
+                        "Host acceptance was not confirmed. Retry uses the same request ID.".into(),
+                    ),
                     Err(error) => {
                         if matches!(error, host::Error::Rejected(_)) {
                             this.host.submissions.finish(&id, &pending.request_id);
+                            this.set_thread_notice(id.clone(), error.to_string(), true);
+                        } else {
+                            this.host
+                                .submissions
+                                .uncertain(&pending.request_id, error.to_string());
                         }
-                        this.host.error = Some(error.to_string());
                     }
                 }
+                this.host.submitting = this.host.selected.as_ref().is_some_and(|selected| {
+                    this.host
+                        .submissions
+                        .all(selected)
+                        .iter()
+                        .any(|p| this.host.submissions.is_sending(&p.request_id))
+                });
                 this.capture_session(cx);
             },
         );
@@ -553,13 +618,17 @@ impl Plait {
 
     fn can_submit(&self) -> bool {
         self.session.ready()
+            && self.navigation.available.get(&self.host.checkout) != Some(&false)
             && self.host.connected
-            && !self.host.submitting
+            && !self.host.controlling
+            && !self.thread_configuration_pending()
             && self.host.snapshot.as_ref().is_some_and(|snapshot| {
-                !snapshot.status.busy()
+                (self.host.protocol() >= 3
+                    || (!snapshot.status.busy()
+                        && self.host.submissions.pending(&snapshot.id).is_none()))
                     && self.session_accepts_thread(&snapshot.id)
                     && self.host.available(Some(&snapshot.model))
-                    && self.host.submissions.pending(&snapshot.id).is_none()
+                    && snapshot.queued.len() + self.host.submissions.all(&snapshot.id).len() < 16
             })
     }
 
@@ -575,34 +644,57 @@ impl Plait {
             .snapshot
             .as_ref()
             .is_some_and(|snapshot| snapshot.status.busy());
-        let reason = if !self.session.ready() {
-            Some(
-                "Waiting for desktop recovery. Saved work must be available before sending.".into(),
-            )
+        let reason = if self.navigation.available.get(&self.host.checkout) == Some(&false) {
+            Some("Checkout folder unavailable. Open its current location before sending.".into())
+        } else if !self.session.ready() {
+            Some("Restoring saved work…".into())
         } else if !self.session_accepts_thread(id) {
-            Some("This thread does not match the saved draft's checkout and model. Start a new thread; the original work is preserved.".into())
+            Some("Thread checkout differs from the saved draft. Original work is preserved.".into())
         } else if !self.host.connected {
             Some("Host disconnected. Reconnect to send.".into())
         } else if self.host.snapshot.is_none() {
             Some("Loading saved thread…".into())
-        } else if busy {
-            None
-        } else if self.host.submitting || self.host.submissions.pending(id).is_some() {
-            Some("Submission pending. Retry safely if the connection failed.".into())
+        } else if self.host.protocol() < 3
+            && (self.host.submitting || self.host.submissions.pending(id).is_some())
+        {
+            Some("Message unconfirmed · Retry safely above.".into())
         } else if !self
             .host
             .available(self.host.snapshot.as_ref().map(|snapshot| &snapshot.model))
         {
             Some(
-                "This thread's saved model is unavailable or not authenticated. Check Settings."
-                    .into(),
+                if self.host.protocol() >= 3 {
+                    "Model unavailable · choose another model below."
+                } else {
+                    "Model unavailable · check Settings."
+                }
+                .into(),
             )
         } else {
             None
         };
+        let send_blocked = if self.thread_configuration_pending() {
+            Some("Saving model settings…".into())
+        } else if self
+            .host
+            .snapshot
+            .as_ref()
+            .is_some_and(|s| s.queued.len() + self.host.submissions.all(id).len() >= 16)
+        {
+            Some("Queue full · cancel a message to send another.".into())
+        } else {
+            None
+        };
         composer.update(cx, |composer, cx| {
+            composer.set_send_blocked(send_blocked, cx);
             composer.set_enabled(reason.is_none() && !self.host.controlling, reason, cx);
             composer.set_busy(busy, cx);
+            composer.set_queue_enabled(
+                self.host.protocol() >= 3,
+                self.host.connected && !self.host.controlling,
+                cx,
+            );
         });
+        self.sync_prompt_history(cx);
     }
 }

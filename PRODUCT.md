@@ -29,6 +29,6 @@ mandatory worktrees, hidden execution, or speculative orchestration. Build small
 testable changes with clear state, presentation, and execution boundaries.
 
 ## Decisions
-Current work stays within M2 local execution. Changes to shared contracts,
+Current work is M2.5, the daily driver, on local execution. Changes to shared contracts,
 permissions, or persistence require agreement and compatibility tests. Follow
 [Contributing](CONTRIBUTING.md) and the [originality policy](docs/ORIGINALITY.md).

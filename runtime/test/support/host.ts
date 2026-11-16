@@ -34,6 +34,8 @@ export function raw(store: string, input: string): Promise<Reply> {
   return new Promise((resolve, reject) => {
     const socket = connect(join(store, 'host.sock'));
     let output = '';
+    // Decode across chunk boundaries: a large reply can split a multi-byte character.
+    socket.setEncoding('utf8');
     socket.setTimeout(5000, () => socket.destroy(new Error('Socket timeout')));
     socket.once('connect', () => socket.write(input));
     socket.on('data', chunk => {

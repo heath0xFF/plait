@@ -19,8 +19,17 @@ pub const SUBTLE: u32 = 0x7f8696;
 pub const SELECTED: u32 = 0x2b2d31;
 /// Outline of raised controls such as the composer and approval card.
 pub const EDGE: u32 = 0x3a3d45;
+/// Focus edge of a text input: quieter than the ring on small controls.
+pub const FOCUS_EDGE: u32 = 0x6f8fc4;
 /// Translucent so one hover step reads the same on every surface.
 pub const HOVER: u32 = 0xffffff0d;
+/// Selected conversation text. Neutral, and translucent for the same reason.
+pub const SELECTION: u32 = 0xffffff2e;
+/// Line tints for a diff inside a tool result: mint additions, rose deletions.
+pub const ADDED_FILL: u32 = 0x94dec51f;
+pub const REMOVED_FILL: u32 = 0xf0a6ac1f;
+/// Outline of a failed command's output, beside its written state.
+pub const FAILED_EDGE: u32 = 0xf0a6ac66;
 
 /// Readable column for conversation text and the composer.
 pub const CONTENT_WIDTH: f32 = 760.;
@@ -104,6 +113,20 @@ pub fn toned_button(
         .map(|el| if raised { el.px_3() } else { el.px_2() })
         // Callers that pass no label supply their own children.
         .when(!label.is_empty(), |el| el.child(label))
+}
+
+/// Secondary action that stays out of sight until the pointer is over its
+/// `group` or it takes keyboard focus, so reading is not interrupted by chrome.
+pub fn quiet_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    group: impl Into<SharedString>,
+) -> Stateful<Div> {
+    button(id, label)
+        .h(px(22.))
+        .opacity(0.)
+        .group_hover(group, |s| s.opacity(1.))
+        .focus_visible(|s| s.border_color(rgb(BLUE)).opacity(1.))
 }
 
 /// Square glyph control. The name is the accessible label; no text is drawn.
@@ -347,6 +370,12 @@ impl AssetSource for Assets {
             "plait-wordmark.svg" => {
                 include_str!("../../../../assets/branding/wordmarks/plait-wordmark-light.svg")
             }
+            "more" => {
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><circle cx="3" cy="8" r="1"/><circle cx="8" cy="8" r="1"/><circle cx="13" cy="8" r="1"/></svg>"#
+            }
+            "close" => {
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><path d="m4 4 8 8m0-8-8 8" fill="none" stroke="black" stroke-width="1.4" stroke-linecap="round"/></svg>"#
+            }
             "down" => {
                 r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4" fill="none" stroke="black" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>"#
             }
@@ -362,6 +391,16 @@ impl AssetSource for Assets {
             }
             "panel" => {
                 r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><g fill="none" stroke="black" stroke-width="1.4" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="M6.5 3v10"/></g></svg>"#
+            }
+            "panel-right" => {
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><g fill="none" stroke="black" stroke-width="1.4" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="M9.5 3v10"/></g></svg>"#
+            }
+            // Outline and filled forms: the shape says whether a favorite is set.
+            "star" => {
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M8 2.8 9.41 6.46 13.33 6.67 10.28 9.14 11.29 12.93 8 10.8 4.71 12.93 5.72 9.14 2.67 6.67 6.59 6.46Z" fill="none" stroke="black" stroke-width="1.3" stroke-linejoin="round"/></svg>"#
+            }
+            "star-filled" => {
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M8 2.8 9.41 6.46 13.33 6.67 10.28 9.14 11.29 12.93 8 10.8 4.71 12.93 5.72 9.14 2.67 6.67 6.59 6.46Z" fill="black" stroke="black" stroke-width="1.3" stroke-linejoin="round"/></svg>"#
             }
             "send" => {
                 r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M8 12.5v-9M4.5 7 8 3.5 11.5 7" fill="none" stroke="black" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>"#
@@ -406,6 +445,9 @@ mod tests {
             "plus",
             "sliders",
             "panel",
+            "panel-right",
+            "star",
+            "star-filled",
             "send",
             "stop",
             "refresh",

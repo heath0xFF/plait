@@ -8,6 +8,9 @@ use std::{
     },
 };
 
+/// The reserved name the runtime sends when any thread summary changed.
+pub(super) const THREADS: &str = "#";
+
 #[derive(Default)]
 pub(super) struct Notifications {
     watchers: Mutex<HashMap<String, Vec<Weak<Wake>>>>,
@@ -143,7 +146,8 @@ pub(super) fn relay(reader: impl Read, notifications: &Notifications) -> io::Res
     let mut reader = BufReader::new(reader);
     loop {
         let mut line = Vec::new();
-        // IDs use the public protocol's 128-byte bound; '*' invalidates all watches.
+        // IDs use the public protocol's 128-byte bound; '*' invalidates all watches
+        // and '#' wakes thread-list watches.
         reader.by_ref().take(130).read_until(b'\n', &mut line)?;
         if line.last() != Some(&b'\n') || line.len() > 129 {
             return Err(io::Error::other("invalid notification frame"));
@@ -151,6 +155,7 @@ pub(super) fn relay(reader: impl Read, notifications: &Notifications) -> io::Res
         line.pop();
         if line.is_empty()
             || (line != b"*"
+                && line != THREADS.as_bytes()
                 && !line
                     .iter()
                     .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(byte)))
@@ -208,8 +213,11 @@ mod tests {
         let notifications = Arc::new(Notifications::default());
         let first = notifications.subscribe("one".into()).unwrap();
         let second = notifications.subscribe("two".into()).unwrap();
+        let threads = notifications.subscribe(THREADS.into()).unwrap();
         assert!(relay(&b"one\ntwo\n"[..], &notifications).is_err());
-        assert!(pending(&first) && pending(&second));
+        assert!(pending(&first) && pending(&second) && !pending(&threads));
+        assert!(relay(&b"#\n"[..], &notifications).is_err());
+        assert!(pending(&threads));
         for invalid in [
             b"\n".to_vec(),
             b"bad/id\n".to_vec(),

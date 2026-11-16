@@ -3,16 +3,17 @@
 //! The host owns model defaults and credentials. This file holds presentation
 //! choices that belong to one desktop installation, so it never leaves the Mac.
 
-use crate::model::Project;
+use crate::{host::ModelChoice, model::Project};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     fs,
     io::Write,
     path::{Path, PathBuf},
 };
 
 /// Larger files are not ours; refuse them rather than parse arbitrary input.
-const FILE_LIMIT: u64 = 64 * 1024;
+const FILE_LIMIT: u64 = 512 * 1024;
 
 /// What Cmd-1 through Cmd-9 select, counted in sidebar order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,18 +37,220 @@ impl JumpTarget {
     }
 }
 
+/// Favorites kept in the picker. The oldest is dropped beyond this.
+pub const FAVORITE_LIMIT: usize = 64;
+/// Recently used models kept, newest first.
+pub const RECENT_LIMIT: usize = 8;
+/// Longer identifiers are not remembered, so full lists always fit the file limit.
+const MODEL_KEY_LIMIT: usize = 512;
+
+/// Shortcut entries kept. A full keymap and full model lists fit the file limit.
+pub const KEYMAP_LIMIT: usize = 128;
+/// Longer action IDs and keystrokes are not remembered.
+const KEYMAP_ID_LIMIT: usize = 64;
+const KEYMAP_KEYS_LIMIT: usize = 48;
+
+/// Shortcuts that replace the defaults: action ID to keystroke, such as
+/// `"thread.new": "cmd-t"`. An empty keystroke leaves the action unbound.
+/// The desktop decides what an ID and a keystroke mean; this is only storage.
+pub type Keymap = BTreeMap<String, String>;
+
+/// A model chosen on this desktop: an identifier, never a credential.
+/// Unlike the wire type, unknown fields are ignored so a newer file still loads.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ModelKey {
+    pub provider: String,
+    pub model_id: String,
+}
+
+impl ModelKey {
+    fn fits(&self) -> bool {
+        self.provider.len() + self.model_id.len() <= MODEL_KEY_LIMIT
+    }
+}
+
+impl From<&ModelChoice> for ModelKey {
+    fn from(choice: &ModelChoice) -> Self {
+        Self {
+            provider: choice.provider.clone(),
+            model_id: choice.model_id.clone(),
+        }
+    }
+}
+
+impl PartialEq<ModelChoice> for ModelKey {
+    fn eq(&self, choice: &ModelChoice) -> bool {
+        self.provider == choice.provider && self.model_id == choice.model_id
+    }
+}
+
 /// Unknown fields are ignored so a newer client's file still loads.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
+    pub navigation: crate::navigation::Preferences,
     pub jump_target: JumpTarget,
     /// Ask before each edit and command. Off by default: runs approve their own
     /// edits and sandboxed commands, and file protections still apply.
     pub ask_before_actions: bool,
+    /// Hide the Git inspector beside the conversation on wide windows.
+    pub hide_inspector: bool,
+    /// Models pinned to the top of the picker, oldest first.
+    pub favorite_models: Vec<ModelKey>,
+    /// Models used to start threads from this desktop, newest first.
+    pub recent_models: Vec<ModelKey>,
+    /// Shortcuts changed on this desktop. Action IDs this client does not know
+    /// are kept, so an entry written by a newer client survives an older one.
+    pub keymap: Keymap,
+}
+
+impl Preferences {
+    pub fn is_favorite(&self, choice: &ModelChoice) -> bool {
+        self.favorite_models.iter().any(|key| key == choice)
+    }
+
+    /// Add or remove a favorite. Returns whether the model is a favorite now.
+    pub fn toggle_favorite(&mut self, choice: &ModelChoice) -> bool {
+        let before = self.favorite_models.len();
+        self.favorite_models.retain(|key| key != choice);
+        let key = ModelKey::from(choice);
+        if self.favorite_models.len() != before || !key.fits() {
+            return false;
+        }
+        self.favorite_models.push(key);
+        trim_oldest(&mut self.favorite_models, FAVORITE_LIMIT);
+        true
+    }
+
+    /// Move a model to the front of the recent list.
+    pub fn record_recent(&mut self, choice: &ModelChoice) {
+        let key = ModelKey::from(choice);
+        if !key.fits() {
+            return;
+        }
+        self.recent_models.retain(|recent| recent != choice);
+        self.recent_models.insert(0, key);
+        self.recent_models.truncate(RECENT_LIMIT);
+    }
+
+    /// Replace the shortcut overrides, within the limits a load applies.
+    pub fn set_keymap(&mut self, keymap: Keymap) {
+        self.keymap = keymap;
+        self.trim_keymap();
+    }
+
+    /// Entries past the limits are dropped from the end of the ID order.
+    fn trim_keymap(&mut self) {
+        self.keymap
+            .retain(|id, keys| id.len() <= KEYMAP_ID_LIMIT && keys.len() <= KEYMAP_KEYS_LIMIT);
+        while self.keymap.len() > KEYMAP_LIMIT {
+            self.keymap.pop_last();
+        }
+    }
+
+    /// A hand-edited file may repeat entries or exceed the limits.
+    fn normalize(mut self) -> Self {
+        self.navigation.normalize();
+        for list in [&mut self.favorite_models, &mut self.recent_models] {
+            let mut seen = std::collections::HashSet::new();
+            list.retain(|key| key.fits() && seen.insert(key.clone()));
+        }
+        trim_oldest(&mut self.favorite_models, FAVORITE_LIMIT);
+        self.recent_models.truncate(RECENT_LIMIT);
+        self.trim_keymap();
+        self
+    }
+}
+
+fn trim_oldest(list: &mut Vec<ModelKey>, limit: usize) {
+    let excess = list.len().saturating_sub(limit);
+    list.drain(..excess);
+}
+
+/// Overlay changes made before disk loading finished without losing untouched
+/// settings from disk. New preference fields participate through serialization.
+pub fn merge_startup(loaded: Preferences, edited: &Preferences) -> Result<Preferences, String> {
+    fn merge(
+        loaded: serde_json::Value,
+        defaults: serde_json::Value,
+        edited: serde_json::Value,
+    ) -> serde_json::Value {
+        if edited == defaults {
+            return loaded;
+        }
+        match (loaded, defaults, edited) {
+            (
+                serde_json::Value::Object(mut loaded),
+                serde_json::Value::Object(defaults),
+                serde_json::Value::Object(edited),
+            ) => {
+                for (key, value) in edited {
+                    let old = loaded.remove(&key).unwrap_or(serde_json::Value::Null);
+                    let default = defaults
+                        .get(&key)
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    loaded.insert(key, merge(old, default, value));
+                }
+                serde_json::Value::Object(loaded)
+            }
+            (_, _, edited) => edited,
+        }
+    }
+    let opened = loaded.navigation.opened.clone();
+    let encode = |preferences: &Preferences| {
+        serde_json::to_value(preferences).map_err(|_| "Cannot merge saved preferences.".to_owned())
+    };
+    let value = merge(
+        encode(&loaded)?,
+        encode(&Preferences::default())?,
+        encode(edited)?,
+    );
+    let mut preferences: Preferences =
+        serde_json::from_value(value).map_err(|_| "Cannot merge saved preferences.".to_owned())?;
+    for checkout in opened {
+        if !preferences.navigation.hidden.contains(&checkout) {
+            preferences.navigation.open(&checkout);
+        }
+    }
+    Ok(preferences)
+}
+
+/// One atomic write at a time; edits during it coalesce to the newest snapshot.
+#[derive(Default)]
+pub struct SaveQueue {
+    pending: Option<(u64, Preferences)>,
+    running: Option<u64>,
+}
+
+impl SaveQueue {
+    pub fn queue(&mut self, revision: u64, value: Preferences) {
+        self.pending = Some((revision, value));
+    }
+
+    pub fn next_write(&mut self) -> Option<(u64, Preferences)> {
+        if self.running.is_some() {
+            return None;
+        }
+        let next = self.pending.take()?;
+        self.running = Some(next.0);
+        Some(next)
+    }
+
+    pub fn finish(&mut self, revision: u64) {
+        if self.running == Some(revision) {
+            self.running = None;
+        }
+    }
 }
 
 /// The per-user location, from the environment. `None` without a home directory.
 pub fn default_path() -> Option<PathBuf> {
+    // A development instance must not write the installed desktop's choices.
+    if let Some(path) = std::env::var_os("PLAIT_DESKTOP_PREFERENCES_FILE") {
+        let path = PathBuf::from(path);
+        return path.is_absolute().then_some(path);
+    }
     let home = std::env::var_os("HOME").map(PathBuf::from);
     if cfg!(target_os = "macos") {
         return home.map(|home| home.join("Library/Application Support/Plait/desktop.json"));
@@ -76,12 +279,18 @@ pub fn load(path: &Path) -> Result<Preferences, String> {
         return Err("Preferences file is too large; defaults are in use.".into());
     }
     serde_json::from_reader(std::io::BufReader::new(file))
+        .map(Preferences::normalize)
         .map_err(|error| format!("Preferences file is invalid ({error}); defaults are in use."))
 }
 
 /// Replace the file atomically so a crash never leaves a half-written file.
-pub fn save(path: &Path, preferences: Preferences) -> Result<(), String> {
+pub fn save(path: &Path, preferences: &Preferences) -> Result<(), String> {
     let fail = |error: std::io::Error| format!("Cannot save preferences: {error}");
+    let bytes = serde_json::to_vec_pretty(preferences)
+        .map_err(|error| format!("Cannot encode preferences: {error}"))?;
+    if bytes.len() as u64 + 1 > FILE_LIMIT {
+        return Err("Preferences exceed the file limit; the saved file was left intact.".into());
+    }
     let directory = path
         .parent()
         .ok_or_else(|| "Cannot save preferences: no parent directory.".to_owned())?;
@@ -89,7 +298,7 @@ pub fn save(path: &Path, preferences: Preferences) -> Result<(), String> {
     let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
     let result = (|| {
         let mut file = fs::File::create(&temporary)?;
-        serde_json::to_writer_pretty(&mut file, &preferences).map_err(std::io::Error::other)?;
+        file.write_all(&bytes)?;
         file.write_all(b"\n")?;
         file.sync_all()?;
         fs::rename(&temporary, path)
@@ -154,6 +363,18 @@ mod tests {
     use super::*;
     use crate::model::Machine;
 
+    fn choice(provider: &str, model_id: &str) -> ModelChoice {
+        ModelChoice {
+            provider: provider.into(),
+            model_id: model_id.into(),
+        }
+    }
+
+    fn keymap(entries: &[(&str, &str)]) -> Keymap {
+        let owned = |(id, keys): &(&str, &str)| (id.to_string(), keys.to_string());
+        entries.iter().map(owned).collect()
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let path =
             std::env::temp_dir().join(format!("plait-preferences-{}-{name}", std::process::id()));
@@ -162,16 +383,63 @@ mod tests {
     }
 
     #[test]
+    fn startup_edits_keep_other_saved_settings_and_projects() {
+        let mut loaded = Preferences {
+            ask_before_actions: true,
+            ..Default::default()
+        };
+        loaded.navigation.open(std::path::Path::new("/previous"));
+        loaded.toggle_favorite(&choice("p", "m"));
+        let mut edited = Preferences {
+            hide_inspector: true,
+            ..Default::default()
+        };
+        edited.navigation.open(std::path::Path::new("/current"));
+        let merged = merge_startup(loaded, &edited).unwrap();
+        assert!(merged.ask_before_actions && merged.hide_inspector);
+        assert!(merged.is_favorite(&choice("p", "m")));
+        assert_eq!(merged.navigation.opened.len(), 2);
+    }
+
+    #[test]
+    fn preference_writes_coalesce_without_overlapping_or_finishing_the_wrong_write() {
+        let mut writes = SaveQueue::default();
+        writes.queue(1, Preferences::default());
+        assert_eq!(writes.next_write().unwrap().0, 1);
+        let mut latest = Preferences {
+            hide_inspector: true,
+            ..Default::default()
+        };
+        writes.queue(2, latest.clone());
+        latest.ask_before_actions = true;
+        writes.queue(3, latest.clone());
+        assert!(writes.next_write().is_none());
+        writes.finish(0);
+        assert!(writes.next_write().is_none());
+        writes.finish(1);
+        assert_eq!(writes.next_write(), Some((3, latest)));
+        writes.finish(1);
+        assert!(writes.next_write().is_none());
+        writes.finish(3);
+        assert!(writes.next_write().is_none());
+    }
+
+    #[test]
     fn missing_file_is_default_and_save_round_trips() {
         let root = scratch("round-trip");
         let path = root.join("nested/desktop.json");
         assert_eq!(load(&path), Ok(Preferences::default()));
         assert!(!Preferences::default().ask_before_actions);
-        let chosen = Preferences {
+        let mut chosen = Preferences {
             jump_target: JumpTarget::Machines,
             ask_before_actions: true,
+            hide_inspector: true,
+            ..Preferences::default()
         };
-        save(&path, chosen).unwrap();
+        chosen.toggle_favorite(&choice("openai-codex", "gpt-5.6-luna"));
+        chosen.record_recent(&choice("openrouter", "anthropic/claude-fable-5"));
+        chosen.set_keymap(keymap(&[("thread.new", "cmd-t"), ("app.quit", "")]));
+        save(&path, &chosen).unwrap();
         assert_eq!(load(&path), Ok(chosen));
         // No temporary file is left beside the saved one.
         assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
@@ -205,12 +473,204 @@ mod tests {
     }
 
     #[test]
+    fn a_file_from_before_model_lists_loads_with_empty_lists() {
+        let root = scratch("older");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("desktop.json");
+        // Exactly what the previous release wrote.
+        fs::write(
+            &path,
+            "{\n  \"jump_target\": \"machines\",\n  \"ask_before_actions\": true\n}\n",
+        )
+        .unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.jump_target, JumpTarget::Machines);
+        assert!(loaded.ask_before_actions);
+        assert!(!loaded.hide_inspector);
+        assert!(loaded.favorite_models.is_empty());
+        assert!(loaded.recent_models.is_empty());
+        assert!(loaded.keymap.is_empty());
+        // Saving it again keeps the old settings and adds the new fields.
+        save(&path, &loaded).unwrap();
+        assert_eq!(load(&path), Ok(loaded));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn model_entries_ignore_unknown_fields_and_reject_malformed_ones() {
+        let root = scratch("models");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("desktop.json");
+        fs::write(
+            &path,
+            r#"{"favorite_models": [{"provider": "p", "model_id": "m", "later": true}]}"#,
+        )
+        .unwrap();
+        assert!(load(&path).unwrap().is_favorite(&choice("p", "m")));
+        fs::write(&path, r#"{"recent_models": [{"provider": "p"}]}"#).unwrap();
+        assert!(load(&path).unwrap_err().contains("invalid"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_keymap_loads_as_written_and_keeps_entries_this_client_does_not_know() {
+        let root = scratch("keymap");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("desktop.json");
+        // The file is storage only: an unknown ID, an empty keystroke, and a
+        // keystroke no client can parse all load and save unchanged.
+        fs::write(
+            &path,
+            r#"{"keymap": {"thread.new": "cmd-t", "later.action": "cmd-l", "app.quit": "", "view.changes": "not a key"}}"#,
+        )
+        .unwrap();
+        let loaded = load(&path).unwrap();
+        let expected = keymap(&[
+            ("app.quit", ""),
+            ("later.action", "cmd-l"),
+            ("thread.new", "cmd-t"),
+            ("view.changes", "not a key"),
+        ]);
+        assert_eq!(loaded.keymap, expected);
+        save(&path, &loaded).unwrap();
+        assert_eq!(load(&path).unwrap().keymap, expected);
+        let written = fs::read_to_string(&path).unwrap();
+        assert!(written.contains("\"later.action\": \"cmd-l\""), "{written}");
+        // A keystroke must be a string; anything else is a malformed file.
+        fs::write(&path, r#"{"keymap": {"thread.new": 7}}"#).unwrap();
+        assert!(load(&path).unwrap_err().contains("invalid"));
+        fs::write(&path, r#"{"keymap": ["cmd-t"]}"#).unwrap();
+        assert!(load(&path).unwrap_err().contains("invalid"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_keymap_is_bounded_in_entries_and_length() {
+        let long = "x".repeat(KEYMAP_ID_LIMIT + 1);
+        let mut preferences = Preferences::default();
+        let mut entries = (0..KEYMAP_LIMIT + 5)
+            .map(|index| (format!("action.{index:03}"), "cmd-k".to_owned()))
+            .collect::<Keymap>();
+        entries.insert(long.clone(), "cmd-l".into());
+        entries.insert("too.long".into(), "k".repeat(KEYMAP_KEYS_LIMIT + 1));
+        preferences.set_keymap(entries);
+        assert_eq!(preferences.keymap.len(), KEYMAP_LIMIT);
+        assert!(!preferences.keymap.contains_key(&long));
+        assert!(!preferences.keymap.contains_key("too.long"));
+        // The first entries in ID order are the ones kept.
+        assert!(preferences.keymap.contains_key("action.000"));
+        assert!(!preferences.keymap.contains_key("action.130"));
+    }
+
+    #[test]
+    fn loading_removes_duplicates_and_applies_the_limits() {
+        let root = scratch("limits");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("desktop.json");
+        let entries = (0..FAVORITE_LIMIT + 3)
+            .map(|index| format!(r#"{{"provider": "p", "model_id": "m{index}"}}"#))
+            .chain([r#"{"provider": "p", "model_id": "m5"}"#.to_owned()])
+            .collect::<Vec<_>>()
+            .join(",");
+        fs::write(
+            &path,
+            format!(r#"{{"favorite_models": [{entries}], "recent_models": [{entries}]}}"#),
+        )
+        .unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.favorite_models.len(), FAVORITE_LIMIT);
+        // Favorites keep the newest; recents keep the front of the list.
+        assert_eq!(loaded.favorite_models[0].model_id, "m3");
+        assert_eq!(loaded.recent_models.len(), RECENT_LIMIT);
+        assert_eq!(loaded.recent_models[0].model_id, "m0");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn favorites_toggle_and_recents_move_to_the_front() {
+        let mut preferences = Preferences::default();
+        let (a, b) = (choice("p", "a"), choice("p", "b"));
+        assert!(preferences.toggle_favorite(&a));
+        assert!(preferences.toggle_favorite(&b));
+        assert!(preferences.is_favorite(&a));
+        assert!(!preferences.toggle_favorite(&a));
+        assert!(!preferences.is_favorite(&a));
+        assert_eq!(preferences.favorite_models, vec![ModelKey::from(&b)]);
+
+        preferences.record_recent(&a);
+        preferences.record_recent(&b);
+        preferences.record_recent(&a);
+        assert_eq!(
+            preferences.recent_models,
+            vec![ModelKey::from(&a), ModelKey::from(&b)]
+        );
+        for index in 0..RECENT_LIMIT + 2 {
+            preferences.record_recent(&choice("p", &format!("m{index}")));
+        }
+        assert_eq!(preferences.recent_models.len(), RECENT_LIMIT);
+        assert_eq!(
+            preferences.recent_models[0].model_id,
+            format!("m{}", RECENT_LIMIT + 1)
+        );
+        // The same model under another provider is a different model.
+        assert!(!preferences.is_favorite(&choice("q", "b")));
+    }
+
+    #[test]
+    fn full_lists_stay_within_the_file_limit() {
+        let mut preferences = Preferences::default();
+        let long = "m".repeat(MODEL_KEY_LIMIT - 4);
+        for index in 0..FAVORITE_LIMIT + 5 {
+            let model = choice("p", &format!("{long}{index:03}"));
+            assert!(preferences.toggle_favorite(&model));
+            preferences.record_recent(&model);
+        }
+        assert_eq!(preferences.favorite_models.len(), FAVORITE_LIMIT);
+        // An identifier too long to remember is skipped, not stored.
+        let oversized = choice("p", &"x".repeat(MODEL_KEY_LIMIT));
+        assert!(!preferences.toggle_favorite(&oversized));
+        preferences.record_recent(&oversized);
+        assert!(
+            !preferences
+                .recent_models
+                .iter()
+                .any(|key| *key == oversized)
+        );
+        // With the longest keymap a load keeps, the file still loads.
+        let id = "i".repeat(KEYMAP_ID_LIMIT - 3);
+        let keys = "k".repeat(KEYMAP_KEYS_LIMIT);
+        preferences.set_keymap(
+            (0..KEYMAP_LIMIT + 5)
+                .map(|index| (format!("{id}{index:03}"), keys.clone()))
+                .collect(),
+        );
+        assert_eq!(preferences.keymap.len(), KEYMAP_LIMIT);
+        let bytes = serde_json::to_vec_pretty(&preferences).unwrap();
+        assert!((bytes.len() as u64) < FILE_LIMIT, "{} bytes", bytes.len());
+    }
+
+    #[test]
+    fn an_oversized_save_does_not_replace_a_readable_file() {
+        let root = scratch("oversized-save");
+        let path = root.join("desktop.json");
+        save(&path, &Preferences::default()).unwrap();
+        let mut value = Preferences::default();
+        value
+            .navigation
+            .observed
+            .insert("x".repeat(FILE_LIMIT as usize), Default::default());
+        assert!(save(&path, &value).unwrap_err().contains("left intact"));
+        assert_eq!(load(&path).unwrap(), Preferences::default());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn save_failure_is_reported() {
         let root = scratch("blocked");
         fs::create_dir_all(&root).unwrap();
         // A file where the directory should be.
         fs::write(root.join("plait"), "").unwrap();
-        assert!(save(&root.join("plait/desktop.json"), Preferences::default()).is_err());
+        assert!(save(&root.join("plait/desktop.json"), &Preferences::default()).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -222,10 +682,12 @@ mod tests {
         };
         vec![
             Project {
+                checkout: "/fixture".into(),
                 name: "plait".into(),
                 machines: vec![machine("zaphod", true), machine("arthur", false)],
             },
             Project {
+                checkout: "/fixture".into(),
                 name: "notes".into(),
                 machines: vec![machine("arthur", false)],
             },

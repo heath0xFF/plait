@@ -37,6 +37,9 @@ fn run() -> io::Result<()> {
     if operation == "command" {
         return command::run(args.collect());
     }
+    if operation == "trusted-command" {
+        return command::run_trusted(args.collect());
+    }
     if operation == "version" {
         serde_json::to_writer(
             io::stdout(),
@@ -44,7 +47,7 @@ fn run() -> io::Result<()> {
                 "component": "host", "version": env!("CARGO_PKG_VERSION"),
                 "revision": option_env!("PLAIT_BUILD_REVISION").unwrap_or("development"),
                 "release": plait_core::update::current_version().map(|version| version.to_string()),
-                "protocol_version": 2,
+                "protocol_version": 3,
             }),
         )?;
         return Ok(());

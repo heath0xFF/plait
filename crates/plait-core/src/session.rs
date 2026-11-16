@@ -35,6 +35,11 @@ pub struct Thread {
     pub title: String,
     pub draft: Draft,
     pub pending: Option<PendingSubmit>,
+    /// Additional outstanding requests; the first stays in `pending` for older journals.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_submissions: Vec<PendingSubmit>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queued_submissions: Vec<PendingSubmit>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -50,7 +55,7 @@ impl Session {
     pub fn saved_thread(&self, summary: &crate::host::ThreadSummary) -> Option<&Thread> {
         self.threads
             .get(&summary.id)
-            .filter(|saved| saved.checkout == summary.checkout && saved.model == summary.model)
+            .filter(|saved| saved.checkout == summary.checkout)
     }
 
     pub fn accepts(&self, summary: &crate::host::ThreadSummary) -> bool {
@@ -61,7 +66,7 @@ impl Session {
         if self
             .threads
             .get(&id)
-            .is_some_and(|saved| saved.checkout != thread.checkout || saved.model != thread.model)
+            .is_some_and(|saved| saved.checkout != thread.checkout)
         {
             return Err("Thread identity conflicts with saved work. Its draft and submission were not changed. Start a new thread or check the host store.".into());
         }
@@ -105,10 +110,22 @@ impl Session {
             {
                 return Err("Saved thread or draft exceeds its limits.".into());
             }
-            if let Some(pending) = &thread.pending {
+            if thread.queued_submissions.len() > 16
+                || thread.pending_submissions.len() + usize::from(thread.pending.is_some()) > 16
+            {
+                return Err("Saved thread has too many pending submissions.".into());
+            }
+            let mut seen = std::collections::HashSet::new();
+            for pending in thread
+                .pending
+                .iter()
+                .chain(&thread.pending_submissions)
+                .chain(&thread.queued_submissions)
+            {
                 let request =
                     crate::host::Request::submit_bound(id, &pending.request_id, &pending.text);
-                if !identifier(&pending.request_id)
+                if !seen.insert(&pending.request_id)
+                    || !identifier(&pending.request_id)
                     || pending.text.trim().is_empty()
                     || serde_json::to_vec(&request)
                         .map_err(|e| e.to_string())?
@@ -351,7 +368,12 @@ mod tests {
             pending: Some(PendingSubmit {
                 request_id: "request-1".into(),
                 text: "Do the task".into(),
+                approval: None,
+                when_busy: None,
+                draft_revision: None,
             }),
+            pending_submissions: Vec::new(),
+            queued_submissions: Vec::new(),
         }
     }
 
@@ -362,24 +384,18 @@ mod tests {
         saved
             .update_thread("thread".into(), original.clone())
             .unwrap();
-        for model_change in [false, true] {
-            let mut changed = original.clone();
-            if model_change {
-                changed.model.model_id = "another-model".into();
-            } else {
-                changed.checkout = "/another-checkout".into();
-            }
-            let summary = crate::host::ThreadSummary {
-                id: "thread".into(),
-                checkout: changed.checkout.clone(),
-                model: changed.model.clone(),
-                status: crate::host::ThreadStatus::Idle,
-            };
-            assert!(!saved.accepts(&summary));
-            assert!(saved.saved_thread(&summary).is_none());
-            assert!(saved.update_thread("thread".into(), changed).is_err());
-            assert_eq!(saved.threads["thread"], original);
-        }
+        let mut changed = original.clone();
+        changed.checkout = "/another-checkout".into();
+        let summary = crate::host::ThreadSummary {
+            id: "thread".into(),
+            checkout: changed.checkout.clone(),
+            model: changed.model.clone(),
+            ..Default::default()
+        };
+        assert!(!saved.accepts(&summary));
+        assert!(saved.saved_thread(&summary).is_none());
+        assert!(saved.update_thread("thread".into(), changed).is_err());
+        assert_eq!(saved.threads["thread"], original);
         let mut edited = original;
         edited.draft.text = "A later draft".into();
         saved
@@ -567,5 +583,65 @@ mod tests {
     fn titles_are_plain_whitespace_normalized_and_unicode_safe() {
         assert_eq!(title("  Fix\n the\tparser 🙂  "), "Fix the parser 🙂");
         assert_eq!(title(&"🙂".repeat(100)).chars().count(), 72);
+    }
+    #[test]
+    fn model_changes_keep_saved_work_and_old_journals_load() {
+        let mut state = Session::empty("/host".into());
+        let mut saved = thread();
+        state.update_thread("thread".into(), saved.clone()).unwrap();
+        saved.model.model_id = "changed".into();
+        let summary = crate::host::ThreadSummary {
+            id: "thread".into(),
+            checkout: saved.checkout.clone(),
+            model: saved.model.clone(),
+            ..Default::default()
+        };
+        assert!(state.saved_thread(&summary).is_some());
+        state.update_thread("thread".into(), saved).unwrap();
+        let mut old = serde_json::to_value(&state).unwrap();
+        let pending = old["threads"]["thread"]["pending"].as_object_mut().unwrap();
+        pending.remove("approval");
+        pending.remove("when_busy");
+        pending.remove("draft_revision");
+        let loaded: Session = serde_json::from_value(old).unwrap();
+        loaded.validate().unwrap();
+        assert!(loaded.threads["thread"].pending_submissions.is_empty());
+        assert!(
+            loaded.threads["thread"]
+                .pending
+                .as_ref()
+                .unwrap()
+                .when_busy
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn journal_preserves_multiple_pending_and_accepted_queue_without_sending() {
+        let directory = root("multiple-pending");
+        let (journal, mut state) = Journal::open(&directory, "/host".into()).unwrap();
+        let mut saved = thread();
+        let mut second = saved.pending.clone().unwrap();
+        second.request_id = "request-2".into();
+        second.when_busy = Some(crate::host::QueueMode::Steer);
+        second.approval = Some(crate::host::ApprovalMode::Auto);
+        second.draft_revision = Some(8);
+        saved.pending_submissions.push(second.clone());
+        let mut queued = second;
+        queued.request_id = "request-3".into();
+        saved.queued_submissions.push(queued);
+        state.update_thread("thread".into(), saved).unwrap();
+        journal.queue(state.clone());
+        journal.flush().unwrap();
+        drop(journal);
+        let (_, restored) = Journal::open(&directory, "/host".into()).unwrap();
+        assert_eq!(restored, state);
+        let mut duplicate = restored.clone();
+        let saved = duplicate.threads.get_mut("thread").unwrap();
+        saved
+            .pending_submissions
+            .push(saved.pending.clone().unwrap());
+        assert!(duplicate.validate().is_err());
+        fs::remove_dir_all(directory).unwrap();
     }
 }

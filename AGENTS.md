@@ -5,7 +5,7 @@
   No web UI, embedded terminal, or mandatory worktrees.
 - Keep models and Git free of GPUI. State owns transitions; UI owns presentation.
 - Run all filesystem and Git work on the background executor, never in render.
-- The app's Git interface stays read-only through M2. Disable optional locks,
+- The app's Git interface stays read-only through M2.5. Disable optional locks,
   external diff, and textconv. Normal development commits are permitted.
 - Show only real data in the app: no sample threads or placeholder machines.
   Test scenes may inject sample state, never in a shipped view. Do not imply execution.
@@ -22,4 +22,5 @@
   and cargo test --workspace. Build and inspect the native app after UI changes.
 - When using Rex, run builds and app sessions in named panes in the current tab.
   Rex is a development tool, not a build dependency.
-- Read CONTRIBUTING.md for the M2 work split. Agree before changing shared contracts.
+- Read CONTRIBUTING.md for the work split. Agree before changing shared contracts;
+  docs/ROADMAP.md records what is agreed for the current milestone.

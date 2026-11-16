@@ -25,7 +25,7 @@ impl Plait {
 
     /// What to say, and offer, when no thread is selected.
     fn idle_prompt(&self) -> (&'static str, String, Option<&'static str>) {
-        let machine = &self.state.projects[0].machines[0].name;
+        let machine = &self.active_project().machines[0].name;
         if self.host.connecting {
             (
                 "Connecting…",
@@ -43,11 +43,10 @@ impl Plait {
         } else if self.host.threads.is_empty() {
             (
                 "No threads yet",
-                if self.next_approval_mode() == Some(ApprovalMode::Auto) {
-                    "Start a thread in this checkout. The agent edits and runs sandboxed commands without asking; files you had already changed stay protected."
-                } else {
-                    "Start a thread in this checkout. Every edit and command waits for your approval."
-                }
+                plait_core::host::policy::idle_detail(
+                    self.next_approval_mode() != Some(ApprovalMode::Auto),
+                    self.command_policy(),
+                )
                 .into(),
                 Some("New thread"),
             )
@@ -79,8 +78,7 @@ impl Plait {
                         if reconnect {
                             this.reconnect_host(window, cx);
                         } else {
-                            window.focus(&this.focus, cx);
-                            this.open_new_thread(cx);
+                            this.new_thread(None, window, cx);
                         }
                     }),
             );
@@ -96,9 +94,11 @@ impl Plait {
                         .flex_shrink_0()
                         .px_6()
                         .pb_3()
-                        .child(self.environment(None, None)),
+                        .child(self.environment(self.new_thread_note(), None)),
                 ),
             )
-            .when(wide, |el| el.child(self.inspector(cx)))
+            .when(self.shows_inspector(wide), |el| {
+                el.child(self.inspector(cx))
+            })
     }
 }

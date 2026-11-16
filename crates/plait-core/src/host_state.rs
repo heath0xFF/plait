@@ -4,7 +4,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::host::{ModelChoice, Snapshot, Status, ThreadSummary};
+use crate::host::{ApprovalMode, ModelChoice, QueueMode, Request, Snapshot, Status, ThreadSummary};
 use std::{path::PathBuf, sync::Arc};
 
 pub struct HostState {
@@ -64,6 +64,7 @@ impl HostState {
         self.snapshot = None;
         self.error = None;
         self.submitting = false;
+        self.submissions.disconnected();
         self.controlling = false;
         self.creating = false;
         if self.saving {
@@ -153,10 +154,11 @@ impl HostState {
                     .map(|old| (&old.model, &old.checkout))
             });
         if expected.is_some_and(|(model, checkout)| {
-            *model != snapshot.model || *checkout != snapshot.checkout
+            (self.protocol() < 3 && *model != snapshot.model) || *checkout != snapshot.checkout
         }) {
             self.connected = false;
-            self.error = Some("Host changed this thread's saved model or checkout. Reconnect to reload its identity.".into());
+            self.error =
+                Some("Host changed this thread's identity. Reconnect to reload it.".into());
             return false;
         }
         if let Some(thread) = self
@@ -165,6 +167,7 @@ impl HostState {
             .find(|thread| thread.id == snapshot.id)
         {
             thread.status = snapshot.status;
+            thread.model = snapshot.model.clone();
         }
         self.snapshot = Some(Arc::new(snapshot));
         true
@@ -186,28 +189,85 @@ impl HostState {
     }
 }
 
+/// The exact request to retry after an uncertain response. It is journaled before I/O.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PendingSubmit {
     pub request_id: String,
     pub text: String,
+    #[serde(default)]
+    pub approval: Option<ApprovalMode>,
+    #[serde(default)]
+    pub when_busy: Option<QueueMode>,
+    #[serde(default)]
+    pub draft_revision: Option<u64>,
+}
+
+impl PendingSubmit {
+    pub fn request(&self, thread_id: &str) -> Request {
+        match self.when_busy {
+            Some(mode) => Request::submit_when_busy(
+                thread_id.into(),
+                self.request_id.clone(),
+                self.text.clone(),
+                self.approval.unwrap_or(ApprovalMode::Ask),
+                mode,
+            ),
+            None => Request::submit(
+                thread_id.into(),
+                self.request_id.clone(),
+                self.text.clone(),
+                self.approval,
+            ),
+        }
+    }
 }
 
 #[derive(Default)]
 pub struct Submissions {
-    pending: HashMap<String, PendingSubmit>,
+    pending: HashMap<String, Vec<PendingSubmit>>,
+    accepted: HashMap<String, Vec<PendingSubmit>>,
+    /// Transient only: restored entries always require an explicit retry.
+    sending: HashSet<String>,
+    errors: HashMap<String, String>,
 }
 
 impl Submissions {
+    /// Legacy clients allow one outstanding request per thread.
     pub fn begin(&mut self, thread_id: &str, text: String) -> Result<PendingSubmit, String> {
+        if self.pending(thread_id).is_some() {
+            return Err("Resolve the previous submission before sending another message.".into());
+        }
+        self.begin_with(thread_id, text, None, None, None)
+    }
+
+    pub fn begin_with(
+        &mut self,
+        thread_id: &str,
+        text: String,
+        approval: Option<ApprovalMode>,
+        when_busy: Option<QueueMode>,
+        draft_revision: Option<u64>,
+    ) -> Result<PendingSubmit, String> {
         if text.trim().is_empty() {
             return Err("Enter a message before sending.".into());
         }
-        if self.pending.contains_key(thread_id) {
-            return Err("Resolve the previous submission before sending another message.".into());
+        if self.all(thread_id).len() >= 16 {
+            return Err("Resolve a pending message before sending another.".into());
+        }
+        if draft_revision.is_some()
+            && self
+                .all(thread_id)
+                .iter()
+                .any(|p| p.draft_revision == draft_revision)
+        {
+            return Err("This draft is already awaiting acceptance. Use Retry safely.".into());
         }
         let submission = PendingSubmit {
             request_id: request_id(),
             text,
+            approval,
+            when_busy,
+            draft_revision,
         };
         let request =
             crate::host::Request::submit_bound(thread_id, &submission.request_id, &submission.text);
@@ -215,24 +275,129 @@ impl Submissions {
         if bytes.len() + 1 > crate::host::REQUEST_LIMIT {
             return Err("Message exceeds the host's 64 KiB request limit. Shorten the draft before sending.".into());
         }
-        self.pending.insert(thread_id.into(), submission.clone());
+        self.pending
+            .entry(thread_id.into())
+            .or_default()
+            .push(submission.clone());
         Ok(submission)
     }
 
     pub fn restore(&mut self, thread_id: String, pending: PendingSubmit) {
-        // Loading disk state must not replace a newer in-memory submission.
-        self.pending.entry(thread_id).or_insert(pending);
+        let items = self.pending.entry(thread_id).or_default();
+        if !items
+            .iter()
+            .any(|item| item.request_id == pending.request_id)
+        {
+            items.push(pending);
+        }
+    }
+
+    pub fn all(&self, thread_id: &str) -> &[PendingSubmit] {
+        self.pending.get(thread_id).map_or(&[], Vec::as_slice)
     }
 
     pub fn pending(&self, thread_id: &str) -> Option<&PendingSubmit> {
-        self.pending.get(thread_id)
+        self.all(thread_id).first()
+    }
+
+    pub fn get(&self, thread_id: &str, request_id: &str) -> Option<&PendingSubmit> {
+        self.all(thread_id)
+            .iter()
+            .find(|p| p.request_id == request_id)
+    }
+
+    pub fn start_send(&mut self, thread_id: &str, request_id: &str) -> bool {
+        self.get(thread_id, request_id).is_some() && self.sending.insert(request_id.into())
+    }
+
+    pub fn is_sending(&self, request_id: &str) -> bool {
+        self.sending.contains(request_id)
+    }
+
+    pub fn uncertain(&mut self, request_id: &str, error: String) {
+        self.sending.remove(request_id);
+        self.errors.insert(request_id.into(), error);
+    }
+
+    pub fn error(&self, request_id: &str) -> Option<&str> {
+        self.errors.get(request_id).map(String::as_str)
+    }
+
+    pub fn disconnected(&mut self) {
+        self.sending.clear();
     }
 
     pub fn finish(&mut self, thread_id: &str, request_id: &str) -> Option<PendingSubmit> {
-        if self.pending.get(thread_id)?.request_id != request_id {
-            return None;
+        let pending = self.pending.get_mut(thread_id)?;
+        let index = pending.iter().position(|p| p.request_id == request_id)?;
+        let finished = pending.remove(index);
+        self.sending.remove(request_id);
+        self.errors.remove(request_id);
+        Some(finished)
+    }
+
+    pub fn accepted(&self, thread_id: &str) -> &[PendingSubmit] {
+        self.accepted.get(thread_id).map_or(&[], Vec::as_slice)
+    }
+
+    pub fn restore_accepted(&mut self, thread_id: String, pending: PendingSubmit) {
+        let items = self.accepted.entry(thread_id).or_default();
+        if !items
+            .iter()
+            .any(|item| item.request_id == pending.request_id)
+        {
+            items.push(pending);
         }
-        self.pending.remove(thread_id)
+    }
+
+    pub fn confirm(&mut self, thread_id: &str, request_id: &str) -> Option<PendingSubmit> {
+        let pending = self.finish(thread_id, request_id)?;
+        let items = self.accepted.entry(thread_id.into()).or_default();
+        items.push(pending.clone());
+        // This cache is only for recovering exact queued text. Older host-owned
+        // messages remain in history, not in the desktop journal.
+        if items.len() > 16 {
+            items.remove(0);
+        }
+        Some(pending)
+    }
+
+    pub fn forget_accepted(&mut self, thread_id: &str, request_id: &str) {
+        if let Some(items) = self.accepted.get_mut(thread_id) {
+            items.retain(|p| p.request_id != request_id);
+        }
+    }
+
+    /// Both accepted messages and still-queued inputs acknowledge the exact request.
+    pub fn observe(&mut self, snapshot: &Snapshot) -> Vec<PendingSubmit> {
+        let accepted = self
+            .all(&snapshot.id)
+            .iter()
+            .filter(|pending| {
+                snapshot
+                    .queued
+                    .iter()
+                    .any(|q| q.request_id == pending.request_id)
+                    || snapshot
+                        .messages
+                        .iter()
+                        .any(|m| m.id == format!("request-{}", pending.request_id))
+            })
+            .map(|pending| pending.request_id.clone())
+            .collect::<Vec<_>>();
+        let confirmed = accepted
+            .into_iter()
+            .filter_map(|id| self.confirm(&snapshot.id, &id))
+            .collect();
+        if let Some(items) = self.accepted.get_mut(&snapshot.id) {
+            items.retain(|pending| {
+                !snapshot
+                    .messages
+                    .iter()
+                    .any(|m| m.id == format!("request-{}", pending.request_id))
+            });
+        }
+        confirmed
     }
 }
 
@@ -272,10 +437,10 @@ mod tests {
     }
 
     #[test]
-    fn negotiated_protocol_accepts_versions_one_and_two_only() {
+    fn negotiated_protocol_accepts_versions_one_through_three_only() {
         let mut state = HostState::new("/repo".into());
         assert_eq!(state.protocol(), 1);
-        for (version, accepted) in [(1, true), (2, true), (3, false), (0, false)] {
+        for (version, accepted) in [(1, true), (2, true), (3, true), (4, false), (0, false)] {
             state.reconnect();
             let mut reply = status(None, Vec::new());
             reply.protocol_version = version;
@@ -288,8 +453,9 @@ mod tests {
         // Submissions are sized as their largest negotiated form.
         let request = crate::host::Request::submit_bound("t", "r", "hi");
         let wire = serde_json::to_value(&request).unwrap();
-        assert_eq!(wire["protocol_version"], 2);
+        assert_eq!(wire["protocol_version"], 3);
         assert_eq!(wire["approval"], "auto");
+        assert_eq!(wire["when_busy"], "follow_up");
         let legacy = crate::host::Request::submit("t".into(), "r".into(), "hi".into(), None);
         assert_eq!(
             serde_json::to_value(&legacy).unwrap(),
@@ -377,6 +543,10 @@ mod tests {
                     model_id: "m".into(),
                     name: "Model".into(),
                     authenticated: true,
+                    reasoning: None,
+                    thinking_levels: None,
+                    context_window: None,
+                    input: None,
                 }],
             ),
         );
@@ -431,5 +601,126 @@ mod tests {
         state.finish("b", &second.request_id);
         assert_eq!(state.pending("a"), Some(&first));
         assert!(state.begin("c", " \n".into()).is_err());
+    }
+    #[test]
+    fn many_pending_messages_keep_original_modes_and_acknowledge_out_of_order() {
+        let mut state = Submissions::default();
+        let a = state
+            .begin_with(
+                "t",
+                "first".into(),
+                Some(ApprovalMode::Ask),
+                Some(QueueMode::FollowUp),
+                Some(1),
+            )
+            .unwrap();
+        let b = state
+            .begin_with(
+                "t",
+                "second".into(),
+                Some(ApprovalMode::Auto),
+                Some(QueueMode::Steer),
+                Some(2),
+            )
+            .unwrap();
+        assert!(state.start_send("t", &a.request_id));
+        assert!(!state.start_send("t", &a.request_id));
+        state.uncertain(&a.request_id, "transport closed".into());
+        assert_eq!(state.confirm("t", &b.request_id), Some(b));
+        assert_eq!(state.pending("t"), Some(&a));
+        assert!(
+            state
+                .begin_with("t", "edited".into(), None, Some(QueueMode::Steer), Some(1))
+                .is_err()
+        );
+        let wire = serde_json::to_value(a.request("t")).unwrap();
+        assert_eq!(wire["request_id"], a.request_id);
+        assert_eq!(wire["approval"], "ask");
+        assert_eq!(wire["when_busy"], "follow_up");
+        assert!(state.start_send("t", &a.request_id));
+        state.disconnected();
+        assert!(!state.is_sending(&a.request_id));
+        assert_eq!(state.pending("t"), Some(&a));
+    }
+
+    #[test]
+    fn snapshot_queue_acknowledges_pending_and_keeps_full_local_text() {
+        let mut state = Submissions::default();
+        let a = state
+            .begin_with(
+                "a",
+                "full text".into(),
+                Some(ApprovalMode::Auto),
+                Some(QueueMode::FollowUp),
+                Some(1),
+            )
+            .unwrap();
+        let mut current = snapshot("a");
+        current.queued.push(crate::host::Queued {
+            id: format!("request-{}", a.request_id),
+            request_id: a.request_id.clone(),
+            text: "tail".into(),
+            mode: QueueMode::FollowUp,
+            approval: ApprovalMode::Auto,
+        });
+        assert_eq!(state.observe(&current), vec![a.clone()]);
+        assert!(state.pending("a").is_none());
+        assert_eq!(state.accepted("a"), std::slice::from_ref(&a));
+        assert!(state.observe(&current).is_empty());
+        current.queued.clear();
+        current.messages.push(crate::host::Message {
+            id: format!("request-{}", a.request_id),
+            ..Default::default()
+        });
+        state.observe(&current);
+        assert!(state.accepted("a").is_empty());
+        state.restore("a".into(), a.clone());
+        state.restore("a".into(), a.clone());
+        assert_eq!(state.all("a"), &[a]);
+    }
+
+    #[test]
+    fn v3_watch_accepts_model_change_but_never_a_checkout_change() {
+        let mut state = HostState::new("/repo".into());
+        let mut catalog = status(None, Vec::new());
+        catalog.protocol_version = 3;
+        state.apply_status(0, catalog);
+        let epoch = state.select(Some("a".into()));
+        assert!(state.apply_snapshot(0, epoch, snapshot("a")));
+        let mut changed = snapshot("a");
+        changed.model.model_id = "other".into();
+        assert!(state.apply_snapshot(0, epoch, changed.clone()));
+        changed.checkout = "/different".into();
+        assert!(!state.apply_snapshot(0, epoch, changed));
+    }
+    #[test]
+    fn pending_limit_is_bounded_and_cancelled_cache_is_forgotten() {
+        let mut state = Submissions::default();
+        for revision in 0..16 {
+            state
+                .begin_with(
+                    "t",
+                    format!("message {revision}"),
+                    Some(ApprovalMode::Ask),
+                    Some(QueueMode::FollowUp),
+                    Some(revision),
+                )
+                .unwrap();
+        }
+        assert!(
+            state
+                .begin_with("t", "overflow".into(), None, None, Some(16))
+                .is_err()
+        );
+        assert_eq!(state.all("t").len(), 16);
+        let request = state.pending("t").unwrap().request_id.clone();
+        state.confirm("t", &request).unwrap();
+        state.forget_accepted("t", &request);
+        assert!(state.accepted("t").is_empty());
+        assert!(
+            state
+                .begin_with("t", "next".into(), None, None, Some(17))
+                .is_ok()
+        );
     }
 }

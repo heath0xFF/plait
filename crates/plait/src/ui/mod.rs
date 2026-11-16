@@ -1,16 +1,29 @@
+mod actions;
 mod changes;
+mod commands;
 mod composer;
 mod conversation;
+mod history;
 mod host;
 mod jump;
 mod live_conversation;
 mod markdown;
+mod model_picker;
 mod navigation;
+mod navigation_host;
+mod palette;
+mod selection;
 mod session;
 mod settings;
-#[cfg(all(test, target_os = "linux"))]
+mod settings_keyboard;
+mod settings_policy;
+mod settings_providers;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod snapshot;
+mod text_field;
 pub mod theme;
+mod thread_controls;
+mod tool_card;
 mod update;
 
 use gpui::{prelude::*, *};
@@ -34,6 +47,7 @@ actions!(
         Minimize,
         OpenRepository,
         Settings,
+        ProviderSettings,
         CheckForUpdates,
         Refresh,
         ToggleSidebar,
@@ -45,24 +59,51 @@ actions!(
         Tab,
         BackTab,
         NextFile,
-        PreviousFile
+        PreviousFile,
+        NewThread,
+        NewThreadWithModel,
+        SwitchThreadModel,
+        CommandPalette,
+        ToggleInspector,
+        RenameThread,
+        ArchiveThread,
+        ToggleArchived,
+        FilterThreads,
+        ToggleNotifications
     ]
 );
+
+/// Below this width the Git inspector is not shown; Git stays in Changes.
+const WIDE_WINDOW: f32 = 1150.;
 
 pub struct Plait {
     state: AppState,
     host: HostState,
     host_watch: Option<host::WatchLease>,
+    navigation: navigation::Navigation,
     composers: HashMap<String, Entity<composer::Composer>>,
     live_scroll: ListState,
     live_count: usize,
     live_layout: Vec<plait_core::transcript::Slot>,
     formatted: std::sync::Arc<plait_core::markdown::Transcript>,
+    history: history::HistoryView,
     settings_open: bool,
-    show_all_models: bool,
+    settings_section: usize,
+    settings_scroll: ScrollHandle,
+    keyboard: settings_keyboard::KeyboardState,
+    policy: settings_policy::PolicyState,
+    providers: settings_providers::ProviderState,
+    /// A new thread was requested: open it when the host confirms creation,
+    /// unless the user has gone elsewhere in the meantime.
     new_thread_open: bool,
+    /// The command palette or model picker, above the workspace.
+    overlay: Option<commands::Overlay>,
+    /// The inspector toggle was used on a window too narrow to show it.
+    inspector_note: bool,
+    thread_controls: thread_controls::ThreadControls,
     focus: FocusHandle,
     expanded_live_tools: HashSet<String>,
+    reading: selection::Reading,
     file_scroll: UniformListScrollHandle,
     diff_scroll: UniformListScrollHandle,
     show_changes: bool,
@@ -96,16 +137,26 @@ impl Plait {
             state,
             host,
             host_watch: None,
+            navigation: navigation::Navigation::new(cx),
             composers: HashMap::new(),
             live_scroll: ListState::new(0, ListAlignment::Bottom, px(300.)),
             live_count: 0,
             live_layout: Vec::new(),
             formatted: Default::default(),
+            history: Default::default(),
             settings_open: false,
-            show_all_models: false,
+            settings_section: 0,
+            settings_scroll: ScrollHandle::new(),
+            keyboard: Default::default(),
+            policy: Default::default(),
+            providers: Default::default(),
             new_thread_open: false,
+            overlay: None,
+            inspector_note: false,
+            thread_controls: Default::default(),
             focus,
             expanded_live_tools: HashSet::new(),
+            reading: Default::default(),
             file_scroll: UniformListScrollHandle::new(),
             diff_scroll: UniformListScrollHandle::new(),
             show_changes: false,
@@ -123,8 +174,18 @@ impl Plait {
             interaction: None,
             switch_us: 0,
         };
+        this.live_scroll
+            .set_scroll_handler(cx.listener(Self::scroll_history));
+        this.initialize_navigation(window, cx);
         this.pump(cx);
         this.load_preferences(cx);
+        // An open picker shows host state; keep it current as replies land.
+        cx.observe_self(|this, cx| {
+            this.sync_picker(cx);
+            this.sync_policy(cx);
+            this.sync_provider_settings(cx);
+        })
+        .detach();
         this.reconnect_host(window, cx);
         // Test scenes stay offline.
         if !cfg!(test) {
@@ -145,11 +206,8 @@ impl Plait {
             let (job, reply) = task.await;
             let _ = this.update(cx, |this, cx| {
                 this.state.repository.complete(job, reply);
-                if let Some(snapshot) = this.state.repository.snapshot.ready()
-                    && let Some(name) = snapshot.root.file_name()
-                {
-                    this.state.projects[0].name = name.to_string_lossy().into_owned();
-                }
+                this.normalize_checkout(cx);
+                this.deliver_files(cx);
                 this.pump(cx);
                 cx.notify();
             });
@@ -160,15 +218,16 @@ impl Plait {
     /// Move to the next or previous host thread, wrapping. With no selection,
     /// forward starts at the first thread and backward at the last.
     fn step_thread(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let count = self.host.threads.len();
+        let indices = self.filtered_threads(cx);
+        let count = indices.len();
         if count == 0 {
             return;
         }
-        let current = self
-            .host
-            .selected
-            .as_ref()
-            .and_then(|id| self.host.threads.iter().position(|thread| &thread.id == id));
+        let current = self.host.selected.as_ref().and_then(|id| {
+            indices
+                .iter()
+                .position(|&index| &self.host.threads[index].id == id)
+        });
         let next = match (current, forward) {
             (Some(index), true) => (index + 1) % count,
             (Some(index), false) => (index + count - 1) % count,
@@ -176,7 +235,7 @@ impl Plait {
             (None, false) => count - 1,
         };
         self.interaction = Some(std::time::Instant::now());
-        let id = self.host.threads[next].id.clone();
+        let id = self.host.threads[indices[next]].id.clone();
         self.select_host_thread(id, window, cx);
     }
 
@@ -274,10 +333,82 @@ impl Plait {
 
 impl Plait {
     fn show_settings(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_overlay(false, window, cx);
         window.focus(&self.focus, cx);
         self.settings_open = open;
+        self.settings_scroll.set_offset(point(px(0.), px(0.)));
+        self.cancel_recording(cx);
+        if open {
+            self.prepare_keyboard(cx);
+            self.prepare_providers(cx);
+        } else {
+            self.close_provider_form(cx);
+        }
+        if !open
+            && !self.show_changes
+            && let Some(id) = self.host.selected.clone()
+        {
+            self.mark_thread_read(&id, cx);
+        }
         self.new_thread_open = false;
         cx.notify();
+    }
+
+    fn wide(window: &Window) -> bool {
+        window.viewport_size().width > px(WIDE_WINDOW)
+    }
+
+    /// The Git inspector beside the conversation: wide windows, unless hidden.
+    pub(super) fn shows_inspector(&self, wide: bool) -> bool {
+        wide && !self.preferences.value.hide_inspector
+    }
+
+    /// Show or hide the Git inspector and remember the choice. A narrow window
+    /// has no room for it, so the toggle says where Git is instead.
+    fn toggle_inspector(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !Self::wide(window) {
+            self.inspector_note = !self.inspector_note;
+            cx.notify();
+            return;
+        }
+        self.inspector_note = false;
+        let mut value = self.preferences.value.clone();
+        value.hide_inspector = !value.hide_inspector;
+        self.set_preferences(value, jump::PreferenceGroup::View, cx);
+    }
+
+    fn inspector_note(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        row()
+            .id("inspector-note")
+            .role(Role::Group)
+            .aria_label("Git inspector unavailable at this window width")
+            .flex_shrink_0()
+            .px_4()
+            .py_2()
+            .gap_3()
+            .border_b_1()
+            .border_color(rgb(BORDER))
+            .text_size(px(12.))
+            .child(div().flex_1().min_w_0().text_color(rgb(MUTED)).child(text!(
+                format!(
+                    "The Git inspector needs a window wider than {WIDE_WINDOW} points. Git status and diffs are in Changes."
+                )
+            )))
+            .child(
+                toned_button("inspector-note-changes", "Show Changes", Tone::Filled).on_activate(
+                    cx,
+                    |this, _, cx| {
+                        this.inspector_note = false;
+                        this.show_tab(true, cx);
+                    },
+                ),
+            )
+            .child(
+                button("inspector-note-dismiss", "Dismiss").on_activate(cx, |this, _, cx| {
+                    this.inspector_note = false;
+                    cx.notify();
+                }),
+            )
     }
 
     fn toggle_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -289,6 +420,12 @@ impl Plait {
 
     fn show_tab(&mut self, changes: bool, cx: &mut Context<Self>) {
         self.show_changes = changes;
+        if !changes
+            && !self.settings_open
+            && let Some(id) = self.host.selected.clone()
+        {
+            self.mark_thread_read(&id, cx);
+        }
         cx.notify();
     }
 
@@ -318,7 +455,7 @@ impl Plait {
             .border_color(rgb(BORDER))
             .child(
                 icon_button("toggle-sidebar", "panel", "Toggle sidebar")
-                    .aria_keyshortcuts("Meta+B")
+                    .aria_keyshortcuts(self.shortcut_aria("view.toggle_sidebar"))
                     .on_activate(cx, |this, window, cx| this.toggle_sidebar(window, cx)),
             )
             .child(
@@ -349,12 +486,12 @@ impl Plait {
                 segmented()
                     .child(
                         segment("conversation-tab", "Conversation", !self.show_changes)
-                            .aria_keyshortcuts("Meta+Shift+1")
+                            .aria_keyshortcuts(self.shortcut_aria("view.conversation"))
                             .on_click(cx.listener(|this, _, _, cx| this.show_tab(false, cx))),
                     )
                     .child(
                         segment("changes-tab", "Changes", self.show_changes)
-                            .aria_keyshortcuts("Meta+Shift+2")
+                            .aria_keyshortcuts(self.shortcut_aria("view.changes"))
                             // The accessible name stays "Changes"; the count is visual.
                             .when_some(changed, |el, count| {
                                 el.child(
@@ -367,6 +504,20 @@ impl Plait {
                             .on_click(cx.listener(|this, _, _, cx| this.show_tab(true, cx))),
                     ),
             )
+            .child(
+                // Mirrors the sidebar toggle at the other end of the header.
+                icon_button(
+                    "toggle-inspector",
+                    "panel-right",
+                    if wide {
+                        "Toggle Git inspector"
+                    } else {
+                        "Git inspector (needs a wider window)"
+                    },
+                )
+                .aria_keyshortcuts(self.shortcut_aria("view.toggle_inspector"))
+                .on_activate(cx, |this, window, cx| this.toggle_inspector(window, cx)),
+            )
     }
 
     /// Where the selected thread runs: Project, Machine, and its checkout branch.
@@ -376,7 +527,7 @@ impl Plait {
         note: Option<(&'static str, u32)>,
     ) -> impl IntoElement {
         // Host threads belong to this machine's checkout.
-        let project = &self.state.projects[0];
+        let project = self.active_project();
         let machine = &project.machines[0];
         let branch = self
             .state
@@ -448,8 +599,8 @@ impl Render for Plait {
         if let Some(interaction) = self.interaction.take() {
             self.switch_us = interaction.elapsed().as_micros();
         }
-        let wide = window.viewport_size().width > px(1150.);
-        let project = &self.state.projects[0];
+        let wide = Self::wide(window);
+        let project = self.active_project();
         let machine = &project.machines[0];
         let real = self.host.selected.is_some();
         let connection = if self.host.connecting {
@@ -461,14 +612,12 @@ impl Render for Plait {
         };
         let title = if self.settings_open {
             "Settings".to_owned()
-        } else if self.new_thread_open {
-            "New local thread".to_owned()
         } else if real {
             self.thread_title(self.host.selected.as_deref().unwrap_or_default())
         } else {
             project.name.clone()
         };
-        let status = if real && !self.settings_open && !self.new_thread_open {
+        let status = if real && !self.settings_open {
             self.host.snapshot.as_ref().map_or_else(
                 || ("Loading".to_owned(), MUTED),
                 |snapshot| {
@@ -482,7 +631,7 @@ impl Render for Plait {
             connection
         };
         // With no thread open the title is already the project; don't repeat it.
-        let location = if real || self.settings_open || self.new_thread_open {
+        let location = if real || self.settings_open {
             format!("{} / {}", project.name, machine.name)
         } else {
             machine.name.clone()
@@ -505,6 +654,55 @@ impl Render for Plait {
             .on_action(
                 cx.listener(|this, _: &ToggleSidebar, window, cx| this.toggle_sidebar(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &ToggleInspector, window, cx| {
+                this.toggle_inspector(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &RenameThread, window, cx| {
+                if let Some(id) = this.host.selected.clone() {
+                    this.begin_rename(id, window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ArchiveThread, window, cx| {
+                if let Some(thread) = this
+                    .host
+                    .threads
+                    .iter()
+                    .find(|thread| Some(&thread.id) == this.host.selected.as_ref())
+                {
+                    this.archive_thread(
+                        thread.id.clone(),
+                        thread.archived != Some(true),
+                        window,
+                        cx,
+                    );
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ToggleArchived, _, cx| {
+                this.navigation.archived = !this.navigation.archived;
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &FilterThreads, window, cx| {
+                this.sidebar = true;
+                window.focus(&this.navigation.filter.focus_handle(cx), cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ToggleNotifications, _, cx| {
+                let mut value = this.preferences.value.clone();
+                value.navigation.mute_notifications = !value.navigation.mute_notifications;
+                this.set_preferences(value, jump::PreferenceGroup::View, cx);
+            }))
+            .on_action(cx.listener(|this, _: &CommandPalette, window, cx| {
+                this.toggle_command_palette(window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &NewThread, window, cx| this.new_thread(None, window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &NewThreadWithModel, window, cx| {
+                this.open_model_picker(model_picker::ModelPurpose::NewThread, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SwitchThreadModel, window, cx| {
+                this.open_thread_models(window, cx)
+            }))
             .on_action(cx.listener(|this, _: &ToggleDiagnostics, _, cx| {
                 this.diagnostics = !this.diagnostics;
                 cx.notify();
@@ -531,8 +729,14 @@ impl Render for Plait {
             .on_action(
                 cx.listener(|this, _: &Quit, window, cx| this.close_desktop(true, window, cx)),
             )
+            .on_action(cx.listener(|this, _: &ProviderSettings, window, cx| {
+                this.show_settings(true, window, cx);
+                this.settings_section = 1;
+            }))
             .on_action(cx.listener(|_, _: &Minimize, window, _| window.minimize_window()))
             .map(|root| self.on_jump_actions(root, cx))
+            .map(|root| self.on_selection_actions(root, cx))
+            .map(|root| self.on_keyboard_controls(root, cx))
             .size_full()
             .overflow_hidden()
             .bg(rgb(BG))
@@ -572,10 +776,12 @@ impl Render for Plait {
                                         .child(notice),
                                 )
                             })
+                            .when_some(self.creation_bar(cx), |el, bar| el.child(bar))
+                            .when(self.inspector_note && !wide, |el| {
+                                el.child(self.inspector_note(cx))
+                            })
                             .child(if self.settings_open {
                                 self.settings(cx).into_any_element()
-                            } else if self.new_thread_open {
-                                self.new_thread(cx).into_any_element()
                             } else if self.show_changes {
                                 self.changes(wide, cx).into_any_element()
                             } else if real {
@@ -586,60 +792,19 @@ impl Render for Plait {
                     ),
             )
             // Timings stay available without spending a permanent chrome row on them.
-            .when(self.diagnostics, |el| el.child(self.diagnostics_bar()));
+            .when(self.diagnostics, |el| el.child(self.diagnostics_bar()))
+            // Last, so the overlay paints above and blocks the workspace.
+            .when_some(self.overlay.as_ref(), |el, overlay| {
+                el.child(overlay.palette.clone())
+            });
         self.last_render_us = start.elapsed().as_micros();
         self.max_render_us = self.max_render_us.max(self.last_render_us);
         root
     }
 }
 
+/// Bind the default shortcuts and build the menu bar from the action table.
 pub fn menus(cx: &mut App) {
-    composer::bind_keys(cx);
-    jump::bind_keys(cx);
-    cx.bind_keys([
-        KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("cmd-w", Close, Some("Plait")),
-        KeyBinding::new("cmd-m", Minimize, Some("Plait")),
-        KeyBinding::new("cmd-o", OpenRepository, Some("Plait")),
-        KeyBinding::new("cmd-,", Settings, Some("Plait")),
-        KeyBinding::new("cmd-r", Refresh, Some("Plait")),
-        KeyBinding::new("cmd-b", ToggleSidebar, Some("Plait")),
-        KeyBinding::new("cmd-shift-d", ToggleDiagnostics, Some("Plait")),
-        // Cmd-1 to Cmd-9 jump to sidebar items; see jump.rs.
-        KeyBinding::new("cmd-shift-1", Conversation, Some("Plait")),
-        KeyBinding::new("cmd-shift-2", Changes, Some("Plait")),
-        KeyBinding::new("cmd-alt-down", NextThread, Some("Plait")),
-        KeyBinding::new("cmd-alt-up", PreviousThread, Some("Plait")),
-        KeyBinding::new("alt-down", NextFile, Some("Plait")),
-        KeyBinding::new("alt-up", PreviousFile, Some("Plait")),
-        KeyBinding::new("tab", Tab, Some("Plait")),
-        KeyBinding::new("shift-tab", BackTab, Some("Plait")),
-    ]);
+    actions::install(cx, &actions::KeyOverrides::new());
     cx.on_action(|_: &Quit, cx| cx.quit());
-    cx.set_menus([
-        Menu::new("Plait").items([
-            MenuItem::action("Settings…", Settings),
-            MenuItem::action("Check for Updates…", CheckForUpdates),
-            MenuItem::separator(),
-            MenuItem::action("Quit Plait", Quit),
-        ]),
-        Menu::new("File").items([
-            MenuItem::action("Open Repository…", OpenRepository),
-            MenuItem::action("Refresh Git Status", Refresh),
-            MenuItem::separator(),
-            MenuItem::action("Close Window", Close),
-        ]),
-        Menu::new("View").items([
-            MenuItem::action("Toggle Sidebar", ToggleSidebar),
-            MenuItem::action("Toggle Diagnostics", ToggleDiagnostics),
-            MenuItem::action("Conversation", Conversation),
-            MenuItem::action("Changes", Changes),
-            MenuItem::separator(),
-            MenuItem::action("Next Thread", NextThread),
-            MenuItem::action("Previous Thread", PreviousThread),
-            MenuItem::action("Next Changed File", NextFile),
-            MenuItem::action("Previous Changed File", PreviousFile),
-        ]),
-        Menu::new("Window").items([MenuItem::action("Minimize", Minimize)]),
-    ]);
 }

@@ -1,7 +1,7 @@
 # Contributing to Plait
 
-Plait is an early local macOS preview. Current work stays within **M2: persistent
-local agent execution**. Read the [README](README.md), [architecture](docs/ARCHITECTURE.md),
+Plait is an early local macOS preview. Current work is **M2.5: the daily driver**
+on local execution; see the [roadmap](docs/ROADMAP.md). Read the [README](README.md), [architecture](docs/ARCHITECTURE.md),
 and [design guide](DESIGN.md) before making changes.
 
 ## Build from source
@@ -41,7 +41,7 @@ To publish a release that installed apps can update to, see
 - Discuss changes to shared models, protocol, durable storage, or permission rules
   before implementation. Preserve compatibility and test the failure paths.
 
-## M2 work split
+## Work split
 
 | Area | Responsibility |
 | --- | --- |
@@ -51,9 +51,11 @@ To publish a release that installed apps can update to, see
 | `runtime/` | Pi integration, approvals, durable execution, and platform command policy |
 
 The composer owns editable text, selection, undo, and IME composition. It emits
-Submit/Stop events; the parent owns host requests and acceptance. Enter during
+Submit (including revision and steering intent)/Stop events; the parent owns host requests and acceptance. Enter during
 IME composition must not submit. An acknowledgement clears only the draft
-revision that was sent. Offline input has a disabled state and a reason.
+revision that was sent. Every pending message keeps that revision, exact request
+ID, approval mode, and queue mode through journal recovery. Offline input has a
+disabled state and a reason.
 
 The host owns accepted work, not a window or event subscription. Closing a client
 must not stop a run; restarting a host must not replay an interrupted effect.
@@ -130,17 +132,33 @@ The script uses disposable repositories and its own app processes. It finds
 controls by accessible name/role, not global keystrokes. Keep those identities
 stable or update the check. Do not alter OS permissions automatically.
 
-For Linux-only layout inspection:
+To see the UI without opening a window, on macOS or Linux:
 
 ```sh
-PLAIT_SNAPSHOT_DIR=/tmp/plait-snapshots \
-  cargo test --locked -p plait snapshot -- --ignored
+bash scripts/snapshots.sh /tmp/plait-snapshots
 ```
 
-This exports 1380 × 860 and 900 × 600 scenes through GPUI's headless renderer.
-It needs a software Vulkan driver such as `mesa-vulkan-drivers`. Scenes use
-injected test state and Linux fonts, not a live provider or the Mac renderer.
-See [verification boundaries](docs/VERIFICATION.md#coverage-boundaries).
+This draws every scene at 1380 × 860 (`-wide`) and 900 × 600 (`-narrow`) and
+prints the PNG files it wrote. It needs no display, Screen Recording, or
+Accessibility permission, and it does not contact a running host. Read the
+images after a UI change.
+
+- **macOS:** Metal and Core Text, as in the app, so glyphs, wrapping, and
+  truncation come from the code the app runs.
+- **Linux:** wgpu with Linux fonts. It needs a software Vulkan driver such as
+  `mesa-vulkan-drivers`, and checks layout, density, and color only.
+
+The images are not the native window. They leave out the title bar, real
+pointer and key input, focus that follows it, the caret and IME, the
+accessibility tree, animation, and timing. `scripts/smoke-macos.sh` and a
+manual look at the app still cover those. Scenes use injected sample state, not
+a live provider. See [how the harness works](docs/ARCHITECTURE.md#scene-snapshots-without-a-window)
+and the [verification boundaries](docs/VERIFICATION.md#coverage-boundaries).
+
+To add a scene for a new view, edit `crates/plait/src/ui/snapshot.rs`: write a
+small function that builds or changes the sample state, set it on the harness,
+and call `harness.capture("name-{suffix}")` from `walk` or a `*_walk` helper.
+Sample state stays in that test module; no shipped view may contain it.
 
 ## Runtime probes and live acceptance
 
