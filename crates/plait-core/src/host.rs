@@ -781,6 +781,41 @@ pub use history::{HistoryField, HistoryItem, HistoryPage, HistoryText, More};
 pub use threads::ThreadWatch;
 pub use watch::{CancelWatch, Snapshots, ThreadLists, Updates};
 
+pub mod policy;
+pub mod providers;
+pub mod sign_in;
+
+impl Client {
+    /// One request and reply for an operation defined outside this file, such
+    /// as provider sign-in. The encoded request can hold a secret, so it is
+    /// overwritten once written and never appears in an error.
+    pub fn send<R: Serialize, T: DeserializeOwned>(&self, request: &R) -> Result<T, Error> {
+        let mut bytes = serde_json::to_vec(request)
+            .map_err(|_| Error::Protocol("Cannot encode host request.".into()))?;
+        let result = self.send_encoded(&bytes);
+        bytes.fill(0);
+        std::hint::black_box(&bytes);
+        decode(&result?.next(Some(Instant::now() + Duration::from_secs(20)))?)
+    }
+
+    fn send_encoded(&self, bytes: &[u8]) -> Result<Frames, Error> {
+        if bytes.len() + 1 > REQUEST_LIMIT {
+            return Err(Error::Protocol(
+                "Request exceeds the host's 64 KiB limit.".into(),
+            ));
+        }
+        let mut socket = crate::local_socket::connect(&self.path)?;
+        socket.set_write_timeout(Some(Duration::from_secs(5)))?;
+        socket.write_all(bytes)?;
+        socket.write_all(b"\n")?;
+        Ok(Frames {
+            reader: BufReader::new(socket),
+            pending: Vec::new(),
+            partial_since: None,
+        })
+    }
+}
+
 pub struct Watch {
     frames: Frames,
     thread_id: String,
