@@ -237,6 +237,14 @@ impl Harness {
         self.settle();
     }
 
+    fn change_snapshot(&mut self, change: impl FnOnce(&mut Snapshot)) {
+        self.update(|plait, _, _| {
+            let previous = plait.host.snapshot.clone().expect("sample snapshot");
+            change(Arc::make_mut(plait.host.snapshot.as_mut().unwrap()));
+            plait.refresh_live_list(Some(&previous));
+        });
+    }
+
     /// Draw the scene, which runs layout and paint, and save it when rendering.
     fn capture(&mut self, name: &str) {
         let window = self.window.into();
@@ -284,7 +292,7 @@ impl Harness {
             plait.show_changes = false;
             let composer = cx.new(|cx| Composer::new(window, cx));
             plait.composers.insert(THREAD.into(), composer);
-            plait.refresh_live_list();
+            plait.refresh_live_list(None);
             plait.sync_composer(cx);
         });
     }
@@ -331,11 +339,9 @@ fn walk(output: Option<&Path>) {
         });
         harness.capture(&format!("live-disconnected-{suffix}"));
         harness.connect(&repository, true);
-        harness.update(|plait, _, _| {
-            plait.expanded_tools.insert(3);
-            plait.live_scroll.splice(3..4, 1);
-        });
+        harness.update(|plait, _, cx| plait.toggle_live_tool("t1", cx));
         harness.capture(&format!("live-approval-{suffix}"));
+        streaming_walk(&mut harness, &repository, suffix);
         harness.update(|plait, _, _| plait.settings_open = true);
         harness.capture(&format!("settings-{suffix}"));
         harness.update(|plait, _, cx| plait.open_new_thread(cx));
@@ -360,6 +366,75 @@ fn walk(output: Option<&Path>) {
         harness.capture(&format!("no-sidebar-{suffix}"));
     }
     let _ = std::fs::remove_dir_all(&scratch);
+}
+
+fn streaming_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
+    harness.connect(repository, false);
+    harness.change_snapshot(|snapshot| {
+        snapshot.messages.extend((3..40).map(|index| Message {
+            id: format!("history-{index}"),
+            role: MessageRole::Assistant,
+            text: format!(
+                "Sample history row {index}. This is a rendering fixture, not an agent run."
+            ),
+        }));
+    });
+    harness.update(|plait, _, cx| {
+        plait.toggle_live_tool("t2", cx);
+        plait.live_scroll.scroll_to(ListOffset {
+            item_ix: 12,
+            offset_in_item: px(7.),
+        });
+    });
+    harness.capture(&format!("stream-history-{suffix}"));
+    let anchor = harness
+        .window
+        .update(&mut harness.cx, |plait, _, _| {
+            plait.live_scroll.logical_scroll_top()
+        })
+        .unwrap();
+    for _ in 0..20 {
+        harness.update(|plait, _, _| {
+            let measured = plait.live_scroll.bounds_for_item(anchor.item_ix);
+            assert!(
+                measured.is_some(),
+                "visible history row must already be measured"
+            );
+            let previous = plait.host.snapshot.clone().unwrap();
+            Arc::make_mut(plait.host.snapshot.as_mut().unwrap())
+                .live_text
+                .push_str(" another streamed word");
+            plait.refresh_live_list(Some(&previous));
+            assert_eq!(plait.live_scroll.bounds_for_item(anchor.item_ix), measured);
+            let current = plait.live_scroll.logical_scroll_top();
+            assert_eq!(current.item_ix, anchor.item_ix);
+            assert_eq!(current.offset_in_item, anchor.offset_in_item);
+            assert!(plait.expanded_live_tools.contains("t2"));
+        });
+    }
+    harness.change_snapshot(|snapshot| {
+        snapshot.messages.remove(0);
+        snapshot.messages.push(Message {
+            id: "new-user".into(),
+            role: MessageRole::User,
+            text: "Sample follow-up".into(),
+        });
+        snapshot.live_text.clear();
+        snapshot.tools[1].output = "Sample test output: 24 tests passed.".into();
+    });
+    harness.update(|plait, _, _| {
+        let current = plait.live_scroll.logical_scroll_top();
+        assert_eq!(current.item_ix, anchor.item_ix - 1);
+        assert_eq!(current.offset_in_item, anchor.offset_in_item);
+        assert!(plait.expanded_live_tools.contains("t2"));
+        assert!(!plait.expanded_live_tools.contains("t1"));
+        plait.live_scroll.scroll_to_end();
+    });
+    harness.capture(&format!("stream-tool-{suffix}"));
+    harness.change_snapshot(|snapshot| {
+        snapshot.tools.remove(1);
+    });
+    harness.update(|plait, _, _| assert!(!plait.expanded_live_tools.contains("t2")));
 }
 
 // The glob import above brings in `gpui::test`; these are plain tests.

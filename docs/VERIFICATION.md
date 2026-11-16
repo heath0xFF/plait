@@ -1,5 +1,33 @@
 # Verification
 
+## Incremental conversation rows — Linux checks, 2026-11-16
+
+Live snapshots now retain measured rows by stable message/tool identity. Only
+structural changes splice the list; content updates remeasure affected rows
+without clearing the scroll anchor. Disclosure follows tool IDs, so a new
+message or disappearing streaming row cannot expand the wrong tool.
+
+Checked formatting, strict workspace Clippy, 62 Rust tests, TypeScript, 86 runtime
+tests, and release headless builds. The optional PNG export was also run.
+Five new headless-state tests cover streaming/status updates, history clipping,
+row namespaces, identity resets/duplicate IDs, and 2,000 deterministic randomized
+insert/delete/reorder/content transitions. The 2,000-message state fixture
+invalidates one streaming row rather than 2,001 rows; this is not a latency result
+or a host-history feature.
+
+The real GPUI layout walk verifies that visible history rows remain measured
+through 20 streaming updates, that their scroll anchor stays fixed, and that
+clipping the first row adjusts the anchor without losing its pixel offset.
+Tool disclosure survives row movement and is removed when its tool disappears.
+Inspected these headless Linux renders at wide and narrow sizes:
+
+- [History held steady while streaming](screenshots/stream-history-linux.png)
+- [Correct tool still expanded after row movement](screenshots/stream-tool-linux.png)
+
+These are sample-state renders, not Mac input or ADEMark measurements. Native
+macOS build/installed-client checks run in CI; hands-on Mac streaming and typing
+latency remain unmeasured. No host protocol, storage, or permission change.
+
 ## Event-driven host watches — Linux checks, 2026-11-16
 
 Replaced the 150 ms sidecar watch poll and the one-second child-process poll

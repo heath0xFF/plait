@@ -32,6 +32,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
 crates/plait-core/src/
 host.rs                 bounded blocking Unix-socket client; background only
 host_state.rs           host selection, request identity, and stale-result guards
+transcript.rs           stable row identity and incremental list-change plans
 local_socket.rs         owner-only paths and OS peer-identity checks
 state.rs                selection, collapse state, request queue, cache
 model.rs                plain Rust data, no GPUI
@@ -220,8 +221,14 @@ The development bundle and icon build are described in [MACOS.md](MACOS.md).
 Conversation events use GPUI's variable-height `list`. User messages render as
 right-aligned bubbles; agent replies remain open text. Tool details start
 collapsed. Disclosure state belongs to the UI and clears on thread selection.
-Expanding a tool invalidates only that list item's measured height with `splice`,
-not the whole scroll state. Changed files and diff
+Live transcript changes are planned in `plait-core::transcript`, without GPUI.
+Ordered stable IDs retain existing rows, including after history-tail clipping.
+Structural changes use `splice`; changed content uses `remeasure_items` so the
+scroll anchor and measured unchanged rows survive streaming. Duplicate IDs or
+a changed thread identity reset the list rather than reuse the wrong row.
+Live tool disclosure and element IDs follow tool/message IDs, not row positions.
+Expanding a live tool remeasures only that row. Fixture disclosure remains
+separate. Changed files and diff
 lines use `uniform_list`; only visible rows are built. Cached data uses `Arc`
 rather than cloning large strings on every render. Long diff lines scroll
 horizontally.

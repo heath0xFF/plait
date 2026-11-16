@@ -4,8 +4,9 @@ use super::{
 };
 use gpui::{prelude::*, *};
 use plait_core::{
-    host::{self, Client, Request},
+    host::{self, Client, Request, Snapshot},
     host_state::request_id,
+    transcript::{self, Update},
 };
 use serde::de::DeserializeOwned;
 
@@ -97,8 +98,7 @@ impl Plait {
         self.settings_open = false;
         self.new_thread_open = false;
         self.show_changes = false;
-        self.live_scroll.reset(0);
-        self.live_count = 0;
+        self.refresh_live_list(None);
         if !self.composers.contains_key(&id) {
             let composer = cx.new(|cx| Composer::new(window, cx));
             let thread_id = id.clone();
@@ -165,12 +165,13 @@ impl Plait {
                                     );
                                     return false;
                                 }
+                                let previous = this.host.snapshot.clone();
                                 if !this.host.apply_snapshot(epoch, watch_epoch, snapshot) {
                                     this.sync_composer(cx);
                                     cx.notify();
                                     return false;
                                 }
-                                this.refresh_live_list();
+                                this.refresh_live_list(previous.as_deref());
                                 this.sync_composer(cx);
                                 cx.notify();
                                 true
@@ -213,14 +214,27 @@ impl Plait {
         cx.notify();
     }
 
-    pub(super) fn refresh_live_list(&mut self) {
-        let count = self.host.snapshot.as_ref().map_or(0, |snapshot| {
-            snapshot.messages.len()
-                + snapshot.tools.len()
-                + usize::from(!snapshot.live_text.is_empty())
-        });
-        self.live_scroll.splice(0..self.live_count, count);
-        self.live_count = count;
+    pub(super) fn refresh_live_list(&mut self, previous: Option<&Snapshot>) {
+        let next = self.host.snapshot.as_deref();
+        match transcript::changes(previous, next) {
+            Update::Reset(count) => {
+                self.live_scroll.reset(count);
+                self.expanded_live_tools.clear();
+            }
+            Update::Patch { splices, remeasure } => {
+                for splice in splices {
+                    self.live_scroll.splice(splice.range, splice.count);
+                }
+                for range in remeasure {
+                    self.live_scroll.remeasure_items(range);
+                }
+                self.expanded_live_tools.retain(|id| {
+                    next.is_some_and(|snapshot| snapshot.tools.iter().any(|tool| tool.id == *id))
+                });
+            }
+        }
+        self.live_count = next.map_or(0, transcript::row_count);
+        debug_assert_eq!(self.live_scroll.item_count(), self.live_count);
     }
 
     pub(super) fn create_host_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {

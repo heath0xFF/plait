@@ -73,6 +73,19 @@ It measures change-to-socket delivery and sidecar request counts with one and
 five running agents, or ADEMark A10. The output includes all 40 latency samples
 per watcher count. Run builds and probes in a named Rex pane during development.
 
+## Incremental conversation updates
+
+The desktop now preserves measured rows across snapshots. Stable row IDs produce
+bounded structural edits and targeted height invalidations. A state test with
+2,000 saved messages plus one streaming row invalidates only the streaming row;
+a status-only change invalidates none. This is a work-count regression test,
+not an A11 result or a claim that the host exposes 2,000 messages yet.
+
+The real GPUI headless test checks cached history measurements and scroll anchors
+during 20 streaming updates, history clipping, and tool movement. Tool disclosure
+follows its stable ID, not its current row number. See the
+[verification and labeled Linux captures](VERIFICATION.md).
+
 ## Next delivery: a valid Mac baseline
 
 1. **Pin the installed build.** Record client and active host build IDs,
@@ -163,9 +176,9 @@ Source inspection identified these candidates, **not measured bottlenecks**:
   [`runtime/src/store.ts`](../runtime/src/store.ts) uses full SQLite durability.
   Measure allocation and write cost. Keep accepted input, approval, and file
   provenance durable; do not weaken commit guarantees for a speed result.
-- [`crates/plait/src/ui/host.rs`](../crates/plait/src/ui/host.rs) replaces the
-  live list's full item range on each snapshot. Measure layout/paint and typing
-  while streaming before changing list invalidation.
+- The desktop no longer replaces the live list's full item range on every
+  snapshot. Measure native layout/paint and typing while streaming to determine
+  the end-to-end benefit of retained row measurements.
 
 Separate OS launch, host readiness, replay/model delay, transport, view updates,
 and final frame presentation. Use release builds and repeated before/after runs

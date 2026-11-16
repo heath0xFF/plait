@@ -9,3 +9,4 @@ pub mod host_state;
 pub mod local_socket;
 pub mod model;
 pub mod state;
+pub mod transcript;

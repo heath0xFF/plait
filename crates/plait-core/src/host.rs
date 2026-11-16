@@ -95,7 +95,7 @@ pub struct Snapshot {
     pub truncated: bool,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Message {
     pub id: String,
@@ -109,7 +109,7 @@ pub enum MessageRole {
     Assistant,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Tool {
     pub id: String,
@@ -118,7 +118,7 @@ pub struct Tool {
     pub input: String,
     pub output: String,
 }
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolStatus {
     Running,

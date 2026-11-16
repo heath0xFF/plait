@@ -1,6 +1,9 @@
 use super::{Plait, theme::*};
 use gpui::{prelude::*, *};
-use plait_core::host::{Approval, MessageRole, Snapshot, ToolStatus};
+use plait_core::{
+    host::{Approval, Message, MessageRole, Tool, ToolStatus},
+    transcript::{self, Row},
+};
 
 /// Full-width line above the conversation for host and submission state.
 fn banner(tint: u32) -> Div {
@@ -25,11 +28,13 @@ fn tool_tint(status: ToolStatus) -> u32 {
 }
 
 impl Plait {
-    fn live_message(&self, index: usize, snapshot: &Snapshot) -> AnyElement {
-        let message = &snapshot.messages[index];
+    fn live_message(&self, message: &Message) -> AnyElement {
         let user = message.role == MessageRole::User;
         let body = if user { bubble() } else { prose() }
-            .id(("live-message", index))
+            .id((
+                ElementId::from("live-message"),
+                SharedString::from(message.id.clone()),
+            ))
             .role(Role::Group)
             .aria_label(format!(
                 "{} message: {}",
@@ -45,35 +50,43 @@ impl Plait {
         }
     }
 
-    fn live_tool(&self, index: usize, offset: usize, cx: &mut Context<Self>) -> AnyElement {
-        let Some(tool) = self
-            .host
-            .snapshot
-            .as_ref()
-            .and_then(|snapshot| snapshot.tools.get(offset))
-        else {
-            return div().into_any_element();
+    pub(super) fn toggle_live_tool(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(snapshot) = self.host.snapshot.as_ref() else {
+            return;
         };
-        let expanded = self.expanded_tools.contains(&index);
+        let Some(offset) = snapshot.tools.iter().position(|tool| tool.id == id) else {
+            return;
+        };
+        let index = transcript::row_count(snapshot) - snapshot.tools.len() + offset;
+        if !self.expanded_live_tools.remove(id) {
+            self.expanded_live_tools.insert(id.to_owned());
+        }
+        self.live_scroll.remeasure_items(index..index + 1);
+        cx.notify();
+    }
+
+    fn live_tool(&self, tool: &Tool, cx: &mut Context<Self>) -> AnyElement {
+        let expanded = self.expanded_live_tools.contains(&tool.id);
+        let id = tool.id.clone();
         column()
             .gap_1()
             .child(
                 row().child(
-                    button(("live-tool", index), "")
-                        .px_1()
-                        .ml(px(-TOOL_INSET))
-                        .aria_label(format!("{} tool · {}", tool.name, tool.status.label()))
-                        .aria_expanded(expanded)
-                        .child(icon(if expanded { "down" } else { "right" }))
-                        .child(div().text_size(px(13.)).child(tool.name.clone()))
-                        .child(tag(tool.status.label(), tool_tint(tool.status)))
-                        .on_activate(cx, move |this, _, cx| {
-                            if !this.expanded_tools.remove(&index) {
-                                this.expanded_tools.insert(index);
-                            }
-                            this.live_scroll.splice(index..index + 1, 1);
-                            cx.notify();
-                        }),
+                    button(
+                        (
+                            ElementId::from("live-tool"),
+                            SharedString::from(tool.id.clone()),
+                        ),
+                        "",
+                    )
+                    .px_1()
+                    .ml(px(-TOOL_INSET))
+                    .aria_label(format!("{} tool · {}", tool.name, tool.status.label()))
+                    .aria_expanded(expanded)
+                    .child(icon(if expanded { "down" } else { "right" }))
+                    .child(div().text_size(px(13.)).child(tool.name.clone()))
+                    .child(tag(tool.status.label(), tool_tint(tool.status)))
+                    .on_activate(cx, move |this, _, cx| this.toggle_live_tool(&id, cx)),
                 ),
             )
             .when(expanded, |el| {
@@ -94,19 +107,18 @@ impl Plait {
         let Some(snapshot) = self.host.snapshot.clone() else {
             return div().into_any_element();
         };
-        let messages = snapshot.messages.len();
-        let streaming = usize::from(!snapshot.live_text.is_empty());
-        let tool = index >= messages + streaming;
-        let content = if index < messages {
-            self.live_message(index, &snapshot)
-        } else if !tool {
-            column()
+        let Some(row) = transcript::row(&snapshot, index) else {
+            return div().into_any_element();
+        };
+        let tool = matches!(row, Row::Tool(_));
+        let content = match row {
+            Row::Message(message) => self.live_message(message),
+            Row::Streaming(text) => column()
                 .gap_1()
                 .child(tag("Assistant · streaming", BLUE))
-                .child(prose().child(text!(snapshot.live_text.clone())))
-                .into_any_element()
-        } else {
-            self.live_tool(index, index - messages - streaming, cx)
+                .child(prose().child(text!(text.to_owned())))
+                .into_any_element(),
+            Row::Tool(tool) => self.live_tool(tool, cx),
         };
         div()
             .w_full()
