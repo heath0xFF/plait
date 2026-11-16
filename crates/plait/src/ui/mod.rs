@@ -5,6 +5,8 @@ mod host;
 mod live_conversation;
 mod navigation;
 mod settings;
+#[cfg(all(test, target_os = "linux"))]
+mod snapshot;
 pub mod theme;
 
 use gpui::{prelude::*, *};

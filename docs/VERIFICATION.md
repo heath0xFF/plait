@@ -1,5 +1,49 @@
 # Verification
 
+## BB look-and-feel pass — Linux layout check only, 2026-11-16
+
+Branch `ui/bb-look-and-feel`, written on Arthur. This is a presentation change
+plus one UI state fix. **It has not been built, run, or inspected on macOS.**
+The host protocol, runtime, persistence, Git adapter, and composer editing logic
+are unchanged. See [DESIGN.md](../DESIGN.md) for the resulting layout.
+
+Checked on Arthur (Ubuntu 26.04, x86-64, Rust 1.98.1):
+
+- `cargo fmt --all -- --check` and strict Clippy for the complete workspace.
+- All 54 Rust tests in the workspace: 18 desktop, 30 core, 6 host.
+- A new desktop test opens the real root view in GPUI's headless test platform
+  and draws every view at 1380 × 860 and 900 × 600: example conversation,
+  expanded tool, Changes with a selected diff, an empty example thread, a remote
+  fixture, a live thread, a disconnected thread, a pending approval, Settings,
+  the new-thread page, and the window with the sidebar hidden. It caught a
+  duplicate GPUI hover style during this work.
+- The same walk rendered through GPUI's headless wgpu renderer on Mesa's software
+  Vulkan driver. Each image was inspected at both sizes. Nothing overflows or
+  overlaps at the 900 × 600 floor with DejaVu Sans, which is wider than the
+  macOS system font.
+- Fixed while testing: New thread followed by Cancel, starting from the empty
+  example thread, showed the first example thread with no messages. The
+  conversation list kept the previous thread's item count. The walk asserts it.
+
+Captures, all **headless Linux renders with sample host data**, not macOS:
+
+- [Example conversation with an expanded tool](screenshots/ui-linux-conversation.png)
+- [Live thread with a pending approval](screenshots/ui-linux-approval.png)
+- [Changes with staged and unstaged work](screenshots/ui-linux-changes.png)
+- [Live thread at 900 × 600](screenshots/ui-linux-narrow.png)
+
+Not checked, and required before this is treated as done:
+
+- The macOS build, Metal renderer, system fonts, and exact spacing.
+- `bash scripts/smoke-macos.sh`. Accessible names and roles it uses were kept:
+  the root group, the tree and its 11 rows, the Conversation / Changes and
+  Unstaged / Staged tabs, tool rows, file buttons, and Open repository. This was
+  checked by reading the script, not by running it.
+- VoiceOver, keyboard focus order, hover and focus appearance, and IME input in
+  the restyled composer box. Its focus edge now follows any focus, not only
+  keyboard focus.
+- A real host connection. Live-thread scenes use injected sample state.
+
 ## Unicode boundary regression — local checks on Arthur
 
 A long accepted message with an emoji across the preview cut produced an

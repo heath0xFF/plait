@@ -27,6 +27,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
   settings.rs           model choice, auth status, defaults, and reconnect
   changes.rs            real local status and diff views
   theme.rs              tokens, original controls, embedded glyphs
+  snapshot.rs           Linux-only headless layout checks (tests only)
 
 crates/plait-core/src/
 host.rs                 bounded blocking Unix-socket client; background only
@@ -219,6 +220,21 @@ Toggle Diagnostics (Cmd-Shift-D) shows them in a footer; it is hidden by
 default. Git panels show background read durations. These are diagnostics,
 **not** measurements of GPU frame time, input-to-display latency, or complete
 launch time. Instrumentation does not write a log from the UI thread.
+
+### Layout checks without a Mac
+
+`ui/snapshot.rs` is a Linux-only test module. It opens the real root view in
+GPUI's headless test platform, walks every view at 1380 × 860 and 900 × 600,
+and draws each one. `cargo test -p plait` runs that walk without a renderer, so
+layout and paint errors fail the test. With `PLAIT_SNAPSHOT_DIR` set and
+`--ignored`, the same walk renders PNG files through GPUI's headless wgpu
+renderer. Host data in these scenes is injected sample state; no socket is
+opened and no agent runs. The repository is a disposable fixture.
+
+The images use Linux fonts and a software renderer. They check layout, density,
+and color. They are **not** a check of the macOS renderer, system fonts,
+accessibility tree, or input. The harness needs GPUI's `test-support` feature,
+enabled only for Linux test builds; release and macOS builds do not compile it.
 
 ## Dependency decision
 
