@@ -2,14 +2,15 @@
 
 These are planned milestones, not a list of shipped features. See the
 [README](../README.md) for the current preview and [Verification](VERIFICATION.md)
-for acceptance evidence and open checks. **Current work stays within M2.**
+for acceptance evidence and open checks. **Current work is M2.5.**
 
 ## Milestones
 
 | Milestone | Scope | Status |
 | --- | --- | --- |
 | M1 — Native foundation | GPUI desktop, navigation, conversations, read-only Git status and diffs | Foundation implemented |
-| M2 — Local agents | Real agent events, approved edits and commands, persistent threads, safe Stop and reconnect | Current local preview; hardening and live installed acceptance continue |
+| M2 — Local agents | Real agent events, approved edits and commands, persistent threads, safe Stop and reconnect | Shipped in the local preview; hardening and live installed acceptance continue |
+| M2.5 — Daily driver | Complete, paged conversation history; projects and threads across checkouts with live status; thread titles, rename, and archive; model and thinking changes within a thread; follow-up and steering messages during a run; provider sign-in from the app; selectable, highlighted conversation text and readable tool results; a command palette; optional per-thread worktrees; an opt-in trusted command mode | Current work; not shipped until the README says so |
 | M3 — Remote execution | Authenticated host connections, remote project discovery, activity/Git updates, network recovery | Planned; Linux execution requires tested containment first |
 | M4 — Development tools | Git staging, commits and history; file browser/editor; review feedback; process and log views | Planned |
 | M5 — Previews | Live HTML, Markdown and MDX, automatic refresh, and selected-content feedback to the agent | Planned |
@@ -18,6 +19,12 @@ for acceptance evidence and open checks. **Current work stays within M2.**
 Do not build the whole roadmap at once. Each change must compile, run, and have
 its own checks. Protocol, storage, and shared-contract changes need agreement
 before implementation.
+
+**Agreed for M2.5:** protocol version 3 and additive storage changes. Version 3
+is negotiated per request, as version 2 is; version 1 and 2 replies stay
+byte-for-byte unchanged and existing stores keep loading. The trusted command
+mode is opt-in per project; the current sandbox stays the default. The
+[host contract](HOST.md) records each addition when it lands.
 
 ## Product structure
 

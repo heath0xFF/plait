@@ -1,7 +1,7 @@
 # Contributing to Plait
 
-Plait is an early local macOS preview. Current work stays within **M2: persistent
-local agent execution**. Read the [README](README.md), [architecture](docs/ARCHITECTURE.md),
+Plait is an early local macOS preview. Current work is **M2.5: the daily driver**
+on local execution; see the [roadmap](docs/ROADMAP.md). Read the [README](README.md), [architecture](docs/ARCHITECTURE.md),
 and [design guide](DESIGN.md) before making changes.
 
 ## Build from source
@@ -41,7 +41,7 @@ To publish a release that installed apps can update to, see
 - Discuss changes to shared models, protocol, durable storage, or permission rules
   before implementation. Preserve compatibility and test the failure paths.
 
-## M2 work split
+## Work split
 
 | Area | Responsibility |
 | --- | --- |
