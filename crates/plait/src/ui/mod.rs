@@ -5,6 +5,8 @@ mod host;
 mod live_conversation;
 mod navigation;
 mod settings;
+#[cfg(all(test, target_os = "linux"))]
+mod snapshot;
 pub mod theme;
 
 use gpui::{prelude::*, *};
@@ -30,6 +32,7 @@ actions!(
         Settings,
         Refresh,
         ToggleSidebar,
+        ToggleDiagnostics,
         Conversation,
         Changes,
         NextThread,
@@ -56,6 +59,7 @@ pub struct Plait {
     diff_scroll: UniformListScrollHandle,
     show_changes: bool,
     sidebar: bool,
+    diagnostics: bool,
     picker_open: bool,
     notice: Option<String>,
     last_render_us: u128,
@@ -93,6 +97,7 @@ impl Plait {
             diff_scroll: UniformListScrollHandle::new(),
             show_changes: false,
             sidebar: true,
+            diagnostics: false,
             picker_open: false,
             notice: None,
             last_render_us: 0,
@@ -131,11 +136,9 @@ impl Plait {
         .detach();
     }
 
-    fn select_thread(&mut self, selection: Selection, cx: &mut Context<Self>) {
-        self.interaction = Some(Instant::now());
-        self.host.select(None);
-        self.settings_open = false;
-        self.new_thread_open = false;
+    /// Point the example conversation at `selection`. The list and disclosure
+    /// state change with it; otherwise they describe the previous thread.
+    fn show_fixture(&mut self, selection: Selection) {
         self.state.select(selection);
         let s = self.state.selection;
         let count = self.state.projects[s.project].machines[s.machine].threads[s.thread]
@@ -143,6 +146,23 @@ impl Plait {
             .len();
         self.expanded_tools.clear();
         self.conversation_scroll.reset(count);
+    }
+
+    /// Host threads and the new-thread page belong to the local machine.
+    fn show_local_machine(&mut self) {
+        self.show_fixture(Selection {
+            project: 0,
+            machine: 0,
+            thread: 0,
+        });
+    }
+
+    fn select_thread(&mut self, selection: Selection, cx: &mut Context<Self>) {
+        self.interaction = Some(Instant::now());
+        self.host.select(None);
+        self.settings_open = false;
+        self.new_thread_open = false;
+        self.show_fixture(selection);
         cx.notify();
     }
 
@@ -265,6 +285,185 @@ impl Plait {
     }
 }
 
+impl Plait {
+    fn show_settings(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus, cx);
+        self.settings_open = open;
+        self.new_thread_open = false;
+        cx.notify();
+    }
+
+    fn toggle_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Keep the shortcut context alive when its focused child is removed.
+        window.focus(&self.focus, cx);
+        self.sidebar = !self.sidebar;
+        cx.notify();
+    }
+
+    fn show_tab(&mut self, changes: bool, cx: &mut Context<Self>) {
+        self.show_changes = changes;
+        cx.notify();
+    }
+
+    /// One compact chrome row: where you are, its state, and the two workspaces.
+    fn header(
+        &self,
+        title: String,
+        location: String,
+        status: (String, u32),
+        wide: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let changed = self
+            .state
+            .local()
+            .then(|| self.state.repository.snapshot.ready())
+            .flatten()
+            .map(|snapshot| snapshot.changes.len())
+            .filter(|count| *count > 0);
+        row()
+            .h(px(CHROME_HEIGHT))
+            .flex_shrink_0()
+            .pl_2()
+            .pr_3()
+            .gap_3()
+            .border_b_1()
+            .border_color(rgb(BORDER))
+            .child(
+                icon_button("toggle-sidebar", "panel", "Toggle sidebar")
+                    .aria_keyshortcuts("Meta+B")
+                    .on_activate(cx, |this, window, cx| this.toggle_sidebar(window, cx)),
+            )
+            .child(
+                row()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_3()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(text!(title)),
+                    )
+                    // The composer repeats this context; the header keeps it for Changes.
+                    .when(wide, |el| {
+                        el.child(tag(location, SUBTLE).flex_shrink_0().whitespace_nowrap())
+                    }),
+            )
+            .child(
+                row()
+                    .flex_shrink_0()
+                    .gap(px(6.))
+                    .child(dot(status.1))
+                    .child(tag(status.0, MUTED)),
+            )
+            .child(
+                segmented()
+                    .child(
+                        segment("conversation-tab", "Conversation", !self.show_changes)
+                            .aria_keyshortcuts("Meta+1")
+                            .on_click(cx.listener(|this, _, _, cx| this.show_tab(false, cx))),
+                    )
+                    .child(
+                        segment("changes-tab", "Changes", self.show_changes)
+                            .aria_keyshortcuts("Meta+2")
+                            // The accessible name stays "Changes"; the count is visual.
+                            .when_some(changed, |el, count| {
+                                el.child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(rgb(SUBTLE))
+                                        .child(count.to_string()),
+                                )
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| this.show_tab(true, cx))),
+                    ),
+            )
+    }
+
+    /// Where the selected thread runs: Project, Machine, and its checkout branch.
+    pub(super) fn environment(
+        &self,
+        model: Option<String>,
+        note: Option<(&'static str, u32)>,
+    ) -> impl IntoElement {
+        let selection = self.state.selection;
+        let project = &self.state.projects[selection.project];
+        let machine = &project.machines[selection.machine];
+        let branch = machine
+            .local
+            .then(|| self.state.repository.snapshot.ready())
+            .flatten()
+            .map(|snapshot| snapshot.branch.clone());
+        let chip = |id: &'static str, glyph: &'static str, label: String| {
+            row()
+                .gap(px(5.))
+                .min_w_0()
+                .child(icon(glyph).size(px(12.)).text_color(rgb(SUBTLE)))
+                .child(div().truncate().child(text!(id = id, label)))
+        };
+        row()
+            .w_full()
+            .max_w(px(CONTENT_WIDTH))
+            .mx_auto()
+            .px_1()
+            .gap_4()
+            .text_size(px(11.))
+            .text_color(rgb(MUTED))
+            .child(chip("environment-project", "folder", project.name.clone()))
+            .child(chip(
+                "environment-machine",
+                "machine",
+                format!(
+                    "{} · {}",
+                    machine.name,
+                    if machine.local {
+                        "local"
+                    } else {
+                        "remote fixture"
+                    }
+                ),
+            ))
+            .when_some(branch, |el, branch| {
+                el.child(chip("environment-branch", "branch", branch))
+            })
+            .when_some(model, |el, model| {
+                el.child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(rgb(SUBTLE))
+                        .child(text!(id = "environment-model", model)),
+                )
+            })
+            .child(div().flex_1())
+            .when_some(note, |el, (note, tint)| {
+                el.child(tag(note, tint).flex_shrink_0().whitespace_nowrap())
+            })
+    }
+
+    fn diagnostics_bar(&self) -> impl IntoElement {
+        row()
+            .h(px(24.))
+            .px_3()
+            .flex_shrink_0()
+            .justify_end()
+            .bg(rgb(RAIL))
+            .border_t_1()
+            .border_color(rgb(BORDER))
+            .text_size(px(11.))
+            .text_color(rgb(SUBTLE))
+            .child(text!(format!(
+                "UI {} µs · peak {} µs · switch {} µs · first {} ms",
+                self.last_render_us,
+                self.max_render_us,
+                self.switch_us,
+                self.first_render_ms.unwrap_or(0)
+            )))
+    }
+}
+
 impl Render for Plait {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let start = Instant::now();
@@ -288,37 +487,38 @@ impl Render for Plait {
         } else {
             thread.title.to_owned()
         };
-        let (status_label, status_tint) = if self.settings_open || self.new_thread_open {
-            (
-                if self.host.connected {
-                    "Host connected"
-                } else {
-                    "Host disconnected"
-                }
-                .to_owned(),
-                if self.host.connected { MINT } else { AMBER },
-            )
+        let status = if self.settings_open || self.new_thread_open {
+            if self.host.connected {
+                ("Host connected".to_owned(), MINT)
+            } else {
+                ("Host disconnected".to_owned(), AMBER)
+            }
         } else if real {
+            self.host.snapshot.as_ref().map_or_else(
+                || ("Loading".to_owned(), MUTED),
+                |snapshot| {
+                    (
+                        snapshot.status.label().to_owned(),
+                        host_status_color(snapshot.status),
+                    )
+                },
+            )
+        } else if machine.local {
             (
-                self.host
-                    .snapshot
-                    .as_ref()
-                    .map_or("Loading", |snapshot| snapshot.status.label())
-                    .to_owned(),
-                MINT,
+                format!("{} · fixture", thread.status.label()),
+                status_color(thread.status),
             )
         } else {
             (
-                format!("{} · fixture", thread.status.label()),
+                format!("{} · remote fixture, not connected", thread.status.label()),
                 status_color(thread.status),
             )
         };
         let location = if self.settings_open {
             "Plait / Local host".to_owned()
         } else {
-            format!("{}  /  {}", project.name, machine.name)
+            format!("{} / {}", project.name, machine.name)
         };
-        let local = machine.local;
         let root = column()
             .id("plait")
             .role(Role::Application)
@@ -328,25 +528,17 @@ impl Render for Plait {
             .on_action(cx.listener(Self::open_repository))
             .on_action(cx.listener(Self::refresh))
             .on_action(cx.listener(|this, _: &Settings, window, cx| {
-                window.focus(&this.focus, cx);
-                this.settings_open = !this.settings_open;
-                this.new_thread_open = false;
+                this.show_settings(!this.settings_open, window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &ToggleSidebar, window, cx| this.toggle_sidebar(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &ToggleDiagnostics, _, cx| {
+                this.diagnostics = !this.diagnostics;
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &ToggleSidebar, window, cx| {
-                // Keep the shortcut context alive when its focused child is removed.
-                window.focus(&this.focus, cx);
-                this.sidebar = !this.sidebar;
-                cx.notify();
-            }))
-            .on_action(cx.listener(|this, _: &Conversation, _, cx| {
-                this.show_changes = false;
-                cx.notify();
-            }))
-            .on_action(cx.listener(|this, _: &Changes, _, cx| {
-                this.show_changes = true;
-                cx.notify();
-            }))
+            .on_action(cx.listener(|this, _: &Conversation, _, cx| this.show_tab(false, cx)))
+            .on_action(cx.listener(|this, _: &Changes, _, cx| this.show_tab(true, cx)))
             .on_action(cx.listener(|this, _: &NextThread, _, cx| this.step_thread(true, cx)))
             .on_action(cx.listener(|this, _: &PreviousThread, _, cx| this.step_thread(false, cx)))
             .on_action(
@@ -377,91 +569,23 @@ impl Render for Plait {
                             .flex_1()
                             .min_w_0()
                             .min_h_0()
-                            .child(
-                                row()
-                                    .h(px(64.))
-                                    .flex_shrink_0()
-                                    .px_6()
-                                    .justify_between()
-                                    .border_b_1()
-                                    .border_color(rgb(BORDER))
-                                    .child(
-                                        column()
-                                            .min_w_0()
-                                            .gap_1()
-                                            .child(tag(location, MUTED))
-                                            .child(
-                                                div()
-                                                    .truncate()
-                                                    .text_size(px(19.))
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .child(text!(title)),
-                                            ),
-                                    )
-                                    .child(
-                                        row()
-                                            .flex_shrink_0()
-                                            .child(dot(status_tint))
-                                            .child(tag(status_label, status_tint)),
-                                    ),
-                            )
-                            .child(
-                                row()
-                                    .px_5()
-                                    .h(px(44.))
-                                    .flex_shrink_0()
-                                    .border_b_1()
-                                    .border_color(rgb(BORDER))
-                                    .justify_between()
-                                    .child(
-                                        row()
-                                            .child(
-                                                button("conversation-tab", "Conversation")
-                                                    .role(Role::Tab)
-                                                    .aria_selected(!self.show_changes)
-                                                    .when(!self.show_changes, |el| {
-                                                        el.bg(rgb(PANEL)).text_color(rgb(TEXT))
-                                                    })
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.show_changes = false;
-                                                        cx.notify();
-                                                    })),
-                                            )
-                                            .child(
-                                                button("changes-tab", "Changes")
-                                                    .role(Role::Tab)
-                                                    .aria_selected(self.show_changes)
-                                                    .when(self.show_changes, |el| {
-                                                        el.bg(rgb(PANEL)).text_color(rgb(MINT))
-                                                    })
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.show_changes = true;
-                                                        cx.notify();
-                                                    })),
-                                            ),
-                                    )
-                                    .child(if local {
-                                        tag(
-                                            if real {
-                                                "LOCAL HOST · GIT READ-ONLY"
-                                            } else {
-                                                "GIT READ-ONLY"
-                                            },
-                                            MINT,
-                                        )
-                                    } else {
-                                        tag("REMOTE FIXTURE · NOT CONNECTED", VIOLET)
-                                    }),
-                            )
+                            .child(self.header(title, location, status, wide, cx))
                             .when_some(self.notice.clone(), |el, notice| {
-                                el.child(div().px_5().py_2().text_color(rgb(RED)).child(notice))
+                                el.child(
+                                    div()
+                                        .px_4()
+                                        .py_2()
+                                        .text_size(px(12.))
+                                        .text_color(rgb(RED))
+                                        .child(notice),
+                                )
                             })
                             .child(if self.settings_open {
                                 self.settings(cx).into_any_element()
                             } else if self.new_thread_open {
                                 self.new_thread(cx).into_any_element()
                             } else if self.show_changes {
-                                self.changes(cx).into_any_element()
+                                self.changes(wide, cx).into_any_element()
                             } else if real {
                                 self.live_conversation(wide, cx).into_any_element()
                             } else {
@@ -469,30 +593,8 @@ impl Render for Plait {
                             }),
                     ),
             )
-            .child(
-                row()
-                    .h(px(28.))
-                    .px_4()
-                    .flex_shrink_0()
-                    .justify_between()
-                    .bg(rgb(RAIL))
-                    .border_t_1()
-                    .border_color(rgb(BORDER))
-                    .text_size(px(11.))
-                    .text_color(rgb(MUTED))
-                    .child(if local {
-                        "Zaphod · local repository"
-                    } else {
-                        "Remote sample · no connection or execution"
-                    })
-                    .child(text!(format!(
-                        "UI {} µs · peak {} µs · switch {} µs · first {} ms",
-                        self.last_render_us,
-                        self.max_render_us,
-                        self.switch_us,
-                        self.first_render_ms.unwrap_or(0)
-                    ))),
-            );
+            // Timings stay available without spending a permanent chrome row on them.
+            .when(self.diagnostics, |el| el.child(self.diagnostics_bar()));
         self.last_render_us = start.elapsed().as_micros();
         self.max_render_us = self.max_render_us.max(self.last_render_us);
         root
@@ -509,6 +611,7 @@ pub fn menus(cx: &mut App) {
         KeyBinding::new("cmd-,", Settings, Some("Plait")),
         KeyBinding::new("cmd-r", Refresh, Some("Plait")),
         KeyBinding::new("cmd-b", ToggleSidebar, Some("Plait")),
+        KeyBinding::new("cmd-shift-d", ToggleDiagnostics, Some("Plait")),
         KeyBinding::new("cmd-1", Conversation, Some("Plait")),
         KeyBinding::new("cmd-2", Changes, Some("Plait")),
         KeyBinding::new("cmd-alt-down", NextThread, Some("Plait")),
@@ -533,6 +636,7 @@ pub fn menus(cx: &mut App) {
         ]),
         Menu::new("View").items([
             MenuItem::action("Toggle Sidebar", ToggleSidebar),
+            MenuItem::action("Toggle Diagnostics", ToggleDiagnostics),
             MenuItem::action("Conversation", Conversation),
             MenuItem::action("Changes", Changes),
             MenuItem::separator(),

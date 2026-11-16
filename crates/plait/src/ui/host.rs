@@ -93,15 +93,10 @@ impl Plait {
     ) {
         window.focus(&self.focus, cx);
         self.host.select(Some(id.clone()));
-        self.state.select(plait_core::model::Selection {
-            project: 0,
-            machine: 0,
-            thread: 0,
-        });
+        self.show_local_machine();
         self.settings_open = false;
         self.new_thread_open = false;
         self.show_changes = false;
-        self.expanded_tools.clear();
         self.live_scroll.reset(0);
         self.live_count = 0;
         if !self.composers.contains_key(&id) {
@@ -218,7 +213,7 @@ impl Plait {
         cx.notify();
     }
 
-    fn refresh_live_list(&mut self) {
+    pub(super) fn refresh_live_list(&mut self) {
         let count = self.host.snapshot.as_ref().map_or(0, |snapshot| {
             snapshot.messages.len()
                 + snapshot.tools.len()

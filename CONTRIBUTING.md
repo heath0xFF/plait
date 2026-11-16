@@ -153,7 +153,21 @@ required before merge.
 
 For UI changes, inspect wide and narrow native windows. With Accessibility
 permission already granted, close Plait and run `bash scripts/smoke-macos.sh`.
-Do not inject global keystrokes into another person's desktop.
+Do not inject global keystrokes into another person's desktop. The smoke script
+finds controls by accessible name and role; keep those stable or update it.
+
+On Linux there is no native window, but you can still look at the layout:
+
+```sh
+PLAIT_SNAPSHOT_DIR=/tmp/plait-snapshots \
+  cargo test --locked -p plait snapshot -- --ignored
+```
+
+This renders every view at 1380 × 860 and 900 × 600 to PNG files using GPUI's
+headless renderer and a software Vulkan driver (`mesa-vulkan-drivers`). The
+scenes use a disposable repository and injected sample host state. They show
+layout, density, and color with Linux fonts. They do not replace the native
+macOS inspection above. See [the architecture notes](docs/ARCHITECTURE.md#layout-checks-without-a-mac).
 
 For the runtime probe:
 
