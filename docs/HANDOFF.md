@@ -50,8 +50,12 @@ Keep later synchronization explicit; do not overwrite work on the other machine.
 
 See `docs/VERIFICATION.md` for remaining native checks. A real agent-authored
 Plait source change, live keyboard IME, and full VoiceOver remain unverified.
-That Mac validation used the desktop-only bundle. The installer branch now
-builds separate client and host/Node packages; its Mac checks are still pending.
+That live-model validation used the desktop-only bundle. The installer branch
+now builds separate client and host/Node packages. Mac CI run `43782943308`
+passed actual installation, 58 packaged runtime tests, active-update lifetime,
+saved-state activation, and native launch. Its app image shows the local host
+connected. Personal-Mac approval/authentication and an installed live-model turn
+remain unverified. See `docs/MACOS.md` and the current verification record.
 
 The older human test conversation and drafts remain untouched on the Mac under
 `/tmp/plait-desktop-check.oaAqzp/`. Do not reset or copy that host store as a

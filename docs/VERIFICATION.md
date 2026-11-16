@@ -1,44 +1,58 @@
 # Verification
 
-## Client/host installer work — Mac results pending
+## macOS installer preview — verified 2026-11-16
 
-The installer branch adds combined and independent component packages. Linux
-checks passed with 51 workspace Rust tests, strict Clippy, and the portable
-runtime suite (42 tests). Twelve portable package-planning tests pass.
-Mac source workspace checks, the real command sandbox suite, release builds,
-and the offline runtime recovery probe passed in workflow run `43774184163`.
-Installation and installed-runtime results are recorded below. Native launch is
-still pending.
+[Mac CI run 43782943308](https://github.com/heath0xFF/plait/actions/runs/43782943308)
+passed for installer source commit `b0bb0ab`, built at PR merge revision
+`602825800f06`. [Download its artifact](https://github.com/heath0xFF/plait/actions/runs/43782943308/artifacts/14189800596)
+and use `Plait-Installer-0.1.0-602825800f06-macos-arm64.pkg` for both components.
+The artifact also contains client-only and host-only packages, a portable client
+ZIP, component metadata, and checksums. Artifact retention is 14 days.
 
-The headless checkpoint is pushed as `ae8cab2` (PR #9). Its Linux CI passed.
-Its Mac CI failed at Metal lookup. Xcode 16.4 uses a versioned application
-path, and the macOS 15 image's compiler files and toolchain root are owned by
-UID 501, not root. The installer branch handles canonical aliases and known
-Metal layouts without removing the compiler/root ownership or write-mode checks.
-CI now uses macOS 26 and validates tool discovery before the long build. No system
-ownership or permissions were changed. The source runtime sandbox suite then passed.
-All three installer packages were built. A manifest-name collision with an npm
-package was fixed and covered by a regression test. Run `43776267368` then passed
-package verification and completed the combined installation, but the user service
-did not become ready. Its nested runtime-suite invocation also hit Node's recursive
-test guard and ran no files; that apparent pass is invalid. A new runner regression
-test prevents that skip. Service startup now uses an explicit OS-account context,
-and run `43779567292` passed user-service startup and all 57 packaged runtime tests
-without skips. Its active-update check then caught PackageKit removing the old
-release under a shared receipt. Host receipts now include the content build ID;
-the stable LaunchAgent still selects the next release. Run `43780843946` retained
-the old files and active host through both updates, but its restart check killed
-the host before Stop cleanup finished. An interrupted result was correct in that
-case. The test now waits for a fixture-only cleanup marker and still requires the
-stopped state after restart; a portable regression covers that barrier. Completed
-activation and native app acceptance remain pending. No failed installer run
-published a release artifact.
+Verified on macOS 26 / Apple Silicon:
 
-The new CI install test uses a labeled upgrade fixture with unchanged program
-code. It checks install/activation lifetime and durable state, not compatibility
-with an unknown future runtime or storage migration. It does not use real model
-credentials. Personal-Mac Gatekeeper approval, authentication, and live-model
-acceptance of the installed package are still required before travel use.
+- Formatting, strict workspace Clippy, 49 Rust tests, and release builds.
+- All 58 source runtime tests, including real command containment and lifecycle.
+- Both offline Pi Durable recovery probes and 12 package-planning tests.
+- Architecture, bundle metadata, executable signatures, licenses, and expanded
+  package manifests for all three installers.
+- Combined installation, per-user LaunchAgent startup, and packaged Node/runtime
+  discovery without developer Node or inherited Node options.
+- All 58 runtime tests again using the installed host, Node, and runtime.
+- Client-only installation, rejected identical-host installation, and a staged
+  host upgrade during an active scripted command. The original managed host PID,
+  running command, old release files, and tool identities were preserved.
+- Stop cleanup before activation, then the same stopped thread, message IDs,
+  tool IDs, and cleared approval after the new host opened the saved store.
+- Installed native app launch and refusal to replace a running client.
+  [The captured app image](screenshots/macos-installed-preview.png) was inspected:
+  the local host is connected and the example thread is visibly labeled as a
+  fixture. This is a disposable CI checkout, not a live-model run.
+
+No selected tests were skipped, ignored, or filtered out. Downloaded artifact
+checksums also passed on Arthur. Linux strict workspace checks passed with
+51 Rust tests and 42 portable runtime tests; Linux command execution remains
+disabled. [Linux CI](https://github.com/heath0xFF/plait/actions/runs/43782943331)
+also passed.
+
+The checks found and fixed four packaging/test issues: an npm manifest-name
+collision, missing service account context, Node's nested test-runner skip, and
+PackageKit deleting old code under a shared host receipt. Host releases now use
+distinct receipts and one stable LaunchAgent label. The activation test waits
+for a fixture-only cleanup marker; Stop acknowledgement alone is not cleanup
+completion. Earlier failed runs did not publish installer artifacts.
+
+The headless checkpoint's Mac runner had untrusted compiler/root ownership.
+CI now uses macOS 26 and accepts known canonical Metal layouts without removing
+ownership or write-mode checks. No system security settings or ownership were
+changed to make tests pass.
+
+The staged upgrade is a labeled fixture with unchanged executable code, not a
+test of unknown future storage migrations. The packages remain unsigned and
+not notarized. Personal-Mac Gatekeeper approval, authentication, a live model
+turn, and older-macOS runtime acceptance are **not** established by these checks.
+Complete the personal-Mac checks before travel use; cloud models need working
+provider connectivity.
 
 ## Portable daemon development checkpoint
 
@@ -65,8 +79,8 @@ That fixture is not a containment mechanism.
 
 The test runner selects real command-sandbox and command-crash cases on macOS,
 and command-denial cases on Linux. All original Mac command tests remain. Mac
-checks, native UI inspection, and live-model acceptance have not been repeated
-for this refactor. Hosted CI results are not yet observed. Linux command
+checks, native UI inspection, and live-model acceptance had not been repeated
+at this checkpoint. Later Mac CI results are recorded above. Linux command
 execution and remote Plait connections remain unsupported.
 
 ## Arthur headless core checkpoint (initial extraction)
