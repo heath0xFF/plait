@@ -118,6 +118,20 @@ test('idle is published only after cleanup so the immediate next submit is accep
   assert.equal(done.messages.filter(message => message.role === 'user').length, 2);
 });
 
+test('a stopped thread survives host restart after cleanup completes', { timeout: 15000 }, async t => {
+  const f = await setup(t, 'cleanup'); const thread = await f.create();
+  await f.submit(thread.id, 'stop-before-restart');
+  assert.equal((await request(f.store, { op: 'stop', thread_id: thread.id })).result.thread.status, 'stopped');
+  await until(async () => JSON.parse(await readFile(join(f.store, `${thread.id}.settled`), 'utf8')),
+    marker => marker.fixture === 'SCRIPTED_FIXTURE_ONLY' && marker.request_id === 'stop-before-restart' && marker.status === 'stopped');
+  const stopped = await f.watch(thread.id);
+  f.host.kill('SIGTERM'); await delay(500); await f.start();
+  const restored = await f.watch(thread.id);
+  assert.equal(restored.status, 'stopped');
+  assert.equal(restored.pending_approval, null);
+  assert.deepEqual(restored.messages, stopped.messages);
+});
+
 test('different stores and TMPDIR values still share the checkout inode lease', { timeout: 15000 }, async t => {
   const f = await setup(t, 'crash'); const first = await f.create(); await f.submit(first.id);
   await until(() => f.watch(first.id), value => !!value.pending_approval);

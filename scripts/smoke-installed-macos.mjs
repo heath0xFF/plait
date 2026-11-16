@@ -101,6 +101,9 @@ test('client update and staged host upgrade preserve an active command and durab
         assert.deepEqual(current.tools.map(tool=>tool.id),running.tools.map(tool=>tool.id));
       }
       await request(f.store,{op:'stop',thread_id:thread.id});
+      // A stopped snapshot acknowledges cancellation, not completed lease cleanup.
+      await until(async()=>JSON.parse(await readFile(f.store+'/'+thread.id+'.settled','utf8')),
+        marker=>marker.fixture==='SCRIPTED_FIXTURE_ONLY' && marker.request_id==='submit-1' && marker.status==='stopped');
       const stopped=await f.watch(thread.id); assert.equal(stopped.status,'stopped');
       f.host.kill('SIGTERM'); await until(async()=>f.host.signalCode!==null,value=>value); await delay(500);
       const next=JSON.parse(await readFile('/Library/Application Support/Plait/Host/installed.json','utf8'));

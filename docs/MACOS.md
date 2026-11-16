@@ -91,7 +91,9 @@ changing the default affects only new threads.
   directory and updates the LaunchAgent file. Each host release has a distinct
   package receipt, so Installer does not remove the previous release's files.
   The LaunchAgent label stays `dev.plait.host`. Installation does not stop the active host.
-  Finish or Stop active threads, then log out and back in to activate the update.
+  Finish active threads, or Stop them and let command cleanup finish. Then log
+  out and back in to activate the update. Shutdown during cleanup leaves an
+  **interrupted** thread for inspection; it does not replay the accepted request.
 - Installing the **same exact host build again is rejected before payload writes**.
   This prevents Installer from rewriting code used by a running process. Use the
   client-only package if only the client needs installation.

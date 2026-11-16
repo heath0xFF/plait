@@ -44,7 +44,11 @@ class FixtureRuntime extends Runtime {
       process.kill(process.pid, 'SIGKILL');
       await new Promise(() => {});
     }
-    return super.run(...args);
+    await super.run(...args);
+    // Stop acknowledgement precedes cleanup; tests need a separate completion barrier.
+    writeFileSync(join(process.argv[2], `${args[0].snapshot.id}.settled`), JSON.stringify({
+      fixture: 'SCRIPTED_FIXTURE_ONLY', request_id: args[1], status: args[0].snapshot.status,
+    }));
   }
   override registry(state: ToolState) {
     const result = super.registry(state);
