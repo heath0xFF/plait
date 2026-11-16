@@ -14,7 +14,7 @@ Linux execution and remote Plait connections are not supported yet. See
 
 Plait is an agent-native development environment designed around persistent coding agents, distributed execution, and first-class Git workflows.
 
-It combines the conversational experience of BB, the integrated development tools of Orca, and the independent remote-machine architecture of Rex.
+Its design joins clear agent conversations, first-class development tools, and independent machine hosts. Plait's application code and design are original; competitors are comparison points, not implementation sources.
 
 Plait is not a terminal emulator, a traditional IDE, or an agent orchestration platform.
 
@@ -97,7 +97,7 @@ The main workspace supports:
 - Process and log inspection
 - Live HTML, Markdown, and MDX previews
 
-The interface should take inspiration from BB's simplicity and visual quality, without copying its architecture.
+The interface should make real work clear and easy to review. Do not copy competitor code, assets, or distinctive UI; compare task outcomes and measured performance instead.
 
 ### Git
 

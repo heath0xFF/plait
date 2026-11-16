@@ -1,57 +1,41 @@
-# UI references
+# Product comparison policy
 
-## BB: primary look-and-feel reference
+## Original implementation and design
 
-The user wants Plait to look and feel like BB while keeping Plait's product
-principles. Use BB as a concrete visual and interaction reference, not just a
-loose source of inspiration. This does not change the current M2 execution work.
+Plait must be better through its own engineering and user experience. Do not
+copy or port application code, assets, or distinctive UI from T3, BB, Orca, or
+other products. Do not translate their code into Rust or use their source as an
+implementation template. A permissive competitor license does not change this
+product rule.
 
-- Upstream: <https://github.com/get-bb/bb>
-- Reference revision: `da3e60b81d560e114a2bec724bb59c997aaaae7f`
-- Local checkouts, both outside the Plait repository: `/Users/heath/code/bb` on
-  Zaphod and `/home/heath/code/bb` on Arthur, at the same revision.
-- License at this revision: MIT, copyright 2026 Michael Yong.
-- Checkout is shallow and clean. No dependencies were installed or app started.
+Compare observable outcomes: how quickly a developer starts useful work, how
+clearly the app shows effects, whether work survives a disconnect, and how safely
+an update completes. Write requirements from these observations, then implement
+and test them within Plait's architecture. Do not reproduce another app's visual
+identity or feature list as a substitute for product decisions.
 
-The checkout is reference material, not a Plait dependency or submodule. Do not
-copy source or assets into Plait. Keep BB's license with the reference checkout.
+Declared libraries such as GPUI and Pi are dependencies, not copied application
+code. Keep them pinned, inspect their supported APIs, and retain their licenses
+and notices. The owner's supplied Plait branding remains the source of assets.
 
-## What to study
+## Historical comparison
 
-The checked-in `assets/app-screenshot.png` shows a compact navigation rail,
-small workspace headers, open assistant text, quiet user bubbles, restrained
-borders, and a bottom composer with nearby model and execution controls.
-These are the main visual reference points. A screenshot is evidence of one
-state, not proof of current behavior or a complete token specification.
+Earlier layout work studied BB at revision
+`da3e60b81d560e114a2bec724bb59c997aaaae7f` from <https://github.com/get-bb/bb>.
+The separate reference checkout and historical verification notes record that
+study. They are not a current instruction to match BB. No reference checkout is
+a Plait dependency or submodule. Keep its license with it.
 
-Useful source locations in the reference checkout:
+## What defines Plait
 
-| Area | BB path |
-| --- | --- |
-| Screenshot | `assets/app-screenshot.png` |
-| Surface and color roles | `apps/app/src/components/ui/theme.css` |
-| Navigation | `apps/app/src/components/sidebar/` |
-| Conversation presentation | `apps/app/src/components/thread/` |
-| Composer and execution controls | `apps/app/src/components/promptbox/` |
-| Model selection | `apps/app/src/components/plugin/PluginProviderModelPicker.tsx` |
-| Settings | `apps/app/src/components/settings/` |
-| Git presentation | `apps/app/src/components/git-diff/` |
-
-For a later UI pass, compare density, spacing, typography, message treatment,
-tool disclosure, composer placement, keyboard flow, and scroll behavior against
-rendered BB. Reimplement the useful behavior with native GPUI controls. Do not
-assume that a source component's current appearance matches an older screenshot.
-
-## What stays Plait
-
-- Rust + GPUI, not Electron or a web UI.
-- Project → Machine → Thread, with machine context visible.
-- Independent host execution and recoverable threads.
+- Rust + GPUI, not a web desktop shell.
+- Project → Machine → Thread, with execution location visible.
+- Independent hosts and recoverable conversations.
 - No mandatory worktrees, embedded terminal, or hidden orchestration.
-- First-class Git; the desktop Git interface stays read-only through M2.
+- First-class Git; the desktop Git interface remains read-only through M2.
 - Explicit approvals, safe Stop, protected existing work, and honest state labels.
-- Plait's supplied ribbon mark and branding.
+- Low input latency, stable scrolling, and no unnecessary idle work.
+- Simple installation and independent client/host updates.
 
-BB's dispatch, automation, plugin, and task-board features are not requirements
-for Plait. A similar look and feel does not authorize copying its architecture
-or widening the current milestone.
+A comparison is not evidence of superiority. Publish measured results and the
+conditions under which they were obtained.

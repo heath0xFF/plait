@@ -13,10 +13,11 @@ Project → Machine → Thread, reads conversations, and inspects Git changes.
 README.md is the product authority. The desktop shows only real data: the
 opened checkout's read-only Git and this machine's host threads. Remote
 machines are not shown until remote execution exists.
-No remote connection, agent execution, terminal, or persistence is claimed.
+Local agent execution and persistence exist. Remote execution, an embedded
+terminal, and automatic updates are not available.
 
 ## Brand commitments
-BB-inspired conversation layout, compact sidebar, charcoal surfaces, mint,
+Original native conversation layout, compact sidebar, charcoal surfaces, mint,
 blue and violet accents. Use the owner's ribbon-P vector kit for branding and
 category icons. Native keyboard behavior. No decorative animation.
 
