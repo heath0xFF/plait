@@ -97,9 +97,12 @@ for native Plait builds.
 
 ### Authentication and status
 
-The host reads your existing Pi authentication. A login or API key set only in
-an interactive shell is not automatically available to a LaunchAgent. Do not
-put credentials into the system LaunchAgent property list or the package.
+The host owns provider accounts. Sign-ins and API keys are kept in Pi's
+credential file, `~/.pi/agent/auth.json`, readable only by your account. Custom
+OpenAI-compatible servers are entries in `~/.pi/agent/models.json`. A login or
+API key set only in an interactive shell is not automatically available to a
+LaunchAgent. Do not put credentials into the system LaunchAgent property list or
+the package.
 
 Locate the installed host with native macOS tools:
 
@@ -111,7 +114,35 @@ host="/Library/Application Support/Plait/Host/releases/$build_id"
 "$host/bin/plait-host" status
 ```
 
-For first-time authentication, the host payload includes the pinned Pi CLI:
+#### Signing in from Plait
+
+> **Not yet shipped.** The host in source builds after v0.1.0-preview.2 has the
+> [provider sign-in operations](HOST.md#provider-sign-in). The Settings UI
+> that uses them does not exist yet, and no real provider sign-in has been run
+> through them. Until it ships, use the Pi CLI method below.
+
+Once the Settings UI ships, first-time authentication stays inside the app and
+needs no host restart:
+
+- **Subscription** (for example Claude Pro or Max, or ChatGPT Plus or Pro): choose
+  the provider and sign in. Plait opens the provider's page in your browser. The
+  browser normally returns to the host by itself; if it cannot, paste the code
+  or the final address into Plait. Some providers show a short code to type on
+  their page instead.
+- **API key** (for example OpenRouter): paste the key once. Plait sends it to the
+  host and does not keep or show it again. Replace it by entering a new one.
+- **Your own server:** give an OpenAI-compatible server a name, base URL,
+  optional key, and model IDs. **Check connection** lists the models it reports.
+- **Sign out** removes the stored sign-in or key for one provider.
+
+The desktop never receives a stored credential. Changes apply to new threads and
+new messages at once. A run already in progress continues with the providers it
+started with. Existing threads retain their exact saved model; changing the
+default affects only new threads.
+
+#### Until then: the Pi CLI
+
+The host payload includes the pinned Pi CLI:
 
 ```sh
 "$host/bin/node" \
@@ -119,10 +150,15 @@ For first-time authentication, the host payload includes the pinned Pi CLI:
 ```
 
 Use its `/login` command, then exit. Do not enter coding tasks into that CLI if
-you intend them to use Plait's approval and sandbox rules. Finish any host work,
-then restart the host session to load new credentials. The simplest restart is
-to log out and back in. Existing threads retain their exact saved model;
-changing the default affects only new threads.
+you intend them to use Plait's approval and sandbox rules.
+
+The v0.1.0-preview.2 host reads credentials only when it starts. Finish any host
+work, then restart the host session; the simplest restart is to log out and
+back in. A host built from later source can load them without a restart:
+
+```sh
+printf '{"op":"reload_providers"}\n' | /usr/bin/nc -U "$HOME/.local/share/plait/host.sock"
+```
 
 ### If the host does not connect
 

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { connect } from 'node:net';
-import { readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -10,7 +12,7 @@ import { LOOPBACK_URL, SECRETS } from './support/providers.ts';
 
 // The real host binary with a sidecar whose providers and sign-in flows are scripted.
 process.env.PLAIT_TEST_RUNTIME = resolve('test/providers-fixture.ts');
-const { request, setup, until } = await import('./support/host.ts');
+const { binary, delay, request, setup, until } = await import('./support/host.ts');
 
 type Catalog = { models: { provider: string; model_id: string; authenticated: boolean }[] };
 const ask = async <T>(store: string, value: unknown) => {
@@ -94,4 +96,42 @@ test('provider operations cross the socket, and a pending sign-in is cleaned up 
   await until(async () => existsSync(join(f.store, 'sidecar-closed')), Boolean);
   assert(existsSync(join(f.store, 'sign-in-released')));
   assert.equal(await open(port), false);
+});
+
+test('the production sidecar serves provider operations from a disposable Pi directory', { timeout: 60000 }, async t => {
+  // src/main.ts with Pi's real registry. HOME and Pi's agent directory point into a temporary
+  // directory, catalogs stay offline, and no operation here contacts a provider.
+  const base = await realpath(await mkdtemp('/tmp/plait-pi-host-'));
+  const store = join(base, 'store'); const agent = join(base, 'agent');
+  await mkdir(store);
+  const environment = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/_API_KEY$|_TOKEN$/.test(name)));
+  const host = spawn(binary, ['run', '--store', store, '--runtime', resolve('src/main.ts')], {
+    stdio: 'ignore', env: { ...environment, HOME: base, PI_CODING_AGENT_DIR: agent, PI_OFFLINE: '1' },
+  });
+  t.after(async () => {
+    if (host.exitCode === null && host.signalCode === null) { const exited = once(host, 'exit'); host.kill('SIGKILL'); await exited; }
+    await delay(200); await rm(base, { recursive: true, force: true });
+  });
+  await until(() => request(store, { op: 'status' }), reply => reply.ok, 30000);
+
+  const list = (await ask<{ providers: ProviderView[] }>(store, { op: 'list_providers' })).result.providers;
+  const anthropic = list.find(provider => provider.id === 'anthropic')!;
+  assert.deepEqual([anthropic.sign_in?.subscription, anthropic.api_key?.name, anthropic.authenticated], [true, 'Anthropic API key', false]);
+
+  // The key takes effect in the catalog without restarting the host.
+  const key = 'sk-or-HOST_KEY_DO_NOT_LEAK';
+  const set = await ask<{ provider: ProviderView }>(store, { op: 'set_provider_key', provider: 'openrouter', key });
+  assert.deepEqual([set.ok, set.result.provider.credential, JSON.stringify(set).includes(key)], [true, 'api_key', false]);
+  const catalog = (await ask<Catalog>(store, { op: 'status' })).result.models;
+  assert(catalog.some(model => model.provider === 'openrouter' && model.authenticated));
+  assert(JSON.parse(await readFile(join(agent, 'auth.json'), 'utf8')).openrouter.key === key);
+  assert.equal((await stat(join(agent, 'auth.json'))).mode & 0o777, 0o600);
+
+  const added = await ask<{ provider: ProviderView }>(store, { op: 'add_endpoint', id: 'home', name: 'Home', base_url: 'http://127.0.0.1:9/v1', model_ids: ['local-model'] });
+  assert.equal(added.result.provider.kind, 'custom');
+  assert((await ask<Catalog>(store, { op: 'status' })).result.models.some(model => model.provider === 'home' && model.model_id === 'local-model' && model.authenticated));
+
+  const out = await ask<{ provider: ProviderView }>(store, { op: 'sign_out_provider', provider: 'openrouter' });
+  assert.equal(out.result.provider.authenticated, false);
+  assert(!(await ask<Catalog>(store, { op: 'status' })).result.models.some(model => model.provider === 'openrouter' && model.authenticated));
 });
