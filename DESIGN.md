@@ -21,14 +21,19 @@ optional wide-window Git inspector. Keep machine and thread context visible.
 - **Rail.** No in-app logo: the app icon and window carry the brand. The rail
   starts with two actions, New thread and Open repository. New thread names the
   model it will use; the control beside it opens the model picker. Projects are plain
-  section headers. Machines are outlined pills with their icon and name.
-  Every tree row is 28 points and one line. Category glyphs use the Plait
+  section headers, ordered by their newest thread activity. The local machine
+  stays in the data model and workspace context; it does not add a repeated row
+  under every project. Every tree row is 28 points and one line. Category glyphs use the Plait
   vector kit in `assets/branding`: mint projects, blue machines, violet
   threads, and light Git. Do not use a generic braid or a crop from the
   reference sheet. The Dock/Finder icon uses the kit's rounded tile. Host state
   sits in a one-line footer with Settings.
-- **Thread rows.** A thread's state is a pill with a dot and a text label.
-  Selection is a neutral fill.
+- **Thread rows.** A title leads, followed by a compact state word and relative
+  activity time. Unread activity uses a heavier title and a dot, with a full
+  accessible name. Selection is a neutral fill. A search field narrows projects
+  and threads; Needs me and Archived are explicit filters. An actions control
+  exposes rename and archive. Rename replaces the title with a text field.
+  Long navigation lists are virtualized. Missing folders stay visible.
 - **Real data only.** No sample threads or placeholder machines. With no
   thread open, the workspace says why (not connected, no threads yet, or
   nothing selected) and offers the one useful action.

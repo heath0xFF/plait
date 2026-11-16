@@ -44,6 +44,11 @@ over once with `scripts/update-installed-macos.sh`.
 4. Read the results, inspect **Changes**, and continue in the same conversation.
    Use **Stop** to cancel work; closing the desktop is not Stop.
 
+Source builds after v0.1.0-preview.2 also show projects across checkouts, live
+thread status, unread activity, search, rename, and archive. Opening another
+project keeps each thread's draft. See [project navigation](docs/MACOS.md#projects-and-threads)
+for live-list limits and notifications.
+
 Code blocks, tool details, and message text have copy controls. Threads and drafts
 restore on reopening; no task is sent automatically. See
 [keyboard controls](docs/MACOS.md#keyboard-controls) and
