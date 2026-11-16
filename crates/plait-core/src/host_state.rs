@@ -272,10 +272,10 @@ mod tests {
     }
 
     #[test]
-    fn negotiated_protocol_accepts_versions_one_and_two_only() {
+    fn negotiated_protocol_accepts_versions_one_through_three_only() {
         let mut state = HostState::new("/repo".into());
         assert_eq!(state.protocol(), 1);
-        for (version, accepted) in [(1, true), (2, true), (3, false), (0, false)] {
+        for (version, accepted) in [(1, true), (2, true), (3, true), (4, false), (0, false)] {
             state.reconnect();
             let mut reply = status(None, Vec::new());
             reply.protocol_version = version;
@@ -288,8 +288,9 @@ mod tests {
         // Submissions are sized as their largest negotiated form.
         let request = crate::host::Request::submit_bound("t", "r", "hi");
         let wire = serde_json::to_value(&request).unwrap();
-        assert_eq!(wire["protocol_version"], 2);
+        assert_eq!(wire["protocol_version"], 3);
         assert_eq!(wire["approval"], "auto");
+        assert_eq!(wire["when_busy"], "follow_up");
         let legacy = crate::host::Request::submit("t".into(), "r".into(), "hi".into(), None);
         assert_eq!(
             serde_json::to_value(&legacy).unwrap(),
@@ -377,6 +378,10 @@ mod tests {
                     model_id: "m".into(),
                     name: "Model".into(),
                     authenticated: true,
+                    reasoning: None,
+                    thinking_levels: None,
+                    context_window: None,
+                    input: None,
                 }],
             ),
         );

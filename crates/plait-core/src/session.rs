@@ -374,6 +374,7 @@ mod tests {
                 checkout: changed.checkout.clone(),
                 model: changed.model.clone(),
                 status: crate::host::ThreadStatus::Idle,
+                ..Default::default()
             };
             assert!(!saved.accepts(&summary));
             assert!(saved.saved_thread(&summary).is_none());
