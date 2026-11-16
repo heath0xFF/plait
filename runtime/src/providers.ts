@@ -79,7 +79,7 @@ function endpointUrl(value: string): string {
   const url = URL.canParse(value) ? new URL(value) : undefined;
   if (!url || (url.protocol !== 'http:' && url.protocol !== 'https:')) fail('invalid_request', 'base_url must be an http or https URL.');
   // A key belongs in the credential store, not in a URL that is listed and saved in models.json.
-  if (url.username || url.password || url.search || url.hash) fail('invalid_request', 'base_url must not contain a user name, password, query, or fragment.');
+  if (url.username || url.password || /[?#]/.test(value)) fail('invalid_request', 'base_url must not contain a user name, password, query, or fragment.');
   return value;
 }
 
