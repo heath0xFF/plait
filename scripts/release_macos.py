@@ -79,7 +79,7 @@ def payload_digest(root):
 def launch_agent(installed):
     return {
         "Label": AGENT_LABEL,
-        "ProgramArguments": [str(installed / "bin/plait-host"), "run"],
+        "ProgramArguments": [str(installed / "bin/plait-host"), "run-user"],
         "RunAtLoad": True,
         "KeepAlive": {"SuccessfulExit": False},
         "ThrottleInterval": 10,
@@ -127,7 +127,7 @@ if /bin/launchctl print "gui/$uid/{AGENT_LABEL}" >/dev/null 2>&1; then
     echo 'Host update installed. Existing host is unchanged. Finish work, then log out and back in to activate.'
 elif /usr/bin/sudo -H -u "$user" {executable} status >/dev/null 2>&1; then
     echo 'An existing unmanaged host is running. It was not stopped. Finish work and stop it before activating the installed host.'
-elif ! /bin/launchctl bootstrap "gui/$uid" {shlex.quote(str(AGENT_PATH))}; then
+elif ! /bin/launchctl asuser "$uid" /usr/bin/sudo -H -u "$user" /bin/launchctl bootstrap "gui/$uid" {shlex.quote(str(AGENT_PATH))}; then
     echo 'Host files installed. Log out and back in to start the user agent.'
 fi
 exit 0

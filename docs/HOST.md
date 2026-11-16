@@ -12,6 +12,9 @@ runtime dependencies; it does not need a development checkout or shell Node.
 
 - `plait-host run [--store ABSOLUTE_PATH] [--runtime ABSOLUTE_PATH]`: foreground
   daemon. `--runtime` is the path to `runtime/src/main.ts`.
+- `plait-host run-user [same options]`: installed per-user service entry. Resolve
+  the home from the OS account, reject root, and set the sidecar home and working
+  directory explicitly. Do not inherit an installer's home or store override.
 - `plait-host start [same options]`: spawn an independent daemon and return when
   its socket answers, or report a startup error. Closing the client has no effect.
 - `plait-host status [--store ABSOLUTE_PATH]`: print the status JSON reply.

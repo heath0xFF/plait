@@ -23,6 +23,9 @@ const tests = readdirSync(directory).filter(name => name.endsWith('.test.ts')
 console.log(platform === 'macos'
   ? 'Runtime checks: common daemon tests and real macOS command-sandbox tests.'
   : 'Runtime checks: common daemon tests and Linux command-denial tests. Linux execution is NOT enabled.');
-const result = spawnSync(process.execPath, ['--test', '--test-concurrency=2', ...tests], { stdio: 'inherit', cwd: fileURLToPath(new URL('..', import.meta.url)) });
+// An outer integration test must not make Node silently skip this independent suite.
+const environment = { ...process.env };
+delete environment.NODE_TEST_CONTEXT;
+const result = spawnSync(process.execPath, ['--test', '--test-concurrency=2', ...tests], { stdio: 'inherit', cwd: fileURLToPath(new URL('..', import.meta.url)), env: environment });
 if (result.error) console.error(result.error.message);
 process.exit(result.status ?? 1);

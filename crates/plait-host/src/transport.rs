@@ -175,7 +175,12 @@ pub fn private_store(store: &Path) -> io::Result<File> {
     Ok(lock)
 }
 
-pub fn serve(store: &Path, runtime: &Path, node: &std::ffi::OsStr) -> io::Result<()> {
+pub fn serve(
+    store: &Path,
+    runtime: &Path,
+    node: &std::ffi::OsStr,
+    home: Option<&Path>,
+) -> io::Result<()> {
     // Private creation modes also apply to SQLite WALs and runtime scratch files.
     unsafe {
         libc::umask(0o077);
@@ -194,7 +199,8 @@ pub fn serve(store: &Path, runtime: &Path, node: &std::ffi::OsStr) -> io::Result
     if unsafe { libc::fcntl(lock.as_raw_fd(), libc::F_SETFD, 0) } < 0 {
         return Err(io::Error::last_os_error());
     }
-    let mut child = Command::new(node)
+    let mut command = Command::new(node);
+    command
         .arg("--disable-warning=ExperimentalWarning")
         .arg(runtime)
         .arg(store)
@@ -204,8 +210,11 @@ pub fn serve(store: &Path, runtime: &Path, node: &std::ffi::OsStr) -> io::Result
         .env("PLAIT_LOCK_FD", lock.as_raw_fd().to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
+        .stderr(Stdio::null());
+    if let Some(home) = home {
+        command.env("HOME", home).current_dir(home);
+    }
+    let mut child = command.spawn()?;
     let input = child
         .stdin
         .take()

@@ -55,7 +55,7 @@ class ReleaseTests(unittest.TestCase):
         installed = HOST_BASE / "releases/0.1.0-aabbccdd"
         agent = plistlib.loads(plistlib.dumps(launch_agent(installed)))
         self.assertEqual(agent["Label"], AGENT_LABEL)
-        self.assertEqual(agent["ProgramArguments"], [str(installed / "bin/plait-host"), "run"])
+        self.assertEqual(agent["ProgramArguments"], [str(installed / "bin/plait-host"), "run-user"])
         self.assertNotIn("UserName", agent)
         self.assertNotIn("PLAIT_HOST_STORE", agent["EnvironmentVariables"])
         self.assertEqual(agent["KeepAlive"], {"SuccessfulExit": False})

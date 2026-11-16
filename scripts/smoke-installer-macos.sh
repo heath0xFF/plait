@@ -22,7 +22,10 @@ host_package=$(python3 -c 'import json,os; r=json.load(open(os.environ["PLAIT_RE
 python3 scripts/build-upgrade-fixture-macos.py "$root/dist/$host_package" "$root/dist/installer-test/host-update.pkg"
 sudo -n /usr/sbin/installer -pkg "$root/dist/$combined" -target /
 node="/Library/Application Support/Plait/Host/releases/$build_id/bin/node"
-"$node" --test scripts/smoke-installed-macos.mjs
+if ! "$node" --test scripts/smoke-installed-macos.mjs; then
+    "$node" scripts/diagnose-installed-macos.mjs || true
+    exit 1
+fi
 
 fixture=$(mktemp -d /tmp/plait-installed-ui.XXXXXX)
 pid=''

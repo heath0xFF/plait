@@ -40,7 +40,9 @@ does not test the downloaded-file approval flow on your Mac.
 
 The host is a **per-user LaunchAgent**, not a root daemon. It starts for the
 current graphical user when possible and at later graphical logins. If no
-user is logged in, startup waits until login. It uses the same default store as
+user is logged in, startup waits until login. Service startup resolves the home
+from the OS account and rejects root execution; it does not use the installer's
+environment. It uses the same default store as
 the development host: `~/.local/share/plait`. A development store override is
 not copied into the installed agent.
 

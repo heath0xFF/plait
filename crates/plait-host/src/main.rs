@@ -3,6 +3,7 @@ mod files;
 mod fingerprint;
 mod installation;
 mod lease;
+mod service;
 mod transport;
 
 use std::{
@@ -46,8 +47,13 @@ fn run() -> io::Result<()> {
         return Ok(());
     }
     let paths = installation::runtime_paths(&env::current_exe()?)?;
-    let mut store = env::var_os("PLAIT_HOST_STORE")
-        .map(PathBuf::from)
+    let service_home = (operation == "run-user")
+        .then(service::user_home)
+        .transpose()?;
+    let mut store = service_home
+        .as_ref()
+        .map(|home| home.join(".local/share/plait"))
+        .or_else(|| env::var_os("PLAIT_HOST_STORE").map(PathBuf::from))
         .unwrap_or_else(|| {
             PathBuf::from(env::var_os("HOME").unwrap_or_default()).join(".local/share/plait")
         });
@@ -66,7 +72,9 @@ fn run() -> io::Result<()> {
         return Err(io::Error::other("store and runtime paths must be absolute"));
     }
     match operation.as_str() {
-        "run" => transport::serve(&store, &runtime, &paths.node),
+        "run" | "run-user" => {
+            transport::serve(&store, &runtime, &paths.node, service_home.as_deref())
+        }
         "status" => {
             let reply = transport::status(&store)?;
             io::stdout().write_all(&reply)
@@ -112,7 +120,7 @@ fn run() -> io::Result<()> {
             ))
         }
         _ => Err(io::Error::other(
-            "usage: plait-host run|start|status [--store PATH] [--runtime PATH], or plait-host version",
+            "usage: plait-host run|run-user|start|status [--store PATH] [--runtime PATH], or plait-host version",
         )),
     }
 }
