@@ -20,11 +20,17 @@ use std::{
     rc::Rc,
 };
 
-actions!(plait, [CopySelection]);
+actions!(plait, [CopySelection, HistoryStart, HistoryEnd]);
 
 pub(super) fn bind_keys(cx: &mut App) {
     // The composer binds Cmd-C in its own, deeper context and wins while it has focus.
-    cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, Some("Plait"))]);
+    cx.bind_keys([
+        KeyBinding::new("cmd-c", CopySelection, Some("Plait")),
+        KeyBinding::new("cmd-up", HistoryStart, Some("Plait")),
+        KeyBinding::new("home", HistoryStart, Some("Plait")),
+        KeyBinding::new("cmd-down", HistoryEnd, Some("Plait")),
+        KeyBinding::new("end", HistoryEnd, Some("Plait")),
+    ]);
 }
 
 /// The most one pointer movement scrolls the list while dragging past its edge.
@@ -35,6 +41,8 @@ const SCROLL_STEP: f32 = 48.;
 pub(super) enum Owner {
     Message(SharedString),
     Stream,
+    Reasoning(SharedString),
+    LiveReasoning,
     Tool(SharedString),
 }
 
@@ -43,6 +51,8 @@ impl Owner {
         match (self, row) {
             (Self::Message(id), Row::Message(message)) => **id == *message.id,
             (Self::Stream, Row::Streaming(_)) => true,
+            (Self::Reasoning(id), Row::Reasoning(message)) => **id == *message.id,
+            (Self::LiveReasoning, Row::LiveReasoning(_)) => true,
             (Self::Tool(id), Row::Tool(tool)) => **id == *tool.id,
             _ => false,
         }
@@ -406,6 +416,17 @@ impl Plait {
                 .live
                 .as_ref()
                 .map(|message| message.blocks.iter().collect()),
+            Row::Reasoning(message) => self
+                .formatted
+                .reasoning
+                .get(&message.id)
+                .filter(|_| self.history.expanded.contains(&message.id))
+                .map(|message| message.blocks.iter().collect()),
+            Row::LiveReasoning(_) => self
+                .formatted
+                .live_reasoning
+                .as_ref()
+                .map(|message| message.blocks.iter().collect()),
             // Details that are folded away are not part of what is on screen.
             Row::Tool(tool) => self
                 .formatted
@@ -418,7 +439,7 @@ impl Plait {
     }
 
     fn anchored_block(&self, anchor: &Anchor) -> Option<&Block> {
-        let snapshot = self.host.snapshot.as_ref()?;
+        let snapshot = self.conversation_snapshot()?;
         let row = self
             .live_layout
             .iter()
@@ -430,7 +451,8 @@ impl Plait {
     /// Place the selection in this frame's row order. Rows that have gone drop it.
     pub(super) fn resolve_selection(&self) {
         self.reading.span.set(None);
-        let (Some(selection), Some(snapshot)) = (&self.reading.selection, &self.host.snapshot)
+        let (Some(selection), Some(snapshot)) =
+            (&self.reading.selection, self.conversation_snapshot())
         else {
             return;
         };
@@ -559,10 +581,16 @@ impl Plait {
         }
     }
 
+    pub(super) fn clear_reading_selection(&mut self) {
+        self.reading.selection = None;
+        self.reading.span.set(None);
+        self.reading.dragging = false;
+    }
+
     /// The text the current selection would copy, if there is one.
     pub(super) fn selected_text(&self) -> Option<String> {
         let span = self.reading.span.get()?;
-        let snapshot = self.host.snapshot.as_ref()?;
+        let snapshot = self.conversation_snapshot()?;
         let rows = self
             .live_layout
             .iter()
@@ -584,7 +612,23 @@ impl Plait {
         root: Stateful<Div>,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        root.on_action(cx.listener(
+        root.on_action(cx.listener(|this, _: &HistoryStart, window, cx| {
+            if this.settings_open || this.show_changes || this.host.selected.is_none() {
+                cx.propagate();
+                return;
+            }
+            this.live_scroll.scroll_to(ListOffset::default());
+            this.load_history(super::history::Load::Older, window, cx);
+            cx.notify();
+        }))
+        .on_action(cx.listener(|this, _: &HistoryEnd, window, cx| {
+            if this.settings_open || this.show_changes || this.host.selected.is_none() {
+                cx.propagate();
+                return;
+            }
+            this.jump_latest(window, cx);
+        }))
+        .on_action(cx.listener(
             |this, _: &CopySelection, _, cx| match this.selected_text() {
                 Some(text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
                 None => cx.propagate(),

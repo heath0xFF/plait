@@ -5,13 +5,17 @@ use super::{
 };
 use gpui::{prelude::*, *};
 use plait_core::{
-    host::{Approval, ApprovalMode, Message, MessageRole, Snapshot},
+    history::{self, Key},
+    host::{Approval, ApprovalMode, HistoryField, Message, MessageRole, Snapshot},
     transcript::{self, Row},
 };
 
 /// Full-width line above the conversation for host and submission state.
 fn banner(tint: u32) -> Div {
     row()
+        .w_full()
+        .max_w(px(CONTENT_WIDTH + 48.))
+        .mx_auto()
         .flex_shrink_0()
         .px_6()
         .py_2()
@@ -61,12 +65,50 @@ impl Plait {
             // The projection arrives with the snapshot; this is a one-frame fallback.
             None => prose().child(message.text.clone()).into_any_element(),
         };
+        let body = column()
+            .gap_2()
+            .children(self.history_parts(
+                Key::Message(message.id.clone()),
+                Some(HistoryField::Text),
+                cx,
+            ))
+            .child(body)
+            .when_some(
+                self.formatted.turn_summaries.get(&message.id),
+                |el, summary| {
+                    el.child(
+                        div()
+                            .pt_1()
+                            .text_size(px(11.))
+                            .text_color(rgb(MUTED))
+                            .child(summary.clone()),
+                    )
+                },
+            );
+        let part = self
+            .history
+            .cache
+            .get(&Key::Message(message.id.clone()))
+            .is_some_and(|entry| {
+                entry
+                    .parts
+                    .iter()
+                    .any(|part| part.field == HistoryField::Text)
+            });
         let copy = quiet_button(
             SharedString::from(format!("copy-message-{}", message.id)),
-            "Copy message",
+            if part {
+                "Copy this part"
+            } else {
+                "Copy message"
+            },
             row_group(index),
         )
-        .aria_label("Copy message source")
+        .aria_label(if part {
+            "Copy this message part"
+        } else {
+            "Copy message source"
+        })
         .on_activate(cx, {
             let text = message.text.clone();
             move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
@@ -142,28 +184,121 @@ impl Plait {
             .into_any_element()
     }
 
+    fn reasoning(
+        &self,
+        id: &str,
+        text: &str,
+        index: usize,
+        live: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let open = live || self.history.expanded.contains(id);
+        let site = Site {
+            owner: if live {
+                Owner::LiveReasoning
+            } else {
+                Owner::Reasoning(id.to_owned().into())
+            },
+            row: index,
+            block: 0,
+        };
+        let parsed = if live {
+            self.formatted.live_reasoning.as_ref()
+        } else {
+            self.formatted.reasoning.get(id)
+        };
+        let key = id.to_owned();
+        let caption = if live {
+            "Thinking…"
+        } else if open {
+            "Hide reasoning"
+        } else {
+            "Show reasoning"
+        };
+        let heading = row()
+            .justify_between()
+            .gap_2()
+            .child(
+                button(SharedString::from(format!("reasoning-{id}")), caption)
+                    .aria_label(caption)
+                    .child(icon(if open { "down" } else { "right" }))
+                    .disabled(live)
+                    .when(!live, |el| {
+                        el.on_activate(cx, move |this, _, cx| this.toggle_reasoning(&key, cx))
+                    }),
+            )
+            .when(open, |el| {
+                el.child(
+                    quiet_button(
+                        SharedString::from(format!("copy-reasoning-{id}")),
+                        "Copy reasoning",
+                        row_group(index),
+                    )
+                    .on_activate(cx, {
+                        let text = text.to_owned();
+                        move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
+                        }
+                    }),
+                )
+            });
+        column()
+            .gap_1()
+            .text_color(rgb(MUTED))
+            .child(heading)
+            .when(open, |el| {
+                el.child(
+                    div()
+                        .id(SharedString::from(format!("reasoning-body-{id}")))
+                        .pl_3()
+                        .border_l_1()
+                        .border_color(rgb(BORDER))
+                        .when(live, |el| el.max_h(px(180.)).overflow_y_scroll())
+                        .when_some(parsed, |el, parsed| {
+                            el.child(self.markdown(
+                                &site,
+                                &parsed.blocks,
+                                &format!("reasoning-{id}"),
+                                cx,
+                            ))
+                        })
+                        .when(!live, |el| {
+                            el.children(self.history_parts(
+                                Key::Message(id.to_owned()),
+                                Some(HistoryField::Reasoning),
+                                cx,
+                            ))
+                        }),
+                )
+            })
+            .into_any_element()
+    }
+
     fn live_event(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let Some(snapshot) = self.host.snapshot.clone() else {
+        let Some(snapshot) = self.conversation_snapshot() else {
             return div().into_any_element();
         };
         let Some(row) = self
             .live_layout
             .get(index)
-            .and_then(|slot| transcript::resolve(&snapshot, *slot))
+            .and_then(|slot| transcript::resolve(snapshot, *slot))
         else {
             return div().into_any_element();
         };
         // Top padding leaves room for a reply's copy control; a reply sits
         // closer to the tool calls that follow it than to what came before.
         let (content, top, bottom) = match row {
-            // A version 3 reply that only reasoned before its tool calls has no
-            // text to show yet: the row stays, with no height.
-            Row::Message(message) if message.text.is_empty() => return div().into_any_element(),
             Row::Message(message) if message.role == MessageRole::User => {
                 (self.live_message(message, index, cx), 10., 4.)
             }
             Row::Message(message) => (self.live_message(message, index, cx), COPY_LIFT, 6.),
             Row::Streaming(text) => (self.live_stream(text, index, cx), 14., 8.),
+            Row::Reasoning(message) => (
+                self.reasoning(&message.id, &message.reasoning, index, false, cx),
+                6.,
+                3.,
+            ),
+            Row::LiveReasoning(text) => (self.reasoning("live", text, index, true, cx), 6., 3.),
             Row::Tool(tool) => match self.tool_row(tool, index, cx) {
                 Some(content) => (content, 1., 1.),
                 // Folded into a closed group: the row stays, with no height.
@@ -192,7 +327,10 @@ impl Plait {
         self.reconcile_tool_rows();
         self.resolve_selection();
         let away = self.live_scroll.logical_scroll_top().item_ix < self.live_count;
-        let size = (self.live_count, snapshot.live_text.len());
+        let size = (
+            snapshot.messages.len() + snapshot.tools.len(),
+            snapshot.live_text.len() + snapshot.live_reasoning.len(),
+        );
         if !away {
             self.reading.seen.set(size);
         }
@@ -207,7 +345,8 @@ impl Plait {
                     self.live_scroll.clone(),
                     cx.processor(|this, index, _, cx| this.live_event(index, cx)),
                 )
-                .size_full(),
+                .size_full()
+                .py_2(),
             )
             .when(away, |el| {
                 el.child(
@@ -242,9 +381,8 @@ impl Plait {
                                             "Jump to latest"
                                         })
                                         .child(icon("down").text_color(rgb(TEXT)))
-                                        .on_activate(cx, |this, _, cx| {
-                                            this.live_scroll.scroll_to_end();
-                                            cx.notify();
+                                        .on_activate(cx, |this, window, cx| {
+                                            this.jump_latest(window, cx)
                                         }),
                                 ),
                         ),
@@ -443,6 +581,7 @@ Tone::Filled,
             .min_w_0()
             .min_h_0()
             .children(self.live_banners(pending, cx))
+            .child(self.history_heading(cx))
             .child(if snapshot.is_none() {
                 empty(
                     "Loading thread",
@@ -461,20 +600,49 @@ Tone::Filled,
                 div().into_any_element()
             });
         if let Some(snapshot) = &snapshot {
-            if snapshot.truncated {
+            if snapshot.truncated && !self.history.enabled {
                 main = main.child(div().px_6().py_1().child(tag(
                     "Bounded preview · older messages or tool output have been clipped by the host.",
                     AMBER,
                 )));
             }
-            if let Some(error) = &snapshot.error {
+            if let Some((state, failed)) = history::run_state(snapshot, self.history.now) {
                 main = main.child(
-                    div()
-                        .px_6()
-                        .py_2()
-                        .text_size(px(12.))
-                        .text_color(rgb(RED))
-                        .child(text!(format!("{}: {}", error.code, error.message))),
+                    div().px_6().py_2().child(
+                        row()
+                            .w_full()
+                            .max_w(px(CONTENT_WIDTH))
+                            .mx_auto()
+                            .text_size(px(12.))
+                            .text_color(rgb(if failed { RED } else { MUTED }))
+                            .child(dot(if failed {
+                                RED
+                            } else if snapshot.status.busy() {
+                                BLUE
+                            } else {
+                                MUTED
+                            }))
+                            .child(state),
+                    ),
+                );
+            }
+            if self.history.enabled
+                && snapshot.status.busy()
+                && (snapshot.live_text.encode_utf16().count() >= 16_383
+                    || snapshot.live_reasoning.encode_utf16().count() >= 16_383)
+            {
+                main = main.child(
+                    div().px_6().child(
+                        div()
+                            .w_full()
+                            .max_w(px(CONTENT_WIDTH))
+                            .mx_auto()
+                            .text_size(px(11.))
+                            .text_color(rgb(AMBER))
+                            .child(
+                                "Live preview · complete text loads when this response is saved.",
+                            ),
+                    ),
                 );
             }
             if let Some(approval) = &snapshot.pending_approval {

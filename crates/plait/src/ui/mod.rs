@@ -3,6 +3,7 @@ mod changes;
 mod commands;
 mod composer;
 mod conversation;
+mod history;
 mod host;
 mod jump;
 mod live_conversation;
@@ -72,6 +73,7 @@ pub struct Plait {
     live_count: usize,
     live_layout: Vec<plait_core::transcript::Slot>,
     formatted: std::sync::Arc<plait_core::markdown::Transcript>,
+    history: history::HistoryView,
     settings_open: bool,
     /// A new thread was requested: open it when the host confirms creation,
     /// unless the user has gone elsewhere in the meantime.
@@ -121,6 +123,7 @@ impl Plait {
             live_count: 0,
             live_layout: Vec::new(),
             formatted: Default::default(),
+            history: Default::default(),
             settings_open: false,
             new_thread_open: false,
             overlay: None,
@@ -145,6 +148,8 @@ impl Plait {
             interaction: None,
             switch_us: 0,
         };
+        this.live_scroll
+            .set_scroll_handler(cx.listener(Self::scroll_history));
         this.pump(cx);
         this.load_preferences(cx);
         // An open picker shows host state; keep it current as replies land.

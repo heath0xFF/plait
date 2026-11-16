@@ -9,6 +9,8 @@ use crate::host::{Message, Snapshot, Tool};
 pub enum Row<'a> {
     Message(&'a Message),
     Streaming(&'a str),
+    Reasoning(&'a Message),
+    LiveReasoning(&'a str),
     Tool(&'a Tool),
 }
 
@@ -16,6 +18,8 @@ pub enum Row<'a> {
 enum Key<'a> {
     Message(&'a str),
     Streaming,
+    Reasoning(&'a str),
+    LiveReasoning,
     Tool(&'a str),
 }
 
@@ -24,13 +28,24 @@ impl<'a> Row<'a> {
         match self {
             Self::Message(message) => Key::Message(&message.id),
             Self::Streaming(_) => Key::Streaming,
+            Self::Reasoning(message) => Key::Reasoning(&message.id),
+            Self::LiveReasoning(_) => Key::LiveReasoning,
             Self::Tool(tool) => Key::Tool(&tool.id),
         }
     }
 }
 
 pub fn row_count(snapshot: &Snapshot) -> usize {
-    snapshot.messages.len() + usize::from(!snapshot.live_text.is_empty()) + snapshot.tools.len()
+    snapshot
+        .messages
+        .iter()
+        .map(|message| {
+            usize::from(!message.text.is_empty()) + usize::from(!message.reasoning.is_empty())
+        })
+        .sum::<usize>()
+        + snapshot.tools.len()
+        + usize::from(!snapshot.live_text.is_empty())
+        + usize::from(!snapshot.live_reasoning.is_empty())
 }
 
 /// A row by position in the snapshot, cheap to cache between snapshots.
@@ -38,6 +53,8 @@ pub fn row_count(snapshot: &Snapshot) -> usize {
 pub enum Slot {
     Message(usize),
     Streaming,
+    Reasoning(usize),
+    LiveReasoning,
     Tool(usize),
 }
 
@@ -63,11 +80,19 @@ pub fn layout(snapshot: &Snapshot) -> Vec<Slot> {
             },
         }
     }
-    let mut slots = Vec::with_capacity(row_count(snapshot));
+    let mut slots = Vec::with_capacity(snapshot.messages.len() * 2 + snapshot.tools.len() + 2);
     slots.extend(leading.into_iter().map(Slot::Tool));
     for (message, tools) in following.into_iter().enumerate() {
-        slots.push(Slot::Message(message));
+        if !snapshot.messages[message].reasoning.is_empty() {
+            slots.push(Slot::Reasoning(message));
+        }
+        if !snapshot.messages[message].text.is_empty() {
+            slots.push(Slot::Message(message));
+        }
         slots.extend(tools.into_iter().map(Slot::Tool));
+    }
+    if !snapshot.live_reasoning.is_empty() {
+        slots.push(Slot::LiveReasoning);
     }
     if !snapshot.live_text.is_empty() {
         slots.push(Slot::Streaming);
@@ -83,6 +108,9 @@ pub fn resolve(snapshot: &Snapshot, slot: Slot) -> Option<Row<'_>> {
             (!snapshot.live_text.is_empty()).then_some(Row::Streaming(&snapshot.live_text))
         }
         Slot::Tool(index) => snapshot.tools.get(index).map(Row::Tool),
+        Slot::Reasoning(index) => snapshot.messages.get(index).map(Row::Reasoning),
+        Slot::LiveReasoning => (!snapshot.live_reasoning.is_empty())
+            .then_some(Row::LiveReasoning(&snapshot.live_reasoning)),
     }
 }
 
@@ -134,8 +162,7 @@ pub fn changes(previous: Option<&Snapshot>, next: Option<&Snapshot>) -> Update {
     let (Some(previous), Some(next)) = (previous, next) else {
         return Update::Reset(count);
     };
-    if previous.id != next.id || previous.checkout != next.checkout || previous.model != next.model
-    {
+    if previous.id != next.id || previous.checkout != next.checkout {
         return Update::Reset(count);
     }
     let old = rows(previous);
@@ -332,6 +359,7 @@ mod tests {
             .map(|row| match row {
                 Row::Message(message) => format!("m{}", message.id),
                 Row::Streaming(_) => "live".into(),
+                Row::Reasoning(_) | Row::LiveReasoning(_) => "reasoning".into(),
                 Row::Tool(tool) => tool.id.clone(),
             })
             .collect();
