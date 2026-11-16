@@ -81,8 +81,11 @@ impl Plait {
                             })
                         }).detach();
                         for (id, thread) in &data.threads {
-                            if let Some(pending) = &thread.pending {
+                            for pending in thread.pending.iter().chain(&thread.pending_submissions) {
                                 this.host.submissions.restore(id.clone(), pending.clone());
+                            }
+                            for pending in &thread.queued_submissions {
+                                this.host.submissions.restore_accepted(id.clone(), pending.clone());
                             }
                         }
                         let selected = data.selected.clone();
@@ -275,6 +278,15 @@ impl Plait {
                         submitted: submitted.clone(),
                     },
                     pending: self.host.submissions.pending(&summary.id).cloned(),
+                    pending_submissions: self
+                        .host
+                        .submissions
+                        .all(&summary.id)
+                        .iter()
+                        .skip(1)
+                        .cloned()
+                        .collect(),
+                    queued_submissions: self.host.submissions.accepted(&summary.id).to_vec(),
                 },
             ) {
                 self.session.note = Some(error);
@@ -329,16 +341,12 @@ impl Plait {
         if !self.session_accepts_thread(&id) {
             return;
         }
-        if let Some(pending) = self.host.submissions.pending(&id).cloned()
-            && snapshot
-                .messages
-                .iter()
-                .any(|message| message.id == format!("request-{}", pending.request_id))
-        {
-            self.host.submissions.finish(&id, &pending.request_id);
+        let accepted = self.host.submissions.observe(snapshot);
+        let accepted_any = !accepted.is_empty();
+        for pending in accepted {
             if let Some(composer) = self.composers.get(&id) {
                 composer.update(cx, |composer, cx| {
-                    composer.clear_if_unchanged(&pending.text, cx);
+                    composer.acknowledge(&pending.text, pending.draft_revision, cx);
                 });
             }
         }
@@ -353,8 +361,13 @@ impl Plait {
             .data
             .as_ref()
             .and_then(|data| data.threads.get(&id))
-            .is_some_and(|thread| thread.pending.as_ref() != self.host.submissions.pending(&id));
-        if title_missing || pending_changed {
+            .is_some_and(|thread| {
+                thread.pending.as_ref() != self.host.submissions.pending(&id)
+                    || thread.pending_submissions.as_slice()
+                        != self.host.submissions.all(&id).get(1..).unwrap_or_default()
+                    || thread.queued_submissions.as_slice() != self.host.submissions.accepted(&id)
+            });
+        if title_missing || pending_changed || accepted_any {
             self.capture_session(cx);
         }
     }

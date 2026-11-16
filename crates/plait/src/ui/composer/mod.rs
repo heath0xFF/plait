@@ -16,7 +16,7 @@ mod trigger;
 pub use commands::CommandId;
 pub use completion::{Completion, CompletionEvent, CompletionItem};
 
-use super::theme::{self, BG, ButtonAction, EDGE, MUTED, RAIL, SUBTLE, TEXT};
+use super::theme::{self, BG, ButtonAction, DisabledControl, EDGE, MUTED, RAIL, SUBTLE, TEXT};
 use commands::COMMANDS;
 use draft::Draft;
 use gpui::{prelude::*, *};
@@ -46,6 +46,7 @@ actions!(
     [
         Submit,
         SubmitNow,
+        Steer,
         Newline,
         Complete,
         Cancel,
@@ -87,6 +88,7 @@ pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("enter", Submit, context),
         KeyBinding::new("cmd-enter", SubmitNow, context),
+        KeyBinding::new("alt-enter", Steer, context),
         KeyBinding::new("shift-enter", Newline, context),
         // Tab accepts a suggestion; with none open it moves focus as usual.
         KeyBinding::new("tab", Complete, context),
@@ -128,7 +130,11 @@ pub fn bind_keys(cx: &mut App) {
 
 #[derive(Clone, Debug)]
 pub enum ComposerEvent {
-    Submit(String),
+    Submit {
+        text: String,
+        revision: u64,
+        steer: bool,
+    },
     Stop,
     /// A local command was chosen from the `/` list. The parent performs it.
     Command(CommandId),
@@ -203,8 +209,11 @@ pub struct Composer {
     focus: FocusHandle,
     draft: Draft,
     enabled: bool,
+    send_blocked: Option<String>,
     reason: Option<String>,
     busy: bool,
+    queue_enabled: bool,
+    stop_enabled: bool,
     selecting: bool,
     layout: Layout,
     bounds: Option<Bounds<Pixels>>,
@@ -228,8 +237,11 @@ impl Composer {
             focus: cx.focus_handle(),
             draft: Draft::default(),
             enabled: false,
+            send_blocked: None,
             reason: Some("Connect a local thread to send messages.".into()),
             busy: false,
+            queue_enabled: false,
+            stop_enabled: false,
             selecting: false,
             layout: Layout::default(),
             bounds: None,
@@ -325,8 +337,16 @@ impl Composer {
         cx.notify();
     }
 
-    pub fn clear_if_unchanged(&mut self, submitted: &str, cx: &mut Context<Self>) -> bool {
-        let cleared = self.draft.clear_if_unchanged(submitted);
+    pub fn acknowledge(
+        &mut self,
+        submitted: &str,
+        revision: Option<u64>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let cleared = match revision {
+            Some(revision) => self.draft.clear_revision(submitted, revision),
+            None => self.draft.clear_if_unchanged(submitted),
+        };
         if cleared {
             self.close_popup();
             self.reveal_cursor = true;
@@ -336,6 +356,36 @@ impl Composer {
         cleared
     }
 
+    pub fn set_queue_enabled(&mut self, enabled: bool, can_stop: bool, cx: &mut Context<Self>) {
+        if self.queue_enabled != enabled || self.stop_enabled != can_stop {
+            self.queue_enabled = enabled;
+            self.stop_enabled = can_stop;
+            cx.notify();
+        }
+    }
+
+    pub fn set_send_blocked(&mut self, reason: Option<String>, cx: &mut Context<Self>) {
+        if self.send_blocked != reason {
+            self.send_blocked = reason;
+            cx.notify();
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.draft.value.text.is_empty()
+    }
+
+    pub fn restore_cancelled(&mut self, text: &str, revision: u64, cx: &mut Context<Self>) -> bool {
+        if !self.is_empty() || self.draft.revision != revision || self.draft.marked.is_some() {
+            return false;
+        }
+        self.draft.insert(text);
+        self.reveal_cursor = true;
+        self.input_changed = true;
+        cx.notify();
+        true
+    }
+
     fn changed(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.reveal_cursor = true;
         self.stop.disarm();
@@ -343,10 +393,23 @@ impl Composer {
         cx.notify();
     }
 
-    fn submit(&mut self, cx: &mut Context<Self>) {
-        if let Some(text) = self.draft.submit(self.enabled, self.busy) {
+    fn submit(&mut self, steer: bool, cx: &mut Context<Self>) {
+        if self.send_blocked.is_some() {
+            return;
+        }
+        if steer && !(self.busy && self.queue_enabled) {
+            return;
+        }
+        if let Some(text) = self
+            .draft
+            .submit(self.enabled, self.busy && !self.queue_enabled)
+        {
             self.close_popup();
-            cx.emit(ComposerEvent::Submit(text));
+            cx.emit(ComposerEvent::Submit {
+                text,
+                revision: self.draft.revision,
+                steer,
+            });
             cx.notify();
         }
     }
@@ -792,7 +855,7 @@ impl Composer {
         if self.enabled && self.draft.cancel_recall() {
             return self.changed(window, cx);
         }
-        if !(self.enabled && self.busy) {
+        if !(self.stop_enabled && self.busy) {
             return cx.propagate();
         }
         if self.stop.press(Instant::now()) {
@@ -827,8 +890,11 @@ impl Composer {
                 .clone()
                 .unwrap_or_else(|| "Composer unavailable".into());
         }
+        if let Some(reason) = &self.send_blocked {
+            return reason.clone();
+        }
         if self.suggestions().is_some_and(Completion::has_items) {
-            return "Up and Down to choose · Enter or Tab to accept · Esc to dismiss".into();
+            return "↑↓ choose · Enter accepts · Esc closes".into();
         }
         if let Some((position, total)) = self.draft.recall_position() {
             return format!(
@@ -836,13 +902,16 @@ impl Composer {
             );
         }
         if !self.busy {
-            return "Enter to send · Shift-Enter for a new line · @ for files · / for commands"
-                .into();
+            return "Enter sends · Shift-Enter new line · @ files · / commands".into();
         }
         if self.stop.armed(Instant::now()) {
             "Press Esc again to stop the agent".into()
         } else {
-            "Agent is working. You can edit the next message · Esc twice to stop".into()
+            if self.queue_enabled {
+                "Enter queues · Option-Enter steers · Esc twice stops".into()
+            } else {
+                "Working · Draft your next message · Esc twice stops".into()
+            }
         }
     }
 }
@@ -1074,8 +1143,11 @@ impl Render for Composer {
         };
         let input = cx.entity().downgrade();
         let enabled = self.enabled;
-        let can_send = self.draft.can_submit(enabled, self.busy);
-        let can_stop = enabled && self.busy;
+        let can_send = self.send_blocked.is_none()
+            && self
+                .draft
+                .can_submit(enabled, self.busy && !self.queue_enabled);
+        let can_stop = self.stop_enabled && self.busy;
         let focused = self.focus.is_focused(window);
         // Suggestions belong to typing; they do not outlive keyboard focus.
         let suggestions = focused.then(|| self.suggestion_list(cx)).flatten();
@@ -1123,10 +1195,11 @@ impl Render for Composer {
                     .line_height(px(LINE_HEIGHT))
                     .on_action(cx.listener(|this, _: &Submit, window, cx| {
                         if !this.accept(None, window, cx) {
-                            this.submit(cx);
+                            this.submit(false, cx);
                         }
                     }))
-                    .on_action(cx.listener(|this, _: &SubmitNow, _, cx| this.submit(cx)))
+                    .on_action(cx.listener(|this, _: &SubmitNow, _, cx| this.submit(false, cx)))
+                    .on_action(cx.listener(|this, _: &Steer, _, cx| this.submit(true, cx)))
                     .on_action(cx.listener(|this, _: &Complete, window, cx| {
                         if !this.accept(None, window, cx) {
                             window.focus_next(cx);
@@ -1297,36 +1370,48 @@ impl Render for Composer {
                             .text_color(rgb(SUBTLE))
                             .child(hint),
                     )
-                    .child(
-                        // Send is the one affirmative control; Stop stays neutral.
-                        theme::toned_icon_button(
-                            "composer-send",
-                            if self.busy { "stop" } else { "send" },
-                            if self.busy { "Stop" } else { "Send" },
-                            if can_send {
-                                theme::Tone::Primary
-                            } else {
-                                theme::Tone::Filled
-                            },
+                    .when(self.busy, |el| {
+                        el.child(
+                            theme::toned_icon_button(
+                                "composer-stop",
+                                "stop",
+                                "Stop",
+                                theme::Tone::Filled,
+                            )
+                            .disabled(!can_stop)
+                            .on_activate(cx, |this, _, cx| {
+                                if this.stop_enabled {
+                                    cx.emit(ComposerEvent::Stop);
+                                }
+                            }),
                         )
-                        .rounded_lg()
-                        .tab_stop(can_send || can_stop)
-                        .a11y_synthetic_children(move |builder| {
-                            if !can_send && !can_stop {
-                                builder.parent_node().set_disabled();
-                            }
-                        })
-                        .when(!can_send && !can_stop, |button| {
-                            button.opacity(0.5).cursor_default()
-                        })
-                        .on_activate(cx, |this, _, cx| {
-                            if this.enabled && this.busy {
-                                cx.emit(ComposerEvent::Stop);
-                            } else {
-                                this.submit(cx);
-                            }
-                        }),
-                    ),
+                    })
+                    .when(!self.busy || self.queue_enabled, |el| {
+                        el.child(
+                            // Send is the one affirmative control; Stop stays neutral.
+                            theme::toned_icon_button(
+                                "composer-send",
+                                "send",
+                                if self.busy { "Queue message" } else { "Send" },
+                                if can_send {
+                                    theme::Tone::Primary
+                                } else {
+                                    theme::Tone::Filled
+                                },
+                            )
+                            .rounded_lg()
+                            .tab_stop(can_send)
+                            .a11y_synthetic_children(move |builder| {
+                                if !can_send {
+                                    builder.parent_node().set_disabled();
+                                }
+                            })
+                            .when(!can_send, |button| button.opacity(0.5).cursor_default())
+                            .on_activate(cx, |this, _, cx| {
+                                this.submit(false, cx);
+                            }),
+                        )
+                    }),
             )
             .children(suggestions)
     }

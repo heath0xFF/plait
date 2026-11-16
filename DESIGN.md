@@ -54,13 +54,15 @@ optional wide-window Git inspector. Keep machine and thread context visible.
   outlined in rose. A long run of calls folds under one line that names their
   count and kinds and any failures; a turn in progress keeps its latest calls
   in view.
-- **Composer.** One raised, rounded box holds the draft, its hint, and a single
-  send control that becomes Stop while the agent works. The draft is one line
-  with placeholder text when empty and grows as it is written, to about a third
-  of the window; past that it scrolls, with a thin position marker in the right
-  padding. The hint always says what the keys do now. Directly beneath the box,
-  a context line names the Project, Machine, and checkout branch, the thread's
-  saved model, and the approval rule.
+- **Composer.** One raised, rounded box holds the draft, a short key hint, and
+  Send. Stop remains a separate neutral control during a run. Enter follows up;
+  Option-Enter steers. The draft grows from one line to about a third of the
+  window, then scrolls. Waiting and unconfirmed messages form a compact,
+  scrollable stack above it, with explicit mode and Cancel or Retry controls.
+  Below it, wrapping controls show model, supported thinking level, approval for
+  the next message, and context use. Model names truncate; actions remain legible.
+  Project and machine stay in navigation and the header. A running turn names
+  its own approval mode, distinct from the next-message choice.
 - **Suggestions.** `@` lists files and `/` lists local commands in one compact
   list that floats just above the composer, at most eight 28-point rows and 560
   points wide. A file row shows the name first, then its directory. Matched

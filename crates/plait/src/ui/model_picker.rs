@@ -25,6 +25,7 @@ pub(super) enum ModelPurpose {
     NewThread,
     /// Save the chosen model as the host's default for new threads.
     DefaultModel,
+    ThreadModel,
 }
 
 /// What an open picker's rows and footer were built from. When it changes,
@@ -32,12 +33,20 @@ pub(super) enum ModelPurpose {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct PickerStamp {
     connected: bool,
-    models: usize,
+    models: Vec<(ModelChoice, String, bool)>,
     default: Option<ModelChoice>,
     choosing: Option<ModelChoice>,
     saving: bool,
     message: Option<String>,
     favorites: Vec<ModelKey>,
+}
+
+/// Equality over every catalog field a picker row displays, including availability.
+fn catalog_stamp(models: &[Model]) -> Vec<(ModelChoice, String, bool)> {
+    models
+        .iter()
+        .map(|m| (m.choice(), m.name.clone(), m.authenticated))
+        .collect()
 }
 
 /// The identifier shown beside a model's display name.
@@ -158,7 +167,7 @@ impl Plait {
         let status = self.host.status.as_ref();
         PickerStamp {
             connected: self.host.connected,
-            models: status.map_or(0, |status| status.models.len()),
+            models: status.map_or_else(Vec::new, |status| catalog_stamp(&status.models)),
             default: status.and_then(|status| status.default_model.clone()),
             choosing: self.host.settings_model.clone(),
             saving: self.host.saving,
@@ -169,6 +178,13 @@ impl Plait {
 
     /// Rebuild an open picker when the host state or favorites behind it changed.
     pub(super) fn sync_picker(&mut self, cx: &mut Context<Self>) {
+        if self
+            .overlay
+            .as_ref()
+            .is_none_or(|overlay| overlay.stamp.is_none())
+        {
+            return;
+        }
         let stamp = self.picker_stamp();
         let Some(overlay) = self.overlay.as_mut() else {
             return;
@@ -271,10 +287,16 @@ impl Plait {
             ModelPurpose::DefaultModel => {
                 ("Choose the default model", "Search models for the default…")
             }
+            ModelPurpose::ThreadModel => ("Change thread model", "Search models for this thread…"),
         };
         let status = self.host.status.as_ref().filter(|_| self.host.connected);
+        let preferred = if purpose == ModelPurpose::ThreadModel {
+            self.host.snapshot.as_ref().map(|snapshot| &snapshot.model)
+        } else {
+            status.and_then(|status| status.default_model.as_ref())
+        };
         let default = status.and_then(|status| {
-            let default = status.default_model.as_ref()?;
+            let default = preferred?;
             let model = status
                 .models
                 .iter()
@@ -449,7 +471,9 @@ impl Plait {
 #[cfg(test)]
 mod tests {
     // Named imports: a glob would bring in GPUI's own `test` attribute.
-    use super::{Item, Model, ModelChoice, Preferences, picker_items, usable_models};
+    use super::{
+        Item, Model, ModelChoice, Preferences, catalog_stamp, picker_items, usable_models,
+    };
 
     fn model(provider: &str, model_id: &str, authenticated: bool) -> Model {
         Model {
@@ -596,5 +620,19 @@ mod tests {
         preferences.toggle_favorite(&choice("google", "gemini"));
         preferences.record_recent(&choice("router", "vendor/opus"));
         assert_eq!(order(&preferences), vec!["vendor/opus", "sol", "luna"]);
+    }
+    #[test]
+    fn catalog_changes_refresh_open_pickers_even_at_the_same_size() {
+        let before = catalog();
+        let mut after = before.clone();
+        after[0].authenticated = false;
+        assert_ne!(catalog_stamp(&before), catalog_stamp(&after));
+        after = before.clone();
+        after[0].name = "Renamed model".into();
+        assert_ne!(catalog_stamp(&before), catalog_stamp(&after));
+        after = before.clone();
+        after.swap(0, 1);
+        assert_ne!(catalog_stamp(&before), catalog_stamp(&after));
+        assert_eq!(catalog_stamp(&before), catalog_stamp(&before));
     }
 }

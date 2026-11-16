@@ -206,8 +206,9 @@ last unsaved keystrokes. Accepted work remains in the independent host store.
 
 If recovery reports an error, do not delete or reset the journal. Close duplicate
 Plait clients first. Keep a copy of the file before repair; malformed or unknown
-versions are left intact. A conflicting saved checkout/model disables sending
+versions are left intact. A conflicting saved checkout disables sending
 for that thread rather than moving an old draft or request to a new identity.
+Changing a thread’s model does not discard its draft or saved selection.
 For development with a different `PLAIT_HOST_STORE`, use a separate absolute
 `PLAIT_DESKTOP_STATE_DIR`. Reconnect does not erase local state or restart work.
 
@@ -240,6 +241,7 @@ path alongside separate `PLAIT_HOST_STORE` and `PLAIT_DESKTOP_STATE_DIR` paths.
 | Cmd-Q | Quit Plait | `app.quit` |
 | Cmd-N | New Thread | `thread.new` |
 | Cmd-Shift-N | New Thread with Model… | `thread.new_with_model` |
+| Cmd-Shift-M | Change Thread Model… | `thread.switch_model` |
 | Cmd-O | Open Repository… | `repository.open` |
 | Cmd-R | Refresh Git Status | `git.refresh` |
 | Cmd-W | Close Window | `window.close` |
@@ -282,12 +284,38 @@ picker is the same list over the host's model catalog.
 | Cmd-D | Model picker: add or remove a favorite |
 | Escape | Close and return focus to where it was |
 
+### Working during a run
+
+With a version 3 host, Enter queues a follow-up and Option-Enter sends steering.
+Steering joins the current run at its next step and uses that run's approval
+mode; if it is not taken in time, it becomes a follow-up. Stop stays beside the
+send control and clears the host queue as well as stopping the run.
+
+The stack above the composer lists waiting messages in order. Cancel removes
+one; Edit cancels it back into an empty draft. Edit is offered for messages sent by this desktop, whose complete text is
+saved locally; the host only sends a bounded preview. If the
+draft changes while cancellation is in flight, the cancelled text is copied to
+the clipboard and the draft stays intact. Unconfirmed messages each offer Retry
+safely, using their original request ID and approval mode. Reopening sends
+nothing. A held queue resumes from its oldest input on the next send.
+
+Choose the model beneath the composer, or Cmd-Shift-M, to change this thread's
+next run. The adjacent thinking control lists exactly the chosen model's
+supported levels. Both are locked during a run. The next-message approval
+control does not change an active run or previously queued messages.
+
+Context usage shows the latest response, not cumulative cost. Hover or activate
+it for exact token counts. At 75% it says high; at 90% it says nearly full. It
+stays hidden when context usage or the window size is unknown. Older hosts keep
+their existing send-when-idle behavior and have no per-thread model controls.
+
 ### Text and controls
 
 | Key | Action |
 | --- | --- |
-| Enter / Shift-Enter | Submit the draft / insert a line break |
-| Cmd-Enter | Submit the draft, even with a suggestion list open |
+| Enter / Shift-Enter | Send, or queue a follow-up during a run / insert a line break |
+| Cmd-Enter | Send or queue a follow-up, even with a suggestion list open |
+| Option-Enter | Steer the running agent at its next step (version 3 host) |
 | Up / Down in the draft | On the first line, Up recalls earlier messages sent in this thread; Down returns toward the draft |
 | @ | List checkout files at the start of a word; type to filter |
 | / | List local commands when it is the first character of an empty draft |
