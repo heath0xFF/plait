@@ -71,8 +71,11 @@ writer lock. The desktop is a client, not the owner of an agent run. Window
 closure drops subscriptions; it does not stop execution. See [HOST.md](HOST.md)
 for the exact protocol, storage location, launch commands, and safety policy.
 
-The host owns model discovery, existing Pi authentication, thread persistence,
-and the default model. The desktop receives availability, not credentials.
+The host owns model discovery, Pi authentication, thread persistence, and the
+default model. The desktop receives availability, not credentials. The host's
+[provider sign-in operations](HOST.md#provider-sign-in) take a pasted key or
+sign-in code from a client once and store it in Pi's files; the Settings UI for
+them is planned.
 Each thread keeps its exact provider/model pair. Saving a default does not
 change an existing thread.
 

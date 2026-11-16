@@ -19,6 +19,7 @@ import { update } from './transcript.ts';
 import { restoreOwned } from './provenance.ts';
 import { RunAuthorization } from './authorization.ts';
 import { InteractiveApproval, automaticApproval } from './approval.ts';
+import type { Providers } from './providers.ts';
 
 type Session = ToolState & {
   harness?: Harness; root?: Conversation; watch?: ConversationWatch; finished?: Promise<void>;
@@ -31,6 +32,8 @@ export class Runtime {
   models: Models;
   directory: string;
   authenticated: Set<string>;
+  // Provider sign-in operations; a reload replaces `models` and `authenticated` together.
+  providers?: Providers;
   private listeners = new Set<(id: string) => void>();
   subscribe(listener: (id: string) => void) {
     this.listeners.add(listener);
@@ -55,6 +58,7 @@ export class Runtime {
   }
   snapshot(id: string) { return this.sessions.get(id)?.snapshot ?? this.store.get(id); }
   async handle(input: unknown): Promise<unknown> {
+    if (this.providers?.handles(input)) return this.providers.handle(input);
     const request = validate(input);
     const protocol = version(request);
     const result = await this.dispatch(request, protocol);
@@ -121,10 +125,12 @@ export class Runtime {
   async open(session: Session): Promise<void> {
     if (session.harness) return;
     const snapshot = session.snapshot;
+    // A provider reload swaps the registry; this run keeps the one it started with.
+    const models = this.models;
     const database = await openNodeSqliteDatabase(join(this.directory, `${snapshot.id}.sqlite`));
     await database.exec('PRAGMA synchronous=FULL');
     const harness = await Harness.open(await SqliteStorage.open(database), {
-      models: () => session.authorization.active ? this.models : createModels(), registry: this.registry(session),
+      models: () => session.authorization.active ? models : createModels(), registry: this.registry(session),
       settings: { retry: { maxRetries: 0 }, stream: { timeoutMs: 60000 }, toolExecution: 'sequential' },
     }, context);
     session.harness = harness;
@@ -233,6 +239,7 @@ export class Runtime {
       await session.finished;
       await session.harness?.close(context);
     }
+    await this.providers?.close();
     this.store.close();
   }
   async reply(input: unknown) {

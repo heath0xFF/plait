@@ -89,6 +89,25 @@ The optional headless PNG export is ignored in the normal Rust suite and runs
 explicitly when requested; CI does not run it on either platform. See
 [UI checks](../CONTRIBUTING.md#ui-checks).
 
+## Provider sign-in
+
+The [provider sign-in operations](HOST.md#provider-sign-in) landed after the
+release baseline and have development evidence only:
+
+- Scripted providers cover the sign-in states, cancellation, expiry, bounds,
+  key storage, and the absence of secrets in every reply.
+- Pi's real registry and credential store, in a disposable agent directory with
+  outbound requests blocked, cover key storage and file modes, literal keys, and
+  `models.json` edits. Connection checks use a local server.
+- The host binary with a scripted sidecar covers a reload during an active run,
+  operations over the socket, and sign-in cleanup at shutdown. The production
+  sidecar entry is started once against an empty disposable Pi directory.
+
+No test contacts a provider. Pi's real sign-in flows for Anthropic, OpenAI, and
+the others, including the browser redirect to the loopback listener and token
+refresh afterward, have not been run through the host. They need acceptance
+with real accounts once the Settings UI exists.
+
 ## Known gaps
 
 - Gatekeeper approval, installed authentication, and a live-model source change

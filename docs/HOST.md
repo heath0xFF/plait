@@ -26,7 +26,8 @@ runtime dependencies; it does not need a development checkout or shell Node.
   Socket: `STORE/host.sock`. Store overrides must be absolute.
 - The store directory is mode 0700 and socket mode 0600. A lifetime OS writer
   lock on `STORE/host.lock` rejects a second host, including after a crash.
-- The Rust host owns and monitors the Node sidecar. No TCP port is opened.
+- The Rust host owns and monitors the Node sidecar. No TCP port is opened,
+  except the loopback callback of a pending [provider sign-in](#provider-sign-in).
   Sidecar failure closes the host. Development restart is explicit through
   `start`; the installed Mac LaunchAgent restarts failed hosts. Neither route
   replays interrupted work. The packaged host uses adjacent immutable Node and
@@ -76,7 +77,8 @@ provider error bodies. Errors are not accepted submissions.
 ```
 
 `default_model` is null or `{"provider":"anthropic","model_id":"MODEL"}`.
-Catalog and auth status come from Pi ModelRuntime; no credentials cross the socket.
+Catalog and auth status come from Pi ModelRuntime. No reply carries a credential;
+[Provider sign-in](#provider-sign-in) names the requests that carry one to the host.
 `set_default_model` result: `{"default_model":{"provider":"anthropic","model_id":"MODEL"}}`.
 `list_threads` result: `{"threads":[{"id":"HOST_UUID","checkout":"/canonical/checkout","model":{"provider":"anthropic","model_id":"MODEL"},"status":"idle"}]}` (latest 100 summaries).
 `create_thread` result: `{"thread":SNAPSHOT}`. It never starts model execution.
@@ -181,6 +183,211 @@ ignored-path protection, checked file helpers, and the command sandbox still
 apply in both modes. Automatic approval removes the prompt, not those checks.
 There is no scheduler or persisted grant in this contract. Future automation
 grants require separate protocol, persistence, and permission review.
+
+## Provider sign-in
+
+These operations change which providers the host can use while it runs. The
+desktop Settings UI that calls them is not shipped yet. They are additions, not
+a protocol version: each accepts the optional `protocol_version` and replies the
+same for every version. A host without them rejects the operation name with
+`invalid_request`.
+
+```json
+{"op":"reload_providers"}
+{"op":"list_providers"}
+{"op":"start_sign_in","provider":"anthropic","method":"browser"}
+{"op":"sign_in_status","sign_in_id":"HOST_UUID"}
+{"op":"answer_sign_in","sign_in_id":"HOST_UUID","input":"Pasted code or choice ID"}
+{"op":"cancel_sign_in","sign_in_id":"HOST_UUID"}
+{"op":"set_provider_key","provider":"openrouter","key":"SECRET"}
+{"op":"sign_out_provider","provider":"openrouter"}
+{"op":"add_endpoint","id":"home","name":"Home server","base_url":"http://127.0.0.1:8080/v1","model_ids":["MODEL"],"key":"SECRET"}
+{"op":"update_endpoint","id":"home","name":"Home server","base_url":"http://127.0.0.1:8080/v1","model_ids":["MODEL"],"key":"SECRET"}
+{"op":"remove_endpoint","id":"home"}
+{"op":"check_endpoint","base_url":"http://127.0.0.1:8080/v1","key":"SECRET"}
+{"op":"check_endpoint","id":"home"}
+```
+
+`method` and every `key` are optional. `update_endpoint` needs only `id`; a field
+left out keeps its saved value. String values are trimmed and must not contain
+control characters. Provider and endpoint IDs are at most 128 bytes; `key` and
+`input` are at most 8192 bytes.
+
+### What crosses the socket
+
+Credentials stay in Pi's own files in Pi's agent directory (`~/.pi/agent`, or
+`PI_CODING_AGENT_DIR`): `auth.json` for sign-ins and keys, `models.json` for
+custom endpoints. The host store holds none of them.
+
+- **Desktop to host, once each:** an API key in `key`, and the text a user pastes
+  to finish a sign-in in `input`. Each travels in one request on the owner-only
+  socket. The host passes it to Pi and keeps no other copy. The `key` of
+  `check_endpoint` with `base_url` is used for that one check and not stored.
+- **Host to desktop, never:** a key, token, or any other stored credential; a
+  credential file path; a provider response body; the pasted `input`. No
+  operation reads a stored credential back.
+- **Host to desktop, for the user to act on:** the sign-in `url` and, in a device
+  flow, the `user_code`. These are one-time values of a pending sign-in, not
+  credentials, but the address can hold the flow's state. Open it; do not log or
+  save it. The host drops both when the sign-in ends.
+- Notifications still carry thread IDs only.
+
+### Reload
+
+`reload_providers` result: `{"providers":[PROVIDER]}`. The host reads `auth.json`,
+`models.json`, and Pi's cached catalogs again, with no network request. It builds
+a complete registry first, then replaces the model catalog and the authenticated
+set of `status` in one step. If loading fails or exceeds 5 seconds, the reply is
+`internal` and the previous registry stays in use.
+
+A run in progress keeps the registry it started with, including a provider or
+endpoint that the reload removed. Credentials are read from Pi's store for each
+model request, so signing out of a provider fails a run that needs it at its
+next model request.
+Every operation below that changes a credential or an endpoint reloads before it
+replies; the next `status` already shows the change.
+
+### Provider list
+
+`list_providers` result: `{"providers":[PROVIDER]}`, one entry per Pi provider.
+All keys are always present.
+
+```json
+{"id":"anthropic","name":"Anthropic","kind":"builtin","authenticated":false,"credential":"none","model_count":18,"sign_in":{"name":"Anthropic (Claude Pro/Max)","subscription":true},"api_key":{"name":"Anthropic API key"},"endpoint":null}
+{"id":"home","name":"Home server","kind":"custom","authenticated":true,"credential":"external","model_count":1,"sign_in":null,"api_key":{"name":"API key"},"endpoint":{"base_url":"http://127.0.0.1:8080/v1","api":"openai-completions","model_ids":["MODEL"]}}
+```
+
+- `kind`: `builtin` ships with Pi; `custom` is declared in `models.json`.
+- `authenticated` matches the `authenticated` flag of that provider's models in `status`.
+- `credential`: `sign_in` or `api_key` is stored in `auth.json` and can be removed
+  with `sign_out_provider`. `external` means the provider works through an
+  environment variable, a key in `models.json`, or ambient cloud credentials,
+  which the host does not manage. `none` means not authenticated.
+- `sign_in` is null or names the sign-in `start_sign_in` runs; `subscription` tells
+  a plan such as Claude Pro or ChatGPT Plus from an ordinary account sign-in.
+- `api_key` is null when `set_provider_key` cannot apply. A provider can offer both
+  methods, one, or neither.
+- `endpoint` is null for built-in providers. `base_url` is shown without any user
+  name, password, query, or fragment, and is null if it cannot be parsed. `api`
+  is the API of the first model.
+
+### Subscription sign-in
+
+`start_sign_in`, `sign_in_status`, `answer_sign_in`, and `cancel_sign_in` all
+return `{"sign_in":SIGN_IN}`. All keys are always present.
+
+```json
+{"id":"HOST_UUID","provider":"anthropic","state":"waiting","url":"https://provider.example/authorize?...","user_code":null,"input":{"kind":"code","message":"Complete login in your browser, or paste the authorization code / redirect URL here:","placeholder":"http://localhost:53692/callback","required":false,"choices":[]},"message":"Complete login in your browser. If the browser is on another machine, paste the final redirect URL here.","expires_in_seconds":598,"error":null}
+```
+
+The host runs Pi's sign-in flow for the provider and stores the result where Pi
+stores it. The desktop shows what the flow asks for and relays answers:
+
+- `state`: `starting` (nothing to show yet), `waiting` (the user must act),
+  `finishing` (the host is exchanging the result), then one of `signed_in`,
+  `failed`, `cancelled`, or `expired`. Those four are final.
+- `url`: open it in the user's browser. It is always `http` or `https`.
+  `user_code`: show it; the user types it on that page (device flows).
+- `input` is null or one question. `kind` is `code` (an authorization code or the
+  final redirect URL), `choice` (answer with one `choices[].id`), `text`, or
+  `secret`. `required` is false only for a `code` when the address returns the
+  browser to this machine: the sign-in then normally completes by itself, and
+  the field is a fallback if the redirect cannot arrive. Keep showing it.
+- `message` is Pi's current instruction or progress text, or null.
+- `error` is null unless `failed`; it is `{code,message}` with fixed host text.
+- `signed_in` is reported after the reload, so `status` already agrees.
+
+Pi's flows for Anthropic and OpenAI Codex first ask for a method. If `method`
+names one of the offered choices, the host answers that first question; otherwise
+it is passed on as a `choice`. A browser method listens on a loopback TCP port
+(Pi's callback server on `127.0.0.1`, on a port Pi chooses) until the sign-in
+ends. Pi's flow contacts the provider to exchange the result; the desktop does not.
+
+Limits: four sign-ins in progress; one per provider, where a new start cancels the
+earlier one; expiry after 10 minutes, or sooner when a device code expires
+sooner. Final states stay readable for 5 minutes, at most 16 records. Nothing is
+saved: a host restart forgets every sign-in, and host shutdown cancels those in
+progress and closes their listeners. `start_sign_in` and `answer_sign_in` wait up
+to 3 seconds for the flow to show something or finish, then reply with the state
+so far. Read `sign_in_status` about once a second while `starting`, `waiting`, or
+`finishing`. Other requests queue behind a waiting reply.
+
+### API keys and sign-out
+
+`set_provider_key` and `sign_out_provider` return `{"provider":PROVIDER}`.
+`set_provider_key` stores or replaces the key through Pi's own key setup. Pi keeps
+one credential per provider, so a key replaces a subscription sign-in and a
+sign-in replaces a key. `auth.json` is created with mode 0600, and the host
+restores 0600 after a write if group or other access was present. The key is
+stored as literal text: Pi's `!command` and `$NAME` forms are escaped, so a
+request cannot make the host run a command or read its environment. A provider
+whose key setup asks for more than one secret value (for example Amazon Bedrock)
+returns `invalid_request`; configure it in Pi.
+
+`sign_out_provider` removes the stored credential and is not an error when none
+exists. It cannot remove an `external` credential. Both operations first cancel a
+pending sign-in for the same provider.
+
+### Custom endpoints
+
+`add_endpoint` and `update_endpoint` return `{"provider":PROVIDER}`;
+`remove_endpoint` returns `{"removed":"home"}`. They edit one provider entry in
+Pi's `models.json`:
+
+```json
+{"providers":{"home":{"name":"Home server","baseUrl":"http://127.0.0.1:8080/v1","api":"openai-completions","apiKey":"none","models":[{"id":"MODEL"}]}}}
+```
+
+- New entries use the `openai-completions` API. `apiKey` `"none"` is Pi's
+  documented placeholder for servers without a key; it makes the endpoint usable
+  and is not a secret. A real `key` goes to `auth.json` like any API key and takes
+  precedence. `sign_out_provider` removes it again.
+- `id`: 1 to 64 lowercase letters, digits, dots, hyphens, or underscores, starting
+  with a letter or digit, and not a built-in provider ID. `name`: at most 128 bytes.
+  `base_url`: an `http` or `https` URL of at most 2048 bytes with no user name,
+  password, query, or fragment. `model_ids`: 1 to 200 distinct IDs of at most 256
+  characters.
+- Every other entry and every field the host does not set is written back as
+  read, including a hand-written `apiKey`, `headers`, `compat`, and per-model
+  fields of models that stay. Indentation and file mode are kept; a new file is
+  0600. The write is a synced temporary file and one rename beside the real
+  file, so a symlinked `models.json` stays a symlink.
+- The host refuses with `conflict`, and writes nothing, when `models.json` is
+  not plain JSON (Pi also accepts comments, which a rewrite would delete), has
+  an unexpected layout, or changed on disk during the edit. After writing, the
+  host reloads and checks that Pi reports the endpoint. Pi ignores the whole
+  file when any entry breaks its schema; in that case the host restores the
+  previous file and returns `conflict`.
+- Built-in providers cannot be edited or removed here. `remove_endpoint` deletes
+  the stored key first, then the entry.
+- With `key`, `add_endpoint` and `update_endpoint` save the entry first. If
+  storing the key then fails, the entry remains and the reply is an error.
+
+`check_endpoint` sends one `GET BASE_URL/models` and returns:
+
+```json
+{"reachable":true,"reason":null,"status":200,"model_ids":["MODEL"],"truncated":false}
+{"reachable":false,"reason":"unauthorized","status":401,"model_ids":[],"truncated":false}
+```
+
+With `base_url` it uses that address and the optional `key`. With `id` it checks
+a saved custom endpoint with its saved key and headers. `reason` is `timeout`,
+`unreachable`, `unauthorized` (401 or 403), `not_found` (404), `http_error`, or
+`invalid_response`; `status` is null without an HTTP response. Limits: 5 seconds,
+a 1 MiB response, the first 500 model IDs (`truncated` flags more). Redirects are
+reported as `http_error`, not followed. The request goes only to the address
+named, and only when this operation is sent. Other requests queue until it
+replies.
+
+### Errors
+
+The reply codes are the existing ones. `invalid_request`: malformed input, an
+unknown field, a provider that lacks the requested method, or a built-in provider
+given as an endpoint. `not_found`: unknown provider, endpoint, or sign-in ID.
+`busy`: four sign-ins already in progress. `conflict`: an existing endpoint or
+provider ID, an `answer_sign_in` when no input is pending, or a `models.json` the
+host will not rewrite. `internal`: Pi could not store, remove, or reload. Messages
+name the field at fault and never repeat its value.
 
 ## Safety boundary
 
