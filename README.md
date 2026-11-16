@@ -6,9 +6,9 @@ Open a repository, start a conversation, approve edits and commands, and review
 what changed. An independent host runs the agent, so closing the desktop does
 not stop accepted work. Reopen it to return to the same thread and saved draft.
 
-[Download preview](https://github.com/heath0xFF/plait/releases/tag/v0.1.0-preview.1) · [Documentation](docs/README.md) · [Contribute](CONTRIBUTING.md)
+[Download preview](https://github.com/heath0xFF/plait/releases/tag/v0.1.0-preview.2) · [Documentation](docs/README.md) · [Contribute](CONTRIBUTING.md)
 
-![Plait showing a completed coding task, native code block, tool results, and saved draft](https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.1/installed-client-coding.png)
+![Plait showing a completed coding task, native code block, tool results, and saved draft](https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.2/installed-client-coding.png)
 
 *Installed Mac app. Scripted provider; real approved source edits and Cargo tests.*
 
@@ -20,13 +20,13 @@ your own model-provider account. The installer includes the host and Node runtim
 **This preview is unsigned and not notarized.** Review the
 [Mac setup guide](docs/MACOS.md) before installing. Do not disable Gatekeeper.
 
-[Download the DMG](https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.1/Plait-0.1.0-de4f1fe115d5-macos-arm64.dmg),
+[Download the DMG](https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.2/Plait-0.1.0-5316950cf690-macos-arm64.dmg),
 open it, and run **Install Plait.pkg**. Or install from Terminal:
 
 ```sh
 curl --proto '=https' -fsSL \
-  https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.1/install.sh |
-  bash -s -- --version v0.1.0-preview.1 --allow-unsigned
+  https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.2/install.sh |
+  bash -s -- --version v0.1.0-preview.2 --allow-unsigned
 ```
 
 Run as your normal user. The script requests administrator access for package
