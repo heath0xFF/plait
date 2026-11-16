@@ -23,7 +23,8 @@ ui/                     GPUI layout, actions, focus, lists, theme
   palette.rs            search field over a ranked list; ranking off the UI thread
   model_picker.rs       model catalog as a palette; default, favorites, new thread
   text_field.rs         single-line input: IME, selection, clipboard, undo
-  navigation.rs         Project → Machine → Thread
+  navigation.rs         virtualized projects and threads, filtering and management
+  navigation_host.rs    cross-checkout listing, live summaries, and notifications
   conversation.rs       no-thread state and the Git inspector
   live_conversation.rs  real host messages, ordered tools, and approvals
   selection.rs          text selection, copy, and link clicks in the conversation
@@ -58,6 +59,7 @@ model.rs                plain Rust data, no GPUI
 machine.rs              this machine's display name
 preferences.rs          desktop-only preferences and Cmd-number order
 fuzzy.rs                subsequence matching and scoring for pickers
+navigation.rs           project grouping, activity tracking, filtering, and jump order
 session.rs              private desktop journal, identity checks, writer lock
 markdown.rs             plain text blocks and style ranges, parsed off render
 highlight.rs            lexical syntax classes for fenced and tool code
@@ -108,8 +110,10 @@ The host also owns each thread's title, timestamps, archive flag, and the queue
 of inputs waiting behind a run. A snapshot is the bounded live tail of a thread.
 The complete conversation is read on demand, in pages, from the thread's saved
 conversation store; an idle thread's store is opened read-only for that, so a
-history read cannot recover or run anything. The desktop loads stored history through these operations. Other version 3
-features are described separately as their controls land.
+history read cannot recover or run anything. The desktop loads stored history,
+shows reasoning, and uses live summaries, host-owned titles, rename, and archive.
+Composer controls configure models and thinking and submit follow-up or steering
+messages through the same negotiated version 3 contract.
 
 The desktop uses bounded snapshot subscriptions. Runtime state changes signal
 the host through a private inherited Unix socket, separate from request/reply
@@ -335,18 +339,50 @@ the Git inspector is hidden, favorite and recently used models, and shortcut
 overrides by stable action ID. `PLAIT_DESKTOP_PREFERENCES_FILE` selects an
 absolute preferences path for an isolated development instance. The model
 lists are provider and model identifiers only, bounded in length and count; the
-file never holds a credential.
+file never holds a credential. The navigation section also stores opened and
+hidden checkout paths, up to 1,000 observed thread activity stamps and unread
+markers, and the notification preference. Older files load with empty navigation
+state; thread content stays in the host and draft journal.
 
 The file is read and written on the background executor. A missing file means
 defaults. A malformed or oversized file is reported in Settings and left in
 place; defaults apply. Saves replace the file atomically, and Settings says
-"Saved" only after the write succeeds. Only the newest save reports a result.
+"Saved" only after the write succeeds. Writes are serialized, with intervening
+changes coalesced to the newest snapshot; only the newest save reports a result.
+An unsafe or failed load disables writes for that window, preserving the file.
 Unknown fields are ignored so a newer client's file still loads, and a file
 written before a field existed loads with that field's default.
 
-Cmd-1 to Cmd-9 count real host threads in sidebar order on the local machine.
-A machine or project selects its first thread; a row with no thread does nothing.
-Jumping expands collapsed parents.
+Cmd-1 to Cmd-9 count matching real host threads in project order on the local
+machine. A machine or project selects its first matching thread; an empty row
+does nothing. Jumping expands collapsed parents.
+
+### Projects and thread activity
+
+With protocol version 3, the desktop subscribes before paging the complete thread
+list across checkouts. Live summaries replace their matching rows; old listings
+are replaced on reconnect. The host watches its newest 200 threads. Older loaded
+threads remain readable and explicitly refreshable, with this limit shown above
+the list. A failed watch is reported as paused updates rather than current data.
+No subscription is polled while idle.
+
+Projects come from host checkout paths and opened folders. Hidden projects stay
+in the host and can be reopened through the palette. Folder availability checks
+run in the background. Successful Git status results normalize a selected
+subdirectory or symlink to its checkout root. Switching projects preserves
+per-thread composers and pending request IDs, changes the repository epoch, and
+cancels only the selected snapshot subscription. It never sends Stop.
+
+A completion, failure, interruption, stop, or approval change marks an unseen
+thread until it is opened. Observations and unread markers persist in desktop
+preferences. The initial listing updates markers but does not post notifications.
+While another thread is visible or the window is inactive, later attention-worthy
+changes request window attention and post a GPUI system notification. Opening a
+notification selects its thread. Alerts off suppresses both external signals,
+while in-app markers remain. GPUI checks for a bundle identifier before using
+macOS UserNotifications and requests authorization on first delivery. Unbundled
+builds and denied authorization retain in-app markers and the attention request.
+No test posts a real system notification.
 
 ### Desktop recovery
 

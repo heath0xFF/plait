@@ -22,3 +22,4 @@ pub mod transcript;
 pub mod update;
 
 pub mod history;
+pub mod navigation;

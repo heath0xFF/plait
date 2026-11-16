@@ -10,6 +10,7 @@ mod live_conversation;
 mod markdown;
 mod model_picker;
 mod navigation;
+mod navigation_host;
 mod palette;
 mod selection;
 mod session;
@@ -63,7 +64,12 @@ actions!(
         NewThreadWithModel,
         SwitchThreadModel,
         CommandPalette,
-        ToggleInspector
+        ToggleInspector,
+        RenameThread,
+        ArchiveThread,
+        ToggleArchived,
+        FilterThreads,
+        ToggleNotifications
     ]
 );
 
@@ -74,6 +80,7 @@ pub struct Plait {
     state: AppState,
     host: HostState,
     host_watch: Option<host::WatchLease>,
+    navigation: navigation::Navigation,
     composers: HashMap<String, Entity<composer::Composer>>,
     live_scroll: ListState,
     live_count: usize,
@@ -130,6 +137,7 @@ impl Plait {
             state,
             host,
             host_watch: None,
+            navigation: navigation::Navigation::new(cx),
             composers: HashMap::new(),
             live_scroll: ListState::new(0, ListAlignment::Bottom, px(300.)),
             live_count: 0,
@@ -168,6 +176,7 @@ impl Plait {
         };
         this.live_scroll
             .set_scroll_handler(cx.listener(Self::scroll_history));
+        this.initialize_navigation(window, cx);
         this.pump(cx);
         this.load_preferences(cx);
         // An open picker shows host state; keep it current as replies land.
@@ -197,11 +206,7 @@ impl Plait {
             let (job, reply) = task.await;
             let _ = this.update(cx, |this, cx| {
                 this.state.repository.complete(job, reply);
-                if let Some(snapshot) = this.state.repository.snapshot.ready()
-                    && let Some(name) = snapshot.root.file_name()
-                {
-                    this.state.projects[0].name = name.to_string_lossy().into_owned();
-                }
+                this.normalize_checkout(cx);
                 this.deliver_files(cx);
                 this.pump(cx);
                 cx.notify();
@@ -213,15 +218,16 @@ impl Plait {
     /// Move to the next or previous host thread, wrapping. With no selection,
     /// forward starts at the first thread and backward at the last.
     fn step_thread(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let count = self.host.threads.len();
+        let indices = self.filtered_threads(cx);
+        let count = indices.len();
         if count == 0 {
             return;
         }
-        let current = self
-            .host
-            .selected
-            .as_ref()
-            .and_then(|id| self.host.threads.iter().position(|thread| &thread.id == id));
+        let current = self.host.selected.as_ref().and_then(|id| {
+            indices
+                .iter()
+                .position(|&index| &self.host.threads[index].id == id)
+        });
         let next = match (current, forward) {
             (Some(index), true) => (index + 1) % count,
             (Some(index), false) => (index + count - 1) % count,
@@ -229,7 +235,7 @@ impl Plait {
             (None, false) => count - 1,
         };
         self.interaction = Some(std::time::Instant::now());
-        let id = self.host.threads[next].id.clone();
+        let id = self.host.threads[indices[next]].id.clone();
         self.select_host_thread(id, window, cx);
     }
 
@@ -338,6 +344,12 @@ impl Plait {
         } else {
             self.close_provider_form(cx);
         }
+        if !open
+            && !self.show_changes
+            && let Some(id) = self.host.selected.clone()
+        {
+            self.mark_thread_read(&id, cx);
+        }
         self.new_thread_open = false;
         cx.notify();
     }
@@ -408,6 +420,12 @@ impl Plait {
 
     fn show_tab(&mut self, changes: bool, cx: &mut Context<Self>) {
         self.show_changes = changes;
+        if !changes
+            && !self.settings_open
+            && let Some(id) = self.host.selected.clone()
+        {
+            self.mark_thread_read(&id, cx);
+        }
         cx.notify();
     }
 
@@ -509,7 +527,7 @@ impl Plait {
         note: Option<(&'static str, u32)>,
     ) -> impl IntoElement {
         // Host threads belong to this machine's checkout.
-        let project = &self.state.projects[0];
+        let project = self.active_project();
         let machine = &project.machines[0];
         let branch = self
             .state
@@ -582,7 +600,7 @@ impl Render for Plait {
             self.switch_us = interaction.elapsed().as_micros();
         }
         let wide = Self::wide(window);
-        let project = &self.state.projects[0];
+        let project = self.active_project();
         let machine = &project.machines[0];
         let real = self.host.selected.is_some();
         let connection = if self.host.connecting {
@@ -638,6 +656,40 @@ impl Render for Plait {
             )
             .on_action(cx.listener(|this, _: &ToggleInspector, window, cx| {
                 this.toggle_inspector(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &RenameThread, window, cx| {
+                if let Some(id) = this.host.selected.clone() {
+                    this.begin_rename(id, window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ArchiveThread, window, cx| {
+                if let Some(thread) = this
+                    .host
+                    .threads
+                    .iter()
+                    .find(|thread| Some(&thread.id) == this.host.selected.as_ref())
+                {
+                    this.archive_thread(
+                        thread.id.clone(),
+                        thread.archived != Some(true),
+                        window,
+                        cx,
+                    );
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ToggleArchived, _, cx| {
+                this.navigation.archived = !this.navigation.archived;
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &FilterThreads, window, cx| {
+                this.sidebar = true;
+                window.focus(&this.navigation.filter.focus_handle(cx), cx);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ToggleNotifications, _, cx| {
+                let mut value = this.preferences.value.clone();
+                value.navigation.mute_notifications = !value.navigation.mute_notifications;
+                this.set_preferences(value, jump::PreferenceGroup::View, cx);
             }))
             .on_action(cx.listener(|this, _: &CommandPalette, window, cx| {
                 this.toggle_command_palette(window, cx)

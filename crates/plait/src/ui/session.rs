@@ -6,7 +6,6 @@ use plait_core::{
     host::{MessageRole, ThreadSummary},
     host_state::HostState,
     session::{self, Draft, Journal, Session, Thread},
-    state::project_name,
 };
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
@@ -162,21 +161,45 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.host.creating || self.host.pending_create.is_some() {
+            self.notice =
+                Some("Resolve the pending thread creation before changing checkout.".into());
+            cx.notify();
+            return;
+        }
         self.capture_session(cx);
-        self.state.projects[0].name = project_name(&path);
+        let mut preferences = self.preferences.value.clone();
+        preferences.navigation.open(&path);
+        self.persist_navigation(preferences, cx);
+        self.host.submissions.disconnected();
+        self.history = Default::default();
         let epoch = self.host.epoch + 1;
         let submissions = std::mem::take(&mut self.host.submissions);
-        self.host = HostState::new(path.clone());
-        self.host.epoch = epoch;
+        let live = self.host.protocol() >= 3 && self.host.connected;
+        if live {
+            self.host.checkout = path.clone();
+            self.host.epoch = epoch;
+            self.host.select(None);
+            self.host.submitting = false;
+        } else {
+            self.host = HostState::new(path.clone());
+            self.host.epoch = epoch;
+        }
         self.host.submissions = submissions;
         self.host_watch = None;
         self.session.restore_thread = None;
+        self.navigation.managing = None;
+        self.navigation.rename = None;
+        self.navigation.menu = None;
         self.settings_open = false;
         self.new_thread_open = false;
         self.file_scroll = UniformListScrollHandle::new();
         self.notice = None;
         self.state.repository.open(path);
-        self.reconnect_host(window, cx);
+        self.rebuild_projects(cx);
+        if !live {
+            self.reconnect_host(window, cx);
+        }
         self.pump(cx);
         self.capture_session(cx);
     }
@@ -322,14 +345,26 @@ impl Plait {
         }));
     }
 
-    pub(super) fn thread_title(&self, id: &str) -> String {
-        self.session
-            .data
+    pub(super) fn summary_title(&self, summary: &ThreadSummary) -> String {
+        summary
+            .title
             .as_ref()
-            .and_then(|data| data.threads.get(id))
-            .filter(|_| self.session_accepts_thread(id))
-            .map(|thread| thread.title.clone())
             .filter(|title| !title.is_empty())
+            .cloned()
+            .or_else(|| {
+                self.saved_thread(summary)
+                    .map(|thread| thread.title.clone())
+                    .filter(|title| !title.is_empty())
+            })
+            .unwrap_or_else(|| format!("Thread {}", summary.id.chars().take(8).collect::<String>()))
+    }
+
+    pub(super) fn thread_title(&self, id: &str) -> String {
+        self.host
+            .threads
+            .iter()
+            .find(|thread| thread.id == id)
+            .map(|summary| self.summary_title(summary))
             .unwrap_or_else(|| format!("Thread {}", id.chars().take(8).collect::<String>()))
     }
 

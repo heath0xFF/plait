@@ -105,6 +105,11 @@ pub(super) const ACTIONS: &[AppAction] = &[
     entry("thread.previous", "Previous Thread", "View", Some("cmd-alt-up"), Item, || Box::new(PreviousThread)),
     entry("git.next_file", "Next Changed File", "View", Some("alt-down"), Item, || Box::new(NextFile)),
     entry("git.previous_file", "Previous Changed File", "View", Some("alt-up"), Item, || Box::new(PreviousFile)),
+    entry("thread.rename", "Rename Thread…", "Thread", None, Item, || Box::new(RenameThread)),
+    entry("thread.archive", "Archive or Unarchive Thread", "Thread", None, Item, || Box::new(ArchiveThread)),
+    entry("thread.show_archived", "Show or Hide Archived Threads", "Thread", None, Item, || Box::new(ToggleArchived)),
+    entry("thread.filter", "Find a Thread", "Thread", None, Item, || Box::new(FilterThreads)),
+    entry("thread.notifications", "Mute or Unmute Thread Alerts", "Thread", None, Item, || Box::new(ToggleNotifications)),
     entry("window.minimize", "Minimize", "Window", Some("cmd-m"), Item, || Box::new(Minimize)),
     entry("jump.1", "Jump to Sidebar Item 1", "Navigation", Some("cmd-1"), Hidden, || Box::new(Jump1)),
     entry("jump.2", "Jump to Sidebar Item 2", "Navigation", Some("cmd-2"), Hidden, || Box::new(Jump2)),
@@ -757,7 +762,7 @@ mod tests {
             .iter()
             .map(|menu| menu.name.to_string())
             .collect::<Vec<_>>();
-        assert_eq!(names, vec!["Plait", "File", "View", "Window"]);
+        assert_eq!(names, vec!["Plait", "File", "View", "Thread", "Window"]);
     }
 
     #[test]

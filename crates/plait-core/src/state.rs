@@ -257,6 +257,7 @@ impl AppState {
     pub fn new(path: PathBuf) -> Self {
         Self {
             projects: vec![Project {
+                checkout: path.clone(),
                 name: project_name(&path),
                 machines: vec![Machine {
                     name: machine::local_name(),

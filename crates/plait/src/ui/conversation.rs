@@ -25,7 +25,7 @@ impl Plait {
 
     /// What to say, and offer, when no thread is selected.
     fn idle_prompt(&self) -> (&'static str, String, Option<&'static str>) {
-        let machine = &self.state.projects[0].machines[0].name;
+        let machine = &self.active_project().machines[0].name;
         if self.host.connecting {
             (
                 "Connecting…",

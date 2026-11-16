@@ -8,6 +8,7 @@ pub struct Machine {
 
 /// A checkout and the machines that hold it. Threads come from each machine's host.
 pub struct Project {
+    pub checkout: PathBuf,
     pub name: String,
     pub machines: Vec<Machine>,
 }

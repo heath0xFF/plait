@@ -112,6 +112,14 @@ The response labels the scripted provider. No sample-view code ships in the app.
   pointer and key events sent through GPUI's dispatch in these scenes, not by
   a native pointer.
 
+Project navigation has headless scenes for wide and narrow grouping, unread and
+approval states, archived threads, inline rename, search, empty results, thread
+actions, paused updates, and the older-host fallback. A dispatched UI test switches
+checkouts while preserving each draft and rejecting the previous watch. Core
+tests cover listing identity guards, activity tracking, preference migration, and
+serialized saves. System notification delivery and notification-click activation
+are not exercised by these tests.
+
 The optional headless PNG export is ignored in the normal Rust suite and runs
 explicitly when requested; CI does not run it on either platform. See
 [UI checks](../CONTRIBUTING.md#ui-checks).

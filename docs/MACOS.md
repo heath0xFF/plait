@@ -215,6 +215,37 @@ For development with a different `PLAIT_HOST_STORE`, use a separate absolute
 For a prepared development checkout and a first source-change task, see
 [Build Plait with Plait](SELF-HOSTING.md).
 
+## Projects and threads
+
+Source builds after v0.1.0-preview.2 list projects across the local host's checkouts.
+Opening a folder adds it to the sidebar. Selecting a thread in another project
+switches its conversation, draft, and Git workspace together. The local machine
+appears in workspace context without a redundant row beneath every project.
+Missing folders remain visible as **Missing**; their saved conversations can still
+be read.
+
+Use the sidebar search to filter titles and project names. **Needs me** includes
+unread activity, pending approvals, failures, and interrupted runs. **Archived**
+includes archived conversations. Thread actions and the **Thread** menu offer
+rename and archive/unarchive. Archiving keeps the conversation and does not stop
+an active run. Removing a project from the sidebar keeps its host threads;
+**Show hidden projects** or a project entry in the command palette brings it back.
+
+The host keeps its newest 200 threads live. When more are loaded, the sidebar
+states the limit; use **Refresh all threads and folders** for older threads and
+folder availability. A disconnected thread-list watch reports that updates are
+paused. Hosts using protocol 1 or 2 retain their one-checkout thread listing and
+journal titles; rename and archive require version 3.
+
+**Alerts on/off** controls system notifications and window attention requests.
+Unread markers remain when alerts are off. Alerts occur for a thread you are not
+viewing, or while Plait is inactive, when it finishes, fails, stops, is interrupted,
+or needs approval. Opening a notification selects its thread. A bundled Mac app
+requests notification authorization on first delivery; an unbundled build cannot
+post macOS notifications, and delivery depends on system permission and Focus
+settings. The initial listing never posts alerts. Native delivery and activation
+remain manual acceptance checks.
+
 ## Keyboard controls
 
 When focus is in the conversation, Home or Cmd-Up goes to the beginning of the
