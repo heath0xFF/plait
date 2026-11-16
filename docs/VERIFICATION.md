@@ -6,22 +6,22 @@ and prerequisites, see [Contributing](../CONTRIBUTING.md#required-checks).
 
 ## Release baseline
 
-- **Release:** [v0.1.0-preview.1](https://github.com/heath0xFF/plait/releases/tag/v0.1.0-preview.1)
-- **Source:** [`de4f1fe`](https://github.com/heath0xFF/plait/tree/de4f1fe115d585b7164a9f87d2900ea531812c07)
+- **Release:** [v0.1.0-preview.2](https://github.com/heath0xFF/plait/releases/tag/v0.1.0-preview.2)
+- **Source:** [`5316950`](https://github.com/heath0xFF/plait/tree/5316950cf69035ed99e4c4d35369eb0b4282d589)
 - **Platform:** Apple Silicon, macOS 26 CI
 
-The [release workflow](https://github.com/heath0xFF/plait/actions/runs/43858368092)
-passed before publication. [Linux CI](https://github.com/heath0xFF/plait/actions/runs/43855316624)
+The [release workflow](https://github.com/heath0xFF/plait/actions/runs/43888424840)
+passed before publication. [Linux CI](https://github.com/heath0xFF/plait/actions/runs/43888417201)
 also passed for that source commit. These results do not certify later changes
 or runtime behavior on older macOS versions.
 
 | Check | Evidence |
 | --- | --- |
-| Rust workspace | Formatting, strict Clippy, 88 Mac tests, release builds |
+| Rust workspace | Formatting, strict Clippy, 90 Mac tests, release builds |
 | Production runtime | 105 tests from source and the same 105 with the installed host, Node, and sidecar |
 | Durable runtime recovery | Two separate credential-free process-crash probes |
 | Packaging | 21 tests, native `plutil`, package contents, and read-only DMG mount/content verification |
-| Installed host | Per-user service startup without a developer Node path; real command-sandbox tests |
+| Installed host | Standard service scheduling; three isolated first-start checks within 15 seconds; no developer Node path |
 | Independent updates | Client replacement and staged host update preserve active work; activation follows cleanup |
 | Native recovery | Actual installed client is terminated during an accepted command, then reopens the same thread and unsent draft |
 | Public downloads | All 19 assets downloaded; all eight checksum files, release discovery, and component metadata checked |
@@ -30,6 +30,19 @@ The staged host upgrade uses a labeled fixture with unchanged executable code.
 It does not establish compatibility with unknown future protocols or storage
 migrations. Checksums detect corruption, not publisher identity. The preview is
 **unsigned and not notarized**; see [Mac installation](MACOS.md).
+
+## Recovery and startup regressions
+
+The desktop journal releases its writer lock when its final owner is dropped.
+Regression tests cover a duplicated descriptor and a child held before exec.
+They check immediate reopen, saved data, and exclusive ownership. Host and command
+leases retain their separate lifetimes. See [the recovery fix](https://github.com/heath0xFF/plait/pull/20).
+
+The installed host uses standard service scheduling. Its startup gate creates
+three isolated LaunchAgents with separate stores, empty credential homes, and
+no auto-restart. Each must answer within the existing 15-second bound. The
+[startup correction](https://github.com/heath0xFF/plait/pull/21) also includes a controlled comparison with the retired background policy. These
+are service-readiness checks, not native UI latency or live-account acceptance.
 
 ## Installed coding check
 
@@ -47,8 +60,8 @@ neither submits the draft nor calls the provider again.
 
 Inspected native captures from the release:
 
-- [Accepted command running](https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.1/installed-client-active.png)
-- [Reopened thread, code block, and saved draft](https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.1/installed-client-coding.png)
+- [Accepted command running](https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.2/installed-client-active.png)
+- [Reopened thread, code block, and saved draft](https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.2/installed-client-coding.png)
 
 These checks establish real tool effects and native process recovery, not
 live-model quality, personal-account authentication, or keyboard/IME behavior.
@@ -75,14 +88,6 @@ explicitly when requested. See [UI checks](../CONTRIBUTING.md#ui-checks).
 
 ## Known gaps
 
-- [Managed-host startup (#14)](https://github.com/heath0xFF/plait/issues/14):
-  intermittent startup remains under investigation. The release reached `ready`
-  after 14,019 ms; a successful run is not a root-cause fix. First-failure phase
-  diagnostics are preserved by the installer checks.
-- [Journal lock lifecycle (#19)](https://github.com/heath0xFF/plait/issues/19):
-  a later Mac run failed the immediate flush/drop/reopen test with a writer-lock
-  conflict. The cause and production impact are not established; the earlier
-  release result does not resolve this failure.
 - Gatekeeper approval, installed authentication, and a live-model source change
   on a user-managed Mac need separate acceptance. CI does not replace them.
 - The bundle targets macOS 15+, but CI currently runs on macOS 26. Older-system

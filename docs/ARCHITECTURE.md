@@ -209,7 +209,9 @@ staged, discarded, committed, or repaired in response to a read error.
 The client and host are independent update units. A combined installer carries
 both component packages; either package can also be installed alone. The host
 unit includes Rust, pinned Node, and locked production runtime dependencies.
-It runs as a per-user LaunchAgent, never as a root agent executor.
+It runs as a per-user LaunchAgent, never as a root agent executor. The agent uses
+standard service scheduling because it serves desktop requests, not discretionary
+background work.
 
 Host releases use content-derived directory names and distinct package receipts.
 A shared receipt would let PackageKit remove the old code during an update.
@@ -258,6 +260,10 @@ next to `desktop.json` under `session/`; `PLAIT_DESKTOP_STATE_DIR` can select an
 absolute isolated directory for development. A lifetime writer lock prevents two
 clients from overwriting each other's drafts. Malformed, oversized, future-schema,
 or wrong-host state is left intact and blocks submission, not silently reset.
+
+The final journal owner explicitly releases its writer lock, so a descriptor
+inherited by a concurrent fork does not keep a released journal locked. Host and
+command leases have different lifetimes and are not released this way.
 
 The UI owns selection and composer changes. It queues immutable memory snapshots
 and coalesces disk saves after 250 ms. Background writes are serialized and atomic,

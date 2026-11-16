@@ -37,7 +37,7 @@ accepts the unsigned preview; the script does not change Gatekeeper or remove
 quarantine attributes.
 
 The script uses the newest published release, including previews.
-`--version v0.1.0-preview.1` pins a release; `--component client` updates only the app.
+`--version v0.1.0-preview.2` pins a release; `--component client` updates only the app.
 `--download ~/Downloads` checks and saves the package without installing it.
 It verifies the package against the release's SHA-256 metadata over HTTPS.
 This detects corruption, not publisher identity; it is not a signed updater.
@@ -123,6 +123,28 @@ you intend them to use Plait's approval and sandbox rules. Finish any host work,
 then restart the host session to load new credentials. The simplest restart is
 to log out and back in. Existing threads retain their exact saved model;
 changing the default affects only new threads.
+
+### If the host does not connect
+
+Use **Reconnect** once. With the installed `$host` path from
+[Authentication and status](#authentication-and-status), check the service and its
+last startup record. These checks do not stop a run or change saved work:
+
+```sh
+"$host/bin/plait-host" status
+/usr/bin/plutil -p "$HOME/.local/share/plait/startup.json"
+```
+
+The startup record contains phases, elapsed times, process IDs, and OS error
+kinds—not credentials or prompts. It describes the last startup attempt, not
+current health; a past `ready` phase does not prove that the host is still running.
+The `version` command identifies the binary you invoke. After a staged update,
+that can be newer than the active host.
+
+Do not delete the host store or force a restart to clear an error. Follow the
+[independent update and activation rules](#independent-updates). When reporting a
+problem, include the macOS version, build, final startup phase, and error kind.
+Do not include credentials, private conversations, or a complete environment dump.
 
 ## Workspace recovery
 
