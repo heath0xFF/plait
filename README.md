@@ -299,6 +299,7 @@ are unsigned and not notarized. There is no automatic updater. See
 | Cmd-R | Refresh local Git status and invalidate cached diffs |
 | Cmd-1 / Cmd-2 | Conversation / Changes |
 | Cmd-B | Show or hide the sidebar |
+| Cmd-Shift-D | Show or hide render timing diagnostics |
 | Cmd-comma | Open local host settings |
 | Enter / Shift-Enter | Submit the composer draft / insert a line break |
 | Cmd-Option-Up / Down | Previous / next thread |

@@ -8,7 +8,8 @@ loose source of inspiration. This does not change the current M2 execution work.
 
 - Upstream: <https://github.com/get-bb/bb>
 - Reference revision: `da3e60b81d560e114a2bec724bb59c997aaaae7f`
-- Local checkout: `/Users/heath/code/bb` (outside the Plait repository)
+- Local checkouts, both outside the Plait repository: `/Users/heath/code/bb` on
+  Zaphod and `/home/heath/code/bb` on Arthur, at the same revision.
 - License at this revision: MIT, copyright 2026 Michael Yong.
 - Checkout is shallow and clean. No dependencies were installed or app started.
 

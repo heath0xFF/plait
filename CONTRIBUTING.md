@@ -153,7 +153,8 @@ required before merge.
 
 For UI changes, inspect wide and narrow native windows. With Accessibility
 permission already granted, close Plait and run `bash scripts/smoke-macos.sh`.
-Do not inject global keystrokes into another person's desktop.
+Do not inject global keystrokes into another person's desktop. The smoke script
+finds controls by accessible name and role; keep those stable or update it.
 
 For the runtime probe:
 

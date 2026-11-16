@@ -26,6 +26,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
   host.rs               background host requests and event subscriptions
   settings.rs           model choice, auth status, defaults, and reconnect
   changes.rs            real local status and diff views
+  theme.rs              tokens, original controls, embedded glyphs
 
 crates/plait-core/src/
 host.rs                 bounded blocking Unix-socket client; background only
@@ -195,18 +196,29 @@ lines use `uniform_list`; only visible rows are built. Cached data uses `Arc`
 rather than cloning large strings on every render. Long diff lines scroll
 horizontally.
 
-The sidebar is 248 points on wide windows, 218 on narrow windows. Below 1150
+One 44-point header carries the thread title, its state, and the Conversation /
+Changes switch; there is no separate tab strip. Navigation, changed-file, and
+model rows are 28 to 36 points and one line. The composer is one raised box; the
+Project, Machine, branch, and saved model sit on a context line beneath it.
+`ui/theme.rs` owns the tokens and the small original controls. A control's tone
+(ghost, selected, filled, primary) is chosen when it is built, because GPUI
+accepts one hover style per element and reports a second one only at draw time.
+
+The sidebar is 272 points on wide windows, 240 on narrow windows. Below 1150
 points, the conversation's 280-point Git inspector is removed; Git remains available in
 the Changes tab. The minimum window is 900 × 600. Cmd-B hides the sidebar.
 
 Controls have focus rings, tab stops, accessible names, and semantic roles.
-Thread state has both a color and a text label. No decorative animation is used.
+Real thread state has both a color and a text label. Example rows show a `mock`
+label and a state dot; their header and accessible name give the sample state.
+No decorative animation is used.
 
-The footer records root-view construction time, peak construction time,
-selection-handler-to-render time, and startup-to-first-render time. Git panels
-show background read durations. These are diagnostics, **not** measurements of
-GPU frame time, input-to-display latency, or complete launch time. Instrumentation
-does not write a log from the UI thread.
+The app records root-view construction time, peak construction time,
+selection-handler-to-render time, and startup-to-first-render time. View →
+Toggle Diagnostics (Cmd-Shift-D) shows them in a footer; it is hidden by
+default. Git panels show background read durations. These are diagnostics,
+**not** measurements of GPU frame time, input-to-display latency, or complete
+launch time. Instrumentation does not write a log from the UI thread.
 
 ## Dependency decision
 

@@ -1,10 +1,13 @@
-use super::theme::{self, BLUE, BORDER, ButtonAction, MUTED, PANEL, TEXT};
+use super::theme::{self, BLUE, ButtonAction, EDGE, MUTED, RAIL, SUBTLE, TEXT};
 use gpui::{prelude::*, *};
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
 const LINE_HEIGHT: f32 = 21.;
-const INPUT_HEIGHT: f32 = 105.;
+// Four lines: room to edit a prompt without crowding the conversation.
+const INPUT_HEIGHT: f32 = 84.;
+// Focus edge for the whole box, quieter than the keyboard ring on small controls.
+const FOCUS_EDGE: u32 = 0x6f8fc4;
 // shortcut: keep 100 full drafts; use edit deltas if large drafts become common.
 const HISTORY_LIMIT: usize = 100;
 
@@ -833,7 +836,7 @@ impl Element for InputElement {
                     let run = TextRun {
                         len: text.len(),
                         font: style.font(),
-                        color: rgb(MUTED).into(),
+                        color: rgb(SUBTLE).into(),
                         background_color: None,
                         underline: None,
                         strikethrough: None,
@@ -902,7 +905,7 @@ impl Element for InputElement {
 }
 
 impl Render for Composer {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let hint = self
             .paint_error
             .clone()
@@ -925,10 +928,15 @@ impl Render for Composer {
         let enabled = self.enabled;
         let can_send = self.draft.can_submit(enabled, self.busy);
         let can_stop = enabled && self.busy;
+        let focused = self.focus.is_focused(window);
+        // One raised box holds the draft and its controls; the box shows focus.
         theme::column()
-            .gap_2()
             .w_full()
             .min_w_0()
+            .rounded_xl()
+            .border_1()
+            .border_color(rgb(if focused { FOCUS_EDGE } else { EDGE }))
+            .bg(rgb(RAIL))
             .child(
                 div()
                     .id("composer-input")
@@ -956,12 +964,9 @@ impl Render for Composer {
                     .tab_stop(true)
                     .key_context("PlaitComposer")
                     .cursor(CursorStyle::IBeam)
-                    .bg(rgb(PANEL))
-                    .rounded_md()
-                    .p_3()
-                    .border_1()
-                    .border_color(rgb(BORDER))
-                    .focus_visible(|s| s.border_color(rgb(BLUE)))
+                    .px_3()
+                    .pt_3()
+                    .pb_1()
                     .text_color(rgb(if self.enabled { TEXT } else { MUTED }))
                     .text_size(px(13.))
                     .line_height(px(LINE_HEIGHT))
@@ -1106,32 +1111,47 @@ impl Render for Composer {
                 theme::row()
                     .justify_between()
                     .gap_3()
+                    .pl_3()
+                    .pr_2()
+                    .pb_2()
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
+                            .truncate()
                             .text_size(px(11.))
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(SUBTLE))
                             .child(hint),
                     )
                     .child(
-                        theme::button("composer-send", if self.busy { "Stop" } else { "Send" })
-                            .tab_stop(can_send || can_stop)
-                            .a11y_synthetic_children(move |builder| {
-                                if !can_send && !can_stop {
-                                    builder.parent_node().set_disabled();
-                                }
-                            })
-                            .when(!can_send && !can_stop, |button| {
-                                button.opacity(0.5).cursor_default()
-                            })
-                            .on_activate(cx, |this, _, cx| {
-                                if this.enabled && this.busy {
-                                    cx.emit(ComposerEvent::Stop);
-                                } else {
-                                    this.submit(cx);
-                                }
-                            }),
+                        // Send is the one affirmative control; Stop stays neutral.
+                        theme::toned_icon_button(
+                            "composer-send",
+                            if self.busy { "stop" } else { "send" },
+                            if self.busy { "Stop" } else { "Send" },
+                            if can_send {
+                                theme::Tone::Primary
+                            } else {
+                                theme::Tone::Filled
+                            },
+                        )
+                        .rounded_lg()
+                        .tab_stop(can_send || can_stop)
+                        .a11y_synthetic_children(move |builder| {
+                            if !can_send && !can_stop {
+                                builder.parent_node().set_disabled();
+                            }
+                        })
+                        .when(!can_send && !can_stop, |button| {
+                            button.opacity(0.5).cursor_default()
+                        })
+                        .on_activate(cx, |this, _, cx| {
+                            if this.enabled && this.busy {
+                                cx.emit(ComposerEvent::Stop);
+                            } else {
+                                this.submit(cx);
+                            }
+                        }),
                     ),
             )
     }
