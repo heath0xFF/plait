@@ -142,7 +142,7 @@ The `version` command identifies the binary you invoke. After a staged update,
 that can be newer than the active host.
 
 Do not delete the host store or force a restart to clear an error. Follow the
-[independent update and activation rules](#independent-updates). When reporting a
+[independent update and activation rules](#updates). When reporting a
 problem, include the macOS version, build, final startup phase, and error kind.
 Do not include credentials, private conversations, or a complete environment dump.
 
@@ -182,6 +182,8 @@ For a prepared development checkout and a first source-change task, see
 | Cmd-Shift-D | Show or hide render timing diagnostics |
 | Cmd-comma | Open local host settings |
 | Enter / Shift-Enter | Submit the draft / insert a line break |
+| Option-Delete / Option-Fn-Delete | Delete the previous / next word in the draft |
+| Cmd-Delete / Cmd-Fn-Delete | Delete to the start / end of the visible draft line |
 | Cmd-Option-Up / Down | Previous / next thread |
 | Option-Up / Down | Previous / next changed file |
 | Tab / Shift-Tab | Move keyboard focus |
@@ -192,7 +194,70 @@ Scroll the conversation, navigation, file list, and diff with the trackpad or
 mouse. Long diff lines scroll horizontally. On narrow windows, use Changes to
 open Git; the optional conversation inspector is hidden.
 
-## Independent updates
+## Updates
+
+### In the app
+
+**Plait → Check for Updates…** (also **Settings → About**) looks for the newest
+signed release on GitHub Releases, including previews. Plait also checks quietly
+at launch; when a release is available, an **Update** button appears beside
+Settings in the sidebar.
+
+**Install and Restart** downloads the release, verifies it, replaces
+`/Applications/Plait.app`, installs that release's host, restarts the host, and
+reopens Plait. It refuses while any thread is running or awaiting approval,
+because a host restart would interrupt that run. Finish or stop the run first.
+Saved drafts and the workspace layout are kept, as on a normal quit.
+
+Each release publishes `update.json` and a detached Ed25519 signature. Plait
+checks the signature against the key built into the app before it trusts the
+version or any artifact, then checks each download's signed size and SHA-256.
+An edited manifest cannot make an older signed build look newer. The app's code
+signature remains ad hoc; downloads are not notarized.
+
+In-app updates need a per-user install: an app bundle you own and a host under
+`~/Library/Application Support/Plait/Host`. An install made by the published
+Installer packages is root-owned. Move it once with
+`scripts/update-installed-macos.sh` from a checkout (it asks for administrator
+access once). Release builds compare versions; a source build is offered the
+newest release.
+
+### Headless hosts
+
+On a Mac that runs only a host, `plait-host update --check` reports whether a
+newer signed release exists, and `plait-host update` installs its host archive
+with the same checks and the same refusal while runs are active. Linux hosts do
+not have published builds yet.
+
+### From a source checkout
+
+Contributors can install their working tree as this Mac's Plait:
+
+```sh
+scripts/update-installed-macos.sh
+```
+
+It builds the app (uncommitted changes included), quits it, replaces
+`/Applications/Plait.app`, and reopens it. The app carries its host; the script
+unpacks it into `~/Library/Application Support/Plait/Host/releases/` only when
+its content changed and runs it from a per-user LaunchAgent. No administrator
+access is needed, except once to remove an earlier system-wide package install;
+threads, drafts, and credentials stay where they are.
+
+A new host replaces the running one only while no run is active or awaiting
+approval; otherwise it is staged. Activate it later with `--activate-host`, or
+keep the current host with `--stage-host`. After activation, releases other than
+the running one are removed. **Settings → About** shows the running desktop
+revision, build time, and host protocol. Builds are ad-hoc signed and not
+notarized.
+
+This per-user install trades one protection for convenience: the system-wide
+package keeps host code owned by root, so processes running as you cannot change
+it. Agent commands still run in the sandbox, which cannot write there.
+
+### Installer packages
+
+The published Installer packages predate in-app updates and install system-wide:
 
 - **Client:** quit only the client and run a client-only package. The host and
   accepted work remain running. Reopen the client to reconnect.
@@ -209,14 +274,14 @@ open Git; the optional conversation inspector is hidden.
 - A manually started host is not adopted or killed. Finish its work and stop it
   before activating the installed agent. A store lock rejects duplicate writers.
 
-Client and host currently use protocol version **1**. The client rejects an
-unsupported host protocol. There is no wire-schema change in this packaging
-work. Future protocol or storage changes need an explicit compatibility and
+The v0.1.0-preview.2 client and host use protocol version **1**. Later source
+builds negotiate opt-in [version 2](HOST.md#protocol-version-2) and fall back to
+version 1, so either side can be updated first. The client rejects other versions. Future protocol or storage changes need an explicit compatibility and
 migration review; arbitrary future versions are not promised to interoperate.
-There is no automatic updater, automatic rollback, or release-directory eviction.
-Do not delete an old release while its host or sidecar can still be running.
+Package installs have no automatic rollback or release-directory eviction. Do
+not delete an old release while its host or sidecar can still be running.
 
-Program files:
+Package program files:
 
 ```text
 /Applications/Plait.app

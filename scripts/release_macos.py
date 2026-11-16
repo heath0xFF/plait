@@ -38,7 +38,9 @@ def manifest(component, version, revision):
         raise ValueError("Invalid source revision")
     return {
         "schema_version": 1, "component": component, "version": version,
-        "revision": revision, "protocol_version": 1,
+        "revision": revision,
+        # Newest protocol spoken; both components still accept version 1.
+        "protocol_version": 2,
         "update_policy": "manual, component-specific installer",
     }
 
@@ -231,6 +233,17 @@ def stage_host(work, version, revision):
     return payload, scripts, metadata
 
 
+def embed_host(resources, payload, metadata):
+    """Carry the host inside the app, so one app update also delivers its host.
+
+    A data archive, not nested code: the app's signature covers it as a resource.
+    """
+    release = payload / HOST_BASE.relative_to("/") / "releases" / metadata["build_id"]
+    with tarfile.open(resources / "Host.tar.gz", "w:gz", compresslevel=6) as archive:
+        archive.add(release, arcname=metadata["build_id"])
+    write_json(resources / "host.json", metadata)
+
+
 def host_package_id(metadata):
     build_id = metadata["build_id"]
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+-[0-9a-f]{20}", build_id):
@@ -293,7 +306,7 @@ def component_manifests(expanded):
     )
 
 
-def build_installers(bundle, client_version, host_version, revision, work):
+def build_installers(bundle, client_version, host_version, revision, work, staged=None):
     payload = work / "client-root"
     (payload / "Applications").mkdir(parents=True)
     shutil.copytree(bundle, payload / "Applications/Plait.app", symlinks=True)
@@ -303,7 +316,7 @@ def build_installers(bundle, client_version, host_version, revision, work):
     (scripts / "preinstall").chmod(0o755)
     client = work / f"Plait-Client-{client_version}-{revision}-macos-arm64.pkg"
     component_package(payload, scripts, "client", client_version, client, work)
-    host_payload, host_scripts, metadata = stage_host(work, host_version, revision)
+    host_payload, host_scripts, metadata = staged or stage_host(work, host_version, revision)
     host = work / f"Plait-Host-{host_version}-{revision}-macos-arm64.pkg"
     component_package(host_payload, host_scripts, "host", host_version, host, work)
     resources = ROOT / "packaging/macos/installer"

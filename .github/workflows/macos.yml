@@ -90,6 +90,7 @@ jobs:
           name: plait-macos-arm64-${{ github.sha }}
           path: |
             dist/*.zip
+            dist/*.tar.gz
             dist/*.dmg
             dist/install.sh
             dist/release.json
@@ -126,10 +127,29 @@ jobs:
       RELEASE_TAG: ${{ github.ref_name }}
       ARTIFACT: plait-macos-arm64-${{ github.sha }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Download the tested build and verify every checksum
         run: |
           gh run download "$GITHUB_RUN_ID" -n "$ARTIFACT" -D release
           (cd release && sha256sum -c ./*.sha256)
+      - name: Build the update signing tool
+        run: |
+          rustup toolchain install --profile minimal --no-self-update
+          cargo build --locked -p plait-core --example update-key
+      - name: Write and sign the update manifest
+        env:
+          PLAIT_UPDATE_SIGNING_KEY: ${{ secrets.PLAIT_UPDATE_SIGNING_KEY }}
+        run: |
+          test -n "$PLAIT_UPDATE_SIGNING_KEY" || { echo 'PLAIT_UPDATE_SIGNING_KEY is not set' >&2; exit 1; }
+          python3 scripts/update_manifest.py release "$RELEASE_TAG"
+          key=$(mktemp)
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$PLAIT_UPDATE_SIGNING_KEY" > "$key"
+          # Signing refuses a key that does not match the one built into Plait.
+          target/debug/examples/update-key sign "$key" release/update.json
+          target/debug/examples/update-key verify release/update.json
       - name: Publish an immutable preview
         run: |
           printf '%s\n' \
@@ -141,7 +161,8 @@ jobs:
             'Apple Silicon; macOS 15+ declared, tested on macOS 26.' \
             '' \
             'The host includes Node and the runtime. Model credentials and project build tools are not included.' \
-            'Client updates leave agent work running. Host updates are staged until an explicit session restart.' \
+            'Per-user installs update from **Plait → Check for Updates…**; headless hosts run `plait-host update`.' \
+            'Package installs move to a per-user install once with `scripts/update-installed-macos.sh` from a checkout.' \
             '' \
             'Native code display, copy controls, saved drafts, and safe submission recovery are included.' \
             'The installed coding/reconnect test uses a scripted provider and real sandboxed Cargo commands, not a live model.' \
@@ -150,6 +171,7 @@ jobs:
             'See docs/MACOS.md, docs/SELF-HOSTING.md, and docs/VERIFICATION.md at this tag for setup and limits.' > notes.md
           gh release create "$RELEASE_TAG" --verify-tag --prerelease --draft \
             --title "Plait $RELEASE_TAG — local preview" --notes-file notes.md \
-            release/*.dmg release/*.pkg release/*.zip release/*.sha256 \
+            release/*.dmg release/*.pkg release/*.zip release/*.tar.gz release/*.sha256 \
+            release/update.json release/update.json.sig \
             release/install.sh release/release.json release/Plait-Release-*.json release/installed-client*.png
           gh release edit "$RELEASE_TAG" --draft=false

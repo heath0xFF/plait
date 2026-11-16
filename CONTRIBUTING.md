@@ -24,7 +24,10 @@ cargo run --locked --release -- /absolute/path/to/repository
 Omit the repository argument to restore the last checkout and thread. Agent work
 requires a running [installed host](docs/MACOS.md) or [development host](docs/HOST.md).
 See [Mac packaging](docs/MACOS.md#build-and-verification) to build the app bundle
-and installers. Rex is optional development tooling, not a build dependency.
+and installers, or run `scripts/update-installed-macos.sh` to
+[install your checkout](docs/MACOS.md#from-a-source-checkout) over the installed app.
+To publish a release that installed apps can update to, see
+[Releasing](docs/RELEASING.md). Rex is optional development tooling, not a build dependency.
 
 ## Propose a change
 

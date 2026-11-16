@@ -28,10 +28,13 @@ export function update(snapshot: Snapshot, view: ConversationView, inputs: Input
   const tools = new Map<string, Snapshot['tools'][number]>();
   const pending = inputs.filter(input => input.entry === null);
   const placed = new Map(inputs.filter(input => input.entry !== null).map(input => [input.entry, input]));
+  // Each tool records the message it followed so clients can interleave them.
+  let last: string | null = null;
+  const push = (message: Snapshot['messages'][number]) => { messages.push(message); last = message.id; };
   const appendPending = (before: number) => {
     while (pending.length && pending[0].anchor < before) {
       const input = pending.shift()!;
-      messages.push(inputMessage(input));
+      push(inputMessage(input));
       if (input.text.length > 4096) truncated = true;
     }
   };
@@ -40,15 +43,15 @@ export function update(snapshot: Snapshot, view: ConversationView, inputs: Input
     for (const [index, message] of ((entry.model ?? []) as readonly Message[]).entries()) {
       if (message.role === 'user' || message.role === 'assistant') {
         const text = messageText(message);
-        if (text) messages.push({ id: message.role === 'user' && placed.has(Number(entry.id)) ? `request-${placed.get(Number(entry.id))!.request_id}` : `${entry.id}-${index}`, role: message.role, text: clip(text) });
+        if (text) push({ id: message.role === 'user' && placed.has(Number(entry.id)) ? `request-${placed.get(Number(entry.id))!.request_id}` : `${entry.id}-${index}`, role: message.role, text: clip(text) });
       }
       if (Array.isArray(message.content)) for (const part of message.content) {
         if (part.type === 'toolCall' && part.id && part.name) tools.set(part.id, {
-          id: part.id, name: part.name, status: 'running', input: clip(JSON.stringify(part.arguments)), output: '',
+          id: part.id, name: part.name, status: 'running', input: clip(JSON.stringify(part.arguments)), output: '', after: last,
         });
       }
       if (message.role === 'toolResult' && message.toolCallId) {
-        const tool = tools.get(message.toolCallId) ?? { id: message.toolCallId, name: 'tool', input: '', output: '', status: 'done' as const };
+        const tool = tools.get(message.toolCallId) ?? { id: message.toolCallId, name: 'tool', input: '', output: '', status: 'done' as const, after: last };
         tool.output = clip(messageText(message)); tool.status = message.isError ? 'error' : 'done'; tools.set(tool.id, tool);
       }
     }

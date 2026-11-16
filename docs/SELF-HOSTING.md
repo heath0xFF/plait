@@ -75,11 +75,11 @@ outside that sandbox. Do not relax containment to make a test green.
 
 ## Updating while building
 
-Use a client-only package to replace the UI after closing it. Accepted host work
-continues. A host package stages an immutable release. Finish active work and
-wait for cleanup before activating it through a session restart. See [Mac
-updates](MACOS.md#independent-updates). No updater may kill a build to replace its
-runtime.
+To try your own changes in the installed app, run
+`scripts/update-installed-macos.sh` from the checkout. For published releases,
+use **Plait → Check for Updates…**. Both replace the host only while no run is
+active or awaiting approval; neither kills a build to replace its runtime. See
+[Mac updates](MACOS.md#updates).
 
 ## Verification boundary
 

@@ -80,7 +80,9 @@ impl Plait {
         self.host.reconnect();
         self.sync_composer(cx);
         self.host_request(
-            Request::Status,
+            Request::Status {
+                protocol_version: Some(host::PROTOCOL_VERSION),
+            },
             window,
             cx,
             |this, result, window, cx| match result {
@@ -166,9 +168,10 @@ impl Plait {
         let epoch = self.host.epoch;
         let watch_epoch = self.host.watch_epoch;
         let watch_id = id.clone();
+        let protocol = self.host.protocol();
         let executor = cx.background_executor().clone();
         let task = cx.background_executor().spawn(async move {
-            let snapshots = Client::from_environment()?.subscribe(watch_id)?;
+            let snapshots = Client::from_environment()?.subscribe(watch_id, protocol)?;
             let lease = WatchLease {
                 cancel: Some(snapshots.cancel_handle()),
                 executor,
@@ -319,7 +322,9 @@ impl Plait {
                 });
             }
         }
-        self.live_count = next.map_or(0, transcript::row_count);
+        // Cached once per snapshot; rendering resolves visible rows by position.
+        self.live_layout = next.map(transcript::layout).unwrap_or_default();
+        self.live_count = self.live_layout.len();
         debug_assert_eq!(self.live_scroll.item_count(), self.live_count);
     }
 
@@ -417,11 +422,12 @@ impl Plait {
         self.host.error = None;
         self.sync_composer(cx);
         self.host_request::<host::SubmitReply>(
-            Request::Submit {
-                thread_id: id.clone(),
-                request_id: pending.request_id.clone(),
-                text: pending.text.clone(),
-            },
+            Request::submit(
+                id.clone(),
+                pending.request_id.clone(),
+                pending.text.clone(),
+                self.next_approval_mode(),
+            ),
             window,
             cx,
             move |this, result, _, cx| {

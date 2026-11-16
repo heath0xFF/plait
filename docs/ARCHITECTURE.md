@@ -20,7 +20,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
   mod.rs                UI state and background-task dispatch
   navigation.rs         Project → Machine → Thread
   conversation.rs       no-thread state and the Git inspector
-  live_conversation.rs  real host messages, tools, and exact-call approvals
+  live_conversation.rs  real host messages, ordered tools, and approvals
   composer.rs           native input, IME, clipboard, undo, submit/stop events
   host.rs               background host requests and event subscriptions
   session.rs            desktop restore/save coordination and submission guards
@@ -56,7 +56,8 @@ A Linux build does not enable agent command execution. The runtime still rejects
 non-macOS commands, and the Rust command guardian still requires Seatbelt. Linux
 containment and cancellation need a separate safety review. Local peer identity
 is checked with `getpeereid` on macOS and `SO_PEERCRED` on Linux.
-Both platforms use local protocol version 1 and the same ownership boundaries.
+Both platforms use the same local protocol (version 1, with opt-in version 2)
+and the same ownership boundaries.
 
 The Linux sandbox mechanism is an open decision. An unprivileged namespace
 probe succeeded, but a read-only bind mount still permitted access to an outside
@@ -98,8 +99,9 @@ ID for an explicit retry. Reconnect loads state; it does not submit a new task.
 The composer keeps its draft until acceptance and clears it only if its edit
 revision still matches the submitted draft. Each thread has its own composer.
 
-Every file change and command needs a one-call approval with full arguments.
-File helpers own checkout writes; command execution reads the checkout and uses
+Each run is submitted with an approval mode. In `ask` mode every file change and
+command needs a one-call approval with full arguments; in `auto` mode, the
+desktop default with a version 2 host, they run without a prompt. File helpers own checkout writes; command execution reads the checkout and uses
 private scratch space for build output. Stop revokes pending approvals and
 cancels work. Interrupted work must not replay automatically after host failure.
 These boundaries need the tests listed in HOST.md before valuable-repository use.
@@ -111,15 +113,17 @@ admission gets a fresh authorization object; a saved thread does not carry
 permission into another turn. Recovery keeps it inactive until old tasks are
 stopped. Stop, completion, and host shutdown revoke it permanently.
 
-`runtime/src/approval.ts` implements the current interactive policy. It owns the
-exact-call prompt, one-use answers, cancellation, and snapshot updates. The tool
+`runtime/src/approval.ts` implements both policies. The interactive policy owns
+the exact-call prompt, one-use answers, cancellation, and snapshot updates. The
+automatic policy grants an active run's calls without a prompt. The tool
 registry asks the run for authorization without owning the approval lifecycle.
 Argument limits, dirty-path protection, checked file helpers, and command
 containment remain mandatory in `tools.ts` and its helpers. Authorization is
 checked again before an effect starts, so a late Allow cannot override Stop.
 
-This refactor does not add unattended grants, scheduling, protocol fields, or
-storage tables. Manual runs still require each approval. Tests include a clearly
+The submitting desktop chooses the mode for one run (see
+[protocol version 2](HOST.md#protocol-version-2)). There is no persisted grant,
+scheduling, or new storage table. Tests include a clearly
 labeled permissive policy fixture to check that authorization cannot bypass file
 protection or command containment. On Linux, the command check proves denial,
 not a working sandbox. The automation requirement remains tracked in
@@ -221,11 +225,19 @@ identical host reinstall is rejected before payload writes. Activation requires
 an explicit session restart after work finishes. Client updates do not control
 the host process. User state and credentials are not package payloads.
 
+Per-user installs update themselves. `plait_core::update` reads GitHub
+Releases, verifies an Ed25519-signed `update.json`, and checks each download's
+signed digest. The app bundle carries its host as a data archive; an update
+unpacks it as a new immutable release under the user's Library, rewrites the
+per-user LaunchAgent, and restarts the host only when the store has no active or
+waiting run. Releases other than the active one are then removed.
+`plait-host update` applies the same steps on machines without the app.
+
 This changes launch configuration, not the frozen protocol or durable thread
-schema. Version 1 compatibility is still checked by the client. Future protocol
-and storage changes need a separate compatibility review. Signing, notarization,
-automatic update delivery, and automatic old-release removal are not implemented.
-See [Mac installation](MACOS.md) for paths and operational limits.
+schema. The client accepts protocol versions 1 and 2. Future protocol
+and storage changes need a separate compatibility review. Developer ID signing
+and notarization are not implemented. See [Mac installation](MACOS.md) for
+paths and operational limits.
 
 ## UI and performance
 

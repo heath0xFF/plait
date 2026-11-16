@@ -41,6 +41,9 @@ impl JumpTarget {
 #[serde(default)]
 pub struct Preferences {
     pub jump_target: JumpTarget,
+    /// Ask before each edit and command. Off by default: runs approve their own
+    /// edits and sandboxed commands, and file protections still apply.
+    pub ask_before_actions: bool,
 }
 
 /// The per-user location, from the environment. `None` without a home directory.
@@ -163,8 +166,10 @@ mod tests {
         let root = scratch("round-trip");
         let path = root.join("nested/desktop.json");
         assert_eq!(load(&path), Ok(Preferences::default()));
+        assert!(!Preferences::default().ask_before_actions);
         let chosen = Preferences {
             jump_target: JumpTarget::Machines,
+            ask_before_actions: true,
         };
         save(&path, chosen).unwrap();
         assert_eq!(load(&path), Ok(chosen));

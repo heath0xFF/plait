@@ -9,6 +9,8 @@ use std::{
 };
 
 pub const REQUEST_LIMIT: usize = 64 * 1024;
+/// Newest protocol this client speaks. Version 2 adds ordered tools and approval modes.
+pub const PROTOCOL_VERSION: u32 = 2;
 const REPLY_LIMIT: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +95,17 @@ pub struct Snapshot {
     pub pending_approval: Option<Approval>,
     pub error: Option<HostError>,
     pub truncated: bool,
+    /// Absent from version 1 hosts, which always ask.
+    #[serde(default)]
+    pub approval_mode: Option<ApprovalMode>,
+}
+
+/// How a run's edits and commands are authorized. Sandbox and file checks apply to both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalMode {
+    Ask,
+    Auto,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -117,6 +130,16 @@ pub struct Tool {
     pub status: ToolStatus,
     pub input: String,
     pub output: String,
+    /// `None`: a version 1 host sent no order. `Some(None)`: before any message.
+    #[serde(default, deserialize_with = "present")]
+    pub after: Option<Option<String>>,
+}
+
+// Distinguishes a missing field from an explicit null.
+fn present<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error> {
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -187,7 +210,10 @@ impl From<std::io::Error> for Error {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
-    Status,
+    Status {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        protocol_version: Option<u32>,
+    },
     SetDefaultModel {
         provider: String,
         model_id: String,
@@ -205,6 +231,10 @@ pub enum Request {
         thread_id: String,
         request_id: String,
         text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        protocol_version: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        approval: Option<ApprovalMode>,
     },
     Stop {
         thread_id: String,
@@ -216,7 +246,37 @@ pub enum Request {
     },
     Watch {
         thread_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        protocol_version: Option<u32>,
     },
+}
+
+impl Request {
+    /// Version 1 hosts reject unknown fields, so only a negotiated version 2 sends any.
+    pub fn submit(
+        thread_id: String,
+        request_id: String,
+        text: String,
+        approval: Option<ApprovalMode>,
+    ) -> Self {
+        Self::Submit {
+            thread_id,
+            request_id,
+            text,
+            protocol_version: approval.map(|_| 2),
+            approval,
+        }
+    }
+
+    /// The largest form of a submission, for size checks before negotiation.
+    pub fn submit_bound(thread_id: &str, request_id: &str, text: &str) -> Self {
+        Self::submit(
+            thread_id.into(),
+            request_id.into(),
+            text.into(),
+            Some(ApprovalMode::Auto),
+        )
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -304,15 +364,35 @@ impl Client {
         })
     }
 
+    /// One request and reply. A versioned status request is the negotiation:
+    /// a version 1 host rejects the field as unknown, so ask again without it.
     pub fn request<T: DeserializeOwned>(&self, request: &Request) -> Result<T, Error> {
+        let result = self.exchange(request);
+        if let (
+            Request::Status {
+                protocol_version: Some(_),
+            },
+            Err(Error::Rejected(error)),
+        ) = (request, &result)
+            && error.code == "invalid_request"
+        {
+            return self.exchange(&Request::Status {
+                protocol_version: None,
+            });
+        }
+        result
+    }
+
+    fn exchange<T: DeserializeOwned>(&self, request: &Request) -> Result<T, Error> {
         let mut frames = self.connect(request)?;
         decode(&frames.next(Some(Instant::now() + Duration::from_secs(15)))?)
     }
 
-    pub fn watch(&self, thread_id: String) -> Result<Watch, Error> {
+    pub fn watch(&self, thread_id: String, protocol: u32) -> Result<Watch, Error> {
         Ok(Watch {
             frames: self.connect(&Request::Watch {
                 thread_id: thread_id.clone(),
+                protocol_version: (protocol >= 2).then_some(2),
             })?,
             thread_id,
             identity: None,
@@ -455,13 +535,17 @@ mod tests {
             socket.write_all(b"{\"ok\":true,\"result\":{\"protocol_version\":1,\"default_model\":null,\"models\":[]}}\n").unwrap();
         });
         let client = Client { path: path.clone() };
-        let reply: Status = client.request(&Request::Status).unwrap();
+        let reply: Status = client
+            .request(&Request::Status {
+                protocol_version: None,
+            })
+            .unwrap();
         assert_eq!(reply.protocol_version, 1);
         server.join().unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
-        assert!(
-            matches!(client.request::<Status>(&Request::Status), Err(Error::Transport(message)) if message.contains("owner-only"))
-        );
+        assert!(matches!(client.request::<Status>(&Request::Status {
+                protocol_version: None
+            }), Err(Error::Transport(message)) if message.contains("owner-only")));
         std::fs::remove_dir_all(directory).unwrap();
     }
 

@@ -13,3 +13,4 @@ pub mod preferences;
 pub mod session;
 pub mod state;
 pub mod transcript;
+pub mod update;

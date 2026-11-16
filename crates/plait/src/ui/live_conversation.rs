@@ -1,8 +1,8 @@
 use super::{Plait, theme::*};
 use gpui::{prelude::*, *};
 use plait_core::{
-    host::{Approval, Message, MessageRole, Tool, ToolStatus},
-    transcript::{self, Row},
+    host::{Approval, ApprovalMode, Message, MessageRole, Snapshot, Tool, ToolStatus},
+    transcript::{self, Row, Slot},
 };
 
 /// Full-width line above the conversation for host and submission state.
@@ -28,6 +28,28 @@ fn tool_tint(status: ToolStatus) -> u32 {
 }
 
 impl Plait {
+    /// The mode the next submission requests. Version 1 hosts always ask.
+    pub(super) fn next_approval_mode(&self) -> Option<ApprovalMode> {
+        (self.host.protocol() >= 2).then_some(if self.preferences.value.ask_before_actions {
+            ApprovalMode::Ask
+        } else {
+            ApprovalMode::Auto
+        })
+    }
+
+    /// A running thread reports its own mode; otherwise show what the next message uses.
+    fn approval_note(&self, snapshot: Option<&Snapshot>) -> &'static str {
+        let mode = match snapshot {
+            Some(snapshot) if snapshot.status.busy() => snapshot.approval_mode,
+            _ => self.next_approval_mode(),
+        };
+        if mode == Some(ApprovalMode::Auto) {
+            "Automatic approval"
+        } else {
+            "Approve each action"
+        }
+    }
+
     fn live_message(&self, message: &Message, cx: &mut Context<Self>) -> AnyElement {
         let user = message.role == MessageRole::User;
         let body = if user { bubble() } else { prose() }
@@ -91,7 +113,13 @@ impl Plait {
         let Some(offset) = snapshot.tools.iter().position(|tool| tool.id == id) else {
             return;
         };
-        let index = transcript::row_count(snapshot) - snapshot.tools.len() + offset;
+        let Some(index) = self
+            .live_layout
+            .iter()
+            .position(|slot| *slot == Slot::Tool(offset))
+        else {
+            return;
+        };
         if !self.expanded_live_tools.remove(id) {
             self.expanded_live_tools.insert(id.to_owned());
         }
@@ -102,10 +130,11 @@ impl Plait {
     fn live_tool(&self, tool: &Tool, cx: &mut Context<Self>) -> AnyElement {
         let expanded = self.expanded_live_tools.contains(&tool.id);
         let id = tool.id.clone();
+        let subject = transcript::tool_subject(tool);
         column()
             .gap_1()
             .child(
-                row().child(
+                row().min_w_0().child(
                     button(
                         (
                             ElementId::from("live-tool"),
@@ -115,11 +144,39 @@ impl Plait {
                     )
                     .px_1()
                     .ml(px(-TOOL_INSET))
-                    .aria_label(format!("{} tool · {}", tool.name, tool.status.label()))
+                    .min_w_0()
+                    .aria_label(format!(
+                        "{} tool{} · {}",
+                        tool.name,
+                        subject
+                            .as_ref()
+                            .map(|subject| format!(" {subject}"))
+                            .unwrap_or_default(),
+                        tool.status.label()
+                    ))
                     .aria_expanded(expanded)
                     .child(icon(if expanded { "down" } else { "right" }))
-                    .child(div().text_size(px(13.)).child(tool.name.clone()))
-                    .child(tag(tool.status.label(), tool_tint(tool.status)))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(13.))
+                            .child(tool.name.clone()),
+                    )
+                    .when_some(subject.clone(), |el, subject| {
+                        el.child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .font_family(MONO)
+                                .text_size(px(12.))
+                                .text_color(rgb(MUTED))
+                                .child(subject),
+                        )
+                    })
+                    // Completion is the normal case; only call out the others.
+                    .when(tool.status != ToolStatus::Done, |el| {
+                        el.child(tag(tool.status.label(), tool_tint(tool.status)).flex_shrink_0())
+                    })
                     .on_activate(cx, move |this, _, cx| this.toggle_live_tool(&id, cx)),
                 ),
             )
@@ -153,7 +210,11 @@ impl Plait {
         let Some(snapshot) = self.host.snapshot.clone() else {
             return div().into_any_element();
         };
-        let Some(row) = transcript::row(&snapshot, index) else {
+        let Some(row) = self
+            .live_layout
+            .get(index)
+            .and_then(|slot| transcript::resolve(&snapshot, *slot))
+        else {
             return div().into_any_element();
         };
         let tool = matches!(row, Row::Tool(_));
@@ -422,7 +483,10 @@ Tone::Filled,
                             .child(composer),
                     )
                 })
-                .child(self.environment(Some(model_label), Some(("Approve each action", MUTED)))),
+                .child(self.environment(
+                    Some(model_label),
+                    Some((self.approval_note(snapshot.as_deref()), MUTED)),
+                )),
         );
         row()
             .gap_0()

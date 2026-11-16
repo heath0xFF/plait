@@ -13,8 +13,8 @@ use super::{Plait, composer::Composer, theme::Assets};
 use gpui::{prelude::*, *};
 use plait_core::{
     host::{
-        Approval, ApprovalKind, Message, MessageRole, Model, ModelChoice, Snapshot, Status,
-        ThreadStatus, ThreadSummary, Tool, ToolStatus,
+        Approval, ApprovalKind, ApprovalMode, Message, MessageRole, Model, ModelChoice, Snapshot,
+        Status, ThreadStatus, ThreadSummary, Tool, ToolStatus,
     },
     model::DiffMode,
     state::Load,
@@ -83,7 +83,7 @@ fn status() -> Status {
         authenticated,
     };
     Status {
-        protocol_version: 1,
+        protocol_version: 2,
         default_model: Some(choice()),
         models: vec![
             model("openai-codex", "gpt-5.6-luna", "GPT-5.6 Luna", true),
@@ -144,15 +144,17 @@ fn thread_snapshot(checkout: &Path, approval: bool) -> Snapshot {
                 id: "t1".into(),
                 name: "edit".into(),
                 status: ToolStatus::Done,
-                input: "src/review.rs".into(),
+                input: "{\"path\":\"src/review.rs\"}".into(),
                 output: "Replaced 1 line.".into(),
+                after: Some(Some("m3".into())),
             },
             Tool {
                 id: "t2".into(),
                 name: "command".into(),
                 status: ToolStatus::Running,
-                input: "cargo test".into(),
+                input: "{\"command\":\"cargo test\"}".into(),
                 output: String::new(),
+                after: Some(Some("m3".into())),
             },
         ],
         pending_approval: approval.then(|| Approval {
@@ -166,6 +168,11 @@ fn thread_snapshot(checkout: &Path, approval: bool) -> Snapshot {
         }),
         error: None,
         truncated: false,
+        approval_mode: Some(if approval {
+            ApprovalMode::Ask
+        } else {
+            ApprovalMode::Auto
+        }),
     }
 }
 

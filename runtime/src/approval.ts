@@ -10,6 +10,17 @@ type PendingApproval = {
   settle(allow: boolean): SettlementFailure | undefined;
 };
 
+/**
+ * The run's user chose automatic approval at submission. Authorization still
+ * requires an active run, and file protections and command containment still
+ * apply after this policy, in tools.ts and its helpers.
+ */
+export const automaticApproval: AuthorizationPolicy = {
+  async authorize(_call: EffectCall, signal: AbortSignal) {
+    if (signal.aborted) fail('permission_denied', 'Tool permission denied or revoked.');
+  },
+};
+
 export class InteractiveApproval implements AuthorizationPolicy {
   private pending?: PendingApproval;
   private readonly snapshot: Snapshot;
