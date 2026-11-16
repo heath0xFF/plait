@@ -36,7 +36,17 @@ test('user LaunchAgent and isolated packaged host start without developer Node',
   const consoleUid = Number((await exec('/usr/bin/stat', ['-f', '%u', '/dev/console'])).stdout.trim());
   assert.equal(consoleUid, process.getuid(), 'Install smoke check requires the runner graphical user.');
   const defaultStore = join(process.env.HOME, '.local/share/plait');
-  const managedStatus = await until(() => request(defaultStore, { op: 'status' }), value => value.ok);
+  let managedStatus;
+  try {
+    managedStatus = await until(() => request(defaultStore, { op: 'status' }), value => value.ok);
+  } catch (error) {
+    // Capture the first failed attempt before later tests change service state.
+    await import('./diagnose-installed-macos.mjs');
+    throw error;
+  }
+  const startup = JSON.parse(await readFile(join(defaultStore, 'startup.json'), 'utf8'));
+  assert.equal(startup.phase, 'ready');
+  console.log('MANAGED_HOST_STARTUP', startup);
   assert.equal(managedStatus.result.protocol_version, 1);
   assert.equal((await stat(join(defaultStore, 'host.sock'))).uid, process.getuid());
   const job = (await exec('/bin/launchctl', ['print', `gui/${process.getuid()}/dev.plait.host`])).stdout;
@@ -74,6 +84,7 @@ test('installed runtime passes the full macOS safety suite', { timeout: 240000 }
 });
 
 test('client update and staged host upgrade preserve an active command and durable state', { timeout: 240000 }, async () => {
+  assert(process.env.PLAIT_MANAGED_HOST_PID, 'Managed-host startup must pass before upgrade acceptance.');
   // Import in a child so the shared test support reads the installed overrides once.
   const program = `
     import assert from 'node:assert/strict';

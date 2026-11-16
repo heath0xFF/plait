@@ -10,6 +10,11 @@ const exec = promisify(execFile);
 const metadata = JSON.parse(await readFile(process.env.PLAIT_RELEASE_MANIFEST, 'utf8'));
 const installed = join('/Library/Application Support/Plait/Host/releases', metadata.host.build_id);
 try {
+  // The host writes only fixed phases, process IDs, timings, and OS error kinds.
+  const startup = JSON.parse(await readFile(join(process.env.HOME, '.local/share/plait/startup.json'), 'utf8'));
+  console.log('MANAGED_HOST_STARTUP', startup);
+} catch (error) { console.log('MANAGED_HOST_STARTUP_UNAVAILABLE', error.code); }
+try {
   const { stdout } = await exec('/bin/launchctl', ['print', `gui/${process.getuid()}/dev.plait.host`]);
   console.log(stdout.split('\n').filter(line => /^\s*(state|pid|program|path|last exit code|username|group|uid) =/.test(line)).join('\n'));
   const pid = stdout.match(/\bpid\s*=\s*(\d+)/)?.[1];
