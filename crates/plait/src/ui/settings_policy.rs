@@ -13,6 +13,7 @@ pub(super) struct PolicyState {
     pub value: Option<CommandPolicy>,
     pub busy: bool,
     pub confirm: bool,
+    confirm_focus: Option<FocusHandle>,
     pub note: Option<String>,
 }
 
@@ -118,11 +119,14 @@ impl Plait {
                 segment(("command-policy", index), label, current == Some(policy))
                     .disabled(!enabled)
                     .when(enabled, |el| {
-                        el.on_activate(cx, move |this, _, cx| {
+                        el.on_activate(cx, move |this, window, cx| {
                             if policy == CommandPolicy::Trusted
                                 && this.command_policy() != Some(policy)
                             {
                                 this.policy.confirm = true;
+                                let focus = cx.focus_handle().tab_stop(true);
+                                window.focus(&focus, cx);
+                                this.policy.confirm_focus = Some(focus);
                                 cx.notify();
                             } else {
                                 this.request_policy(Some(policy), cx);
@@ -180,13 +184,18 @@ impl Plait {
                         .child(
                             row()
                                 .gap_2()
-                                .child(button("cancel-trusted", "Keep current policy").on_activate(
-                                    cx,
-                                    |this, _, cx| {
-                                        this.policy.confirm = false;
-                                        cx.notify();
-                                    },
-                                ))
+                                .child(
+                                    button("cancel-trusted", "Keep current policy")
+                                        .when_some(
+                                            self.policy.confirm_focus.as_ref(),
+                                            |el, focus| el.track_focus(focus),
+                                        )
+                                        .on_activate(cx, |this, window, cx| {
+                                            this.policy.confirm = false;
+                                            window.focus(&this.focus, cx);
+                                            cx.notify();
+                                        }),
+                                )
                                 .child(
                                     toned_button(
                                         "confirm-trusted",
@@ -195,8 +204,9 @@ impl Plait {
                                     )
                                     .on_activate(
                                         cx,
-                                        |this, _, cx| {
-                                            this.request_policy(Some(CommandPolicy::Trusted), cx)
+                                        |this, window, cx| {
+                                            this.request_policy(Some(CommandPolicy::Trusted), cx);
+                                            window.focus(&this.focus, cx);
                                         },
                                     ),
                                 ),

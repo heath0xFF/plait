@@ -117,8 +117,10 @@ approval states, archived threads, inline rename, search, empty results, thread
 actions, paused updates, and the older-host fallback. A dispatched UI test switches
 checkouts while preserving each draft and rejecting the previous watch. Core
 tests cover listing identity guards, activity tracking, preference migration, and
-serialized saves. System notification delivery and notification-click activation
-are not exercised by these tests.
+serialized saves. Delayed management replies cannot dismiss a newer rename or
+overwrite a newer live summary; reconnect and checkout changes release pending
+controls whose old replies are discarded. System notification delivery and
+notification-click activation are not exercised by these tests.
 
 The optional headless PNG export is ignored in the normal Rust suite and runs
 explicitly when requested; CI does not run it on either platform. See
@@ -153,9 +155,22 @@ they do not authenticate to a real provider or save a real credential.
 Shortcut scenes send keys through GPUI dispatch to prove that recording intercepts
 an existing command, conflicts name it, and rebinding removes the old shortcut.
 Secret-field checks keep clipboard contents unchanged and prove that a sent value
-cannot return through Undo. Pure client tests cover request encoding, tolerant
-replies, sign-in states, endpoint validation, and policy copy. Native IME, token
-refresh, and full VoiceOver acceptance remain separate checks.
+cannot return through Undo. Dispatched Tab and Shift-Tab checks traverse endpoint
+fields and reach the composer from adjacent controls. Endpoint results only
+describe the address that was checked. Pure client tests cover request encoding,
+tolerant replies, sign-in states, endpoint validation, and policy copy.
+
+An isolated native source build was inspected against a disposable version 3 host
+and checkout. All five Settings tabs, provider entry with masked accessibility
+values, endpoint field traversal through Save, shortcut conflict cancellation and
+rebinding, command-palette search and dispatch, and cancelling Trusted confirmation
+with Return were checked. This exposed and resolved missing field tab stops and
+duplicate Settings heading accessibility IDs. The pinned headless test platform
+does not activate accessibility trees, so PNG exports cannot cover those IDs.
+
+No real sign-in, credential save, endpoint request, or model run was performed in
+that native pass. Exact minimum-size native scrolling, IME, token refresh,
+notification delivery, and full VoiceOver acceptance remain separate checks.
 
 ## Paged conversation history
 

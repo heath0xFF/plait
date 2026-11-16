@@ -181,6 +181,11 @@ impl Plait {
             self.host.epoch = epoch;
             self.host.select(None);
             self.host.submitting = false;
+            if self.host.saving {
+                self.host.saving = false;
+                self.host.save_message =
+                    Some("Save not confirmed. Reconnect to reload the saved default.".into());
+            }
         } else {
             self.host = HostState::new(path.clone());
             self.host.epoch = epoch;

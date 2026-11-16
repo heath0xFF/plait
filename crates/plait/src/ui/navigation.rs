@@ -22,7 +22,8 @@ pub(super) struct Navigation {
     pub attention: bool,
     pub rename: Option<(String, Entity<TextField>)>,
     pub menu: Option<String>,
-    pub managing: Option<String>,
+    pub managing: Option<ThreadManagement>,
+    management_generation: u64,
     pub error: Option<String>,
     pub loading: bool,
     pub generation: u64,
@@ -43,12 +44,21 @@ impl Navigation {
             rename: None,
             menu: None,
             managing: None,
+            management_generation: 0,
             error: None,
             loading: false,
             generation: 0,
             watch: None,
         }
     }
+}
+
+#[derive(Clone)]
+pub(super) struct ThreadManagement {
+    epoch: u64,
+    generation: u64,
+    id: String,
+    rename: Option<(Entity<TextField>, String)>,
 }
 
 #[derive(Clone, Copy)]
@@ -524,6 +534,7 @@ impl Plait {
         if self.host.protocol() < 3 || !self.host.connected {
             return;
         }
+        self.sidebar = true;
         self.navigation
             .filter
             .update(cx, |field, cx| field.set_text("", cx));
@@ -592,28 +603,83 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let Some(operation) = self.begin_thread_management(id, &request, cx) else {
+            return;
+        };
+        self.host_request::<ThreadReply>(request, window, cx, move |this, reply, window, cx| {
+            this.finish_thread_management(operation, reply, window, cx);
+        });
+    }
+
+    pub(super) fn begin_thread_management(
+        &mut self,
+        id: String,
+        request: &Request,
+        cx: &App,
+    ) -> Option<ThreadManagement> {
         if self.navigation.managing.is_some() || !self.host.connected || self.host.protocol() < 3 {
+            return None;
+        }
+        self.navigation.management_generation += 1;
+        let operation = ThreadManagement {
+            epoch: self.host.epoch,
+            generation: self.navigation.management_generation,
+            rename: self.navigation.rename.as_ref().and_then(|(thread, field)| {
+                (matches!(request, Request::RenameThread { .. }) && thread == &id)
+                    .then(|| (field.clone(), field.read(cx).text().to_owned()))
+            }),
+            id,
+        };
+        if self.navigation.menu.as_deref() == Some(&operation.id) {
+            self.navigation.menu = None;
+        }
+        self.navigation.managing = Some(operation.clone());
+        self.navigation.error = None;
+        Some(operation)
+    }
+
+    pub(super) fn finish_thread_management(
+        &mut self,
+        operation: ThreadManagement,
+        reply: Result<ThreadReply, plait_core::host::Error>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.host.epoch != operation.epoch
+            || self
+                .navigation
+                .managing
+                .as_ref()
+                .map(|pending| pending.generation)
+                != Some(operation.generation)
+        {
             return;
         }
-        self.navigation.managing = Some(id.clone());
-        self.navigation.error = None;
-        self.host_request::<ThreadReply>(request, window, cx, move |this, reply, window, cx| {
-            this.navigation.managing = None;
-            match reply {
-                Ok(reply) if reply.thread.id == id => {
-                    this.apply_managed_thread(ThreadSummary::from(&reply.thread), cx);
-                    this.navigation.rename = None;
-                    this.navigation.menu = None;
-                    window.focus(&this.focus, cx);
-                }
-                Ok(_) => {
-                    this.navigation.error = Some(
-                        "Host returned a different thread. Refresh before trying again.".into(),
-                    )
-                }
-                Err(error) => this.navigation.error = Some(error.to_string()),
+        self.navigation.managing = None;
+        let result = match reply {
+            Ok(reply) if reply.thread.id == operation.id => {
+                self.apply_managed_thread(ThreadSummary::from(&reply.thread), cx)
             }
-        });
+            Ok(_) => Err("Host returned a different thread. Refresh before trying again.".into()),
+            Err(error) => Err(error.to_string()),
+        };
+        if let Err(error) = result {
+            self.navigation.error = Some(error);
+            cx.notify();
+            return;
+        }
+        // A reply belongs to the field that sent it, not a later edit or focus.
+        if let Some((sent_field, sent_text)) = operation.rename
+            && self.navigation.rename.as_ref().is_some_and(|(id, field)| {
+                id == &operation.id && field == &sent_field && field.read(cx).text() == sent_text
+            })
+        {
+            if sent_field.focus_handle(cx).is_focused(window) {
+                window.focus(&self.focus, cx);
+            }
+            self.navigation.rename = None;
+        }
+        cx.notify();
     }
 
     /// New thread, the model it will start with, and a way to pick another.

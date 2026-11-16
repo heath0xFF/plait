@@ -45,7 +45,15 @@ pub(super) struct EndpointForm {
     pub url: Entity<TextField>,
     pub models: Entity<TextField>,
     pub key: Entity<TextField>,
-    pub checked: Option<providers::EndpointCheck>,
+    pub checked: Option<(String, providers::EndpointCheck)>,
+}
+
+impl EndpointForm {
+    pub(super) fn current_check(&self, cx: &App) -> Option<&providers::EndpointCheck> {
+        self.checked
+            .as_ref()
+            .and_then(|(url, check)| (self.url.read(cx).text().trim() == url).then_some(check))
+    }
 }
 
 fn field(
@@ -241,15 +249,18 @@ impl Plait {
         &mut self,
         provider: Provider,
         action: ProviderAction,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.close_provider_form(cx);
         match action {
             ProviderAction::SignIn => self.start_provider_sign_in(provider.id, cx),
             ProviderAction::EnterKey => {
+                let field = secret("Provider API key", cx);
+                window.focus(&field.focus_handle(cx), cx);
                 self.providers.form = Some(Form::Key {
                     provider: provider.id,
-                    field: secret("Provider API key", cx),
+                    field,
                 })
             }
             ProviderAction::SignOut => self.provider_mutation::<providers::ProviderReply>(
@@ -258,7 +269,7 @@ impl Plait {
                 },
                 cx,
             ),
-            ProviderAction::Edit => self.edit_endpoint(Some(provider), cx),
+            ProviderAction::Edit => self.edit_endpoint(Some(provider), window, cx),
             ProviderAction::Check => self.check_provider_endpoint(provider.id, cx),
             ProviderAction::Remove => {
                 self.providers.form = Some(Form::Remove {
@@ -367,7 +378,12 @@ impl Plait {
         );
     }
 
-    fn edit_endpoint(&mut self, provider: Option<Provider>, cx: &mut Context<Self>) {
+    fn edit_endpoint(
+        &mut self,
+        provider: Option<Provider>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let endpoint = provider.as_ref().and_then(|p| p.endpoint.as_ref());
         self.providers.form = Some(Form::Endpoint(EndpointForm {
             id: provider.as_ref().map(|p| p.id.clone()),
@@ -392,6 +408,9 @@ impl Plait {
             key: secret("Endpoint API key", cx),
             checked: None,
         }));
+        if let Some(Form::Endpoint(form)) = &self.providers.form {
+            window.focus(&form.name.focus_handle(cx), cx);
+        }
     }
 
     fn save_endpoint(&mut self, cx: &mut Context<Self>) {
@@ -461,6 +480,9 @@ impl Plait {
         }
         let key = (!form.key.read(cx).text().is_empty())
             .then(|| form.key.update(cx, |field, cx| field.take_secret(cx)));
+        if let Some(Form::Endpoint(form)) = &mut self.providers.form {
+            form.checked = None;
+        }
         self.providers.busy = true;
         let generation = self.providers.generation;
         let tested_url = base_url.clone();
@@ -472,16 +494,16 @@ impl Plait {
                     return;
                 }
                 this.providers.busy = false;
+                let Some(Form::Endpoint(form)) = &mut this.providers.form else {
+                    return;
+                };
+                if form.url.read(cx).text().trim() != tested_url {
+                    this.providers.note = Some("The address changed. Check it again.".into());
+                    return;
+                }
                 match result {
                     Ok(check) => {
-                        if let Some(Form::Endpoint(form)) = &mut this.providers.form {
-                            if form.url.read(cx).text().trim() == tested_url {
-                                form.checked = Some(check);
-                            } else {
-                                this.providers.note =
-                                    Some("The address changed. Check it again.".into());
-                            }
-                        }
+                        form.checked = Some((tested_url, check));
                     }
                     Err(error) => this.providers.note = Some(providers::refusal(&error)),
                 }
@@ -643,7 +665,7 @@ impl Plait {
                     .child(row().gap_2()
                         .child(button("check-endpoint", "Check connection").disabled(!enabled).when(enabled, |el| el.on_activate(cx, |this, _, cx| this.check_endpoint_form(cx))))
                         .child(button("save-endpoint", "Save endpoint").disabled(!enabled).when(enabled, |el| el.on_activate(cx, |this, _, cx| this.save_endpoint(cx)))));
-                if let Some(check) = &form.checked {
+                if let Some(check) = form.current_check(cx) {
                     panel = panel.child(tag(check.summary(), MUTED));
                     let selected = providers::parse_model_ids(form.models.read(cx).text());
                     for (index, id) in check.model_ids.iter().enumerate() {
@@ -658,6 +680,12 @@ impl Plait {
                                 let Some(Form::Endpoint(form)) = &this.providers.form else {
                                     return;
                                 };
+                                if !form
+                                    .current_check(cx)
+                                    .is_some_and(|check| check.model_ids.contains(&id))
+                                {
+                                    return;
+                                }
                                 let mut ids =
                                     providers::parse_model_ids(form.models.read(cx).text());
                                 if ids.contains(&id) {
@@ -679,12 +707,17 @@ impl Plait {
             }
             None => return column(),
         }
-        panel.child(
-            row().child(
-                button("close-provider-form", "Back to providers")
-                    .on_activate(cx, |this, _, cx| this.close_provider_form(cx)),
+        panel.child(row().child(
+            button("close-provider-form", "Back to providers").on_activate(
+                cx,
+                |this, window, cx| {
+                    this.close_provider_form(cx);
+                    if let Some(search) = &this.providers.search {
+                        window.focus(&search.focus_handle(cx), cx);
+                    }
+                },
             ),
-        )
+        ))
     }
 
     pub(super) fn provider_settings(&self, cx: &mut Context<Self>) -> Div {
@@ -726,8 +759,8 @@ impl Plait {
                         .aria_label(format!("{label}: {}", provider.name))
                         .disabled(!enabled)
                         .when(enabled, |el| {
-                            el.on_activate(cx, move |this, _, cx| {
-                                this.provider_action(provider.clone(), action, cx)
+                            el.on_activate(cx, move |this, window, cx| {
+                                this.provider_action(provider.clone(), action, window, cx)
                             })
                         }),
                 );
@@ -783,9 +816,9 @@ impl Plait {
                         button("add-endpoint", "Add endpoint")
                             .disabled(!enabled)
                             .when(enabled, |el| {
-                                el.on_activate(cx, |this, _, cx| {
+                                el.on_activate(cx, |this, window, cx| {
                                     this.close_provider_form(cx);
-                                    this.edit_endpoint(None, cx);
+                                    this.edit_endpoint(None, window, cx);
                                 })
                             }),
                     ),

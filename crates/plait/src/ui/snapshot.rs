@@ -1444,6 +1444,29 @@ fn composer_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     };
     harness.composer(|composer, _, cx| composer.restore_draft(lines(6), 1, None, cx));
     harness.capture(&format!("composer-lines-{suffix}"));
+    harness.update(|plait, window, cx| {
+        window.focus(&plait.composers[THREAD].focus_handle(cx), cx);
+    });
+    harness.draw();
+    // Both adjacent controls must lead back to the composer through normal Tab order.
+    for (leave, return_key) in [("shift-tab", "tab"), ("tab", "shift-tab")] {
+        harness.keystroke(leave);
+        harness.update(|plait, window, cx| {
+            assert_ne!(
+                window.focused(cx),
+                Some(plait.composers[THREAD].focus_handle(cx)),
+                "{leave} leaves the composer when no completion is open"
+            );
+        });
+        harness.keystroke(return_key);
+        harness.update(|plait, window, cx| {
+            assert_eq!(
+                window.focused(cx),
+                Some(plait.composers[THREAD].focus_handle(cx)),
+                "{return_key} reaches the composer from its adjacent control"
+            );
+        });
+    }
     // Far more lines than fit: the input stops growing and scrolls to its cursor.
     harness.composer(|composer, _, cx| composer.restore_draft(lines(60), 2, None, cx));
     harness.capture(&format!("composer-tall-{suffix}"));
@@ -1854,18 +1877,85 @@ fn settings_controls_walk(harness: &mut Harness, repository: &Path, suffix: &str
             url: field("Endpoint base URL", "http://localhost:8000/v1", cx),
             models: field("Endpoint model IDs", "sample-model", cx),
             key: cx.new(|cx| TextField::new("Endpoint API key", "Optional", cx).secret()),
-            checked: Some(EndpointCheck {
-                reachable: true,
-                reason: None,
-                status: Some(200),
-                model_ids: vec!["sample-model".into(), "sample-alternative".into()],
-                truncated: false,
-            }),
+            checked: Some((
+                "http://localhost:8000/v1".into(),
+                EndpointCheck {
+                    reachable: true,
+                    reason: None,
+                    status: Some(200),
+                    model_ids: vec!["sample-model".into(), "sample-alternative".into()],
+                    truncated: false,
+                },
+            )),
         }));
     });
     harness.capture(&format!("provider-endpoint-{suffix}"));
+    harness.update(|plait, window, cx| {
+        let Some(Form::Endpoint(form)) = &plait.providers.form else {
+            panic!("endpoint form");
+        };
+        window.focus(&form.name.focus_handle(cx), cx);
+    });
+    harness.draw();
+    for (keystroke, field) in [
+        ("tab", "address"),
+        ("tab", "models"),
+        ("tab", "key"),
+        ("shift-tab", "models"),
+        ("shift-tab", "address"),
+        ("shift-tab", "name"),
+    ] {
+        harness.keystroke(keystroke);
+        harness.update(|plait, window, cx| {
+            let Some(Form::Endpoint(form)) = &plait.providers.form else {
+                panic!("endpoint form");
+            };
+            let target = match field {
+                "name" => &form.name,
+                "address" => &form.url,
+                "models" => &form.models,
+                "key" => &form.key,
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                window.focused(cx),
+                Some(target.focus_handle(cx)),
+                "{keystroke} moves to the endpoint {field} field"
+            );
+        });
+    }
+    harness.update(|plait, _, cx| {
+        let Some(Form::Endpoint(form)) = &plait.providers.form else {
+            panic!("endpoint form");
+        };
+        assert!(form.current_check(cx).is_some());
+        form.url.update(cx, |field, cx| {
+            field.set_text("http://localhost:9000/v1", cx)
+        });
+        assert!(
+            form.current_check(cx).is_none(),
+            "a completed check only describes its tested address"
+        );
+    });
+    harness.capture(&format!("provider-endpoint-edited-{suffix}"));
+    if suffix == "narrow" {
+        harness.pointer(PlatformInput::Scroll(ScrollEvent {
+            position: point(px(600.), px(500.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(-450.))),
+            ..Default::default()
+        }));
+        harness.draw();
+        harness.update(|plait, _, _| {
+            assert!(
+                plait.settings_scroll.offset().y < px(0.),
+                "the endpoint form scrolls to its lower actions"
+            );
+        });
+        harness.capture("provider-endpoint-scrolled-narrow");
+    }
     harness.update(|plait, _, cx| {
         plait.close_provider_form(cx);
+        plait.settings_scroll.set_offset(point(px(0.), px(0.)));
         plait.settings_section = 2;
         plait.policy.key = Some((plait.host.epoch, plait.host.checkout.clone()));
         plait.policy.value = Some(CommandPolicy::Sandboxed);
@@ -2552,10 +2642,21 @@ fn project_switching_keeps_each_draft_and_rejects_the_old_watch() {
             });
         let old_epoch = plait.host.epoch;
         let old_watch = plait.host.watch_epoch;
+        plait.host.saving = true;
+        plait.host.save_message = Some("Saving default model…".into());
         plait.select_host_thread("other-thread".into(), window, cx);
         assert_eq!(plait.host.checkout, other);
         assert_eq!(plait.state.repository.path, other);
         assert!(!plait.host.accepts_watch(old_epoch, old_watch, THREAD));
+        assert!(!plait.host.saving);
+        assert!(
+            plait
+                .host
+                .save_message
+                .as_deref()
+                .unwrap()
+                .contains("not confirmed")
+        );
         plait
             .composers
             .get("other-thread")
@@ -2574,6 +2675,178 @@ fn project_switching_keeps_each_draft_and_rejects_the_old_watch() {
             "Separate draft"
         );
         assert_eq!(plait.host.threads.len(), 3);
+    });
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn thread_management_preserves_newer_edits_and_activity() {
+    if !isolated("thread_management_preserves_newer_edits_and_activity") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-management-ui-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.update(|plait, window, cx| {
+        plait.host.status.as_mut().unwrap().protocol_version = 3;
+        plait.sidebar = false;
+        plait.begin_rename(THREAD.into(), window, cx);
+        assert!(plait.sidebar, "global rename reveals its field");
+        let field = plait.navigation.rename.as_ref().unwrap().1.clone();
+        field.update(cx, |field, cx| field.set_text("Submitted title", cx));
+        let operation = plait
+            .begin_thread_management(
+                THREAD.into(),
+                &plait_core::host::Request::rename_thread(THREAD.into(), "Submitted title".into()),
+                cx,
+            )
+            .unwrap();
+        field.update(cx, |field, cx| field.set_text("A newer edit", cx));
+        plait.navigation.menu = Some("thr_0c44a9d1".into());
+        let focus = plait.navigation.filter.focus_handle(cx);
+        window.focus(&focus, cx);
+
+        let summary = plait
+            .host
+            .threads
+            .iter_mut()
+            .find(|thread| thread.id == THREAD)
+            .unwrap();
+        summary.updated_at = Some(20);
+        summary.title = Some("Newer live title".into());
+        summary.status = ThreadStatus::Running;
+        let reply = |updated_at| {
+            Ok(plait_core::host::ThreadReply {
+                thread: Snapshot {
+                    id: THREAD.into(),
+                    checkout: repository.clone(),
+                    model: choice(),
+                    title: Some("Submitted title".into()),
+                    updated_at: Some(updated_at),
+                    status: ThreadStatus::Idle,
+                    ..Default::default()
+                },
+            })
+        };
+        plait.finish_thread_management(operation, reply(10), window, cx);
+        assert!(plait.navigation.managing.is_none());
+        assert_eq!(
+            plait.navigation.rename.as_ref().unwrap().1.read(cx).text(),
+            "A newer edit"
+        );
+        assert_eq!(plait.navigation.menu.as_deref(), Some("thr_0c44a9d1"));
+        assert!(focus.is_focused(window));
+        let summary = plait
+            .host
+            .threads
+            .iter()
+            .find(|thread| thread.id == THREAD)
+            .unwrap();
+        assert_eq!(summary.title.as_deref(), Some("Newer live title"));
+        assert_eq!(summary.status, ThreadStatus::Running);
+
+        // Reopening the same thread makes a new editor even if its text matches.
+        let operation = plait
+            .begin_thread_management(
+                THREAD.into(),
+                &plait_core::host::Request::rename_thread(THREAD.into(), "Submitted title".into()),
+                cx,
+            )
+            .unwrap();
+        plait.begin_rename(THREAD.into(), window, cx);
+        let replacement = plait.navigation.rename.as_ref().unwrap().1.clone();
+        replacement.update(cx, |field, cx| field.set_text("A newer edit", cx));
+        plait.finish_thread_management(operation, reply(30), window, cx);
+        assert_eq!(plait.navigation.rename.as_ref().unwrap().1, replacement);
+        assert!(replacement.focus_handle(cx).is_focused(window));
+
+        // Archiving a thread does not acknowledge its unsaved rename field.
+        let operation = plait
+            .begin_thread_management(
+                THREAD.into(),
+                &plait_core::host::Request::archive_thread(THREAD.into(), true),
+                cx,
+            )
+            .unwrap();
+        plait.finish_thread_management(operation, reply(35), window, cx);
+        assert_eq!(plait.navigation.rename.as_ref().unwrap().1, replacement);
+        assert!(replacement.focus_handle(cx).is_focused(window));
+
+        // The original editor can close after success without stealing focus.
+        let operation = plait
+            .begin_thread_management(
+                THREAD.into(),
+                &plait_core::host::Request::rename_thread(THREAD.into(), "Submitted title".into()),
+                cx,
+            )
+            .unwrap();
+        window.focus(&focus, cx);
+        plait.finish_thread_management(operation, reply(40), window, cx);
+        assert!(plait.navigation.rename.is_none());
+        assert!(focus.is_focused(window));
+    });
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn reconnect_releases_management_and_rejects_its_late_reply() {
+    if !isolated("reconnect_releases_management_and_rejects_its_late_reply") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-reconnect-ui-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.update(|plait, window, cx| {
+        plait.host.status.as_mut().unwrap().protocol_version = 3;
+        plait.begin_rename(THREAD.into(), window, cx);
+        let operation = plait
+            .begin_thread_management(
+                THREAD.into(),
+                &plait_core::host::Request::rename_thread(THREAD.into(), "Submitted title".into()),
+                cx,
+            )
+            .unwrap();
+        let field = plait.navigation.rename.as_ref().unwrap().1.clone();
+        plait.navigation.loading = true;
+        plait.reconnect_host(window, cx);
+        assert!(plait.navigation.managing.is_none());
+        assert!(!plait.navigation.loading);
+        assert!(
+            plait
+                .navigation
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("not confirmed")
+        );
+        // A different operation in the new epoch must remain pending.
+        plait.host.connected = true;
+        let _new = plait
+            .begin_thread_management(
+                THREAD.into(),
+                &plait_core::host::Request::rename_thread(THREAD.into(), "Submitted title".into()),
+                cx,
+            )
+            .unwrap();
+        plait.finish_thread_management(
+            operation,
+            Ok(plait_core::host::ThreadReply {
+                thread: Snapshot {
+                    id: THREAD.into(),
+                    checkout: repository.clone(),
+                    ..Default::default()
+                },
+            }),
+            window,
+            cx,
+        );
+        assert!(plait.navigation.managing.is_some());
+        assert_eq!(plait.navigation.rename.as_ref().unwrap().1, field);
+        assert!(field.focus_handle(cx).is_focused(window));
     });
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();

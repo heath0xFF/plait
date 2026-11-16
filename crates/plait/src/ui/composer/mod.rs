@@ -234,7 +234,8 @@ pub struct Composer {
 impl Composer {
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
-            focus: cx.focus_handle(),
+            // Tracked focus uses the handle's tab settings, not the div's.
+            focus: cx.focus_handle().tab_stop(true),
             draft: Draft::default(),
             enabled: false,
             send_blocked: None,
@@ -1184,7 +1185,6 @@ impl Render for Composer {
                         }
                     })
                     .track_focus(&self.focus)
-                    .tab_stop(true)
                     .key_context("PlaitComposer")
                     .cursor(CursorStyle::IBeam)
                     .px_3()

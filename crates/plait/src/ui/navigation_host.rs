@@ -280,20 +280,15 @@ impl Plait {
         .detach();
     }
 
-    pub(super) fn apply_managed_thread(&mut self, summary: ThreadSummary, cx: &mut Context<Self>) {
-        if let Some(current) = self
-            .host
-            .threads
-            .iter_mut()
-            .find(|thread| thread.id == summary.id)
-        {
-            if current.checkout != summary.checkout {
-                return;
-            }
-            *current = summary;
-        }
+    pub(super) fn apply_managed_thread(
+        &mut self,
+        summary: ThreadSummary,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        navigation::merge_threads(&mut self.host.threads, vec![summary])?;
         self.rebuild_projects(cx);
         self.capture_session(cx);
         cx.notify();
+        Ok(())
     }
 }

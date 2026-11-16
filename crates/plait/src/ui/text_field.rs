@@ -423,7 +423,8 @@ impl TextField {
         cx: &mut Context<Self>,
     ) -> Self {
         Self {
-            focus: cx.focus_handle(),
+            // GPUI uses a tracked handle's tab settings instead of the div's.
+            focus: cx.focus_handle().tab_stop(true),
             line: Line::default(),
             name: name.into(),
             placeholder: placeholder.into(),
@@ -905,7 +906,6 @@ impl Render for TextField {
                 }
             })
             .track_focus(&self.focus)
-            .tab_stop(true)
             .key_context("PlaitTextField")
             .cursor(CursorStyle::IBeam)
             .flex()

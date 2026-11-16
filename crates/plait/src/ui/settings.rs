@@ -1,4 +1,4 @@
-//! The Settings page: host status first, then Models, Approvals, Keyboard,
+//! The Settings page: host status first, then Models, Providers, Approvals, Keyboard,
 //! and About and updates.
 
 use super::{
@@ -50,7 +50,8 @@ pub(super) fn section(title: &'static str) -> Div {
             div()
                 .text_size(px(13.))
                 .font_weight(FontWeight::MEDIUM)
-                .child(text!(title)),
+                // Several section headings can appear in one accessibility tree.
+                .child(text!(id = title, title)),
         )
 }
 
@@ -165,7 +166,7 @@ impl Plait {
         let signed_in = models.iter().filter(|model| model.authenticated);
         let usable = signed_in.clone().count();
         if usable == 0 {
-            return Some("No model is signed in. Add a provider above; its models become available as soon as the host confirms.".into());
+            return Some("No model is signed in. Open Providers to sign in; its models become available as soon as the host confirms.".into());
         }
         let providers = |models: &mut dyn Iterator<Item = &plait_core::host::Model>| {
             models

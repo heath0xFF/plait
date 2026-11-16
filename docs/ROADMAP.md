@@ -40,6 +40,8 @@ Do not expose the current local socket protocol over a public TCP listener.
 Multiple threads do not imply isolated files. Worktrees stay optional, and
 writers must coordinate around existing dirty work. There is no embedded terminal,
 mandatory agent orchestration, automatic swarm, or built-in cloud compute service.
+Per-thread worktree creation remains planned: the desktop's Git interface stays
+read-only through M2.5. Existing checkouts can be opened as projects.
 Use existing tools for interactive shells and debugging. A future Open in Rex
 integration and native mobile companion are possibilities, not current features.
 

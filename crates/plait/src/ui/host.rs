@@ -79,6 +79,11 @@ impl Plait {
         self.history = Default::default();
         self.navigation.watch = None;
         self.navigation.generation += 1;
+        self.navigation.loading = false;
+        if self.navigation.managing.take().is_some() {
+            self.navigation.error =
+                Some("Thread change not confirmed. Refresh to check before trying again.".into());
+        }
         self.host.reconnect();
         self.sync_composer(cx);
         self.host_request(
