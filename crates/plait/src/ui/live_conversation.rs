@@ -394,7 +394,7 @@ Tone::Filled,
                     ),
             );
         }
-        if pending {
+        if pending && self.host.protocol() < 3 {
             let ready = self.host.connected && !self.host.submitting && self.session.ready();
             banners.push(
                 banner(MUTED)
@@ -452,7 +452,7 @@ Tone::Filled,
             } else if self.live_count == 0 {
                 empty(
                     "Start this conversation",
-                    "Send a message below. The saved provider and model will be used for every turn.",
+                    "Send a message below. Change the model or thinking level between runs.",
                 )
                 .into_any_element()
             } else if let Some(snapshot) = &snapshot {
@@ -493,6 +493,7 @@ Tone::Filled,
                 .pt_2()
                 .pb_3()
                 .gap_2()
+                .children(self.queued_inputs(cx))
                 .when_some(composer.cloned(), |el, composer| {
                     el.child(
                         div()
@@ -502,10 +503,15 @@ Tone::Filled,
                             .child(composer),
                     )
                 })
-                .child(self.environment(
-                    Some(model_label),
-                    Some((self.approval_note(snapshot.as_deref()), MUTED)),
-                )),
+                .child(if self.host.protocol() >= 3 {
+                    self.thread_environment(cx)
+                } else {
+                    self.environment(
+                        Some(model_label),
+                        Some((self.approval_note(snapshot.as_deref()), MUTED)),
+                    )
+                    .into_any_element()
+                }),
         );
         row()
             .gap_0()

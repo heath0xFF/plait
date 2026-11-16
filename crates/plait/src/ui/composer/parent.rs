@@ -21,7 +21,7 @@ impl Plait {
         match event {
             ComposerEvent::Command(id) => self.run_composer_command(*id, window, cx),
             ComposerEvent::FilesNeeded => self.supply_files(cx),
-            ComposerEvent::Submit(_) | ComposerEvent::Stop => {}
+            ComposerEvent::Submit { .. } | ComposerEvent::Stop => {}
         }
     }
 

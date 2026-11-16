@@ -51,9 +51,11 @@ To publish a release that installed apps can update to, see
 | `runtime/` | Pi integration, approvals, durable execution, and platform command policy |
 
 The composer owns editable text, selection, undo, and IME composition. It emits
-Submit/Stop events; the parent owns host requests and acceptance. Enter during
+Submit (including revision and steering intent)/Stop events; the parent owns host requests and acceptance. Enter during
 IME composition must not submit. An acknowledgement clears only the draft
-revision that was sent. Offline input has a disabled state and a reason.
+revision that was sent. Every pending message keeps that revision, exact request
+ID, approval mode, and queue mode through journal recovery. Offline input has a
+disabled state and a reason.
 
 The host owns accepted work, not a window or event subscription. Closing a client
 must not stop a run; restarting a host must not replay an interrupted effect.

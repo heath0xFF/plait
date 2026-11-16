@@ -662,9 +662,9 @@ fn desktop_recovery_does_not_rebind_saved_work_or_clear_a_newer_revision() {
         });
         plait.capture_session(cx);
         let saved = plait.session.data.as_ref().unwrap().threads[THREAD].clone();
-        plait.host.threads[0].model.model_id = "a-different-model".into();
+        plait.host.threads[0].checkout = "/a-different-checkout".into();
         let snapshot = Arc::make_mut(plait.host.snapshot.as_mut().unwrap());
-        snapshot.model = plait.host.threads[0].model.clone();
+        snapshot.checkout = plait.host.threads[0].checkout.clone();
         snapshot.messages.push(Message {
             id: format!("request-{}", pending.request_id),
             role: MessageRole::User,
@@ -681,8 +681,8 @@ fn desktop_recovery_does_not_rebind_saved_work_or_clear_a_newer_revision() {
         assert!(!plait.session_accepts_thread(THREAD));
         assert!(plait.host.submissions.pending(THREAD).is_some());
         // Only the matching identity can reconcile the accepted request, not a reused thread ID.
-        plait.host.threads[0].model = choice();
-        Arc::make_mut(plait.host.snapshot.as_mut().unwrap()).model = choice();
+        plait.host.threads[0].checkout = saved.checkout.clone();
+        Arc::make_mut(plait.host.snapshot.as_mut().unwrap()).checkout = saved.checkout.clone();
         plait.restore_composer(THREAD, &composer, cx);
         plait.record_snapshot(cx);
         assert!(plait.host.submissions.pending(THREAD).is_none());
@@ -806,7 +806,7 @@ fn keys_drive_the_palette_and_picker() {
     press(&mut harness, "cmd-k");
     assert_eq!(
         shown(&mut harness).len(),
-        2 + 18 + 5,
+        2 + 19 + 5,
         "threads, commands, models"
     );
     press(&mut harness, "escape");
@@ -912,6 +912,7 @@ fn walk(output: Option<&Path>) {
         tool_cards_walk(&mut harness, &repository, suffix);
         draft_walk(&mut harness, &repository, suffix);
         composer_walk(&mut harness, &repository, suffix);
+        composer_v3_walk(&mut harness, &repository, suffix);
         settings_walk(&mut harness, &repository, suffix);
         palette_walk(&mut harness, &repository, suffix);
         picker_walk(&mut harness, &repository, suffix);
@@ -1621,4 +1622,218 @@ fn snapshot() {
     };
     std::fs::create_dir_all(&output).unwrap();
     walk(Some(&output));
+}
+
+/// Version 3 input and context controls. All state is synthetic and no socket is opened.
+fn composer_v3_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
+    use super::composer::ComposerEvent;
+    use plait_core::host::{QueueMode, Queued, ThinkingLevel, Usage};
+    harness.fresh_composer(repository);
+    harness.update(|plait, _, cx| {
+        let status = plait.host.status.as_mut().unwrap();
+        status.protocol_version = 3;
+        let model = status
+            .models
+            .iter_mut()
+            .find(|m| m.choice() == choice())
+            .unwrap();
+        model.name = "Sample model with an exceptionally long readable model name".into();
+        model.reasoning = Some(true);
+        model.thinking_levels = Some(vec![
+            ThinkingLevel::Off,
+            ThinkingLevel::Low,
+            ThinkingLevel::High,
+        ]);
+        model.context_window = Some(200_000);
+        Arc::make_mut(plait.host.snapshot.as_mut().unwrap()).thinking_level =
+            Some(ThinkingLevel::Low);
+        plait.host.submissions = Default::default();
+        plait.sync_composer(cx);
+    });
+    harness.capture(&format!("composer-v3-idle-{suffix}"));
+    harness.composer(|composer, window, cx| {
+        let revision = composer.saved_draft().1;
+        assert!(composer.restore_cancelled("Restored exact message", revision, cx));
+        composer.restore_draft(String::new(), revision + 2, None, cx);
+        let empty_revision = composer.saved_draft().1;
+        composer.type_text("Newer draft", window, cx);
+        assert!(!composer.restore_cancelled("Earlier cancelled message", empty_revision, cx));
+        assert_eq!(composer.text(), "Newer draft");
+        composer.restore_draft(String::new(), empty_revision + 2, None, cx);
+    });
+    harness.update(|plait, window, cx| plait.open_thread_models(window, cx));
+    harness.capture(&format!("composer-v3-model-picker-{suffix}"));
+    harness.update(|plait, window, cx| plait.close_overlay(true, window, cx));
+    harness.update(|plait, window, cx| plait.open_thinking(window, cx));
+    harness.capture(&format!("composer-v3-thinking-picker-{suffix}"));
+    harness.update(|plait, window, cx| plait.close_overlay(true, window, cx));
+    harness.change_snapshot(|snapshot| {
+        snapshot.status = ThreadStatus::Running;
+        snapshot.queued = [QueueMode::FollowUp, QueueMode::Steer]
+            .into_iter()
+            .enumerate()
+            .map(|(i, mode)| Queued {
+                id: format!("request-queue-{i}"),
+                request_id: format!("queue-{i}"),
+                text: if i == 0 {
+                    "Then check the edge cases in the parser.".into()
+                } else {
+                    "Keep the existing public API unchanged.".into()
+                },
+                mode,
+                approval: ApprovalMode::Ask,
+            })
+            .collect();
+    });
+    let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let recorded = events.clone();
+    harness.update(move |plait, _, cx| {
+        let composer = plait.composers[THREAD].clone();
+        cx.subscribe(&composer, move |_, _, event, _| {
+            if let ComposerEvent::Submit {
+                text,
+                revision,
+                steer,
+            } = event
+            {
+                recorded
+                    .borrow_mut()
+                    .push((text.clone(), *revision, *steer));
+            }
+        })
+        .detach();
+        plait.sync_composer(cx);
+    });
+    harness
+        .composer(|composer, window, cx| composer.type_text("Sample follow-up draft", window, cx));
+    harness.capture(&format!("composer-v3-queued-{suffix}"));
+    harness.keystroke("enter");
+    harness.draw();
+    harness.keystroke("alt-enter");
+    assert_eq!(
+        events.borrow().len(),
+        2,
+        "both busy gestures emit without a host"
+    );
+    assert!(!events.borrow()[0].2);
+    assert!(events.borrow()[1].2);
+    assert_eq!(events.borrow()[0].0, "Sample follow-up draft");
+    assert_eq!(events.borrow()[0].1, events.borrow()[1].1);
+    harness.change_snapshot(|snapshot| snapshot.status = ThreadStatus::Interrupted);
+    harness.update(|plait, _, cx| plait.sync_composer(cx));
+    harness.capture(&format!("composer-v3-held-{suffix}"));
+    harness.update(|plait, _, cx| {
+        let pending = plait
+            .host
+            .submissions
+            .begin_with(
+                THREAD,
+                "Sample message with an unconfirmed response".into(),
+                Some(ApprovalMode::Ask),
+                Some(QueueMode::FollowUp),
+                Some(900),
+            )
+            .unwrap();
+        plait
+            .host
+            .submissions
+            .uncertain(&pending.request_id, "Sample disconnected socket".into());
+        plait.sync_composer(cx);
+    });
+    harness.capture(&format!("composer-v3-uncertain-{suffix}"));
+    harness.update(|plait, _, cx| {
+        let pending = plait
+            .host
+            .submissions
+            .pending(THREAD)
+            .unwrap()
+            .request_id
+            .clone();
+        plait.host.submissions.start_send(THREAD, &pending);
+        plait.sync_composer(cx);
+    });
+    harness.capture(&format!("composer-v3-sending-{suffix}"));
+    harness.update(|plait, _, _| {
+        for queued in &plait.host.snapshot.as_ref().unwrap().queued {
+            plait.host.submissions.restore_accepted(
+                THREAD.into(),
+                plait_core::host_state::PendingSubmit {
+                    request_id: queued.request_id.clone(),
+                    text: queued.text.clone(),
+                    approval: Some(queued.approval),
+                    when_busy: Some(queued.mode),
+                    draft_revision: Some(100),
+                },
+            );
+        }
+    });
+    harness.composer(|composer, _, cx| composer.restore_draft(String::new(), 1000, None, cx));
+    harness.capture(&format!("composer-v3-edit-queued-{suffix}"));
+    harness.change_snapshot(|snapshot| {
+        snapshot.status = ThreadStatus::Running;
+        let sample = snapshot.queued[0].clone();
+        snapshot.queued = (0..16)
+            .map(|index| Queued {
+                request_id: format!("full-{index}"),
+                id: format!("request-full-{index}"),
+                ..sample.clone()
+            })
+            .collect();
+    });
+    harness.update(|plait, _, cx| plait.sync_composer(cx));
+    harness.capture(&format!("composer-v3-full-queue-{suffix}"));
+    harness.update(|plait, _, _| plait.host.submissions = Default::default());
+    harness.change_snapshot(|snapshot| {
+        snapshot.queued.clear();
+        snapshot.status = ThreadStatus::Idle;
+        snapshot.usage = Some(Usage {
+            input: 1000,
+            output: 500,
+            cache_read: 8500,
+            cache_write: 0,
+            reasoning: Some(300),
+            total: 10000,
+            context_used: Some(10000),
+            context_window: Some(200000),
+        });
+    });
+    harness.update(|plait, _, cx| plait.sync_composer(cx));
+    harness.capture(&format!("composer-v3-context-low-{suffix}"));
+    harness
+        .change_snapshot(|snapshot| snapshot.usage.as_mut().unwrap().context_used = Some(160000));
+    harness.capture(&format!("composer-v3-context-high-{suffix}"));
+    harness
+        .change_snapshot(|snapshot| snapshot.usage.as_mut().unwrap().context_used = Some(190000));
+    harness.capture(&format!("composer-v3-context-full-{suffix}"));
+    harness.update(|plait, _, _| plait.thread_controls.usage_open = true);
+    harness.capture(&format!("composer-v3-context-details-{suffix}"));
+    harness.update(|plait, _, _| plait.thread_controls.usage_open = false);
+    harness.update(|plait, _, cx| {
+        plait
+            .host
+            .status
+            .as_mut()
+            .unwrap()
+            .models
+            .iter_mut()
+            .for_each(|m| m.authenticated = false);
+        plait.sync_composer(cx);
+    });
+    harness.capture(&format!("composer-v3-model-unavailable-{suffix}"));
+    harness.update(|plait, _, cx| {
+        plait.host.connected = false;
+        plait.sync_composer(cx);
+    });
+    harness.capture(&format!("composer-v3-disconnected-{suffix}"));
+    harness.update(|plait, _, cx| {
+        plait.session.required = true;
+        plait.session.loading = true;
+        plait.sync_composer(cx);
+    });
+    harness.capture(&format!("composer-v3-recovery-{suffix}"));
+    harness.update(|plait, _, _| {
+        plait.session.required = false;
+        plait.session.loading = false;
+    });
+    harness.connect(repository, false);
 }

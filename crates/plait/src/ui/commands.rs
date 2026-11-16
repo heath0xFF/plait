@@ -22,6 +22,11 @@ pub(super) enum Command {
     NewThread(ModelChoice),
     /// A model chosen in the model picker. The picker's purpose gives it meaning.
     Model(ModelChoice),
+    Thinking {
+        thread_id: String,
+        epoch: u64,
+        level: plait_core::host::ThinkingLevel,
+    },
 }
 
 impl Clone for Command {
@@ -31,6 +36,15 @@ impl Clone for Command {
             Self::OpenThread(id) => Self::OpenThread(id.clone()),
             Self::NewThread(choice) => Self::NewThread(choice.clone()),
             Self::Model(choice) => Self::Model(choice.clone()),
+            Self::Thinking {
+                thread_id,
+                epoch,
+                level,
+            } => Self::Thinking {
+                thread_id: thread_id.clone(),
+                epoch: *epoch,
+                level: *level,
+            },
         }
     }
 }
@@ -283,10 +297,20 @@ impl Plait {
                     self.focus_composer(window, cx);
                 }
             }
+            Command::Thinking {
+                thread_id,
+                epoch,
+                level,
+            } => {
+                if self.host.epoch == epoch && self.host.selected.as_ref() == Some(&thread_id) {
+                    self.configure_selected(None, Some(level), window, cx);
+                }
+            }
             Command::NewThread(choice) => self.new_thread(Some(choice), window, cx),
             Command::Model(choice) => match purpose {
                 Some(ModelPurpose::NewThread) => self.new_thread(Some(choice), window, cx),
                 Some(ModelPurpose::DefaultModel) => self.choose_default_model(choice, window, cx),
+                Some(ModelPurpose::ThreadModel) => self.choose_thread_model(choice, window, cx),
                 None => {}
             },
         }

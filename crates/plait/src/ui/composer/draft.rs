@@ -324,14 +324,15 @@ impl Draft {
         let Some((text, revision)) = self.submitted.take() else {
             return false;
         };
-        if text != submitted
-            || revision != self.revision
-            || self.value.text != submitted
-            || self.marked.is_some()
-        {
+        text == submitted && self.clear_revision(submitted, revision)
+    }
+
+    /// An acknowledgement belongs to one edit revision, even with many requests pending.
+    pub fn clear_revision(&mut self, submitted: &str, revision: u64) -> bool {
+        if revision != self.revision || self.value.text != submitted || self.marked.is_some() {
             return false;
         }
-        // A recalled prompt was sent as shown: return to what was being written.
+        self.submitted = None;
         if self.cancel_recall() {
             return true;
         }
@@ -966,5 +967,20 @@ mod tests {
         assert_eq!(draft.durable_text(), "keep me");
         draft.insert("!");
         assert_eq!(draft.durable_text(), "sent!");
+    }
+    #[test]
+    fn acknowledgements_for_multiple_requests_clear_only_their_revision() {
+        let mut draft = Draft::default();
+        draft.insert("first");
+        let first_revision = draft.revision;
+        draft.submit(true, false).unwrap();
+        draft.insert(" and second");
+        let second_revision = draft.revision;
+        let second = draft.submit(true, false).unwrap();
+        assert!(!draft.clear_revision("first", first_revision));
+        assert_eq!(draft.value.text, second);
+        assert!(draft.clear_revision(&second, second_revision));
+        draft.insert(&second);
+        assert!(!draft.clear_revision(&second, second_revision));
     }
 }

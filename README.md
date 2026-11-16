@@ -49,6 +49,11 @@ restore on reopening; no task is sent automatically. See
 [keyboard controls](docs/MACOS.md#keyboard-controls) and
 [Build Plait with Plait](docs/SELF-HOSTING.md) for the edit → test → review loop.
 
+Source builds with a version 3 host also queue follow-ups and steering while an
+agent works, and let you change a thread's model and thinking level between
+runs. The composer shows waiting inputs and the latest context usage. See
+[working during a run](docs/MACOS.md#working-during-a-run).
+
 ## How it works
 
 The desktop and execution host run on your Mac. The desktop is a client;

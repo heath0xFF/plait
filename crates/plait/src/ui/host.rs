@@ -28,7 +28,7 @@ impl Drop for WatchLease {
 }
 
 impl Plait {
-    fn host_request<T: DeserializeOwned + Send + 'static>(
+    pub(super) fn host_request<T: DeserializeOwned + Send + 'static>(
         &mut self,
         mut request: Request,
         window: &mut Window,
@@ -147,7 +147,11 @@ impl Plait {
                     return;
                 }
                 match event {
-                    ComposerEvent::Submit(text) => this.submit_message(text.clone(), window, cx),
+                    ComposerEvent::Submit {
+                        text,
+                        revision,
+                        steer,
+                    } => this.submit_message(text.clone(), *revision, *steer, window, cx),
                     ComposerEvent::Stop => this.control_thread(None, window, cx),
                     other => this.composer_event(other, window, cx),
                 }
@@ -377,15 +381,33 @@ impl Plait {
         cx.notify();
     }
 
-    fn submit_message(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn submit_message(
+        &mut self,
+        text: String,
+        revision: u64,
+        steer: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(id) = self.host.selected.clone() else {
             return;
         };
         if !self.can_submit() {
             return;
         }
-        match self.host.submissions.begin(&id, text) {
-            Ok(_) => self.retry_submission(window, cx),
+        let mode = (self.host.protocol() >= 3).then_some(if steer {
+            host::QueueMode::Steer
+        } else {
+            host::QueueMode::FollowUp
+        });
+        match self.host.submissions.begin_with(
+            &id,
+            text,
+            self.next_approval_mode(),
+            mode,
+            Some(revision),
+        ) {
+            Ok(pending) => self.retry_submission_id(&id, &pending.request_id, window, cx),
             Err(error) => {
                 self.host.error = Some(error);
                 cx.notify();
@@ -397,67 +419,80 @@ impl Plait {
         let Some(id) = self.host.selected.clone() else {
             return;
         };
-        if !self.host.connected || self.host.submitting || !self.session.ready() {
-            return;
-        }
         let Some(pending) = self.host.submissions.pending(&id).cloned() else {
             return;
         };
-        if self.session.required
-            && !self
-                .host
-                .threads
-                .iter()
-                .find(|thread| thread.id == id)
-                .is_some_and(|thread| self.saved_thread(thread).is_some())
-        {
-            self.host.error = Some(
-                "Saved submission identity does not match this thread. Nothing was sent.".into(),
-            );
-            cx.notify();
+        self.retry_submission_id(&id, &pending.request_id, window, cx);
+    }
+
+    pub(super) fn retry_submission_id(
+        &mut self,
+        id: &str,
+        request_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.host.connected || !self.session.ready() || !self.session_accepts_thread(id) {
             return;
         }
+        let Some(pending) = self.host.submissions.get(id, request_id).cloned() else {
+            return;
+        };
+        if (pending.when_busy.is_some() && self.host.protocol() < 3)
+            || (pending.approval.is_some() && self.host.protocol() < 2)
+        {
+            self.host.error =
+                Some("This message needs a newer host. Update before retrying.".into());
+            return;
+        }
+        if !self.host.submissions.start_send(id, request_id) {
+            return;
+        }
+        let id = id.to_owned();
         let composer = self.composers.get(&id).cloned();
         self.host.submitting = true;
         self.host.error = None;
         self.sync_composer(cx);
         self.host_request::<host::SubmitReply>(
-            Request::submit(
-                id.clone(),
-                pending.request_id.clone(),
-                pending.text.clone(),
-                self.next_approval_mode(),
-            ),
+            pending.request(&id),
             window,
             cx,
             move |this, result, _, cx| {
-                this.host.submitting = false;
                 match result {
                     Ok(reply)
                         if reply.accepted
                             && reply.thread_id == id
                             && reply.request_id == pending.request_id =>
                     {
-                        this.host.submissions.finish(&id, &pending.request_id);
+                        this.host.submissions.confirm(&id, &pending.request_id);
                         if let Some(composer) = composer {
                             composer.update(cx, |composer, cx| {
-                                composer.clear_if_unchanged(&pending.text, cx);
+                                composer.acknowledge(&pending.text, pending.draft_revision, cx);
                             });
                         }
                     }
-                    Ok(_) => {
-                        this.host.error = Some(
-                            "Submission was not confirmed. Retry safely with the same request ID."
-                                .into(),
-                        )
-                    }
+                    Ok(_) => this.host.submissions.uncertain(
+                        &pending.request_id,
+                        "Host acceptance was not confirmed. Retry uses the same request ID.".into(),
+                    ),
                     Err(error) => {
                         if matches!(error, host::Error::Rejected(_)) {
                             this.host.submissions.finish(&id, &pending.request_id);
+                            this.set_thread_notice(id.clone(), error.to_string(), true);
+                        } else {
+                            this.host
+                                .submissions
+                                .uncertain(&pending.request_id, error.to_string());
                         }
-                        this.host.error = Some(error.to_string());
                     }
                 }
+                this.host.submitting = this.host.selected.as_ref().is_some_and(|selected| {
+                    this.host
+                        .submissions
+                        .all(selected)
+                        .iter()
+                        .any(|p| this.host.submissions.is_sending(&p.request_id))
+                });
                 this.capture_session(cx);
             },
         );
@@ -554,12 +589,15 @@ impl Plait {
     fn can_submit(&self) -> bool {
         self.session.ready()
             && self.host.connected
-            && !self.host.submitting
+            && !self.host.controlling
+            && !self.thread_configuration_pending()
             && self.host.snapshot.as_ref().is_some_and(|snapshot| {
-                !snapshot.status.busy()
+                (self.host.protocol() >= 3
+                    || (!snapshot.status.busy()
+                        && self.host.submissions.pending(&snapshot.id).is_none()))
                     && self.session_accepts_thread(&snapshot.id)
                     && self.host.available(Some(&snapshot.model))
-                    && self.host.submissions.pending(&snapshot.id).is_none()
+                    && snapshot.queued.len() + self.host.submissions.all(&snapshot.id).len() < 16
             })
     }
 
@@ -576,33 +614,53 @@ impl Plait {
             .as_ref()
             .is_some_and(|snapshot| snapshot.status.busy());
         let reason = if !self.session.ready() {
-            Some(
-                "Waiting for desktop recovery. Saved work must be available before sending.".into(),
-            )
+            Some("Restoring saved work…".into())
         } else if !self.session_accepts_thread(id) {
-            Some("This thread does not match the saved draft's checkout and model. Start a new thread; the original work is preserved.".into())
+            Some("Thread checkout differs from the saved draft. Original work is preserved.".into())
         } else if !self.host.connected {
             Some("Host disconnected. Reconnect to send.".into())
         } else if self.host.snapshot.is_none() {
             Some("Loading saved thread…".into())
-        } else if busy {
-            None
-        } else if self.host.submitting || self.host.submissions.pending(id).is_some() {
-            Some("Submission pending. Retry safely if the connection failed.".into())
+        } else if self.host.protocol() < 3
+            && (self.host.submitting || self.host.submissions.pending(id).is_some())
+        {
+            Some("Message unconfirmed · Retry safely above.".into())
         } else if !self
             .host
             .available(self.host.snapshot.as_ref().map(|snapshot| &snapshot.model))
         {
             Some(
-                "This thread's saved model is unavailable or not authenticated. Check Settings."
-                    .into(),
+                if self.host.protocol() >= 3 {
+                    "Model unavailable · choose another model below."
+                } else {
+                    "Model unavailable · check Settings."
+                }
+                .into(),
             )
         } else {
             None
         };
+        let send_blocked = if self.thread_configuration_pending() {
+            Some("Saving model settings…".into())
+        } else if self
+            .host
+            .snapshot
+            .as_ref()
+            .is_some_and(|s| s.queued.len() + self.host.submissions.all(id).len() >= 16)
+        {
+            Some("Queue full · cancel a message to send another.".into())
+        } else {
+            None
+        };
         composer.update(cx, |composer, cx| {
+            composer.set_send_blocked(send_blocked, cx);
             composer.set_enabled(reason.is_none() && !self.host.controlling, reason, cx);
             composer.set_busy(busy, cx);
+            composer.set_queue_enabled(
+                self.host.protocol() >= 3,
+                self.host.connected && !self.host.controlling,
+                cx,
+            );
         });
         self.sync_prompt_history(cx);
     }

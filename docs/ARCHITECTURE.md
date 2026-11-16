@@ -136,7 +136,9 @@ partial frames retain absolute deadlines; an idle established watch has no timer
 A repository epoch, watch epoch, and thread ID guard each async result. An uncertain submission keeps its request
 ID for an explicit retry. Reconnect loads state; it does not submit a new task.
 The composer keeps its draft until acceptance and clears it only if its edit
-revision still matches the submitted draft. Each thread has its own composer.
+revision still matches the submitted draft. Each pending request retains its own
+revision, queue mode, and approval mode, so out-of-order replies cannot erase a
+newer draft or change a retry’s authorization. Each thread has its own composer.
 
 Each run is submitted with an approval mode. In `ask` mode every file change and
 command needs a one-call approval with full arguments; in `auto` mode, the
@@ -371,7 +373,8 @@ protocol and durable conversation schema are unchanged.
 
 ### Composer
 
-The composer owns editable text and reports intent as events: Submit, Stop, a
+The composer owns editable text and reports intent as events: Submit (text, edit
+revision, and whether to steer), Stop, a
 chosen local command, and a request for the checkout's files. The window owns
 host requests and Git reads and performs the commands. `Draft` holds every
 editing rule without GPUI, so the rules are unit-tested.
@@ -418,6 +421,27 @@ types a mention, lists the fixture repository through Git, and accepts the
 result. The scenes do **not** exercise key events, IME, pointer selection,
 wheel scrolling, or the accessibility tree; those have had no check in a
 native window. The editing rules behind them are unit-tested.
+
+### Queue and per-thread controls
+
+A version 3 composer can send during a run: Enter follows up, Option-Enter
+steers, and Stop remains a separate control. The core `Submissions` collection
+tracks each outstanding request independently. Request ID, full text, queue
+mode, approval mode, and draft revision are written before socket I/O. A queued
+snapshot item acknowledges a request just as its accepted message does. Sending
+flags are transient; reopening and reconnecting never submit on their own.
+The legacy journal `pending` field holds the first outstanding item;
+`pending_submissions` holds the rest. Additive `queued_submissions` preserves
+exact local text for cancelling a queued message back into the draft. Queues
+owned by the host remain authoritative; this local cache starts no work.
+
+`ui/thread_controls.rs` presents model, thinking, approval, context usage, and
+the input queue. Model changes are refused during a run. Thinking choices come
+from the catalog, and request replies are guarded by host epoch, selected
+thread, and request sequence. The subscription owns snapshot order; control
+replies do not replace a newer event. Saved thread identity is ID and checkout;
+a model change preserves draft recovery. Pure usage formatting and thresholds
+live in `plait-core::compose`, with no GPUI dependency.
 
 ### Native conversation text
 

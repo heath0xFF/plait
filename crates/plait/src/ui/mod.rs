@@ -17,6 +17,7 @@ mod settings;
 mod snapshot;
 mod text_field;
 pub mod theme;
+mod thread_controls;
 mod tool_card;
 mod update;
 
@@ -55,6 +56,7 @@ actions!(
         PreviousFile,
         NewThread,
         NewThreadWithModel,
+        SwitchThreadModel,
         CommandPalette,
         ToggleInspector
     ]
@@ -80,6 +82,7 @@ pub struct Plait {
     overlay: Option<commands::Overlay>,
     /// The inspector toggle was used on a window too narrow to show it.
     inspector_note: bool,
+    thread_controls: thread_controls::ThreadControls,
     focus: FocusHandle,
     expanded_live_tools: HashSet<String>,
     reading: selection::Reading,
@@ -125,6 +128,7 @@ impl Plait {
             new_thread_open: false,
             overlay: None,
             inspector_note: false,
+            thread_controls: Default::default(),
             focus,
             expanded_live_tools: HashSet::new(),
             reading: Default::default(),
@@ -611,6 +615,9 @@ impl Render for Plait {
             )
             .on_action(cx.listener(|this, _: &NewThreadWithModel, window, cx| {
                 this.open_model_picker(model_picker::ModelPurpose::NewThread, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SwitchThreadModel, window, cx| {
+                this.open_thread_models(window, cx)
             }))
             .on_action(cx.listener(|this, _: &ToggleDiagnostics, _, cx| {
                 this.diagnostics = !this.diagnostics;
