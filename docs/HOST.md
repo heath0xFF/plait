@@ -179,10 +179,133 @@ Stop and shutdown revoke it. Answers after cancellation or consumption return
 Authorization and tool execution are separate. Argument limits, dirty-path and
 ignored-path protection, checked file helpers, and the command sandbox still
 apply in both modes. Automatic approval removes the prompt, not those checks.
+The sandbox is the default [command policy](#command-policy); approval mode
+never changes which policy a run uses.
 There is no scheduler or persisted grant in this contract. Future automation
 grants require separate protocol, persistence, and permission review.
 
+## Command policy
+
+Each canonical checkout has a command policy: `sandboxed`, the default, or
+`trusted`. It decides how the `command` tool runs for runs in that checkout.
+Trusted mode is opt-in per project. The host operations below are implemented;
+**the desktop control that sets the policy is not shipped yet**, so the app
+uses the sandbox unless a client sends the operation.
+
+```json
+{"op":"command_policy","checkout":"/absolute/checkout"}
+{"op":"set_command_policy","checkout":"/absolute/checkout","policy":"trusted"}
+```
+
+Both return `{"checkout":"/canonical/checkout","policy":"sandboxed"}`, with the
+policy now in force for that checkout. `checkout` is an absolute path inside a
+Git working tree and is resolved to its canonical root, as in `list_threads`.
+`policy` is `sandboxed` or `trusted`; anything else is `invalid_request`. Both
+operations accept the optional `protocol_version` and reply the same way for
+every version. A host without them rejects the unknown operation with
+`invalid_request`; a client treats that host as sandboxed. No existing request
+or reply changes: `create_thread`, `submit`, and snapshots carry no policy. A
+snapshot does not yet report the policy its run used.
+
+- **Storage.** `host.sqlite` keeps one `settings` row per trusted checkout, keyed
+  by the canonical path and holding the checkout root's device and inode. There
+  is no schema change. `sandboxed` removes the row. A missing or unreadable
+  row, or a directory that is no longer the one that was trusted, is
+  `sandboxed`. Another host store never shares the setting.
+- **Who can set it.** Only this operation, sent by a local client as an explicit
+  user action. No tool, model output, thread, run, or snapshot carries or
+  changes the policy, and a thread cannot take it to another checkout.
+- **When it applies.** A run reads the policy once at admission and keeps it
+  until it ends. A change applies to the next run. Recovery starts no run.
+- **Linux.** Commands are rejected in both modes.
+
+| | `sandboxed` | `trusted` |
+| --- | --- | --- |
+| Process | Seatbelt profile, `/bin/sh -c` | `/bin/sh -c` as the user, no profile |
+| Working directory | Checkout | Checkout |
+| Checkout and Git writes | Denied | Allowed |
+| Other files | Read system and toolchain paths; write private scratch and the thread build cache | Anything the user account can read or write |
+| Network | Denied, except Unix sockets in scratch | Allowed |
+| HOME and TMPDIR | A new private directory per command | The user's real home and temporary directory |
+| Environment | Fixed PATH and Apple toolchain | The user's login-shell environment |
+| Build output | Per-thread cache; Cargo offline | Wherever the project's tools put it |
+| Standard input | None | None |
+| Deadline, Stop, output bounds | As in [Safety boundary](#safety-boundary) | The same |
+
+**Trusted environment.** The host runs as a per-user service with a minimal
+PATH, so it asks the account's login shell, as a new terminal would. Once per
+run, before the first trusted command, it starts the account's shell (from the
+OS account record) as a login shell in the host's HOME and reads the resulting
+environment. The shell is also interactive for zsh, bash, and fish, whose
+interactive startup files commonly extend PATH. Startup files are the user's
+own and run with the user's access. That shell starts from a fixed base: `HOME`, `USER`, `LOGNAME`,
+`SHELL`, the system PATH, and, when the host has them, `TMPDIR`, `LANG`,
+`LC_ALL`, `LC_CTYPE`, `SSH_AUTH_SOCK`, and `__CF_USER_TEXT_ENCODING`. Nothing
+else from the host process is inherited. `PLAIT_HOST_EXE`, `PLAIT_LOCK_FD`, and
+`PLAIT_NOTIFY_FD` are removed, and the guardian marks every inherited descriptor
+close-on-exec, so the store lock, the checkout lease, and the notification
+socket never reach the command. The read has a 10-second limit and runs under
+the guardian. If it fails, the command runs with the base variables and
+`HOME/.cargo/bin`, Homebrew, `/usr/local/bin`, and the system PATH, and its
+output begins with a notice. Shell functions and aliases are not available:
+commands run under `/bin/sh`.
+
+**Unchanged in trusted mode.**
+
+- Authorization. `ask` still prompts for each exact call and `auto` still
+  removes only the prompt. Authorization is checked again before the command
+  starts, so an approval after Stop does nothing.
+- Lifecycle. The Rust guardian holds the store and checkout writer leases and
+  kills the command's process group on Stop, host or sidecar death, the
+  15-minute deadline, and shell exit. Output keeps its bounds and Unicode rules.
+- File tools. `read`, `edit`, and `write` keep every check in
+  [Safety boundary](#safety-boundary). Paths that were dirty or ignored before
+  the run stay refused for the whole run, even if a command commits them.
+- Approval text. A command prompt reads `Run command with full user access and
+  network`, and every prompt in a trusted run states the risk below instead of
+  the sandboxed wording.
+- Model instructions. The run's instructions and the `command` tool description
+  describe the mode in force. The sandboxed wording is unchanged.
+
+**After each trusted command**, whether it succeeded, failed, or was stopped:
+
+- The host compares each file this thread owns with its postimage record. A
+  file the command changed, replaced, or removed loses its record, in memory
+  and in the store. It then has no special standing: while it is dirty, file
+  tools refuse it, in this run and later ones, until it is clean again, for
+  example after a commit. An unchanged file stays owned. If the host stops before this step, the stale
+  record remains but still never matches, as before.
+- If a path that was dirty before the run changed during the command, the
+  command's output begins with a notice naming up to 20 such files.
+  Directories are not examined. This reports the change; it does not prevent
+  or undo it.
+
+**What trusted mode gives up.** A trusted command is a program running as you.
+
+- It can change, delete, or commit any file your account can, including files
+  that were dirty before the run, ignored files, Git history, other checkouts,
+  and your home directory. Dirty-path protection covers only the file tools.
+- It can use the network, your credentials, your SSH agent, and your keychain
+  as any program you run can, and can send what it reads anywhere.
+- It can reach the host itself: the socket, the store, and the installed host
+  files. The host does not offer the model a way to change the policy, approve
+  a call, or reach another thread, but it cannot stop a trusted command from
+  doing those things as you. Trust the project and the model accordingly.
+- It can signal other processes, and a process that deliberately leaves the
+  command's process group survives Stop with the same access.
+- The checkout writer lease still excludes other Plait runs, not the command's
+  own writes to other places.
+- With automatic approval, trusted commands run without a prompt.
+- Build output and dependency installs land in the checkout or your home, not
+  in a private cache. Dirty and ignored entries count toward the 500-entry
+  baseline bound, so a command that leaves many of them can make file tools
+  and later runs fail until they are cleaned up or ignored by directory.
+
 ## Safety boundary
+
+Command rules in this section describe the default `sandboxed` policy. A
+project set to `trusted` replaces them as described in
+[Command policy](#command-policy). File-tool rules apply to both.
 
 Load checkout `AGENTS.md` explicitly before execution. Model and thread settings
 are immutable once a thread exists; changing the default affects only new threads.

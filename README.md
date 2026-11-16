@@ -94,7 +94,10 @@ This is the **M2 local preview**, not a complete IDE.
   no file editor, embedded terminal, mandatory worktree, or automatic updater.
 - Commands cannot use external networking or write the checkout. Approved file
   tools make edits; build output goes to private caches. Model requests need
-  access to your configured provider.
+  access to your configured provider. Source builds of the host after
+  v0.1.0-preview.2 also have an opt-in, per-project
+  [trusted command mode](docs/HOST.md#command-policy) that lifts these limits;
+  no desktop control sets it yet.
 - Conversation and tool views show bounded previews, not the full stored history.
 
 Mac CI verifies the installed app, sandbox, and recovery with scripted providers.
