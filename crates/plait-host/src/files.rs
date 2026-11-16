@@ -124,12 +124,45 @@ fn text(file: &mut File, limit: u64) -> io::Result<String> {
 
 // Range reads never allocate the whole file and keep the same descriptor/path checks.
 fn read_range(file: &mut File, request: &Value) -> io::Result<Value> {
-    let offset = request["offset"].as_u64().unwrap_or(0);
-    let limit = request["limit"].as_u64().unwrap_or(8192);
+    let offset = match request.get("offset") {
+        None => 0,
+        Some(value) => value
+            .as_u64()
+            .ok_or_else(|| io::Error::other("invalid read offset"))?,
+    };
+    let limit = match request.get("limit") {
+        None => 8192,
+        Some(value) => value
+            .as_u64()
+            .ok_or_else(|| io::Error::other("invalid read limit"))?,
+    };
+    if !(4..=12000).contains(&limit) {
+        return Err(io::Error::other("invalid read limit"));
+    }
     let meta = file.metadata()?;
-    if !meta.is_file() || meta.nlink() != 1 || offset > meta.len() || !(4..=12000).contains(&limit)
-    {
+    if !meta.is_file() || meta.nlink() != 1 {
         return Err(io::Error::other("invalid file range"));
+    }
+    if offset > meta.len() {
+        return Err(io::Error::other("read offset beyond EOF"));
+    }
+    // A continuation byte alone could be corrupt data, not a split character.
+    let start = offset.saturating_sub(3);
+    file.seek(SeekFrom::Start(start))?;
+    let mut context = Vec::new();
+    (&mut *file)
+        .take(offset - start + 4)
+        .read_to_end(&mut context)?;
+    let boundary = (offset - start) as usize;
+    for index in 0..boundary {
+        // Only the crossing character needs to be valid, not the following bytes.
+        for end in boundary + 1..=context.len() {
+            if let Ok(value) = std::str::from_utf8(&context[index..end])
+                && value.chars().count() == 1
+            {
+                return Err(io::Error::other("read offset inside UTF-8 character"));
+            }
+        }
     }
     file.seek(SeekFrom::Start(offset))?;
     let mut bytes = Vec::new();
@@ -140,9 +173,7 @@ fn read_range(file: &mut File, request: &Value) -> io::Result<Value> {
             error.valid_up_to()
         }
         Err(_) => {
-            return Err(io::Error::other(
-                "range must start at a UTF-8 boundary in a UTF-8 file",
-            ));
+            return Err(io::Error::other("file contents are not valid UTF-8"));
         }
     };
     let next = offset + end as u64;
@@ -320,6 +351,93 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn range(bytes: &[u8], request: Value) -> io::Result<Value> {
+        let path = std::env::temp_dir().join(format!(
+            "plait-range-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut file = File::options()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        file.write_all(bytes)?;
+        let result = read_range(&mut file, &request);
+        std::fs::remove_file(path)?;
+        result
+    }
+
+    #[test]
+    fn range_arguments_are_strict() {
+        for value in [
+            json!(null),
+            json!(-1),
+            json!(1.5),
+            json!("4"),
+            json!(true),
+            json!([]),
+            json!({}),
+        ] {
+            for field in ["offset", "limit"] {
+                let error = range(b"hello", json!({field: value})).unwrap_err();
+                assert_eq!(error.to_string(), format!("invalid read {field}"));
+            }
+        }
+        for limit in [0, 3, 12001, u64::MAX] {
+            assert_eq!(
+                range(b"hello", json!({"limit": limit}))
+                    .unwrap_err()
+                    .to_string(),
+                "invalid read limit"
+            );
+        }
+        assert_eq!(range(b"hello", json!({})).unwrap()["text"], "hello");
+    }
+
+    #[test]
+    fn range_offsets_and_unicode_boundaries() {
+        let bytes = "abc🚀z".as_bytes();
+        let page = range(bytes, json!({"offset": 0, "limit": 4})).unwrap();
+        assert_eq!(
+            page,
+            json!({"text":"abc", "offset":0, "next_offset":3, "total_bytes":8})
+        );
+        assert_eq!(
+            range(bytes, json!({"offset":3, "limit":4})).unwrap()["text"],
+            "🚀"
+        );
+        for offset in 4..7 {
+            assert_eq!(
+                range(bytes, json!({"offset":offset}))
+                    .unwrap_err()
+                    .to_string(),
+                "read offset inside UTF-8 character"
+            );
+        }
+        for bytes in [b"".as_slice(), bytes] {
+            assert_eq!(
+                range(bytes, json!({"offset":bytes.len()})).unwrap()["text"],
+                ""
+            );
+            assert_eq!(
+                range(bytes, json!({"offset":bytes.len() + 1}))
+                    .unwrap_err()
+                    .to_string(),
+                "read offset beyond EOF"
+            );
+        }
+        for bytes in [b"\xff".as_slice(), b"\x80abc", b"abc\xf0\x9f"] {
+            assert_eq!(
+                range(bytes, json!({})).unwrap_err().to_string(),
+                "file contents are not valid UTF-8"
+            );
+        }
+    }
+
     #[test]
     fn rejects_escapes_and_git_metadata() {
         for path in [

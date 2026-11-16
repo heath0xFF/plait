@@ -819,9 +819,15 @@ The runtime exposes `read`, `read_output`, `edit`, `write`, and `command`.
 These are model tools, independent of the client socket protocol version.
 
 - `read`: `{path, offset?, limit?}` reads a regular UTF-8 checkout file. Offsets
-  count bytes from zero; limit defaults to 8192 and is 4–12000 bytes. The result
-  gives the next offset when more remains. Pages never split a UTF-8 character;
-  an offset inside a character is rejected. Reads keep the descriptor, root,
+  count bytes from zero; omitted offset defaults to zero, and omitted limit
+  defaults to 8192 (4–12000 bytes allowed). Supplied values must be integers;
+  negative offsets, nulls, strings, and fractional or out-of-range values are
+  rejected rather than defaulted. Zero and EOF offsets are valid; EOF returns
+  empty text with no continuation. The result gives the next offset when more
+  remains. Pages never split a UTF-8 character. An offset beyond EOF, an offset
+  inside a character, and invalid UTF-8 encountered while reading have distinct
+  fixed errors; raw helper diagnostics are never exposed. UTF-8 validation is
+  page-local, not a scan of the entire file. Reads keep the descriptor, root,
   symlink, hard-link, and Git-metadata checks, without loading the whole file.
 - `edit`: `{path, old_text, new_text}` replaces exactly one occurrence in a file
   up to 8 MiB. Approval compares its complete fingerprint, including content

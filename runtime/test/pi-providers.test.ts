@@ -149,7 +149,10 @@ const HAND_WRITTEN = {
   },
 };
 const seeded = (content: unknown = HAND_WRITTEN, indent: number | string = '\t') => async (agent: string) => {
-  await writeFile(join(agent, 'models.json'), JSON.stringify(content, null, indent) + '\n', { mode: 0o644 });
+  const path = join(agent, 'models.json');
+  await writeFile(path, JSON.stringify(content, null, indent) + '\n', { mode: 0o644 });
+  // Mode-preservation tests need this exact starting mode regardless of umask.
+  await chmod(path, 0o644);
 };
 
 test('adding an endpoint writes Pi\'s format, keeps the rest of models.json, and reloads', async t => {

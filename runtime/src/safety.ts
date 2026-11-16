@@ -125,6 +125,11 @@ export async function fileAction<T = FileResult>(root: string, action: string, p
         if (code !== 0) {
           // Only fixed helper messages cross the boundary; never echo raw stderr.
           const reason = new Map([
+            ['plait-host: invalid read offset', 'Read denied: offset must be a non-negative integer byte offset.'],
+            ['plait-host: invalid read limit', 'Read denied: limit must be an integer from 4 to 12000 bytes.'],
+            ['plait-host: read offset beyond EOF', 'Read denied: offset is beyond the end of the file.'],
+            ['plait-host: read offset inside UTF-8 character', 'Read denied: offset is inside a UTF-8 character. Use the returned next offset.'],
+            ['plait-host: file contents are not valid UTF-8', 'Read denied: file contents are not valid UTF-8.'],
             ['plait-host: edit must match exactly once', 'Edit denied: old_text must match exactly once.'],
             ['plait-host: file identity or metadata changed after approval', 'Edit denied: file identity or metadata changed after approval.'],
             ['plait-host: file changed after approval was requested', 'Edit denied: file contents changed after approval was requested.'],

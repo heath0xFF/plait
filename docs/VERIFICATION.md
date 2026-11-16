@@ -240,3 +240,20 @@ history remains available, internal summaries do not become user messages,
 restart during summarization makes no new requests until submission, and a
 failed required summary can recover. They establish orchestration and storage
 behavior, not the quality of summaries produced by a live model.
+
+An installed source build was also exercised with a live provider on Plait's
+actual Rust and TypeScript code. The run made a cross-language change, added
+regression tests and documentation, accepted review corrections in follow-up
+messages, and completed a queued correction. Closing the desktop during work
+left the host running; reopening restored the selected thread and an unsent
+draft. The source installer’s active-run check refused to proceed while that run was active.
+
+With Trusted commands explicitly enabled for that checkout, the agent ran the
+ordinary full development gate: 332 Rust tests passed (one image-export test
+ignored), 187 runtime tests passed including the macOS sandbox tests, and the
+release-script suite passed 23 tests. Two permission fixtures were made explicit
+so the gate also passes under the host's private `0077` umask. No production
+permission checks or test assertions were weakened. This establishes a live
+project-development loop; it does not certify every provider, native input
+method, or long-running task. Automatic compaction remains covered by the
+scripted tests above rather than this live run.

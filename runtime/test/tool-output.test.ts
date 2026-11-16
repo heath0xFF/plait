@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
-import { writeFile, symlink, link } from 'node:fs/promises';
+import { writeFile, symlink, link, mkdtemp, realpath, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { CommandOutputs, OUTPUT_COUNT, OUTPUT_LIMIT, rangeArgs } from '../src/tool-output.ts';
 import type { TextRange } from '../src/tool-output.ts';
 import { fileAction, rootIdentity } from '../src/safety.ts';
@@ -33,6 +34,37 @@ test('ranged reads reach every byte of a large Unicode file without relaxing pat
   await link(join(root, 'large.txt'), join(base, 'hard'));
   await assert.rejects(fileAction(root, 'read_range', 'large.txt', { offset: 0 }));
   for (const path of ['../outside', '.git/config']) await assert.rejects(fileAction(root, 'read_range', path, { offset: 0 }));
+});
+
+test('ranged helper errors are specific, fixed, and preserve valid boundaries', async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'plait-read-range-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(join(root, 'unicode.txt'), 'abc🚀z');
+  const read = (args: unknown) => fileAction<TextRange>(root, 'read_range', 'unicode.txt', args);
+  for (const value of [null, -1, 1.5, '4', true, [], {}]) {
+    await assert.rejects(read({ offset: value }), { message: 'Read denied: offset must be a non-negative integer byte offset.' });
+    await assert.rejects(read({ limit: value }), { message: 'Read denied: limit must be an integer from 4 to 12000 bytes.' });
+  }
+  for (const limit of [0, 3, 12001]) {
+    await assert.rejects(read({ limit }), { message: 'Read denied: limit must be an integer from 4 to 12000 bytes.' });
+  }
+  assert.equal((await read({})).text, 'abc🚀z');
+  assert.deepEqual(await read({ offset: 0, limit: 4 }), { text: 'abc', offset: 0, next_offset: 3, total_bytes: 8 });
+  assert.deepEqual(await read({ offset: 3, limit: 4 }), { text: '🚀', offset: 3, next_offset: 7, total_bytes: 8 });
+  assert.deepEqual(await read({ offset: 8 }), { text: '', offset: 8, next_offset: null, total_bytes: 8 });
+  await assert.rejects(read({ offset: 9 }), { message: 'Read denied: offset is beyond the end of the file.' });
+  for (const offset of [4, 5, 6]) {
+    await assert.rejects(read({ offset }), { message: 'Read denied: offset is inside a UTF-8 character. Use the returned next offset.' });
+  }
+  for (const bytes of [[0xff], [0x80, 97], [97, 0xf0, 0x9f]]) {
+    await writeFile(join(root, 'unicode.txt'), Buffer.from(bytes));
+    await assert.rejects(read({}), { message: 'Read denied: file contents are not valid UTF-8.' });
+  }
+  await writeFile(join(root, 'unicode.txt'), '');
+  assert.deepEqual(await read({ offset: 0 }), { text: '', offset: 0, next_offset: null, total_bytes: 0 });
+  await assert.rejects(fileAction(root, 'read_range', 'private-missing-path', {}), {
+    message: 'File access denied, changed, non-unique edit, or unsafe path.',
+  });
 });
 
 test('command logs survive reopen, preserve Unicode across chunks, and belong to one thread', async t => {
@@ -77,5 +109,26 @@ test('range arguments reject malformed and unbounded reads', () => {
   for (const args of [{ offset: -1 }, { offset: 0.5 }, { offset: '1' }, { limit: 0 }, { limit: 12001 }, { offset: Infinity }]) {
     assert.throws(() => rangeArgs(args));
   }
+});
+
+test('range arguments default only omitted fields and preserve valid byte ranges', () => {
+  for (const args of [
+    { offset: null }, { limit: null }, { offset: null, limit: null },
+    { offset: null, limit: 4 }, { offset: 0, limit: null },
+    { offset: undefined }, { limit: undefined },
+  ]) {
+    assert.throws(() => rangeArgs(args), {
+      code: 'invalid_request',
+      message: 'offset must be a non-negative byte offset; limit must be 4–12000 bytes.',
+    });
+  }
   assert.deepEqual(rangeArgs({}), { offset: 0, limit: 8192 });
+  assert.deepEqual(rangeArgs({ offset: 0 }), { offset: 0, limit: 8192 });
+  assert.deepEqual(rangeArgs({ offset: 27 }), { offset: 27, limit: 8192 });
+  assert.deepEqual(rangeArgs({ limit: 4 }), { offset: 0, limit: 4 });
+  assert.deepEqual(rangeArgs({ limit: 12000 }), { offset: 0, limit: 12000 });
+  assert.deepEqual(rangeArgs({ offset: 0, limit: 4 }), { offset: 0, limit: 4 });
+  assert.deepEqual(rangeArgs({ offset: Number.MAX_SAFE_INTEGER, limit: 12000 }), {
+    offset: Number.MAX_SAFE_INTEGER, limit: 12000,
+  });
 });

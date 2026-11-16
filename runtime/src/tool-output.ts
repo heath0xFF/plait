@@ -15,7 +15,8 @@ export function outputTail(text: string) {
 }
 
 export function rangeArgs(args: Record<string, unknown>) {
-  const offset = args.offset ?? 0; const limit = args.limit ?? 8192;
+  const offset = Object.hasOwn(args, 'offset') ? args.offset : 0;
+  const limit = Object.hasOwn(args, 'limit') ? args.limit : 8192;
   if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0
     || typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 4 || limit > 12000) {
     fail('invalid_request', 'offset must be a non-negative byte offset; limit must be 4–12000 bytes.');
