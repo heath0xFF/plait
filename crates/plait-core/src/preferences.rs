@@ -3,7 +3,7 @@
 //! The host owns model defaults and credentials. This file holds presentation
 //! choices that belong to one desktop installation, so it never leaves the Mac.
 
-use crate::model::Project;
+use crate::{host::ModelChoice, model::Project};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -36,14 +36,102 @@ impl JumpTarget {
     }
 }
 
+/// Favorites kept in the picker. The oldest is dropped beyond this.
+pub const FAVORITE_LIMIT: usize = 64;
+/// Recently used models kept, newest first.
+pub const RECENT_LIMIT: usize = 8;
+/// Longer identifiers are not remembered, so full lists always fit the file limit.
+const MODEL_KEY_LIMIT: usize = 512;
+
+/// A model chosen on this desktop: an identifier, never a credential.
+/// Unlike the wire type, unknown fields are ignored so a newer file still loads.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ModelKey {
+    pub provider: String,
+    pub model_id: String,
+}
+
+impl ModelKey {
+    fn fits(&self) -> bool {
+        self.provider.len() + self.model_id.len() <= MODEL_KEY_LIMIT
+    }
+}
+
+impl From<&ModelChoice> for ModelKey {
+    fn from(choice: &ModelChoice) -> Self {
+        Self {
+            provider: choice.provider.clone(),
+            model_id: choice.model_id.clone(),
+        }
+    }
+}
+
+impl PartialEq<ModelChoice> for ModelKey {
+    fn eq(&self, choice: &ModelChoice) -> bool {
+        self.provider == choice.provider && self.model_id == choice.model_id
+    }
+}
+
 /// Unknown fields are ignored so a newer client's file still loads.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
     pub jump_target: JumpTarget,
     /// Ask before each edit and command. Off by default: runs approve their own
     /// edits and sandboxed commands, and file protections still apply.
     pub ask_before_actions: bool,
+    /// Hide the Git inspector beside the conversation on wide windows.
+    pub hide_inspector: bool,
+    /// Models pinned to the top of the picker, oldest first.
+    pub favorite_models: Vec<ModelKey>,
+    /// Models used to start threads from this desktop, newest first.
+    pub recent_models: Vec<ModelKey>,
+}
+
+impl Preferences {
+    pub fn is_favorite(&self, choice: &ModelChoice) -> bool {
+        self.favorite_models.iter().any(|key| key == choice)
+    }
+
+    /// Add or remove a favorite. Returns whether the model is a favorite now.
+    pub fn toggle_favorite(&mut self, choice: &ModelChoice) -> bool {
+        let before = self.favorite_models.len();
+        self.favorite_models.retain(|key| key != choice);
+        let key = ModelKey::from(choice);
+        if self.favorite_models.len() != before || !key.fits() {
+            return false;
+        }
+        self.favorite_models.push(key);
+        trim_oldest(&mut self.favorite_models, FAVORITE_LIMIT);
+        true
+    }
+
+    /// Move a model to the front of the recent list.
+    pub fn record_recent(&mut self, choice: &ModelChoice) {
+        let key = ModelKey::from(choice);
+        if !key.fits() {
+            return;
+        }
+        self.recent_models.retain(|recent| recent != choice);
+        self.recent_models.insert(0, key);
+        self.recent_models.truncate(RECENT_LIMIT);
+    }
+
+    /// A hand-edited file may repeat entries or exceed the limits.
+    fn normalize(mut self) -> Self {
+        for list in [&mut self.favorite_models, &mut self.recent_models] {
+            let mut seen = std::collections::HashSet::new();
+            list.retain(|key| key.fits() && seen.insert(key.clone()));
+        }
+        trim_oldest(&mut self.favorite_models, FAVORITE_LIMIT);
+        self.recent_models.truncate(RECENT_LIMIT);
+        self
+    }
+}
+
+fn trim_oldest(list: &mut Vec<ModelKey>, limit: usize) {
+    let excess = list.len().saturating_sub(limit);
+    list.drain(..excess);
 }
 
 /// The per-user location, from the environment. `None` without a home directory.
@@ -76,11 +164,12 @@ pub fn load(path: &Path) -> Result<Preferences, String> {
         return Err("Preferences file is too large; defaults are in use.".into());
     }
     serde_json::from_reader(std::io::BufReader::new(file))
+        .map(Preferences::normalize)
         .map_err(|error| format!("Preferences file is invalid ({error}); defaults are in use."))
 }
 
 /// Replace the file atomically so a crash never leaves a half-written file.
-pub fn save(path: &Path, preferences: Preferences) -> Result<(), String> {
+pub fn save(path: &Path, preferences: &Preferences) -> Result<(), String> {
     let fail = |error: std::io::Error| format!("Cannot save preferences: {error}");
     let directory = path
         .parent()
@@ -89,7 +178,7 @@ pub fn save(path: &Path, preferences: Preferences) -> Result<(), String> {
     let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
     let result = (|| {
         let mut file = fs::File::create(&temporary)?;
-        serde_json::to_writer_pretty(&mut file, &preferences).map_err(std::io::Error::other)?;
+        serde_json::to_writer_pretty(&mut file, preferences).map_err(std::io::Error::other)?;
         file.write_all(b"\n")?;
         file.sync_all()?;
         fs::rename(&temporary, path)
@@ -154,6 +243,13 @@ mod tests {
     use super::*;
     use crate::model::Machine;
 
+    fn choice(provider: &str, model_id: &str) -> ModelChoice {
+        ModelChoice {
+            provider: provider.into(),
+            model_id: model_id.into(),
+        }
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let path =
             std::env::temp_dir().join(format!("plait-preferences-{}-{name}", std::process::id()));
@@ -167,11 +263,15 @@ mod tests {
         let path = root.join("nested/desktop.json");
         assert_eq!(load(&path), Ok(Preferences::default()));
         assert!(!Preferences::default().ask_before_actions);
-        let chosen = Preferences {
+        let mut chosen = Preferences {
             jump_target: JumpTarget::Machines,
             ask_before_actions: true,
+            hide_inspector: true,
+            ..Preferences::default()
         };
-        save(&path, chosen).unwrap();
+        chosen.toggle_favorite(&choice("openai-codex", "gpt-5.6-luna"));
+        chosen.record_recent(&choice("openrouter", "anthropic/claude-fable-5"));
+        save(&path, &chosen).unwrap();
         assert_eq!(load(&path), Ok(chosen));
         // No temporary file is left beside the saved one.
         assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
@@ -205,12 +305,129 @@ mod tests {
     }
 
     #[test]
+    fn a_file_from_before_model_lists_loads_with_empty_lists() {
+        let root = scratch("older");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("desktop.json");
+        // Exactly what the previous release wrote.
+        fs::write(
+            &path,
+            "{\n  \"jump_target\": \"machines\",\n  \"ask_before_actions\": true\n}\n",
+        )
+        .unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.jump_target, JumpTarget::Machines);
+        assert!(loaded.ask_before_actions);
+        assert!(!loaded.hide_inspector);
+        assert!(loaded.favorite_models.is_empty());
+        assert!(loaded.recent_models.is_empty());
+        // Saving it again keeps the old settings and adds the new fields.
+        save(&path, &loaded).unwrap();
+        assert_eq!(load(&path), Ok(loaded));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn model_entries_ignore_unknown_fields_and_reject_malformed_ones() {
+        let root = scratch("models");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("desktop.json");
+        fs::write(
+            &path,
+            r#"{"favorite_models": [{"provider": "p", "model_id": "m", "later": true}]}"#,
+        )
+        .unwrap();
+        assert!(load(&path).unwrap().is_favorite(&choice("p", "m")));
+        fs::write(&path, r#"{"recent_models": [{"provider": "p"}]}"#).unwrap();
+        assert!(load(&path).unwrap_err().contains("invalid"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn loading_removes_duplicates_and_applies_the_limits() {
+        let root = scratch("limits");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("desktop.json");
+        let entries = (0..FAVORITE_LIMIT + 3)
+            .map(|index| format!(r#"{{"provider": "p", "model_id": "m{index}"}}"#))
+            .chain([r#"{"provider": "p", "model_id": "m5"}"#.to_owned()])
+            .collect::<Vec<_>>()
+            .join(",");
+        fs::write(
+            &path,
+            format!(r#"{{"favorite_models": [{entries}], "recent_models": [{entries}]}}"#),
+        )
+        .unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.favorite_models.len(), FAVORITE_LIMIT);
+        // Favorites keep the newest; recents keep the front of the list.
+        assert_eq!(loaded.favorite_models[0].model_id, "m3");
+        assert_eq!(loaded.recent_models.len(), RECENT_LIMIT);
+        assert_eq!(loaded.recent_models[0].model_id, "m0");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn favorites_toggle_and_recents_move_to_the_front() {
+        let mut preferences = Preferences::default();
+        let (a, b) = (choice("p", "a"), choice("p", "b"));
+        assert!(preferences.toggle_favorite(&a));
+        assert!(preferences.toggle_favorite(&b));
+        assert!(preferences.is_favorite(&a));
+        assert!(!preferences.toggle_favorite(&a));
+        assert!(!preferences.is_favorite(&a));
+        assert_eq!(preferences.favorite_models, vec![ModelKey::from(&b)]);
+
+        preferences.record_recent(&a);
+        preferences.record_recent(&b);
+        preferences.record_recent(&a);
+        assert_eq!(
+            preferences.recent_models,
+            vec![ModelKey::from(&a), ModelKey::from(&b)]
+        );
+        for index in 0..RECENT_LIMIT + 2 {
+            preferences.record_recent(&choice("p", &format!("m{index}")));
+        }
+        assert_eq!(preferences.recent_models.len(), RECENT_LIMIT);
+        assert_eq!(
+            preferences.recent_models[0].model_id,
+            format!("m{}", RECENT_LIMIT + 1)
+        );
+        // The same model under another provider is a different model.
+        assert!(!preferences.is_favorite(&choice("q", "b")));
+    }
+
+    #[test]
+    fn full_lists_stay_within_the_file_limit() {
+        let mut preferences = Preferences::default();
+        let long = "m".repeat(MODEL_KEY_LIMIT - 4);
+        for index in 0..FAVORITE_LIMIT + 5 {
+            let model = choice("p", &format!("{long}{index:03}"));
+            assert!(preferences.toggle_favorite(&model));
+            preferences.record_recent(&model);
+        }
+        assert_eq!(preferences.favorite_models.len(), FAVORITE_LIMIT);
+        // An identifier too long to remember is skipped, not stored.
+        let oversized = choice("p", &"x".repeat(MODEL_KEY_LIMIT));
+        assert!(!preferences.toggle_favorite(&oversized));
+        preferences.record_recent(&oversized);
+        assert!(
+            !preferences
+                .recent_models
+                .iter()
+                .any(|key| *key == oversized)
+        );
+        let bytes = serde_json::to_vec_pretty(&preferences).unwrap();
+        assert!((bytes.len() as u64) < FILE_LIMIT, "{} bytes", bytes.len());
+    }
+
+    #[test]
     fn save_failure_is_reported() {
         let root = scratch("blocked");
         fs::create_dir_all(&root).unwrap();
         // A file where the directory should be.
         fs::write(root.join("plait"), "").unwrap();
-        assert!(save(&root.join("plait/desktop.json"), Preferences::default()).is_err());
+        assert!(save(&root.join("plait/desktop.json"), &Preferences::default()).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 

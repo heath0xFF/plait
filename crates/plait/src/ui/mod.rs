@@ -1,15 +1,20 @@
+mod actions;
 mod changes;
+mod commands;
 mod composer;
 mod conversation;
 mod host;
 mod jump;
 mod live_conversation;
 mod markdown;
+mod model_picker;
 mod navigation;
+mod palette;
 mod session;
 mod settings;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod snapshot;
+mod text_field;
 pub mod theme;
 mod update;
 
@@ -45,9 +50,16 @@ actions!(
         Tab,
         BackTab,
         NextFile,
-        PreviousFile
+        PreviousFile,
+        NewThread,
+        NewThreadWithModel,
+        CommandPalette,
+        ToggleInspector
     ]
 );
+
+/// Below this width the Git inspector is not shown; Git stays in Changes.
+const WIDE_WINDOW: f32 = 1150.;
 
 pub struct Plait {
     state: AppState,
@@ -59,8 +71,13 @@ pub struct Plait {
     live_layout: Vec<plait_core::transcript::Slot>,
     formatted: std::sync::Arc<plait_core::markdown::Transcript>,
     settings_open: bool,
-    show_all_models: bool,
+    /// A new thread was requested: open it when the host confirms creation,
+    /// unless the user has gone elsewhere in the meantime.
     new_thread_open: bool,
+    /// The command palette or model picker, above the workspace.
+    overlay: Option<commands::Overlay>,
+    /// The inspector toggle was used on a window too narrow to show it.
+    inspector_note: bool,
     focus: FocusHandle,
     expanded_live_tools: HashSet<String>,
     file_scroll: UniformListScrollHandle,
@@ -102,8 +119,9 @@ impl Plait {
             live_layout: Vec::new(),
             formatted: Default::default(),
             settings_open: false,
-            show_all_models: false,
             new_thread_open: false,
+            overlay: None,
+            inspector_note: false,
             focus,
             expanded_live_tools: HashSet::new(),
             file_scroll: UniformListScrollHandle::new(),
@@ -125,6 +143,8 @@ impl Plait {
         };
         this.pump(cx);
         this.load_preferences(cx);
+        // An open picker shows host state; keep it current as replies land.
+        cx.observe_self(|this, cx| this.sync_picker(cx)).detach();
         this.reconnect_host(window, cx);
         // Test scenes stay offline.
         if !cfg!(test) {
@@ -274,10 +294,68 @@ impl Plait {
 
 impl Plait {
     fn show_settings(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_overlay(false, window, cx);
         window.focus(&self.focus, cx);
         self.settings_open = open;
         self.new_thread_open = false;
         cx.notify();
+    }
+
+    fn wide(window: &Window) -> bool {
+        window.viewport_size().width > px(WIDE_WINDOW)
+    }
+
+    /// The Git inspector beside the conversation: wide windows, unless hidden.
+    pub(super) fn shows_inspector(&self, wide: bool) -> bool {
+        wide && !self.preferences.value.hide_inspector
+    }
+
+    /// Show or hide the Git inspector and remember the choice. A narrow window
+    /// has no room for it, so the toggle says where Git is instead.
+    fn toggle_inspector(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !Self::wide(window) {
+            self.inspector_note = !self.inspector_note;
+            cx.notify();
+            return;
+        }
+        self.inspector_note = false;
+        let mut value = self.preferences.value.clone();
+        value.hide_inspector = !value.hide_inspector;
+        self.set_preferences(value, jump::PreferenceGroup::View, cx);
+    }
+
+    fn inspector_note(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        row()
+            .id("inspector-note")
+            .role(Role::Group)
+            .aria_label("Git inspector unavailable at this window width")
+            .flex_shrink_0()
+            .px_4()
+            .py_2()
+            .gap_3()
+            .border_b_1()
+            .border_color(rgb(BORDER))
+            .text_size(px(12.))
+            .child(div().flex_1().min_w_0().text_color(rgb(MUTED)).child(text!(
+                format!(
+                    "The Git inspector needs a window wider than {WIDE_WINDOW} points. Git status and diffs are in Changes."
+                )
+            )))
+            .child(
+                toned_button("inspector-note-changes", "Show Changes", Tone::Filled).on_activate(
+                    cx,
+                    |this, _, cx| {
+                        this.inspector_note = false;
+                        this.show_tab(true, cx);
+                    },
+                ),
+            )
+            .child(
+                button("inspector-note-dismiss", "Dismiss").on_activate(cx, |this, _, cx| {
+                    this.inspector_note = false;
+                    cx.notify();
+                }),
+            )
     }
 
     fn toggle_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -367,6 +445,20 @@ impl Plait {
                             .on_click(cx.listener(|this, _, _, cx| this.show_tab(true, cx))),
                     ),
             )
+            .child(
+                // Mirrors the sidebar toggle at the other end of the header.
+                icon_button(
+                    "toggle-inspector",
+                    "panel-right",
+                    if wide {
+                        "Toggle Git inspector"
+                    } else {
+                        "Git inspector (needs a wider window)"
+                    },
+                )
+                .aria_keyshortcuts("Meta+Alt+B")
+                .on_activate(cx, |this, window, cx| this.toggle_inspector(window, cx)),
+            )
     }
 
     /// Where the selected thread runs: Project, Machine, and its checkout branch.
@@ -448,7 +540,7 @@ impl Render for Plait {
         if let Some(interaction) = self.interaction.take() {
             self.switch_us = interaction.elapsed().as_micros();
         }
-        let wide = window.viewport_size().width > px(1150.);
+        let wide = Self::wide(window);
         let project = &self.state.projects[0];
         let machine = &project.machines[0];
         let real = self.host.selected.is_some();
@@ -461,14 +553,12 @@ impl Render for Plait {
         };
         let title = if self.settings_open {
             "Settings".to_owned()
-        } else if self.new_thread_open {
-            "New local thread".to_owned()
         } else if real {
             self.thread_title(self.host.selected.as_deref().unwrap_or_default())
         } else {
             project.name.clone()
         };
-        let status = if real && !self.settings_open && !self.new_thread_open {
+        let status = if real && !self.settings_open {
             self.host.snapshot.as_ref().map_or_else(
                 || ("Loading".to_owned(), MUTED),
                 |snapshot| {
@@ -482,7 +572,7 @@ impl Render for Plait {
             connection
         };
         // With no thread open the title is already the project; don't repeat it.
-        let location = if real || self.settings_open || self.new_thread_open {
+        let location = if real || self.settings_open {
             format!("{} / {}", project.name, machine.name)
         } else {
             machine.name.clone()
@@ -505,6 +595,18 @@ impl Render for Plait {
             .on_action(
                 cx.listener(|this, _: &ToggleSidebar, window, cx| this.toggle_sidebar(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &ToggleInspector, window, cx| {
+                this.toggle_inspector(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CommandPalette, window, cx| {
+                this.toggle_command_palette(window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &NewThread, window, cx| this.new_thread(None, window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &NewThreadWithModel, window, cx| {
+                this.open_model_picker(model_picker::ModelPurpose::NewThread, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &ToggleDiagnostics, _, cx| {
                 this.diagnostics = !this.diagnostics;
                 cx.notify();
@@ -572,10 +674,12 @@ impl Render for Plait {
                                         .child(notice),
                                 )
                             })
+                            .when_some(self.creation_bar(cx), |el, bar| el.child(bar))
+                            .when(self.inspector_note && !wide, |el| {
+                                el.child(self.inspector_note(cx))
+                            })
                             .child(if self.settings_open {
                                 self.settings(cx).into_any_element()
-                            } else if self.new_thread_open {
-                                self.new_thread(cx).into_any_element()
                             } else if self.show_changes {
                                 self.changes(wide, cx).into_any_element()
                             } else if real {
@@ -586,60 +690,19 @@ impl Render for Plait {
                     ),
             )
             // Timings stay available without spending a permanent chrome row on them.
-            .when(self.diagnostics, |el| el.child(self.diagnostics_bar()));
+            .when(self.diagnostics, |el| el.child(self.diagnostics_bar()))
+            // Last, so the overlay paints above and blocks the workspace.
+            .when_some(self.overlay.as_ref(), |el, overlay| {
+                el.child(overlay.palette.clone())
+            });
         self.last_render_us = start.elapsed().as_micros();
         self.max_render_us = self.max_render_us.max(self.last_render_us);
         root
     }
 }
 
+/// Bind the default shortcuts and build the menu bar from the action table.
 pub fn menus(cx: &mut App) {
-    composer::bind_keys(cx);
-    jump::bind_keys(cx);
-    cx.bind_keys([
-        KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("cmd-w", Close, Some("Plait")),
-        KeyBinding::new("cmd-m", Minimize, Some("Plait")),
-        KeyBinding::new("cmd-o", OpenRepository, Some("Plait")),
-        KeyBinding::new("cmd-,", Settings, Some("Plait")),
-        KeyBinding::new("cmd-r", Refresh, Some("Plait")),
-        KeyBinding::new("cmd-b", ToggleSidebar, Some("Plait")),
-        KeyBinding::new("cmd-shift-d", ToggleDiagnostics, Some("Plait")),
-        // Cmd-1 to Cmd-9 jump to sidebar items; see jump.rs.
-        KeyBinding::new("cmd-shift-1", Conversation, Some("Plait")),
-        KeyBinding::new("cmd-shift-2", Changes, Some("Plait")),
-        KeyBinding::new("cmd-alt-down", NextThread, Some("Plait")),
-        KeyBinding::new("cmd-alt-up", PreviousThread, Some("Plait")),
-        KeyBinding::new("alt-down", NextFile, Some("Plait")),
-        KeyBinding::new("alt-up", PreviousFile, Some("Plait")),
-        KeyBinding::new("tab", Tab, Some("Plait")),
-        KeyBinding::new("shift-tab", BackTab, Some("Plait")),
-    ]);
+    actions::install(cx, &actions::KeyOverrides::new());
     cx.on_action(|_: &Quit, cx| cx.quit());
-    cx.set_menus([
-        Menu::new("Plait").items([
-            MenuItem::action("Settings…", Settings),
-            MenuItem::action("Check for Updates…", CheckForUpdates),
-            MenuItem::separator(),
-            MenuItem::action("Quit Plait", Quit),
-        ]),
-        Menu::new("File").items([
-            MenuItem::action("Open Repository…", OpenRepository),
-            MenuItem::action("Refresh Git Status", Refresh),
-            MenuItem::separator(),
-            MenuItem::action("Close Window", Close),
-        ]),
-        Menu::new("View").items([
-            MenuItem::action("Toggle Sidebar", ToggleSidebar),
-            MenuItem::action("Toggle Diagnostics", ToggleDiagnostics),
-            MenuItem::action("Conversation", Conversation),
-            MenuItem::action("Changes", Changes),
-            MenuItem::separator(),
-            MenuItem::action("Next Thread", NextThread),
-            MenuItem::action("Previous Thread", PreviousThread),
-            MenuItem::action("Next Changed File", NextFile),
-            MenuItem::action("Previous Changed File", PreviousFile),
-        ]),
-        Menu::new("Window").items([MenuItem::action("Minimize", Minimize)]),
-    ]);
 }

@@ -1,7 +1,14 @@
-use super::{Plait, theme::*};
-use gpui::{prelude::*, *};
+//! The Settings page: host status first, then Models, Approvals, Keyboard,
+//! and About and updates.
 
-const MODEL_ROW_HEIGHT: f32 = 36.;
+use super::{
+    Plait,
+    jump::PreferenceGroup,
+    model_picker::{ModelPurpose, model_label},
+    theme::*,
+};
+use gpui::{prelude::*, *};
+use std::collections::HashSet;
 
 /// Centered reading column for settings-style pages.
 fn page(id: &'static str) -> Stateful<Div> {
@@ -31,30 +38,69 @@ fn note(text: impl Into<SharedString>) -> Div {
         .child(text.into())
 }
 
-/// Ring for an unchosen option, filled for the chosen one: shape, not just color.
-fn radio(chosen: bool) -> Div {
-    div()
-        .size(px(12.))
+/// One titled group of settings, ruled off from the group above it.
+pub(super) fn section(title: &'static str) -> Div {
+    column()
+        .gap_3()
         .flex_shrink_0()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_full()
-        .border_1()
-        .border_color(rgb(if chosen { MINT } else { SUBTLE }))
-        .when(chosen, |el| {
-            el.child(div().size(px(6.)).rounded_full().bg(rgb(MINT)))
-        })
+        .pt_4()
+        .border_t_1()
+        .border_color(rgb(BORDER))
+        .child(
+            div()
+                .text_size(px(13.))
+                .font_weight(FontWeight::MEDIUM)
+                .child(text!(title)),
+        )
+}
+
+/// A setting: what it is and what it means on the left, its control on the right.
+pub(super) fn setting(
+    label: &'static str,
+    detail: impl Into<SharedString>,
+    control: impl IntoElement,
+) -> Div {
+    row()
+        .items_start()
+        .justify_between()
+        .gap_4()
+        .child(
+            column()
+                .flex_1()
+                .min_w_0()
+                .gap(px(2.))
+                .child(div().text_size(px(12.)).text_color(rgb(MUTED)).child(label))
+                .child(
+                    div()
+                        .text_size(px(11.))
+                        .line_height(px(17.))
+                        .text_color(rgb(SUBTLE))
+                        .child(detail.into()),
+                ),
+        )
+        .child(control)
+}
+
+/// A state in words beside its dot, so the color is never the only signal.
+fn state_line(text: impl Into<SharedString>, tint: u32) -> Div {
+    row()
+        .items_start()
+        .child(dot(tint).mt(px(5.)))
+        // Long host errors wrap; they are never cut off.
+        .child(tag(text, tint).flex_1().min_w_0().line_height(px(17.)))
 }
 
 impl Plait {
     fn host_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (label, tint) = if self.host.connecting {
-            ("Connecting to local host…", MUTED)
+            ("Connecting to local host…".to_owned(), MUTED)
         } else if self.host.connected {
-            ("Local host connected · protocol 1", MINT)
+            (
+                format!("Local host connected · protocol {}", self.host.protocol()),
+                MINT,
+            )
         } else {
-            ("Local host disconnected", AMBER)
+            ("Local host disconnected".to_owned(), AMBER)
         };
         column()
             .gap_2()
@@ -70,13 +116,27 @@ impl Plait {
                     .justify_between()
                     .child(row().child(dot(tint)).child(tag(label, tint)))
                     .child(
-                        button("reconnect-host", "Reconnect")
-                            .disabled(self.host.connecting)
-                            .when(!self.host.connecting, |el| {
-                                el.on_activate(cx, |this, window, cx| {
-                                    this.reconnect_host(window, cx)
-                                })
-                            }),
+                        row()
+                            .gap_1()
+                            .child(
+                                button("open-setup-guide", "Setup and recovery guide").on_activate(
+                                    cx,
+                                    |_, _, cx| {
+                                        cx.open_url(
+                                            "https://github.com/heath0xFF/plait/blob/main/docs/MACOS.md",
+                                        );
+                                    },
+                                ),
+                            )
+                            .child(
+                                toned_button("reconnect-host", "Reconnect", Tone::Filled)
+                                    .disabled(self.host.connecting)
+                                    .when(!self.host.connecting, |el| {
+                                        el.on_activate(cx, |this, window, cx| {
+                                            this.reconnect_host(window, cx)
+                                        })
+                                    }),
+                            ),
                     ),
             )
             .when_some(self.host.error.clone(), |el, error| {
@@ -92,252 +152,112 @@ impl Plait {
                     "The installed host normally starts at login. Reconnect does not restart it. Closing Plait does not stop accepted work.",
                 ))
             })
-            .when(self.host.status.as_ref().is_some_and(|status| !status.models.iter().any(|model| model.authenticated)), |el| {
-                el.child(note("No authenticated models. Sign in to Pi on this host. Finish active work before restarting the host to load new credentials."))
-            })
-            .child(button("open-setup-guide", "Setup and recovery guide").on_activate(cx, |_, _, cx| {
-                cx.open_url("https://github.com/heath0xFF/plait/blob/main/docs/MACOS.md");
-            }))
     }
 
-    fn model_picker(&self, settings: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let list = column()
-            .flex_1()
-            .min_h(px(108.))
-            .rounded_lg()
-            .border_1()
-            .border_color(rgb(BORDER))
-            .overflow_hidden();
-        let Some(status) = &self.host.status else {
-            return list.child(empty(
-                "Model catalog unavailable",
-                "Connect to the local host to load model and authentication status. No credentials are stored in the desktop.",
-            ));
-        };
-        if status.models.is_empty() {
-            return list.child(empty(
-                "No models available",
-                "The host returned an empty catalog. Use the setup guide above to configure the host.",
-            ));
+    /// How much of the host's catalog can be used, counted from its reply.
+    fn catalog_summary(&self) -> Option<String> {
+        let models = &self.host.status.as_ref()?.models;
+        if models.is_empty() {
+            return Some(
+                "The host returned no models. The setup guide explains how to configure it.".into(),
+            );
         }
-        let mut indices = status
-            .models
-            .iter()
-            .enumerate()
-            .filter(|(_, model)| self.show_all_models || model.authenticated)
-            .map(|(index, _)| index)
-            .collect::<Vec<_>>();
-        indices.sort_by_key(|index| !status.models[*index].authenticated);
-        let container = column().flex_1().min_h(px(144.)).gap_2().child(
-            row()
-                .justify_between()
-                .child(tag(format!("{} models shown", indices.len()), SUBTLE))
-                .child(
-                    button(
-                        "toggle-all-models",
-                        if self.show_all_models {
-                            "Authenticated only"
-                        } else {
-                            "Show all models"
-                        },
-                    )
-                    .on_activate(cx, |this, _, cx| {
-                        this.show_all_models = !this.show_all_models;
-                        cx.notify();
-                    }),
-                ),
-        );
-        if indices.is_empty() {
-            return container.child(list.child(empty("No authenticated models", "Use the setup guide above to sign in on the host. The desktop does not store credentials.")));
+        let signed_in = models.iter().filter(|model| model.authenticated);
+        let usable = signed_in.clone().count();
+        if usable == 0 {
+            return Some("No model is signed in. Sign in to a provider on the host, then reconnect. Finish active work before restarting the host to load new credentials.".into());
         }
-        container.child(
-            list.child(
-                uniform_list(
-                    if settings {
-                        "settings-models"
-                    } else {
-                        "new-thread-models"
-                    },
-                    indices.len(),
-                    cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                        range
-                            .map(|index| this.model_choice(indices[index], settings, cx))
-                            .collect::<Vec<_>>()
-                    }),
-                )
-                .flex_1()
-                .min_h_0(),
-            ),
-        )
-    }
-
-    fn model_choice(&self, index: usize, settings: bool, cx: &mut Context<Self>) -> AnyElement {
-        let Some(model) = self
-            .host
-            .status
-            .as_ref()
-            .and_then(|status| status.models.get(index))
-        else {
-            return div().into_any_element();
+        let providers = |models: &mut dyn Iterator<Item = &plait_core::host::Model>| {
+            models
+                .map(|model| model.provider.as_str())
+                .collect::<HashSet<_>>()
+                .len()
         };
-        let choice = model.choice();
-        let selected = if settings {
-            &self.host.settings_model
-        } else {
-            &self.host.new_model
-        };
-        let chosen = selected.as_ref() == Some(&choice);
-        let locked = if settings {
-            self.host.saving
-        } else {
-            self.host.pending_create.is_some()
-        };
-        let enabled = self.host.connected && model.authenticated && !locked;
-        nav_row(
-            (
-                if settings {
-                    "default-model"
-                } else {
-                    "thread-model"
-                },
-                index,
-            ),
-            format!(
-                "{} / {}. {}. {}",
-                model.provider,
-                model.model_id,
-                model.name,
-                if model.authenticated {
-                    "Authenticated"
-                } else {
-                    "Not authenticated"
-                }
-            ),
-            chosen,
-        )
-        .h(px(MODEL_ROW_HEIGHT))
-        .rounded_none()
-        .px_3()
-        .gap_3()
-        .role(Role::RadioButton)
-        .aria_toggled(if chosen {
-            Toggled::True
-        } else {
-            Toggled::False
-        })
-        .disabled(!enabled)
-        .child(radio(chosen))
-        .child(
-            div()
-                .flex_shrink_0()
-                .text_color(rgb(TEXT))
-                .child(model.name.clone()),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_size(px(11.))
-                .text_color(rgb(SUBTLE))
-                .child(format!("{} / {}", model.provider, model.model_id)),
-        )
-        .child(tag(
-            if model.authenticated {
-                "Authenticated"
-            } else {
-                "Not authenticated"
-            },
-            if model.authenticated { SUBTLE } else { AMBER },
+        Some(format!(
+            "{usable} of {} models are signed in, from {} of {} providers.",
+            models.len(),
+            providers(&mut signed_in.clone()),
+            providers(&mut models.iter()),
         ))
-        .when(enabled, |el| {
-            el.on_activate(cx, move |this, _, cx| {
-                if !this.host.available(Some(&choice))
-                    || (settings && this.host.saving)
-                    || (!settings && this.host.pending_create.is_some())
-                {
-                    return;
-                }
-                if settings {
-                    this.host.settings_model = Some(choice.clone());
-                    this.host.save_message = Some("Unsaved default model change.".into());
-                } else {
-                    this.host.new_model = Some(choice.clone());
-                }
-                cx.notify();
-            })
-        })
-        .into_any_element()
     }
 
-    pub(super) fn settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The default model at the top of its section. Choosing in the picker
+    /// saves at once; the line beneath reports what the host answered.
+    fn model_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let saved = self
             .host
             .status
             .as_ref()
-            .and_then(|status| status.default_model.as_ref())
-            .map_or_else(
-                || "No default model saved".into(),
-                |model| format!("Saved default: {} / {}", model.provider, model.model_id),
-            );
-        let can_save = !self.host.saving && self.host.available(self.host.settings_model.as_ref());
+            .and_then(|status| status.default_model.as_ref());
+        let name = saved.map_or_else(
+            || "No default model".to_owned(),
+            |choice| self.model_name(choice),
+        );
+        let usable = saved.is_none_or(|choice| self.host.available(Some(choice)));
+        let can_choose = self.host.connected && !self.host.saving;
+        let control = toned_button("choose-default-model", "", Tone::Filled)
+            .aria_label(format!("Default model: {name}. Choose another…"))
+            .gap_2()
+            .max_w(px(320.))
+            .child(div().min_w_0().truncate().child(name))
+            .child(icon("down").text_color(rgb(MUTED)))
+            .disabled(!can_choose)
+            .when(can_choose, |el| {
+                el.on_activate(cx, |this, window, cx| {
+                    this.open_model_picker(ModelPurpose::DefaultModel, window, cx)
+                })
+            });
+        section("Models")
+            .child(setting(
+                "Default model for new threads",
+                "New threads start with this model. Choosing another saves it on the host at once. Existing threads keep the model they were created with.",
+                control,
+            ))
+            .when_some(saved, |el, choice| {
+                el.child(tag(model_label(choice), MUTED))
+            })
+            .when(!usable && self.host.connected, |el| {
+                el.child(state_line(
+                    "The saved default is not signed in on this host. New threads ask for a model until it is.",
+                    AMBER,
+                ))
+            })
+            .when_some(self.default_model_state(), |el, (state, tint)| {
+                el.child(state_line(state, tint))
+            })
+            .when_some(self.catalog_summary(), |el, summary| {
+                el.child(tag(summary, SUBTLE))
+            })
+            .child(tag(
+                "Authentication stays on the host. The desktop shows availability only; it never reads or saves credentials.",
+                SUBTLE,
+            ))
+            .when_some(
+                self.preference_note(Some(PreferenceGroup::Models)),
+                |el, note| el.child(tag(format!("Favorites and recent models: {note}"), SUBTLE)),
+            )
+    }
+
+    pub(super) fn settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div().flex().flex_1().min_h_0().px_6().py_5().child(
             page("settings-page")
                 .child(
                     row()
-                        .justify_between()
-                        .child(heading("Local host settings"))
-                        .child(toned_button("close-settings", "Done", Tone::Filled).on_activate(
-                            cx,
-                            |this, window, cx| this.show_settings(false, window, cx),
-                        )),
-                )
-                .child(self.host_status(cx))
-                .child(note(
-                    "Authentication stays on the host. This page shows status only; it never reads or saves credentials.",
-                ))
-                .child(
-                    column()
-                        .gap_1()
-                        .child(section_label("Default model for new threads"))
-                        .child(tag(saved, MUTED))
-                        .child(tag(
-                            "Existing threads always use their exact saved provider and model.",
-                            SUBTLE,
-                        )),
-                )
-                .child(self.model_picker(true, cx))
-                .child(
-                    row()
                         .flex_shrink_0()
-                        .gap_3()
+                        .justify_between()
+                        .child(heading("Settings"))
                         .child(
-                            toned_button(
-                                "save-default-model",
-                                if self.host.saving {
-                                    "Saving…"
-                                } else {
-                                    "Save default model"
-                                },
-Tone::Primary,
-)
-                            .disabled(!can_save)
-                            .when(can_save, |el| {
-                                el.on_activate(cx, |this, window, cx| {
-                                    this.save_default_model(window, cx)
-                                })
-                            }),
-                        )
-                        .when_some(self.host.save_message.clone(), |el, message| {
-                            el.child(
-                                div()
-                                    .min_w_0()
-                                    .text_size(px(12.))
-                                    .text_color(rgb(MUTED))
-                                    .child(text!(message)),
-                            )
-                        }),
+                            toned_button("close-settings", "Done", Tone::Filled)
+                                .on_activate(cx, |this, window, cx| {
+                                    this.show_settings(false, window, cx)
+                                }),
+                        ),
                 )
+                .when_some(self.preference_note(None), |el, note| {
+                    el.child(state_line(format!("Desktop preferences: {note}"), AMBER))
+                })
+                .child(self.host_status(cx))
+                .child(self.model_settings(cx))
                 .child(self.approval_settings(cx))
                 .child(self.keyboard_settings(cx))
                 .child(self.build_details(cx)),
@@ -355,15 +275,16 @@ Tone::Primary,
         } else {
             "Host not connected".into()
         };
-        column()
-            .gap_1()
-            .flex_shrink_0()
-            .child(section_label("About"))
-            .child(tag(
-                format!("Desktop {} · {revision}{built}", env!("CARGO_PKG_VERSION")),
-                MUTED,
-            ))
-            .child(tag(host, SUBTLE))
+        section("About and updates")
+            .child(
+                column()
+                    .gap_1()
+                    .child(tag(
+                        format!("Desktop {} · {revision}{built}", env!("CARGO_PKG_VERSION")),
+                        MUTED,
+                    ))
+                    .child(tag(host, SUBTLE)),
+            )
             .child(self.update_controls(cx))
     }
 
@@ -384,9 +305,9 @@ Tone::Primary,
                     })
                     .aria_label(format!("Edits and commands: {label}"))
                     .on_activate(cx, move |this, _, cx| {
-                        let mut preferences = this.preferences.value;
+                        let mut preferences = this.preferences.value.clone();
                         preferences.ask_before_actions = value;
-                        this.set_preferences(preferences, cx);
+                        this.set_preferences(preferences, PreferenceGroup::Approvals, cx);
                     }),
             );
         }
@@ -397,84 +318,11 @@ Tone::Primary,
         } else {
             "The agent edits files and runs commands without asking. Files you had already changed stay protected; commands cannot write the checkout or reach the network. Applies from your next message."
         };
-        column()
-            .gap_2()
-            .flex_shrink_0()
-            .child(section_label("Approvals"))
-            .child(
-                row()
-                    .justify_between()
-                    .child(tag("Edits and commands", MUTED))
-                    .child(choices),
+        section("Approvals")
+            .child(setting("Edits and commands", detail, choices))
+            .when_some(
+                self.preference_note(Some(PreferenceGroup::Approvals)),
+                |el, note| el.child(tag(note, SUBTLE)),
             )
-            .child(tag(detail, SUBTLE))
-    }
-
-    pub(super) fn new_thread(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let can_create = self.host.connected
-            && !self.host.creating
-            && (self.host.pending_create.is_some()
-                || self.host.available(self.host.new_model.as_ref()));
-        div().flex().flex_1().min_h_0().px_6().py_5().child(
-            page("new-thread-page")
-                .child(
-                    column()
-                        .gap_1()
-                        .child(heading("Choose a model"))
-                        .child(note(
-                            "A new thread belongs to this local checkout. Creating it does not run the model.",
-                        ))
-                        .child(tag(self.host.checkout.display().to_string(), SUBTLE)),
-                )
-                .child(self.host_status(cx))
-                .child(self.model_picker(false, cx))
-                .child(
-                    row()
-                        .flex_shrink_0()
-                        .child(
-                            toned_button(
-                                "create-thread",
-                                if self.host.creating {
-                                    "Creating…"
-                                } else if self.host.pending_create.is_some() {
-                                    "Retry thread creation"
-                                } else {
-                                    "Create local thread"
-                                },
-Tone::Primary,
-)
-                            .disabled(!can_create)
-                            .when(can_create, |el| {
-                                el.on_activate(cx, |this, window, cx| {
-                                    this.create_host_thread(window, cx)
-                                })
-                            }),
-                        )
-                        .child(button("cancel-new-thread", "Cancel").on_activate(
-                            cx,
-                            |this, _, cx| {
-                                this.new_thread_open = false;
-                                cx.notify();
-                            },
-                        )),
-                ),
-        )
-    }
-
-    pub(super) fn open_new_thread(&mut self, cx: &mut Context<Self>) {
-        if self.host.pending_create.is_none() {
-            self.host.new_model = self
-                .host
-                .status
-                .as_ref()
-                .and_then(|status| status.default_model.clone())
-                .filter(|choice| self.host.available(Some(choice)));
-        }
-        self.host_watch = None;
-        self.host.select(None);
-        self.settings_open = false;
-        self.new_thread_open = true;
-        self.show_changes = false;
-        cx.notify();
     }
 }

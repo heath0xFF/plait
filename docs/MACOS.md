@@ -172,23 +172,83 @@ For a prepared development checkout and a first source-change task, see
 
 ## Keyboard controls
 
-| Shortcut | Action |
+### Application shortcuts
+
+These are the default shortcuts for application actions. The table is generated
+from the action table in `crates/plait/src/ui/actions.rs`, and a test fails when
+the two differ. The ID is the action's stable name. Rebinding is not available
+in the app yet.
+
+| Shortcut | Action | ID |
+| --- | --- | --- |
+| Cmd-comma | Settings… | `app.settings` |
+| Cmd-Q | Quit Plait | `app.quit` |
+| Cmd-N | New Thread | `thread.new` |
+| Cmd-Shift-N | New Thread with Model… | `thread.new_with_model` |
+| Cmd-O | Open Repository… | `repository.open` |
+| Cmd-R | Refresh Git Status | `git.refresh` |
+| Cmd-W | Close Window | `window.close` |
+| Cmd-K | Command Palette… | `palette.toggle` |
+| Cmd-B | Toggle Sidebar | `view.toggle_sidebar` |
+| Cmd-Option-B | Toggle Git Inspector | `view.toggle_inspector` |
+| Cmd-Shift-D | Toggle Diagnostics | `view.toggle_diagnostics` |
+| Cmd-Shift-1 | Conversation | `view.conversation` |
+| Cmd-Shift-2 | Changes | `view.changes` |
+| Cmd-Option-Down | Next Thread | `thread.next` |
+| Cmd-Option-Up | Previous Thread | `thread.previous` |
+| Option-Down | Next Changed File | `git.next_file` |
+| Option-Up | Previous Changed File | `git.previous_file` |
+| Cmd-M | Minimize | `window.minimize` |
+| Cmd-1 | Jump to Sidebar Item 1 | `jump.1` |
+| Cmd-2 | Jump to Sidebar Item 2 | `jump.2` |
+| Cmd-3 | Jump to Sidebar Item 3 | `jump.3` |
+| Cmd-4 | Jump to Sidebar Item 4 | `jump.4` |
+| Cmd-5 | Jump to Sidebar Item 5 | `jump.5` |
+| Cmd-6 | Jump to Sidebar Item 6 | `jump.6` |
+| Cmd-7 | Jump to Sidebar Item 7 | `jump.7` |
+| Cmd-8 | Jump to Sidebar Item 8 | `jump.8` |
+| Cmd-9 | Jump to Sidebar Item 9 | `jump.9` |
+| Tab | Focus Next Control | `focus.next` |
+| Shift-Tab | Focus Previous Control | `focus.previous` |
+
+Cmd-N creates a thread with the saved default model and puts the cursor in its
+composer. When no default can be used, it opens the model picker and creates
+the thread on selection. Cmd-Shift-N always asks for the model. Cmd-1 to Cmd-9
+count threads in sidebar order; Settings can change this to machines or
+projects. Cmd-Option-B hides or shows the Git inspector beside the conversation
+and the choice is remembered. On a window too narrow for the inspector it
+explains where Git is instead.
+
+### Command palette and model picker
+
+Cmd-K opens the command palette: threads in the open checkout, every menu
+command with its shortcut, and "New thread with" each signed-in model. The model
+picker is the same list over the host's model catalog.
+
+| Key | Action |
 | --- | --- |
-| Cmd-O | Open a local repository |
-| Cmd-R | Refresh Git status and cached diffs |
-| Cmd-1 … Cmd-9 | Jump to the Nth thread; Settings can change this to machines or projects |
-| Cmd-Shift-1 / Cmd-Shift-2 | Conversation / Changes |
-| Cmd-B | Show or hide the sidebar |
-| Cmd-Shift-D | Show or hide render timing diagnostics |
-| Cmd-comma | Open local host settings |
+| Type | Filter. Words match in any order, in the title or the detail |
+| Up / Down | Move the selection; it wraps at the ends |
+| Page Up / Page Down | Move a page |
+| Return | Run the selected item |
+| Cmd-Return | Model picker: save the selected model as the default |
+| Cmd-D | Model picker: add or remove a favorite |
+| Escape | Close and return focus to where it was |
+
+### Text and controls
+
+| Key | Action |
+| --- | --- |
 | Enter / Shift-Enter | Submit the draft / insert a line break |
-| Option-Delete / Option-Fn-Delete | Delete the previous / next word in the draft |
-| Cmd-Delete / Cmd-Fn-Delete | Delete to the start / end of the visible draft line |
-| Cmd-Option-Up / Down | Previous / next thread |
-| Option-Up / Down | Previous / next changed file |
-| Tab / Shift-Tab | Move keyboard focus |
+| Option-Delete / Option-Fn-Delete | Delete the previous / next word |
+| Cmd-Delete / Cmd-Fn-Delete | Delete to the start / end of the line |
+| Option-Left / Right | Move by word; add Shift to select |
+| Cmd-Left / Right | Move to the start / end of the line; add Shift to select |
+| Cmd-A / Cmd-C / Cmd-X / Cmd-V | Select all / copy / cut / paste |
+| Cmd-Z / Cmd-Shift-Z | Undo / redo |
 | Return / Space | Activate the focused control |
-| Cmd-M / Cmd-W / Cmd-Q | Minimize / close / quit |
+
+Search fields take one line: pasted line breaks become spaces.
 
 Scroll the conversation, navigation, file list, and diff with the trackpad or
 mouse. Long diff lines scroll horizontally. On narrow windows, use Changes to

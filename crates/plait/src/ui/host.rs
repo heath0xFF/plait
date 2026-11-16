@@ -360,7 +360,9 @@ impl Plait {
                     }
                     if this.new_thread_open && this.host.watch_epoch == selection_epoch {
                         this.select_host_thread(reply.thread.id, window, cx);
+                        this.focus_composer(window, cx);
                     }
+                    this.record_recent_model(&choice, cx);
                     this.load_threads(window, cx);
                 }
                 Ok(_) => this.host.error = Some("Host returned a different model. Creation is unconfirmed; reconnect before retrying.".into()),

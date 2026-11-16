@@ -17,7 +17,7 @@
 //! then call `harness.capture("name-{suffix}")` from `walk` or a `*_walk`
 //! helper. Every scene runs at both window sizes.
 
-use super::{Plait, composer::Composer, theme::Assets};
+use super::{Plait, composer::Composer, model_picker::ModelPurpose, theme::Assets};
 use gpui::{prelude::*, *};
 use plait_core::{
     host::{
@@ -167,7 +167,25 @@ fn status() -> Status {
                 true,
             ),
             model("google", "gemini-3-pro", "Gemini 3 Pro", false),
-        ],
+        ]
+        .into_iter()
+        // Enough catalog for the picker to scroll: providers that are not signed in.
+        .chain((0..36).map(|index| {
+            model(
+                &format!("sample-provider-{}", index / 6 + 1),
+                &format!("sample-model-{}", index + 1),
+                &format!("Sample Model {}", index + 1),
+                false,
+            )
+        }))
+        .collect(),
+    }
+}
+
+fn other_choice() -> ModelChoice {
+    ModelChoice {
+        provider: "openrouter".into(),
+        model_id: "anthropic/claude-opus-latest".into(),
     }
 }
 
@@ -330,6 +348,8 @@ impl Harness {
             }
         });
         cx.allow_parking();
+        // As main does, so scenes show the shortcuts the palette reads from the keymap.
+        cx.update(super::menus);
         let path = repository.to_owned();
         let window = cx
             .open_window(size(px(width), px(height)), |window, cx| {
@@ -500,6 +520,73 @@ fn desktop_recovery_does_not_rebind_saved_work_or_clear_a_newer_revision() {
     std::fs::remove_dir_all(scratch).unwrap();
 }
 
+/// New Thread creates at once with the default, asks when there is none, and
+/// never replaces the request ID of a creation the host has not confirmed.
+#[core::prelude::v1::test]
+fn new_thread_keeps_its_request_id_and_overlays_return_focus() {
+    if !isolated("new_thread_keeps_its_request_id_and_overlays_return_focus") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-new-thread-ui-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.update(|plait, window, cx| {
+        let before = window.focused(cx);
+        plait.toggle_command_palette(window, cx);
+        assert!(plait.overlay.is_some());
+        assert!(
+            window.focused(cx) != before,
+            "the palette takes the keyboard"
+        );
+        plait.toggle_command_palette(window, cx);
+        assert!(plait.overlay.is_none());
+        assert!(window.focused(cx) == before, "closing returns focus");
+        // Without a usable default, nothing is created until a model is chosen.
+        plait.host.status.as_mut().unwrap().default_model = None;
+        plait.new_thread(None, window, cx);
+        assert!(plait.overlay.is_some());
+        assert!(plait.host.pending_create.is_none() && !plait.host.creating);
+        plait.close_overlay(true, window, cx);
+        plait.host.status = Some(status());
+        // With one, the request is sent at once and no page or picker opens.
+        plait.new_thread(None, window, cx);
+        assert!(plait.overlay.is_none());
+        assert!(plait.host.creating);
+    });
+    // No host runs in this scratch home, so the request fails and stays unconfirmed.
+    let unconfirmed = |harness: &mut Harness| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            harness.settle();
+            let pending = harness
+                .window
+                .update(&mut harness.cx, |plait, _, _| {
+                    (!plait.host.creating).then(|| plait.host.pending_create.clone())
+                })
+                .expect("window update");
+            if let Some(pending) = pending {
+                return pending.expect("an unconfirmed creation is kept");
+            }
+            assert!(Instant::now() < deadline, "creation did not finish");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    let first = unconfirmed(&mut harness);
+    assert_eq!(first.1, choice());
+    harness.update(|plait, window, cx| {
+        assert!(plait.host.error.is_some());
+        assert!(plait.creation_bar(cx).is_some(), "the retry is offered");
+        // Asking again, even for another model, retries the same request.
+        plait.new_thread(Some(other_choice()), window, cx);
+        assert!(plait.host.creating);
+    });
+    assert_eq!(unconfirmed(&mut harness), first);
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
 /// Every view at the default size and at the minimum window size.
 fn walk(output: Option<&Path>) {
     let scratch = std::env::temp_dir().join(format!(
@@ -538,18 +625,16 @@ fn walk(output: Option<&Path>) {
         streaming_walk(&mut harness, &repository, suffix);
         tool_states_walk(&mut harness, &repository, suffix);
         draft_walk(&mut harness, &repository, suffix);
-        harness.update(|plait, _, _| plait.settings_open = true);
-        harness.capture(&format!("settings-{suffix}"));
+        settings_walk(&mut harness, &repository, suffix);
+        palette_walk(&mut harness, &repository, suffix);
+        picker_walk(&mut harness, &repository, suffix);
+        new_thread_walk(&mut harness, &repository, suffix);
+        inspector_walk(&mut harness, &repository, suffix);
+        // Threads exist, but none is open.
         harness.update(|plait, _, _| {
-            for model in &mut plait.host.status.as_mut().unwrap().models {
-                model.authenticated = false;
-            }
+            plait.host_watch = None;
+            plait.host.select(None);
         });
-        harness.capture(&format!("settings-no-auth-{suffix}"));
-        harness.update(|plait, _, _| plait.host.status = Some(status()));
-        harness.update(|plait, _, cx| plait.open_new_thread(cx));
-        harness.capture(&format!("new-thread-{suffix}"));
-        harness.update(|plait, _, _| plait.new_thread_open = false);
         harness.capture(&format!("home-threads-{suffix}"));
         // Cmd-2 selects the second thread; next/previous wrap around the list.
         harness.update(|plait, window, cx| {
@@ -674,6 +759,135 @@ fn draft_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     });
     harness.capture(&format!("live-draft-{suffix}"));
     harness.connect(repository, false);
+}
+
+/// Settings sections, with no signed-in model, and after a default-model save failed.
+fn settings_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
+    harness.connect(repository, false);
+    harness.update(|plait, _, _| plait.settings_open = true);
+    harness.capture(&format!("settings-{suffix}"));
+    harness.update(|plait, _, _| {
+        for model in &mut plait.host.status.as_mut().unwrap().models {
+            model.authenticated = false;
+        }
+    });
+    harness.capture(&format!("settings-no-auth-{suffix}"));
+    harness.update(|plait, _, _| {
+        plait.host.status = Some(status());
+        // As a failed save leaves it: the choice is kept, the host's default unchanged.
+        plait.host.settings_model = Some(other_choice());
+        plait
+            .host
+            .finish_save(Err("sample error; the host did not answer.".into()));
+    });
+    harness.capture(&format!("settings-save-failed-{suffix}"));
+    harness.update(|plait, _, _| {
+        plait.host.settings_model = Some(choice());
+        plait.host.save_message = None;
+        plait.settings_open = false;
+    });
+}
+
+fn set_query(harness: &mut Harness, query: &'static str) {
+    harness.update(move |plait, _, cx| {
+        let overlay = plait.overlay.as_ref().expect("open overlay");
+        overlay
+            .palette
+            .update(cx, |palette, cx| palette.set_query(query, cx));
+    });
+}
+
+/// The command palette: everything grouped, a ranked query, and no matches.
+fn palette_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
+    harness.connect(repository, false);
+    harness.update(|plait, window, cx| plait.toggle_command_palette(window, cx));
+    harness.capture(&format!("palette-{suffix}"));
+    set_query(harness, "new");
+    harness.capture(&format!("palette-query-{suffix}"));
+    set_query(harness, "zzzz");
+    harness.capture(&format!("palette-no-matches-{suffix}"));
+    harness.update(|plait, window, cx| {
+        plait.toggle_command_palette(window, cx);
+        assert!(plait.overlay.is_none());
+    });
+}
+
+/// The model picker: favorites, recents, and provider groups; a search that
+/// mixes signed-in and signed-out models; the signed-out groups; no matches.
+fn picker_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
+    harness.connect(repository, false);
+    harness.update(|plait, window, cx| {
+        // In memory only: the scene does not write a preferences file.
+        let preferences = &mut plait.preferences.value;
+        preferences.toggle_favorite(&other_choice());
+        preferences.toggle_favorite(&ModelChoice {
+            provider: "google".into(),
+            model_id: "gemini-3-pro".into(),
+        });
+        preferences.record_recent(&ModelChoice {
+            provider: "openai-codex".into(),
+            model_id: "gpt-6-astra".into(),
+        });
+        plait.open_model_picker(ModelPurpose::NewThread, window, cx);
+    });
+    harness.capture(&format!("model-picker-{suffix}"));
+    set_query(harness, "pro");
+    harness.capture(&format!("model-picker-query-{suffix}"));
+    set_query(harness, "zzzz");
+    harness.capture(&format!("model-picker-no-matches-{suffix}"));
+    set_query(harness, "");
+    harness.update(|plait, _, cx| {
+        let overlay = plait.overlay.as_ref().expect("open picker");
+        overlay.palette.update(cx, |palette, cx| {
+            palette.move_by(true, 12, cx);
+            palette.move_by(true, 12, cx);
+        });
+    });
+    harness.capture(&format!("model-picker-scrolled-{suffix}"));
+    harness.update(|plait, window, cx| {
+        plait.close_overlay(true, window, cx);
+        // Disconnected: the picker says why it has nothing to list.
+        plait.host.connected = false;
+        plait.open_model_picker(ModelPurpose::DefaultModel, window, cx);
+    });
+    harness.capture(&format!("model-picker-disconnected-{suffix}"));
+    harness.update(|plait, window, cx| {
+        plait.close_overlay(true, window, cx);
+        plait.preferences.value = Default::default();
+    });
+}
+
+/// A thread creation the host has not confirmed, with its retry.
+fn new_thread_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
+    harness.connect(repository, false);
+    harness.update(|plait, _, _| {
+        plait.host.pending_create = Some(("sample-request".into(), choice()));
+        plait.host.error =
+            Some("Sample error. Retry creation to reuse the same request ID.".into());
+    });
+    harness.capture(&format!("new-thread-unconfirmed-{suffix}"));
+    harness.update(|plait, _, _| {
+        plait.host.pending_create = None;
+        plait.host.error = None;
+    });
+}
+
+/// The Git inspector hidden. A narrow window has no inspector, so the toggle
+/// explains where Git is instead.
+fn inspector_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
+    harness.connect(repository, false);
+    harness.update(|plait, window, cx| {
+        plait.toggle_inspector(window, cx);
+        let wide = Plait::wide(window);
+        assert_eq!(plait.preferences.value.hide_inspector, wide);
+        assert_eq!(plait.inspector_note, !wide);
+    });
+    harness.capture(&format!("inspector-hidden-{suffix}"));
+    harness.update(|plait, window, cx| {
+        plait.toggle_inspector(window, cx);
+        assert!(!plait.preferences.value.hide_inspector);
+        assert!(!plait.inspector_note);
+    });
 }
 
 // The glob import above brings in `gpui::test`; these are plain tests.
