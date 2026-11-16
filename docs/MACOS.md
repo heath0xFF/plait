@@ -148,6 +148,28 @@ For development with a different `PLAIT_HOST_STORE`, use a separate absolute
 For a prepared development checkout and a first source-change task, see
 [Build Plait with Plait](SELF-HOSTING.md).
 
+## Keyboard controls
+
+| Shortcut | Action |
+| --- | --- |
+| Cmd-O | Open a local repository |
+| Cmd-R | Refresh Git status and cached diffs |
+| Cmd-1 … Cmd-9 | Jump to the Nth thread; Settings can change this to machines or projects |
+| Cmd-Shift-1 / Cmd-Shift-2 | Conversation / Changes |
+| Cmd-B | Show or hide the sidebar |
+| Cmd-Shift-D | Show or hide render timing diagnostics |
+| Cmd-comma | Open local host settings |
+| Enter / Shift-Enter | Submit the draft / insert a line break |
+| Cmd-Option-Up / Down | Previous / next thread |
+| Option-Up / Down | Previous / next changed file |
+| Tab / Shift-Tab | Move keyboard focus |
+| Return / Space | Activate the focused control |
+| Cmd-M / Cmd-W / Cmd-Q | Minimize / close / quit |
+
+Scroll the conversation, navigation, file list, and diff with the trackpad or
+mouse. Long diff lines scroll horizontally. On narrow windows, use Changes to
+open Git; the optional conversation inspector is hidden.
+
 ## Independent updates
 
 - **Client:** quit only the client and run a client-only package. The host and
@@ -201,6 +223,10 @@ full Xcode with Metal. Run:
 bash scripts/check.sh --require-command-sandbox
 bash scripts/build-macos.sh
 ```
+
+To inspect the built client without installing it, run
+`open dist/Plait.app --args /absolute/path/to/repository`. Agent work still needs
+a running [local host](HOST.md).
 
 The build compiles the locked workspace, generates client and host Rust notices
 with pinned `cargo-about` 0.9.3, verifies the pinned Node download checksum, and

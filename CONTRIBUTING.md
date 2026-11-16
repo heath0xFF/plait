@@ -1,6 +1,6 @@
 # Contributing to Plait
 
-Plait is early-stage software. M1 runs on Apple Silicon macOS. The current work
+Plait is an early local preview for Apple Silicon macOS. The current work
 is M2: local, persistent agent execution. Read [README.md](README.md),
 [DESIGN.md](DESIGN.md), and [the architecture notes](docs/ARCHITECTURE.md) first.
 
@@ -13,10 +13,14 @@ cargo build --locked --release
 cargo run --locked --release -- /absolute/path/to/a/repository
 ```
 
-Install full Xcode and its Metal toolchain. Rustup uses the pinned
-`rust-toolchain.toml`. See the README for setup details. Linux and Intel macOS
-are not verified desktop targets. Linux can build and test the headless Rust
-crates; see the commands below. This does not enable Linux agent execution.
+Install full Xcode and its Metal toolchain. If Metal is missing, run
+`xcodebuild -downloadComponent MetalToolchain`. Rustup uses the pinned
+`rust-toolchain.toml`. See [Mac build setup](docs/MACOS.md#build-and-verification)
+for packaging requirements. The client needs a running local host for agent
+work; use the [installed host](docs/MACOS.md) or [development host](docs/HOST.md).
+Omit the repository argument to restore the last checkout and thread.
+Linux and Intel macOS are not verified desktop targets. Linux can build and test
+the headless Rust crates; see the commands below. This does not enable Linux agent execution.
 Rex is useful for long jobs but is not required to build. The desktop itself
 does not need Node; the local host sidecar and isolated runtime probe do.
 
@@ -180,6 +184,23 @@ npm test
 This test uses a scripted provider and temporary files. Live model checks are
 explicit opt-in and use your own account; see the probe README. No shared API
 keys are needed to contribute.
+
+### Live-agent acceptance
+
+After the scripted safety suite passes, an opt-in check can use your existing
+Pi account in a disposable Rust repository. It makes two turns with exact source
+edits and Cargo tests; it does not give the model this source checkout.
+
+```sh
+node scripts/smoke-agent.mjs --self-test
+PI_PROVIDER=YOUR_PROVIDER PI_MODEL=YOUR_MODEL node scripts/smoke-agent.mjs --live
+```
+
+Build `target/debug/plait-host` and install the runtime packages first.
+`PLAIT_HOST_BINARY` can select another built host. Fixtures remain in a private
+temporary directory for inspection. This does not replace installed native
+window-close/reopen, Stop, provider-failure, or process-crash checks. See
+[Verification](docs/VERIFICATION.md) for the full acceptance boundary.
 
 ## License
 

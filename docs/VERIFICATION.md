@@ -1,5 +1,41 @@
 # Verification
 
+## Published preview — v0.1.0-preview.1
+
+[The release](https://github.com/heath0xFF/plait/releases/tag/v0.1.0-preview.1)
+was published from `de4f1fe` on 2026-11-16. [Tag workflow 43858368092](https://github.com/heath0xFF/plait/actions/runs/43858368092)
+passed the full build and publication gate: 88 Mac Rust tests, 105 runtime tests
+from source and again with the installed host/runtime, two durable recovery
+probes, 21 packaging tests, DMG mounting/content verification, and package and
+native-client acceptance. Linux checks passed on the same source commit.
+
+The installed coding probe now makes a behavior-preserving refactor and adds a
+regression test in a disposable copy of `plait-core`. It runs real sandboxed Cargo
+tests, closes the actual installed native client during the command, and reopens
+the same thread and saved draft. It then restarts the host and completes a
+follow-up without replay. Git diff/index checks, tool/message identities, and the
+untouched source checkout are asserted. The seed draft was supplied by the test;
+this does not establish live keyboard or IME behavior.
+
+Inspected native captures from this exact release:
+
+- [Accepted command running](https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.1/installed-client-active.png)
+- [Reopened thread, native code block, and saved draft](https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.1/installed-client-coding.png)
+
+The response explicitly labels the scripted provider. No sample-view code is
+shipped. The release was private until all assets uploaded; published package,
+image, script, and metadata downloads are versioned. All 19 public assets were
+downloaded on Arthur; all eight checksum files passed. Unauthenticated release
+discovery and the published component index matched the tag and source revision.
+The tagged raw installer also matched the released script. Checksums detect
+corruption, not publisher identity. Packages are still unsigned and not notarized.
+
+The managed host reached `ready` at 14,019 ms on the tag run. This passed the
+current gate but reinforces issue #14's cold-start investigation. Do not report
+that earlier startup timeout as fixed. Personal-Mac Gatekeeper/authentication,
+a live-model source change, older-macOS runtime behavior, and accessibility/input
+acceptance remain open.
+
 ## Installable Mac preview candidate — 2026-11-16
 
 [Mac run 43845602435](https://github.com/heath0xFF/plait/actions/runs/43845602435)

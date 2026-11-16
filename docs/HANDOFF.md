@@ -1,5 +1,43 @@
 # Arthur development handoff
 
+## Published preview checkpoint — 2026-11-16
+
+[Plait v0.1.0-preview.1](https://github.com/heath0xFF/plait/releases/tag/v0.1.0-preview.1)
+is published from `de4f1fe` after PR #17. Use its DMG or the curl installer in
+[Mac setup](MACOS.md). These are unsigned, not-notarized Apple Silicon packages;
+do not disable Gatekeeper. The desktop and host remain independent.
+
+[The tag workflow](https://github.com/heath0xFF/plait/actions/runs/43858368092)
+passed 88 Mac Rust tests, 105 runtime tests from source and again installed,
+21 packaging tests, and the actual command sandbox checks. The installed client
+joined a scripted-provider task that changed real Plait source in a disposable
+copy and ran Cargo. Closing the client did not cancel work. Reopening restored
+the same thread and an unsent draft without executing it. Native active/completed
+window captures were inspected. Personal-Mac authentication, Gatekeeper approval,
+and a live model's source change remain separate acceptance work.
+
+Desktop recovery now owns a private journal and writer lock. Drafts, edit
+revisions, and unconfirmed request IDs survive reopening. Identity conflicts,
+corruption, and future schemas do not reset saved work or reassign it to another
+checkout/model. Markdown parsing stays outside render; code, message, and tool
+copy controls use native GPUI. No host protocol or conversation-schema change.
+
+Original implementation is a project rule. Do not copy or port competitor
+application code, assets, or distinctive UI. Earlier BB layout references are
+historical, not current requirements. Use [DESIGN.md](../DESIGN.md) and
+[the reference policy](UI-REFERENCES.md).
+
+Keep the existing untracked `runtime/test/host-replay.test.ts` and
+`runtime/test/support/replay.ts` intact. They were not included in the preview.
+Issue #14 is still a startup investigation: measured managed-host startup varied
+from about 5 to 14 seconds. New phase diagnostics preserve the first failed
+attempt. The preview is not a claimed fix for that earlier timeout.
+
+Start with [Build Plait with Plait](SELF-HOSTING.md). Native app inspection,
+commits, dependency preparation, and packaging still belong in Rex. Keep Linux
+commands disabled until real containment is implemented and tested. Complete
+the live installed Mac loop before expanding remote execution or Git writes.
+
 ## Goal and boundary
 
 Heath is moving development to Arthur through Rex on his phone. Prepare the
@@ -161,9 +199,10 @@ That temporary path is not a permanent CLI repair; preserve the live sessions.
 
 Plait remains native Rust + GPUI, Project → Machine → Thread, independent
 hosts, first-class Git, no embedded terminal, no mandatory worktrees, and no
-hidden orchestration. BB is the primary look-and-feel reference, not a source
-of copied code or assets. See `DESIGN.md` and `docs/UI-REFERENCES.md`. The reference
-checkout is on the Mac at `/Users/heath/code/bb`; clone it separately if needed.
+hidden orchestration. Build original Plait code and design. Compare other apps
+by user outcomes, not as implementation or layout templates. Declared, pinned
+libraries such as GPUI and Pi remain allowed with their licenses retained.
+See `DESIGN.md` and `docs/UI-REFERENCES.md`.
 
 ## Current limits
 
