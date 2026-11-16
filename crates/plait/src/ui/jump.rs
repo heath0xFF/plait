@@ -35,6 +35,8 @@ pub(super) struct PreferenceState {
     pub note: Option<String>,
     /// The group of the newest change. `None` while `note` is about loading.
     group: Option<PreferenceGroup>,
+    /// `note` reports a problem, not progress.
+    failed: bool,
 }
 
 impl Plait {
@@ -86,6 +88,7 @@ impl Plait {
                 state.path = path;
                 // A choice made before loading finished is newer than the file.
                 if state.revision == 0 {
+                    state.failed = !matches!(loaded, Some(Ok(_)));
                     match loaded {
                         Some(Ok(value)) => state.value = value,
                         Some(Err(error)) => state.note = Some(error),
@@ -122,6 +125,7 @@ impl Plait {
         state.value = value.clone();
         state.revision += 1;
         state.group = Some(group);
+        state.failed = state.path.is_none();
         let revision = state.revision;
         let Some(path) = state.path.clone() else {
             state.note =
@@ -139,6 +143,7 @@ impl Plait {
                 if this.preferences.revision != revision {
                     return;
                 }
+                this.preferences.failed = result.is_err();
                 this.preferences.note = Some(match result {
                     Ok(()) => "Saved.".into(),
                     Err(error) => {
@@ -160,11 +165,13 @@ impl Plait {
     /// The preference file's state, for the section whose control changed it.
     /// Loading problems and changes made outside Settings belong to no section.
     pub(super) fn preference_note(&self, group: Option<PreferenceGroup>) -> Option<String> {
-        let shown = match self.preferences.group {
-            None | Some(PreferenceGroup::View) => None,
-            changed => changed,
+        let state = &self.preferences;
+        let shown = match state.group {
+            // Outside a section only a problem is worth a line, never "Saved."
+            None | Some(PreferenceGroup::View) => state.failed.then_some(None),
+            changed => Some(changed),
         };
-        self.preferences.note.clone().filter(|_| shown == group)
+        state.note.clone().filter(|_| shown == Some(group))
     }
 
     pub(super) fn keyboard_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
