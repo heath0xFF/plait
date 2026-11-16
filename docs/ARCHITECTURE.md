@@ -38,6 +38,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
     commands.rs         the local command table
     parent.rs           what the window supplies and performs for a composer
   host.rs               background host requests and event subscriptions
+  history.rs            bounded history reads, projection dispatch, and reading controls
   session.rs            desktop restore/save coordination and submission guards
   markdown.rs           native conversation blocks: prose, code, tables, diffs
   settings.rs           host status and the Models, Approvals, Keyboard, About sections
@@ -50,6 +51,7 @@ host.rs                 bounded Unix-socket framing and requests; background onl
 host/watch.rs           cancellable reader and bounded async snapshot delivery
 host_state.rs           host selection, request identity, and stale-result guards
 transcript.rs           stable row identity and incremental list-change plans
+history.rs              stored/live merging, text parts, memory limits, run wording
 local_socket.rs         owner-only paths and OS peer-identity checks
 state.rs                selection, collapse state, request queue, cache
 model.rs                plain Rust data, no GPUI
@@ -106,8 +108,8 @@ The host also owns each thread's title, timestamps, archive flag, and the queue
 of inputs waiting behind a run. A snapshot is the bounded live tail of a thread.
 The complete conversation is read on demand, in pages, from the thread's saved
 conversation store; an idle thread's store is opened read-only for that, so a
-history read cannot recover or run anything. The desktop core can speak these
-operations; the desktop views do not use them yet.
+history read cannot recover or run anything. The desktop loads stored history through these operations. Other version 3
+features are described separately as their controls land.
 
 The desktop uses bounded snapshot subscriptions. Runtime state changes signal
 the host through a private inherited Unix socket, separate from request/reply
@@ -456,8 +458,42 @@ file. Arguments that the host clipped or that are not the expected JSON are
 shown as received, with a note. The same pass plans groups: a finished run of
 five or more consecutive calls folds under one line with its count and kinds,
 and the run a busy thread is still adding to keeps its latest three calls in
-view. These are still bounded host previews, not paginated history. Git
-refreshes after an observed busy-to-complete transition.
+view. Version 3 stored tool fields replace bounded live previews; opened read results
+show all loaded lines. Version 1 and 2 hosts keep the bounded-preview behavior.
+Git refreshes after an observed busy-to-complete transition.
+
+`plait-core::history` keeps a reading window of at most 600 stored items and
+16 MiB of field text. The projected snapshot, Markdown blocks, and syntax spans
+are additional bounded representations of that window. One page hydrates up to
+2 MiB beyond its inline text. An oversized field is read in parts of roughly
+262,144 UTF-16 units, with explicit Next part and Start over controls; copying
+copies the displayed part. Every continuation must advance on the declared
+UTF-16 boundary and finish at the declared length.
+
+The host snapshot stays the authoritative live state for submissions and status.
+A separate display snapshot combines stored items with its live tail, preserving
+full stored fields and the newest tool status. Reading older pages evicts the
+newer end when needed and labels the detached window; Latest reopens the live
+end. Forward paging is not available. Ordinary forward scrolling works within
+the loaded window. Evicted older pages can be loaded again, including when an
+eviction cuts through a page. A missing history seam resets to the newest page
+instead of implying that two separated ranges are contiguous.
+
+History socket reads and Markdown/tool projection run on the background executor.
+There is one history read and one projection in flight per view. New snapshots
+coalesce while projection runs; host epoch, watch epoch, thread ID, and projection
+revision reject stale delivery. Pages arriving after newer live state are merged
+with that state. Prepending uses the existing stable-ID list splices, so the
+current item and pixel offset survive. The scene harness verifies that invariant.
+
+Reasoning has its own stable row identity and parsed blocks. Completed reasoning
+starts collapsed; live reasoning has a compact, scrollable body. Disclosure and
+selection survive ordinary snapshot updates. Replacing an oversized text part
+clears selection because its offsets now refer to another part. Run-state copy
+uses only host facts: no invented stop actor or per-turn duration. Completed
+answers summarize observed tool steps and successfully edited or written paths.
+A response still streaming can only show the host's bounded live tail; its full
+stored text loads after the host saves it.
 
 Conversation text can be selected with the pointer: drag, double-click for a
 word, triple-click for a block or a line of code, and shift-click to extend,
