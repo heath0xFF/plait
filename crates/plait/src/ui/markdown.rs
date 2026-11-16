@@ -1,132 +1,416 @@
-//! Presentation for precomputed native Markdown blocks. Parsing never runs here.
+//! Presentation for precomputed conversation blocks. Parsing never runs here.
 
-use super::{Plait, theme::*};
+use super::{
+    Plait,
+    selection::{Selectable, Site, selection_fill},
+    theme::*,
+};
 use gpui::{prelude::*, *};
-use plait_core::markdown::{Kind, Message};
+use plait_core::{
+    diff::Change,
+    highlight::Token,
+    markdown::{self, Align, Block, DiffLine, Kind, Style, Table},
+};
+use std::ops::Range;
+
+/// Left inset for each level of list nesting, and the width of a bullet column.
+const LIST_STEP: f32 = 20.;
+/// Width given to one character of a table cell, wide enough for monospace code.
+const CELL_CHARACTER: f32 = 8.4;
+const CELL_PADDING: f32 = 10.;
+
+/// Syntax classes drawn with the existing palette; see DESIGN.md.
+fn token_color(token: Token) -> u32 {
+    match token {
+        Token::Comment => SUBTLE,
+        Token::Keyword => VIOLET,
+        Token::String | Token::Inserted => MINT,
+        Token::Number => AMBER,
+        Token::Type | Token::Property | Token::Meta => BLUE,
+        Token::Function | Token::Heading => TEXT,
+        Token::Punctuation => MUTED,
+        Token::Deleted => RED,
+    }
+}
+
+fn highlight(style: &Style) -> HighlightStyle {
+    let link = style.link.is_some();
+    let color = if link {
+        Some(BLUE)
+    } else {
+        style.token.map(token_color)
+    };
+    HighlightStyle {
+        color: color.map(|color| rgb(color).into()),
+        font_weight: (style.strong || style.token == Some(Token::Heading))
+            .then_some(FontWeight::BOLD),
+        font_style: style.emphasis.then_some(FontStyle::Italic),
+        background_color: style.code.then(|| rgb(PANEL).into()),
+        // A link is underlined as well as tinted, so it never depends on color.
+        underline: link.then(|| UnderlineStyle {
+            thickness: px(1.),
+            color: Some(rgb(BLUE).into()),
+            wavy: false,
+        }),
+        strikethrough: style.strike.then(|| StrikethroughStyle {
+            thickness: px(1.),
+            color: None,
+        }),
+        ..HighlightStyle::default()
+    }
+}
+
+/// Clip a block's spans to `range` and make them relative to it.
+fn local_spans(block: &Block, range: &Range<usize>) -> Vec<(Range<usize>, Style)> {
+    block
+        .spans
+        .iter()
+        .filter(|(span, _)| span.start < range.end && range.start < span.end)
+        .map(|(span, style)| {
+            let local =
+                span.start.max(range.start) - range.start..span.end.min(range.end) - range.start;
+            (local, *style)
+        })
+        .collect()
+}
 
 impl Plait {
-    pub(super) fn markdown(
+    /// Styled, selectable text for `range` of a block.
+    pub(super) fn block_text(
         &self,
-        owner: &str,
-        message: &Message,
+        site: &Site,
+        block: &Block,
+        range: Range<usize>,
+        by_line: bool,
+    ) -> Selectable {
+        let spans = local_spans(block, &range);
+        let code: Vec<_> = spans
+            .iter()
+            .filter(|(_, style)| style.code)
+            .map(|(range, _)| (range.clone(), SharedString::from(MONO)))
+            .collect();
+        let mut runs: Vec<_> = spans
+            .iter()
+            .map(|(range, style)| (range.clone(), highlight(style)))
+            .collect();
+        if let Some(selected) = self.reading.selected(site, block, &range) {
+            markdown::restyle(&mut runs, selected, |style| {
+                style.background_color = Some(selection_fill())
+            });
+        }
+        let text = StyledText::new(SharedString::from(block.text[range.clone()].to_owned()))
+            .with_highlights(runs)
+            .with_font_family_overrides(code);
+        self.selectable(site, block, range, text, by_line)
+    }
+
+    /// The monospace body of a code block: one line per source line, scrolling sideways.
+    pub(super) fn code_text(&self, site: &Site, block: &Block, id: ElementId) -> Stateful<Div> {
+        div()
+            .id(id)
+            .w_full()
+            .overflow_x_scroll()
+            .font_family(MONO)
+            .text_size(px(12.))
+            .line_height(px(19.))
+            .whitespace_nowrap()
+            .child(self.block_text(site, block, 0..block.text.len(), true))
+    }
+
+    fn code_block(
+        &self,
+        site: &Site,
+        block: &Block,
+        language: &str,
+        key: &str,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let blocks = message
-            .blocks
+        let copy = block.text.clone();
+        let group = SharedString::from(format!("code-group-{key}"));
+        column()
+            .group(group.clone())
+            .w_full()
+            .min_w_0()
+            .rounded_lg()
+            .bg(rgb(RAIL))
+            .border_1()
+            .border_color(rgb(BORDER))
+            .overflow_hidden()
+            .child(
+                row()
+                    .pl_3()
+                    .pr_1()
+                    .h(px(ROW_HEIGHT))
+                    .justify_between()
+                    .child(tag(
+                        if language.is_empty() {
+                            SharedString::from("Code")
+                        } else {
+                            SharedString::from(language.to_owned())
+                        },
+                        SUBTLE,
+                    ))
+                    .child(
+                        quiet_button(
+                            SharedString::from(format!("copy-code-{key}")),
+                            "Copy code",
+                            group,
+                        )
+                        .aria_label("Copy code block")
+                        .on_activate(cx, move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
+                        }),
+                    ),
+            )
+            .child(
+                self.code_text(
+                    site,
+                    block,
+                    SharedString::from(format!("code-{key}")).into(),
+                )
+                .px_3()
+                .pb_2(),
+            )
+            .into_any_element()
+    }
+
+    fn list_item(&self, site: &Site, block: &Block, depth: usize, marker: usize) -> AnyElement {
+        let marker = marker.min(block.text.len());
+        div()
+            .flex()
+            .items_start()
+            .w_full()
+            .min_w_0()
+            .pl(px(depth as f32 * LIST_STEP))
+            .child(
+                prose()
+                    .flex_shrink_0()
+                    .min_w(px(LIST_STEP))
+                    .pr(px(6.))
+                    .text_color(rgb(MUTED))
+                    .child(SharedString::from(
+                        block.text[..marker].trim_end().to_owned(),
+                    )),
+            )
+            .child(prose().flex_1().min_w_0().child(self.block_text(
+                site,
+                block,
+                marker..block.text.len(),
+                false,
+            )))
+            .into_any_element()
+    }
+
+    fn table_cell(
+        &self,
+        site: &Site,
+        block: &Block,
+        range: Range<usize>,
+        width: f32,
+        align: Align,
+    ) -> Div {
+        let cell = div()
+            .flex()
+            .w(px(width))
+            .flex_shrink_0()
+            .px(px(CELL_PADDING))
+            .py(px(5.));
+        // Text stays left-aligned inside its own box, so hit-testing is the
+        // same in every column; the box moves instead.
+        match align {
+            Align::Left => cell,
+            Align::Center => cell.justify_center(),
+            Align::Right => cell.justify_end(),
+        }
+        .child(
+            div()
+                .min_w_0()
+                .child(self.block_text(site, block, range, false)),
+        )
+    }
+
+    /// Cells keep a width estimated from their text, so every row lines up
+    /// without measuring; a table wider than the column scrolls sideways.
+    fn table(&self, site: &Site, block: &Block, table: &Table, key: &str) -> AnyElement {
+        let widths: Vec<f32> = table
+            .columns
             .iter()
-            .enumerate()
-            .map(|(index, block)| {
-                if let Kind::Code(language) = &block.kind {
-                    let copy = block.text.clone();
-                    return column()
-                        .w_full()
-                        .min_w_0()
-                        .rounded_lg()
-                        .bg(rgb(RAIL))
-                        .border_1()
-                        .border_color(rgb(BORDER))
-                        .overflow_hidden()
-                        .child(
-                            row()
-                                .px_3()
-                                .h(px(28.))
-                                .justify_between()
-                                .child(tag(
-                                    if language.is_empty() {
-                                        "Code"
-                                    } else {
-                                        language
-                                    },
-                                    SUBTLE,
-                                ))
-                                .child(
-                                    button(
-                                        SharedString::from(format!("copy-code-{owner}-{index}")),
-                                        "Copy code",
-                                    )
-                                    .aria_label("Copy code block")
-                                    .on_activate(
-                                        cx,
-                                        move |_, _, cx| {
-                                            cx.write_to_clipboard(ClipboardItem::new_string(
-                                                copy.clone(),
-                                            ))
-                                        },
-                                    ),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .id(SharedString::from(format!("code-{owner}-{index}")))
-                                .px_3()
-                                .py_2()
-                                .w_full()
-                                .overflow_x_scroll()
-                                .font_family(MONO)
-                                .text_size(px(12.))
-                                .line_height(px(19.))
-                                .whitespace_nowrap()
-                                .child(block.text.clone()),
-                        )
-                        .into_any_element();
-                }
-                if block.kind == Kind::Rule {
-                    return div()
-                        .w_full()
-                        .my_2()
-                        .border_b_1()
-                        .border_color(rgb(BORDER))
-                        .into_any_element();
-                }
-                let text = StyledText::new(block.text.clone())
-                    .with_highlights(block.spans.iter().map(|(range, style)| {
-                        (
-                            range.clone(),
-                            HighlightStyle {
-                                font_weight: style.strong.then_some(FontWeight::BOLD),
-                                font_style: style.emphasis.then_some(FontStyle::Italic),
-                                background_color: style.code.then(|| rgb(PANEL).into()),
-                                color: style.code.then(|| rgb(MINT).into()),
-                                ..HighlightStyle::default()
-                            },
-                        )
-                    }))
-                    .with_font_family_overrides(
-                        block
-                            .spans
-                            .iter()
-                            .filter(|(_, style)| style.code)
-                            .map(|(range, _)| (range.clone(), SharedString::from(MONO))),
-                    );
-                let mut body = prose().w_full().min_w_0();
-                match block.kind {
-                    Kind::Heading(level) => {
-                        body = body
-                            .font_weight(FontWeight::BOLD)
-                            .text_size(px(match level {
-                                1 => 18.,
-                                2 => 16.,
-                                _ => 14.,
-                            }));
-                    }
-                    Kind::Quote => {
-                        body = body
-                            .pl_3()
-                            .border_l_2()
-                            .border_color(rgb(EDGE))
-                            .text_color(rgb(MUTED))
-                    }
-                    Kind::List(depth) => body = body.pl(px(depth as f32 * 12.)),
-                    _ => {}
-                }
-                body.child(text).into_any_element()
+            .map(|column| {
+                (column.width as f32 * CELL_CHARACTER + 2. * CELL_PADDING).clamp(56., 360.)
             })
-            .collect::<Vec<_>>();
+            .collect();
+        let total: f32 = widths.iter().sum();
+        let rows = table.rows.iter().enumerate().map(|(index, cells)| {
+            div()
+                .flex()
+                .items_stretch()
+                .when(index > 0, |el| el.border_t_1().border_color(rgb(BORDER)))
+                .when(index == 0, |el| {
+                    el.bg(rgb(RAIL)).font_weight(FontWeight::MEDIUM)
+                })
+                .children(cells.iter().zip(&widths).zip(&table.columns).map(
+                    |((cell, width), column)| {
+                        self.table_cell(site, block, cell.clone(), *width, column.align)
+                    },
+                ))
+        });
+        // The outer row lets a narrow table keep its own width.
+        div()
+            .flex()
+            .w_full()
+            .min_w_0()
+            .child(
+                div()
+                    .id(SharedString::from(format!("table-{key}")))
+                    .flex()
+                    .min_w_0()
+                    .max_w_full()
+                    .overflow_x_scroll()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(rgb(BORDER))
+                    .text_size(px(13.))
+                    .line_height(px(20.))
+                    .child(column().flex_none().w(px(total)).children(rows)),
+            )
+            .into_any_element()
+    }
+
+    /// A line diff: removals then additions, each marked in a gutter and tinted.
+    pub(super) fn diff(
+        &self,
+        site: &Site,
+        block: &Block,
+        lines: &[DiffLine],
+        key: &str,
+    ) -> AnyElement {
+        let rows = lines.iter().map(|line| {
+            let (mark, tint, fill) = match line.change {
+                Change::Context => (" ", MUTED, None),
+                Change::Removed => ("−", RED, Some(REMOVED_FILL)),
+                Change::Added => ("+", MINT, Some(ADDED_FILL)),
+            };
+            div()
+                .flex()
+                .when_some(fill, |el, fill| el.bg(rgba(fill)))
+                .child(
+                    div()
+                        .w(px(18.))
+                        .flex_shrink_0()
+                        .text_center()
+                        .text_color(rgb(tint))
+                        .child(mark),
+                )
+                .child(
+                    div()
+                        .pr_3()
+                        .text_color(rgb(if line.change == Change::Context {
+                            MUTED
+                        } else {
+                            TEXT
+                        }))
+                        .child(self.block_text(site, block, line.range.clone(), false)),
+                )
+        });
+        div()
+            .id(SharedString::from(format!("diff-{key}")))
+            .flex()
+            .w_full()
+            .overflow_x_scroll()
+            .py_1()
+            .font_family(MONO)
+            .text_size(px(12.))
+            .line_height(px(19.))
+            .whitespace_nowrap()
+            // Tints reach the widest line, or the edge when every line is short.
+            .child(column().flex_none().min_w_full().children(rows))
+            .into_any_element()
+    }
+
+    fn block(&self, site: &Site, block: &Block, key: &str, cx: &mut Context<Self>) -> AnyElement {
+        let whole = 0..block.text.len();
+        let body = match &block.kind {
+            Kind::Code(language) => self.code_block(site, block, language, key, cx),
+            Kind::Rule => div()
+                .w_full()
+                .my_1()
+                .border_b_1()
+                .border_color(rgb(BORDER))
+                .into_any_element(),
+            Kind::List { depth, marker } => self.list_item(site, block, *depth, *marker),
+            Kind::Table(table) => self.table(site, block, table, key),
+            Kind::Diff(lines) => self.diff(site, block, lines, key),
+            Kind::Heading(level) => prose()
+                .w_full()
+                .min_w_0()
+                .font_weight(FontWeight::BOLD)
+                .text_size(px(match level {
+                    1 => 18.,
+                    2 => 16.,
+                    _ => 14.,
+                }))
+                .line_height(px(24.))
+                .child(self.block_text(site, block, whole, false))
+                .into_any_element(),
+            Kind::Quote => prose()
+                .w_full()
+                .min_w_0()
+                .pl_3()
+                .border_l_2()
+                .border_color(rgb(EDGE))
+                .text_color(rgb(MUTED))
+                .child(self.block_text(site, block, whole, false))
+                .into_any_element(),
+            Kind::Paragraph => prose()
+                .w_full()
+                .min_w_0()
+                .child(self.block_text(site, block, whole, false))
+                .into_any_element(),
+        };
+        if block.indent == 0 {
+            return body;
+        }
+        div()
+            .w_full()
+            .min_w_0()
+            .pl(px(block.indent as f32 * LIST_STEP))
+            .child(body)
+            .into_any_element()
+    }
+
+    /// Every block of one row. `key` is unique to the row, for element IDs.
+    pub(super) fn markdown(
+        &self,
+        site: &Site,
+        blocks: &[Block],
+        key: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut previous: Option<&Kind> = None;
+        let blocks = blocks.iter().enumerate().map(|(index, block)| {
+            let site = Site {
+                block: index,
+                ..site.clone()
+            };
+            // Items of one list sit close together; a heading opens a section.
+            let gap = match (previous, &block.kind) {
+                (None, _) => 0.,
+                (Some(Kind::List { .. }), Kind::List { .. }) => 2.,
+                (_, Kind::Heading(_)) => 14.,
+                _ => 8.,
+            };
+            previous = Some(&block.kind);
+            div().w_full().min_w_0().mt(px(gap)).child(self.block(
+                &site,
+                block,
+                &format!("{key}-{index}"),
+                cx,
+            ))
+        });
         column()
             .w_full()
             .min_w_0()
-            .gap_2()
-            .children(blocks)
+            .children(blocks.collect::<Vec<_>>())
             .into_any_element()
     }
 }

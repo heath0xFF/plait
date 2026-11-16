@@ -10,12 +10,14 @@ mod markdown;
 mod model_picker;
 mod navigation;
 mod palette;
+mod selection;
 mod session;
 mod settings;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod snapshot;
 mod text_field;
 pub mod theme;
+mod tool_card;
 mod update;
 
 use gpui::{prelude::*, *};
@@ -80,6 +82,7 @@ pub struct Plait {
     inspector_note: bool,
     focus: FocusHandle,
     expanded_live_tools: HashSet<String>,
+    reading: selection::Reading,
     file_scroll: UniformListScrollHandle,
     diff_scroll: UniformListScrollHandle,
     show_changes: bool,
@@ -124,6 +127,7 @@ impl Plait {
             inspector_note: false,
             focus,
             expanded_live_tools: HashSet::new(),
+            reading: Default::default(),
             file_scroll: UniformListScrollHandle::new(),
             diff_scroll: UniformListScrollHandle::new(),
             show_changes: false,
@@ -636,6 +640,7 @@ impl Render for Plait {
             )
             .on_action(cx.listener(|_, _: &Minimize, window, _| window.minimize_window()))
             .map(|root| self.on_jump_actions(root, cx))
+            .map(|root| self.on_selection_actions(root, cx))
             .size_full()
             .overflow_hidden()
             .bg(rgb(BG))

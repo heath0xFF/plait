@@ -183,6 +183,7 @@ pub(super) fn install(cx: &mut App, overrides: &KeyOverrides) {
     composer::bind_keys(cx);
     text_field::bind_keys(cx);
     palette::bind_keys(cx);
+    selection::bind_keys(cx);
     bind(cx, overrides);
     cx.set_menus(menus());
 }

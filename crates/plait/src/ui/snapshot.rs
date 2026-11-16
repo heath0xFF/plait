@@ -229,7 +229,7 @@ fn thread_snapshot(checkout: &Path, approval: bool) -> Snapshot {
                 id: "t1".into(),
                 name: "edit".into(),
                 status: ToolStatus::Done,
-                input: "{\"path\":\"src/review.rs\"}".into(),
+                input: "{\"path\":\"src/review.rs\",\"old_text\":\"    read_status();\",\"new_text\":\"    queue_status();\\n    notify_when_ready();\"}".into(),
                 output: "Replaced 1 line.".into(),
                 after: Some(Some("m3".into())),
             },
@@ -283,7 +283,7 @@ fn tool_states(snapshot: &mut Snapshot) {
             "t1",
             "edit",
             ToolStatus::Done,
-            "{\"path\":\"src/review.rs\"}",
+            "{\"path\":\"src/review.rs\",\"old_text\":\"    read_status();\",\"new_text\":\"    queue_status();\\n    notify_when_ready();\"}",
             "Replaced 1 line.",
         ),
         tool(
@@ -304,7 +304,7 @@ fn tool_states(snapshot: &mut Snapshot) {
             "t4",
             "edit",
             ToolStatus::Interrupted,
-            "{\"path\":\"notes.md\"}",
+            "{\"path\":\"notes.md\",\"old_text\":\"# Read-only review\",\"new_text\":\"# Review\"}",
             "",
         ),
     ];
@@ -327,6 +327,142 @@ fn finished_turn(snapshot: &mut Snapshot) {
         text: "Sample result. The refresh is queued and the tests pass.\n\n- `src/review.rs` queues the read\n- 24 tests passed".into(),
         ..Default::default()
     });
+}
+
+/// Sample replies that exercise every kind of conversation text.
+const PROSE: &str = "## Sample reading fixture\n\nThis is a rendering fixture, not an agent run. See [the GPUI site](https://gpui.rs/) or https://example.com/docs for more, with ~~struck~~ text, *emphasis*, **strong**, and `inline code`.\n\n1. First step\n   - nested point that is long enough to wrap onto a second line at the narrow window size so the hanging indent is visible\n     - deeper point\n2. Second step\n\n   A paragraph that belongs to the second step.\n\n- [x] finished task\n- [ ] open task\n\n> A quoted remark.\n\n| Crate | Role | Lines |\n| :-- | :-- | --: |\n| `plait` | GPUI presentation and input | 6200 |\n| `plait-core` | Models, **projection**, and Git | 5400 |\n| `plait-host` | Host lifetime | 1300 |\n\n---\n\nDone.";
+
+const CODE: &str = "```rust\n// Sample code\npub fn refresh<'a>(queue: &'a mut Queue) -> Result<usize, Error> {\n    let count = queue.len() + 0x1f;\n    println!(\"queued {count}\");\n    Ok(count)\n}\n```\n\n```typescript\nexport async function load(path: string): Promise<Thread[]> {\n  const reply = await fetch(`/threads/${path}`); // sample\n  return reply.ok ? reply.json() : [];\n}\n```\n\n```python\ndef total(rows: list[int]) -> int:\n    \"\"\"Sample docstring.\"\"\"\n    return sum(row for row in rows if row > 0)  # positive only\n```\n\n```sh\nCARGO_TERM_COLOR=never cargo test --locked | tee \"$TMPDIR/test.log\" # sample\n```";
+
+const DATA: &str = "```json\n{\"name\": \"plait\", \"private\": true, \"version\": 3}\n```\n\n```toml\n[workspace.package]\nedition = \"2024\" # sample\n```\n\n```yaml\nsteps:\n  - run: \"cargo test\"\n    retries: 2\n```\n\n```diff\n@@ -1,3 +1,3 @@\n-    read_status();\n+    queue_status();\n```\n\n```go\nfunc Sum(xs []int) int { return len(xs) } // sample\n```\n\n```cpp\n#include <vector>\nint main() { std::vector<int> v{1, 2}; return 0; }\n```\n\n```\nplain text with no language\n```\n\n| Sample | One | Two | Three | Four | Five | Six | Seven |\n| - | - | - | - | - | - | - | - |\n| A wide table scrolls sideways | 1 | 2 | 3 | 4 | 5 | 6 | A last cell that is long enough to wrap inside its column when it reaches the width limit |";
+
+/// A finished thread whose replies cover prose, tables, links, and code.
+fn reading(snapshot: &mut Snapshot) {
+    snapshot.status = ThreadStatus::Idle;
+    snapshot.live_text.clear();
+    snapshot.tools.clear();
+    let message = |id: &str, role, text: &str| Message {
+        id: id.into(),
+        role,
+        text: text.into(),
+        ..Default::default()
+    };
+    snapshot.messages = vec![
+        message(
+            "r1",
+            MessageRole::User,
+            "Show the sample fixture.\nIt links to https://example.com/start too.",
+        ),
+        message("r2", MessageRole::Assistant, PROSE),
+        message("r3", MessageRole::User, "And the code samples."),
+        message("r4", MessageRole::Assistant, CODE),
+        message("r5", MessageRole::Assistant, DATA),
+    ];
+}
+
+/// One finished call of every tool, a failed command, and arguments the host clipped.
+fn tool_cards(snapshot: &mut Snapshot) {
+    snapshot.status = ThreadStatus::Idle;
+    snapshot.live_text.clear();
+    let listing: String = (1..=30)
+        .map(|line| format!("pub fn sample_{line}() {{}}\n"))
+        .collect();
+    snapshot.tools = vec![
+        tool(
+            "c1",
+            "read",
+            ToolStatus::Done,
+            "{\"path\":\"src/review.rs\"}",
+            &listing,
+        ),
+        tool(
+            "c2",
+            "edit",
+            ToolStatus::Done,
+            "{\"path\":\"src/review.rs\",\"old_text\":\"pub fn refresh() {\\n    read_status();\\n}\",\"new_text\":\"pub fn refresh() {\\n    queue_status();\\n    notify_when_ready();\\n}\"}",
+            "Replaced 1 occurrence.",
+        ),
+        tool(
+            "c3",
+            "write",
+            ToolStatus::Done,
+            "{\"path\":\"notes/plan.toml\",\"content\":\"# Sample file\\n[plan]\\nsteps = 3\\n\"}",
+            "Created notes/plan.toml.",
+        ),
+    ];
+    snapshot.messages.push(Message {
+        id: "m4".into(),
+        role: MessageRole::Assistant,
+        text: "Sample note between two runs of tool calls.".into(),
+        ..Default::default()
+    });
+    let after = |mut call: Tool| {
+        call.after = Some(Some("m4".into()));
+        call
+    };
+    snapshot.tools.extend([
+        after(tool(
+            "c4",
+            "command",
+            ToolStatus::Done,
+            "{\"command\":\"cargo test --locked\"}",
+            "Sample output\nrunning 24 tests\ntest result: ok. 24 passed; 0 failed",
+        )),
+        after(tool(
+            "c5",
+            "command",
+            ToolStatus::Error,
+            "{\"command\":\"cargo clippy -- -D warnings\"}",
+            "Sample error output\nerror: unused variable: `count`\nexit status 101",
+        )),
+        after(tool(
+            "c6",
+            "edit",
+            ToolStatus::Done,
+            "ample clipped arguments\",\"new_text\":\"the start was cut off\"}",
+            "Replaced 1 occurrence.",
+        )),
+    ]);
+}
+
+/// A long run of calls: finished and folded, or still running with its latest steps.
+fn long_run(snapshot: &mut Snapshot, running: bool) {
+    snapshot.status = if running {
+        ThreadStatus::Running
+    } else {
+        ThreadStatus::Idle
+    };
+    snapshot.live_text.clear();
+    let names = ["read", "read", "edit", "command", "read", "edit", "command"];
+    snapshot.tools = names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let (input, output) = match *name {
+                "command" => ("{\"command\":\"cargo check\"}", "Sample output."),
+                "edit" => (
+                    "{\"path\":\"src/review.rs\",\"old_text\":\"a\",\"new_text\":\"b\"}",
+                    "Replaced 1 occurrence.",
+                ),
+                _ => ("{\"path\":\"src/review.rs\"}", "pub fn sample() {}\n"),
+            };
+            let last = index + 1 == names.len();
+            let status = match (index, running && last) {
+                (_, true) => ToolStatus::Running,
+                (3, _) => ToolStatus::Error,
+                _ => ToolStatus::Done,
+            };
+            tool(&format!("g{index}"), name, status, input, output)
+        })
+        .collect();
+    if !running {
+        snapshot.messages.push(Message {
+            id: "m4".into(),
+            role: MessageRole::Assistant,
+            text: "Sample result after a long run of tool calls.".into(),
+            ..Default::default()
+        });
+    }
 }
 
 /// An unsent message of several lines, as typed into the composer.
@@ -413,12 +549,42 @@ impl Harness {
         });
     }
 
-    /// Draw the scene, which runs layout and paint, and save it when rendering.
-    fn capture(&mut self, name: &str) {
+    /// Deliver one pointer event to the window, as the platform would. Handlers
+    /// belong to the last drawn frame, so draw with `capture` first.
+    fn pointer(&mut self, event: PlatformInput) {
+        let window = self.window.into();
+        self.cx
+            .update_window(window, |_, window, cx| {
+                window.dispatch_event(event, cx);
+            })
+            .expect("pointer event");
+        self.settle();
+    }
+
+    /// Press one key combination, dispatched from the focused element.
+    fn keystroke(&mut self, keys: &'static str) {
+        let keystroke = Keystroke::parse(keys).expect("keystroke");
+        let window = self.window.into();
+        self.cx
+            .update_window(window, |_, window, cx| {
+                window.dispatch_keystroke(keystroke, cx);
+            })
+            .expect("keystroke");
+        self.settle();
+    }
+
+    /// Run layout and paint without saving an image.
+    fn draw(&mut self) {
         let window = self.window.into();
         self.cx
             .update_window(window, |_, window, cx| window.draw(cx).clear(cx))
             .expect("draw");
+    }
+
+    /// Draw the scene, which runs layout and paint, and save it when rendering.
+    fn capture(&mut self, name: &str) {
+        self.draw();
+        let window = self.window.into();
         if let Some(output) = &self.output {
             let image = self.cx.capture_screenshot(window).expect("screenshot");
             image
@@ -742,6 +908,8 @@ fn walk(output: Option<&Path>) {
         harness.capture(&format!("live-approval-{suffix}"));
         streaming_walk(&mut harness, &repository, suffix);
         tool_states_walk(&mut harness, &repository, suffix);
+        reading_walk(&mut harness, &repository, suffix);
+        tool_cards_walk(&mut harness, &repository, suffix);
         draft_walk(&mut harness, &repository, suffix);
         composer_walk(&mut harness, &repository, suffix);
         settings_walk(&mut harness, &repository, suffix);
@@ -822,6 +990,8 @@ fn streaming_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
             assert!(plait.expanded_live_tools.contains("t2"));
         });
     }
+    // Text arrived while the reader was elsewhere in the history.
+    harness.capture(&format!("stream-new-activity-{suffix}"));
     harness.change_snapshot(|snapshot| {
         snapshot.messages.remove(0);
         snapshot.messages.push(Message {
@@ -863,6 +1033,276 @@ fn tool_states_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     });
     harness.capture(&format!("live-tools-{suffix}"));
     // Later scenes show the usual thread list again.
+    harness.connect(repository, false);
+}
+
+/// Prose, a table, links, a selection across blocks, and highlighted code.
+fn reading_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
+    use super::selection::Owner;
+    harness.connect(repository, false);
+    harness.change_snapshot(reading);
+    let at = |item_ix| ListOffset {
+        item_ix,
+        offset_in_item: px(0.),
+    };
+    harness.update(|plait, _, cx| {
+        plait.host.threads[0].status = ThreadStatus::Idle;
+        plait.sync_composer(cx);
+        plait.live_scroll.scroll_to(at(0));
+    });
+    harness.capture(&format!("read-prose-{suffix}"));
+    let reply = || Owner::Message("r2".into());
+    // Where the caret before a byte of one of the reply's blocks is on screen.
+    let caret = |harness: &mut Harness, block: usize, offset: usize| {
+        let found = harness.window.update(&mut harness.cx, |plait, _, _| {
+            plait.text_point(&reply(), block, offset)
+        });
+        found.unwrap().expect("text is on screen")
+    };
+    let press = |position, click_count| {
+        PlatformInput::MouseDown(MouseDownEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: Modifiers::default(),
+            click_count,
+            first_mouse: false,
+        })
+    };
+    let release = |position| {
+        PlatformInput::MouseUp(MouseUpEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: Modifiers::default(),
+            click_count: 1,
+        })
+    };
+    let moved = |position, pressed_button| {
+        PlatformInput::MouseMove(MouseMoveEvent {
+            position,
+            pressed_button,
+            modifiers: Modifiers::default(),
+        })
+    };
+    let selected = |harness: &mut Harness| {
+        harness
+            .window
+            .update(&mut harness.cx, |plait, _, _| plait.selected_text())
+            .unwrap()
+    };
+
+    // Resting on a link shows where it leads, and the row's quiet controls.
+    let link = caret(
+        harness,
+        1,
+        "This is a rendering fixture, not an agent run. See the G".len(),
+    );
+    harness.pointer(moved(link, None));
+    harness.update(|plait, _, _| {
+        assert_eq!(
+            plait.reading.hovered_link.as_deref(),
+            Some("https://gpui.rs/")
+        );
+    });
+    harness.capture(&format!("read-hover-{suffix}"));
+    // A click that starts and ends on the link follows it and selects nothing.
+    harness.pointer(press(link, 1));
+    harness.pointer(release(link));
+    harness.capture(&format!("read-hover-{suffix}"));
+    assert_eq!(selected(harness), None);
+
+    // Drag from inside the first paragraph into a later block: the table when
+    // the window is tall enough to show it, otherwise a list item.
+    let from = caret(
+        harness,
+        1,
+        "This is a rendering fixture, not an agent run. ".len(),
+    );
+    let (block, offset, ending) = if suffix == "wide" {
+        (
+            10,
+            "Crate\tRole\tLines\nplait\tGPUI presentation".len(),
+            "plait\tGPUI presentation",
+        )
+    } else {
+        (5, "2. Second".len(), "\n2. Second")
+    };
+    let to = caret(harness, block, offset);
+    harness.pointer(press(from, 1));
+    harness.pointer(moved(to, Some(MouseButton::Left)));
+    harness.capture(&format!("read-selection-{suffix}"));
+    harness.pointer(release(to));
+    let copied = selected(harness).expect("dragged selection");
+    assert!(copied.starts_with("See the GPUI site"), "{copied}");
+    assert!(copied.contains("1. First step\n◦ nested point"), "{copied}");
+    assert!(copied.ends_with(ending), "{copied}");
+    // Cmd-C reaches the conversation because the press moved focus to it.
+    harness.update(|_, _, cx| super::selection::bind_keys(cx));
+    harness.keystroke("cmd-c");
+    harness.update(|_, _, cx| {
+        let clipboard = cx.read_from_clipboard().and_then(|item| item.text());
+        assert_eq!(clipboard.as_deref(), Some(copied.as_str()));
+    });
+
+    // A double click takes a word; a shift-click extends from where it began.
+    let word = caret(harness, 5, "2. Sec".len());
+    harness.pointer(press(word, 2));
+    harness.pointer(release(word));
+    harness.capture(&format!("read-word-{suffix}"));
+    assert_eq!(selected(harness).as_deref(), Some("Second"));
+    let end = caret(harness, 5, "2. Second step".len());
+    harness.pointer(PlatformInput::MouseDown(MouseDownEvent {
+        button: MouseButton::Left,
+        position: end,
+        modifiers: Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        },
+        click_count: 1,
+        first_mouse: false,
+    }));
+    harness.pointer(release(end));
+    harness.capture(&format!("read-word-{suffix}"));
+    assert_eq!(selected(harness).as_deref(), Some("Second step"));
+    // A triple click takes the block, without its list marker.
+    let item = caret(harness, 2, "1. Fir".len());
+    harness.pointer(press(item, 3));
+    harness.pointer(release(item));
+    harness.capture(&format!("read-word-{suffix}"));
+    assert_eq!(selected(harness).as_deref(), Some("First step"));
+    harness.pointer(press(from, 1));
+    harness.pointer(release(from));
+    harness.capture(&format!("read-word-{suffix}"));
+    assert_eq!(
+        selected(harness),
+        None,
+        "a plain click clears the selection"
+    );
+
+    // Dragging past the bottom edge scrolls, and the selection follows.
+    let (below, before) = harness
+        .window
+        .update(&mut harness.cx, |plait, _, _| {
+            let list = plait.live_scroll.viewport_bounds();
+            let offset = plait.live_scroll.scroll_px_offset_for_scrollbar().y;
+            (point(from.x, list.bottom() + px(60.)), offset)
+        })
+        .unwrap();
+    harness.pointer(press(from, 1));
+    for _ in 0..16 {
+        harness.pointer(moved(below, Some(MouseButton::Left)));
+        harness.draw();
+    }
+    harness.capture(&format!("read-drag-scroll-{suffix}"));
+    harness.pointer(release(below));
+    harness.update(|plait, _, _| {
+        let offset = plait.live_scroll.scroll_px_offset_for_scrollbar().y;
+        assert!(offset < before - px(200.), "{offset} {before}");
+        let copied = plait.selected_text().expect("selection across rows");
+        assert!(copied.starts_with("See the GPUI site"), "{copied}");
+        assert!(
+            copied.contains("\n\nAnd the code samples.\n\n// Sample code"),
+            "{copied}"
+        );
+    });
+
+    harness.update(|plait, _, _| plait.live_scroll.scroll_to(at(3)));
+    harness.capture(&format!("read-code-{suffix}"));
+    // In code, a triple click takes one line.
+    let code = Owner::Message("r4".into());
+    let line = harness
+        .window
+        .update(&mut harness.cx, |plait, _, _| {
+            plait.text_point(&code, 0, "// Sample code\npub fn re".len())
+        })
+        .unwrap()
+        .expect("code is on screen");
+    harness.pointer(press(line, 3));
+    harness.pointer(release(line));
+    harness.capture(&format!("read-code-{suffix}"));
+    assert_eq!(
+        selected(harness).as_deref(),
+        Some("pub fn refresh<'a>(queue: &'a mut Queue) -> Result<usize, Error> {")
+    );
+    // The control over the list returns to the newest row.
+    let jump = harness
+        .window
+        .update(&mut harness.cx, |plait, _, _| {
+            assert!(plait.live_scroll.logical_scroll_top().item_ix < plait.live_count);
+            let list = plait.live_scroll.viewport_bounds();
+            // It ends at the right edge of the text column.
+            let column = (list.size.width - px(48.)).min(px(760.));
+            point(
+                list.center().x + column * 0.5 - px(40.),
+                list.bottom() - px(24.),
+            )
+        })
+        .unwrap();
+    harness.pointer(press(jump, 1));
+    harness.pointer(release(jump));
+    harness.capture(&format!("read-latest-{suffix}"));
+    harness.update(|plait, _, _| {
+        let top = plait.live_scroll.logical_scroll_top();
+        assert_eq!(top.item_ix, plait.live_count, "at the newest row");
+    });
+    harness.capture(&format!("read-data-{suffix}"));
+    harness.connect(repository, false);
+}
+
+/// Each tool's presentation, then a folded and an opened run of calls.
+fn tool_cards_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
+    harness.connect(repository, false);
+    harness.change_snapshot(tool_cards);
+    harness.update(|plait, _, cx| {
+        plait.host.threads[0].status = ThreadStatus::Idle;
+        plait.sync_composer(cx);
+        for id in ["c1", "c2", "c3"] {
+            plait.toggle_live_tool(id, cx);
+        }
+        plait.live_scroll.scroll_to_end();
+    });
+    harness.capture(&format!("tools-files-{suffix}"));
+    harness.update(|plait, _, cx| {
+        for id in ["c1", "c2", "c3", "c4", "c5", "c6"] {
+            plait.toggle_live_tool(id, cx);
+        }
+        plait.live_scroll.scroll_to_end();
+    });
+    harness.capture(&format!("tools-commands-{suffix}"));
+
+    harness.connect(repository, false);
+    harness.change_snapshot(|snapshot| long_run(snapshot, false));
+    harness.update(|plait, _, _| plait.live_scroll.scroll_to_end());
+    harness.capture(&format!("tools-group-{suffix}"));
+    // How the group's first two rows were last drawn: (hidden, leads the group).
+    let drawn = |plait: &Plait| {
+        let folds = plait.reading.folds.borrow();
+        (folds["g0"], folds["g1"])
+    };
+    harness.update(|plait, _, _| {
+        assert_eq!(drawn(plait), ((true, true), (true, false)));
+    });
+    harness.update(|plait, _, cx| {
+        plait.toggle_tool_group("g0", cx);
+        plait.toggle_live_tool("g3", cx);
+        plait.live_scroll.scroll_to_end();
+    });
+    harness.capture(&format!("tools-group-open-{suffix}"));
+    harness.update(|plait, _, _| {
+        assert_eq!(drawn(plait), ((false, true), (false, false)));
+        assert!(plait.tool_details_shown("g3"));
+    });
+    harness.update(|plait, _, cx| plait.toggle_tool_group("g0", cx));
+    harness.capture(&format!("tools-group-{suffix}"));
+    harness.update(|plait, _, _| {
+        assert_eq!(drawn(plait), ((true, true), (true, false)));
+        // Its details stay open for when the group is, but are not on screen.
+        assert!(!plait.tool_details_shown("g3"));
+    });
+
+    harness.connect(repository, false);
+    harness.change_snapshot(|snapshot| long_run(snapshot, true));
+    harness.update(|plait, _, _| plait.live_scroll.scroll_to_end());
+    harness.capture(&format!("tools-running-{suffix}"));
     harness.connect(repository, false);
 }
 
