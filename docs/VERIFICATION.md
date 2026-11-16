@@ -1,5 +1,134 @@
 # Verification
 
+## macOS installer preview — verified 2026-11-16
+
+[Mac CI run 43782943308](https://github.com/heath0xFF/plait/actions/runs/43782943308)
+passed for installer source commit `b0bb0ab`, built at PR merge revision
+`602825800f06`. [Download its artifact](https://github.com/heath0xFF/plait/actions/runs/43782943308/artifacts/14189800596)
+and use `Plait-Installer-0.1.0-602825800f06-macos-arm64.pkg` for both components.
+The artifact also contains client-only and host-only packages, a portable client
+ZIP, component metadata, and checksums. Artifact retention is 14 days.
+
+Verified on macOS 26 / Apple Silicon:
+
+- Formatting, strict workspace Clippy, 49 Rust tests, and release builds.
+- All 58 source runtime tests, including real command containment and lifecycle.
+- Both offline Pi Durable recovery probes and 12 package-planning tests.
+- Architecture, bundle metadata, executable signatures, licenses, and expanded
+  package manifests for all three installers.
+- Combined installation, per-user LaunchAgent startup, and packaged Node/runtime
+  discovery without developer Node or inherited Node options.
+- All 58 runtime tests again using the installed host, Node, and runtime.
+- Client-only installation, rejected identical-host installation, and a staged
+  host upgrade during an active scripted command. The original managed host PID,
+  running command, old release files, and tool identities were preserved.
+- Stop cleanup before activation, then the same stopped thread, message IDs,
+  tool IDs, and cleared approval after the new host opened the saved store.
+- Installed native app launch and refusal to replace a running client.
+  [The captured app image](screenshots/macos-installed-preview.png) was inspected:
+  the local host is connected and the example thread is visibly labeled as a
+  fixture. This is a disposable CI checkout, not a live-model run.
+
+No selected tests were skipped, ignored, or filtered out. Downloaded artifact
+checksums also passed on Arthur. Linux strict workspace checks passed with
+51 Rust tests and 42 portable runtime tests; Linux command execution remains
+disabled. [Linux CI](https://github.com/heath0xFF/plait/actions/runs/43782943331)
+also passed.
+
+The checks found and fixed four packaging/test issues: an npm manifest-name
+collision, missing service account context, Node's nested test-runner skip, and
+PackageKit deleting old code under a shared host receipt. Host releases now use
+distinct receipts and one stable LaunchAgent label. The activation test waits
+for a fixture-only cleanup marker; Stop acknowledgement alone is not cleanup
+completion. Earlier failed runs did not publish installer artifacts.
+
+The headless checkpoint's Mac runner had untrusted compiler/root ownership.
+CI now uses macOS 26 and accepts known canonical Metal layouts without removing
+ownership or write-mode checks. No system security settings or ownership were
+changed to make tests pass.
+
+The staged upgrade is a labeled fixture with unchanged executable code, not a
+test of unknown future storage migrations. The packages remain unsigned and
+not notarized. Personal-Mac Gatekeeper approval, authentication, a live model
+turn, and older-macOS runtime acceptance are **not** established by these checks.
+Complete the personal-Mac checks before travel use; cloud models need working
+provider connectivity.
+
+## Portable daemon development checkpoint
+
+Verified on Arthur after the local-socket and runtime boundary changes:
+
+- `bash scripts/check.sh` passed: formatting, strict headless clippy, 34 Rust
+  tests (30 core and 4 host), a debug host build, pinned runtime installation,
+  TypeScript checking, 39 runtime tests, and core/host release builds.
+- Full workspace strict clippy and all 49 Rust tests also passed on Linux.
+- No selected tests were skipped, ignored, or filtered out.
+- Both full command-sandbox gates correctly returned an error on Linux before
+  running tests. Linux runtime tests explicitly verify denial at both the
+  TypeScript and Rust helper entry points.
+- Workflow `actionlint`, shell syntax, JavaScript syntax, and `git diff --check`
+  passed. The Mac policy/environment body matches the pre-refactor source.
+
+The 39 Linux runtime tests are **not** the older 39-test Mac sandbox suite below.
+They test independent daemon start, socket protocol limits, persistent models and
+request IDs, client disconnect/reconnect, approved file edits, Stop approval
+revocation, checkout leases, exact postimages, dirty-file protection, and crash
+recovery. Common guardian tests use a clearly labeled subprocess fixture to
+check cancellation, output drainage/bounds, spawn failure, and deadline cleanup.
+That fixture is not a containment mechanism.
+
+The test runner selects real command-sandbox and command-crash cases on macOS,
+and command-denial cases on Linux. All original Mac command tests remain. Mac
+checks, native UI inspection, and live-model acceptance had not been repeated
+at this checkpoint. Later Mac CI results are recorded above. Linux command
+execution and remote Plait connections remain unsupported.
+
+## Arthur headless core checkpoint (initial extraction)
+
+Verified on Arthur (Ubuntu x86-64, pinned Rust 1.98.1) after the core crate split:
+
+- `cargo fmt --all -- --check`
+- `cargo clippy --locked -p plait-core -p plait-host --all-targets -- -D warnings`
+- `cargo test --locked -p plait-core -p plait-host` — 31 tests passed:
+  28 core and 3 host tests. No tests were ignored or filtered out.
+- `cargo build --locked --release -p plait-core -p plait-host`
+- `cargo clippy --locked --workspace --all-targets -- -D warnings`
+- `cargo test --locked --workspace` — 46 tests passed, including the 15
+  desktop/composer tests. No tests were ignored or filtered out.
+- The headless dependency graph contains no GPUI packages. The default workspace
+  member is still the desktop. Existing dependency versions are unchanged.
+- `actionlint` passed for both workflows; `git diff --check` passed.
+
+The new Linux-only Git test creates a non-UTF-8 filename and verifies real status,
+preview, and tracked diff reads without changing the index or worktree. The
+existing 27 core tests moved with their production modules. Those six production
+modules are byte-for-byte unchanged; desktop source changes only rename imports
+from `plait` to `plait_core`.
+
+The full workspace test target also compiles on Arthur, but it does not validate
+a native window or the macOS renderer. The smaller headless CI job does not
+compile GPUI. Cargo can still fetch desktop dependency sources while resolving
+the workspace. The new hosted CI job has not been observed running yet.
+
+No Mac build, native UI inspection, TypeScript runtime suite, or live model run
+was repeated for this split. The native validation below records the earlier
+Mac checkpoint. Linux agent execution and remote connections remain unsupported;
+no sandbox checks were removed. See [HANDOFF.md](HANDOFF.md) for the remaining
+platform boundaries and the temporary Rex CLI workaround.
+
+## Arthur Linux containment investigation
+
+On 2026-11-15, an unprivileged Bubblewrap 0.11.1 namespace probe succeeded on
+Arthur. The Landlock ABI query returned 8. A second disposable probe confirmed
+that a process in `--unshare-all` namespaces could connect to an outside Unix
+server through a `--ro-bind` fixture directory. It received only a fixed test
+message. The server recorded one connection, and the fixture was removed.
+
+Runtime `npm ci --ignore-scripts` and `npm run check` also passed. The runtime
+safety suite was not run in this investigation, and no Linux command backend was
+enabled. No system security settings were changed. See
+[LINUX-SANDBOX.md](LINUX-SANDBOX.md) for the open design decision and test gates.
+
 ## M2 validation — in progress
 
 The full workspace passes formatting, warning-free clippy, 45 Rust tests
@@ -46,9 +175,9 @@ an approved active command: its sleep process exited and pending approval cleare
 The old human conversation and fixture remained byte-for-byte unchanged.
 
 **An agent-authored change to Plait itself is not yet verified.** Real keyboard
-IME use and full VoiceOver coverage are not verified. The development bundle
-still packages the desktop only, not Node or the independent host. Linux Plait
-execution is not supported yet; see [the Arthur handoff](HANDOFF.md).
+IME use and full VoiceOver coverage are not verified. That validation used the
+desktop-only development bundle; current installer work is recorded above.
+Linux Plait execution is not supported yet; see [the Arthur handoff](HANDOFF.md).
 
 The following sections record the historical M1 baseline, not M2 acceptance.
 

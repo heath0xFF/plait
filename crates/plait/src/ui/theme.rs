@@ -1,5 +1,5 @@
 use gpui::{prelude::*, *};
-use plait::model::ThreadStatus;
+use plait_core::model::ThreadStatus;
 use std::borrow::Cow;
 
 pub const BG: u32 = 0x171819;

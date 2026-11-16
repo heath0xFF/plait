@@ -226,7 +226,7 @@ impl Plait {
                 .filter(|choice| self.host.available(Some(choice)));
         }
         self.host.select(None);
-        self.state.select(plait::model::Selection {
+        self.state.select(plait_core::model::Selection {
             project: 0,
             machine: 0,
             thread: 0,

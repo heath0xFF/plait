@@ -3,7 +3,7 @@ use super::{
     composer::{Composer, ComposerEvent},
 };
 use gpui::{prelude::*, *};
-use plait::{
+use plait_core::{
     host::{self, Client, Request},
     host_state::request_id,
 };
@@ -93,7 +93,7 @@ impl Plait {
     ) {
         window.focus(&self.focus, cx);
         self.host.select(Some(id.clone()));
-        self.state.select(plait::model::Selection {
+        self.state.select(plait_core::model::Selection {
             project: 0,
             machine: 0,
             thread: 0,

@@ -3,10 +3,7 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     io::{BufRead, BufReader, Write},
-    os::unix::{
-        fs::{FileTypeExt, MetadataExt},
-        net::UnixStream,
-    },
+    os::unix::net::UnixStream,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -296,38 +293,7 @@ impl Client {
                 "Message exceeds the host's 64 KiB request limit.".into(),
             ));
         }
-        let metadata = std::fs::symlink_metadata(&self.path)?;
-        let parent = std::fs::symlink_metadata(
-            self.path
-                .parent()
-                .ok_or_else(|| Error::Protocol("Invalid host socket path.".into()))?,
-        )?;
-        // A private path and the connected peer must both belong to this user.
-        let uid = unsafe { libc::geteuid() };
-        if !metadata.file_type().is_socket()
-            || metadata.uid() != uid
-            || metadata.mode() & 0o077 != 0
-            || !parent.is_dir()
-            || parent.uid() != uid
-            || parent.mode() & 0o077 != 0
-        {
-            return Err(Error::Transport(
-                "Host socket and parent must be owner-only and owned by this user.".into(),
-            ));
-        }
-        let mut socket = UnixStream::connect(&self.path)?;
-        #[cfg(target_os = "macos")]
-        {
-            use std::os::fd::AsRawFd;
-            let (mut peer_uid, mut peer_gid) = (0, 0);
-            if unsafe { libc::getpeereid(socket.as_raw_fd(), &mut peer_uid, &mut peer_gid) } != 0
-                || peer_uid != uid
-            {
-                return Err(Error::Transport(
-                    "Local host peer ownership check failed.".into(),
-                ));
-            }
-        }
+        let mut socket = crate::local_socket::connect(&self.path)?;
         socket.set_read_timeout(Some(Duration::from_secs(1)))?;
         socket.set_write_timeout(Some(Duration::from_secs(5)))?;
         socket.write_all(&bytes)?;

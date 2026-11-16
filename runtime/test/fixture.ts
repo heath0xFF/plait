@@ -13,7 +13,10 @@ const models = createModels();
 const faux = fauxProvider({ tokensPerSecond: 120, tokenSize: { min: 1, max: 1 } });
 const call = (name: string, args: Record<string, string>, id: string) => fauxAssistantMessage([fauxToolCall(name, args, { id })], { stopReason: 'toolUse' });
 const mode = process.env.PLAIT_TEST_SCENARIO;
-const responses = mode === 'edit-command' ? [
+const responses = mode === 'edit' ? [
+  call('read', { path: 'notes.txt' }, 'read-1'),
+  call('edit', { path: 'notes.txt', old_text: 'before', new_text: 'after' }, 'edit-1'),
+] : mode === 'edit-command' ? [
   call('read', { path: 'notes.txt' }, 'read-1'),
   call('edit', { path: 'notes.txt', old_text: 'before', new_text: 'after' }, 'edit-1'),
   call('command', { command: 'test "$(cat notes.txt)" = after; printf passed' }, 'command-1'),
@@ -41,7 +44,11 @@ class FixtureRuntime extends Runtime {
       process.kill(process.pid, 'SIGKILL');
       await new Promise(() => {});
     }
-    return super.run(...args);
+    await super.run(...args);
+    // Stop acknowledgement precedes cleanup; tests need a separate completion barrier.
+    writeFileSync(join(process.argv[2], `${args[0].snapshot.id}.settled`), JSON.stringify({
+      fixture: 'SCRIPTED_FIXTURE_ONLY', request_id: args[1], status: args[0].snapshot.status,
+    }));
   }
   override registry(state: ToolState) {
     const result = super.registry(state);

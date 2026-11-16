@@ -1,0 +1,56 @@
+import { spawn } from 'node:child_process';
+import { fail, HostError } from '../protocol.ts';
+
+export const COMMAND_TIMEOUT_MS = 15 * 60 * 1000;
+type GuardianCommand = {
+  root: string;
+  text: string;
+  policy: string;
+  env: NodeJS.ProcessEnv;
+  checkoutFd?: number;
+};
+
+// Only platform policy preparation may supply a production guardian request.
+export async function runGuardian(command: GuardianCommand, signal: AbortSignal, output: (chunk: string) => void, timeoutMs = COMMAND_TIMEOUT_MS): Promise<string> {
+  if (signal.aborted) fail('permission_denied', 'Run stopped.');
+  const executable = process.env.PLAIT_HOST_EXE;
+  if (!executable) fail('internal', 'Host command guardian is not configured.');
+  return await new Promise<string>((resolve, reject) => {
+    const child = spawn(executable, ['command', command.root, command.policy, command.text], {
+      cwd: command.root, env: command.env,
+      stdio: ['pipe', 'pipe', 'pipe', process.env.PLAIT_LOCK_FD ? Number(process.env.PLAIT_LOCK_FD) : 'ignore', command.checkoutFd ?? 'ignore'],
+    });
+    let result = ''; let settled = false;
+    let drainTimeout: ReturnType<typeof setTimeout> | undefined;
+    const cancel = () => { child.stdin!.end(); };
+    const timeout = setTimeout(cancel, timeoutMs);
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      clearTimeout(drainTimeout);
+      signal.removeEventListener('abort', cancel);
+      cancel();
+      if (error) reject(error);
+      else resolve(result || 'Command completed.');
+    };
+    child.stdin!.on('error', () => {});
+    signal.addEventListener('abort', cancel, { once: true });
+    const collect = (data: Buffer) => {
+      const chunk = data.toString();
+      result = (result + chunk).slice(-16384);
+      output(chunk.slice(-4096));
+    };
+    child.stdout!.on('data', collect); child.stderr!.on('data', collect);
+    child.once('error', () => finish(new HostError('permission_denied', 'Command guardian could not start.')));
+    child.once('exit', () => {
+      // Unsupported detached descendants must not hold the output subscription open.
+      drainTimeout = setTimeout(() => {
+        child.stdout!.destroy(); child.stderr!.destroy();
+      }, 1000);
+    });
+    // Close follows pipe drainage; exit alone can lose the final tool output.
+    child.once('close', code => finish(code === 0 ? undefined
+      : new HostError('permission_denied', `Command ended without success (${code ?? 'stopped'}). ${result}`)));
+  });
+}

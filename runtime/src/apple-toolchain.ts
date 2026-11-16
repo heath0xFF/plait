@@ -9,8 +9,31 @@ export const DEVELOPER = '/Applications/Xcode.app/Contents/Developer';
 export const SDK = `${DEVELOPER}/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk`;
 const shellQuote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
 
+export function trustedMetalRoot(path: string, name: string, developer: string): string | null {
+  if (name !== 'metal' && name !== 'metallib') return null;
+  const filenames = name === 'metal' ? ['metal'] : ['metallib', 'air-lld'];
+  const toolchain = `${developer}/Toolchains/XcodeDefault.xctoolchain`;
+  if (path.startsWith(toolchain + '/')) {
+    const relative = path.slice(toolchain.length + 1);
+    // Xcode 16 installs Metal below usr/metal/<version>; newer Xcode uses cryptexes.
+    if (filenames.some(file => relative === `usr/bin/${file}`
+      || (relative.endsWith('/' + file) && /^usr\/metal\/(?:[0-9]+(?:\.[0-9]+)*|current)\/bin\/[^/]+$/.test(relative)))) return toolchain;
+  }
+  const root = dirname(dirname(dirname(path)));
+  if (/^\/private\/var\/run\/com\.apple\.security\.cryptexd\/mnt\/com\.apple\.MobileAsset\.MetalToolchain-[A-Za-z0-9.-]+\/Metal\.xctoolchain$/.test(root)
+    && filenames.some(file => path === join(root, 'usr', 'bin', file))) return root;
+  return null;
+}
+
 export async function appleToolchain(scratch: string, signal: AbortSignal) {
-  const tools: string[] = []; const roots = new Set<string>();
+  let developer: string;
+  try { developer = await realpath(DEVELOPER); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { bin: '', readOnly: [] as string[] }; throw error; }
+  if (!developer.startsWith('/Applications/') || !developer.endsWith('.app/Contents/Developer')) {
+    fail('permission_denied', 'Xcode developer directory is not a trusted installed application.');
+  }
+  // Xcode.app may be a system-managed alias to a versioned Xcode application.
+  const tools: string[] = []; const roots = new Set<string>([developer]);
   for (const name of ['metal', 'metallib']) {
     let output: string;
     try {
@@ -20,13 +43,10 @@ export async function appleToolchain(scratch: string, signal: AbortSignal) {
         timeout: 10000, maxBuffer: 4096, signal,
       })).stdout.trim();
     } catch { return { bin: '', readOnly: [] as string[] }; }
-    const path = await realpath(output); const root = dirname(dirname(dirname(path)));
-    const installed = root === `${DEVELOPER}/Toolchains/XcodeDefault.xctoolchain`
-      || /^\/private\/var\/run\/com\.apple\.security\.cryptexd\/mnt\/com\.apple\.MobileAsset\.MetalToolchain-[A-Za-z0-9.-]+\/Metal\.xctoolchain$/.test(root);
+    const path = await realpath(output); const root = trustedMetalRoot(path, name, developer);
+    if (!root) fail('permission_denied', 'Metal compiler is not in a trusted installed Apple toolchain.');
     const info = await lstat(path); const directory = await lstat(root);
-    const executable = path === join(root, 'usr', 'bin', name)
-      || (name === 'metallib' && path === join(root, 'usr', 'bin', 'air-lld'));
-    if (!installed || !executable || !info.isFile() || info.uid !== 0 || directory.uid !== 0 || ((info.mode | directory.mode) & 0o022) !== 0) {
+    if (!info.isFile() || info.uid !== 0 || directory.uid !== 0 || ((info.mode | directory.mode) & 0o022) !== 0) {
       fail('permission_denied', 'Metal compiler is not in a trusted installed Apple toolchain.');
     }
     tools.push(path); roots.add(root);

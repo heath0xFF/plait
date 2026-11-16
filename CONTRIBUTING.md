@@ -15,9 +15,10 @@ cargo run --locked --release -- /absolute/path/to/a/repository
 
 Install full Xcode and its Metal toolchain. Rustup uses the pinned
 `rust-toolchain.toml`. See the README for setup details. Linux and Intel macOS
-are not verified desktop targets. Rex is useful for long jobs but is not required
-to build. The desktop itself does not need Node; the local host sidecar and
-isolated runtime probe do.
+are not verified desktop targets. Linux can build and test the headless Rust
+crates; see the commands below. This does not enable Linux agent execution.
+Rex is useful for long jobs but is not required to build. The desktop itself
+does not need Node; the local host sidecar and isolated runtime probe do.
 
 ## Work together
 
@@ -89,12 +90,66 @@ outside this slice.
 
 ## Required checks
 
+Start with the same command on macOS and Linux:
+
+```sh
+bash scripts/check.sh
+```
+
+Requirements on both: Git, Rustup, a C compiler/linker, and Node 22.19 or newer
+with npm. Use the pinned Rust toolchain. macOS also needs the Xcode/Metal tools
+listed above. The script installs runtime packages from the lockfile without
+package install scripts. Both CI workflows use this entry point.
+
+| Check | macOS | Linux |
+|---|---|---|
+| Rust checks and release build | Complete workspace | Core and host |
+| Common daemon and file-safety tests | Yes | Yes |
+| Command lifecycle with a scripted helper | Yes | Yes; not a sandbox test |
+| Real command sandbox | Seatbelt tests | Execution-denial tests only |
+| Native window inspection | Separate manual check | Not validated |
+
+`bash scripts/check.sh --require-command-sandbox` is the full command-safety gate.
+It runs on macOS and reports a blocking error on Linux. Do not treat a passing
+Linux development run as sandbox acceptance. The mechanism remains an
+[open design decision](docs/LINUX-SANDBOX.md).
+
+For focused checks on macOS, use the complete workspace:
+
 ```sh
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
 cargo build --locked --release
 ```
+
+On Linux, check the headless core and Rust host helpers:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --locked -p plait-core -p plait-host --all-targets -- -D warnings
+cargo test --locked -p plait-core -p plait-host
+cargo build --locked --release -p plait-core -p plait-host
+```
+
+`plait-core` owns models, client state, the local socket client, and read-only
+Git. It has no GPUI dependency. The desktop consumes this crate directly; do
+not copy its modules into another test target. The Linux CI job runs these
+checks plus the Node runtime suite, using scripted providers and temporary
+stores. No provider credentials are needed. Cargo can still fetch pinned desktop
+dependency sources to resolve the workspace, but the headless commands do not
+compile them. Keep `--locked`; do not update dependency versions
+as part of a platform port.
+
+For focused runtime work, first build `plait-host`, then run `npm run check`
+and `npm test` in `runtime/`. The runner labels the selected platform coverage.
+Common tests and platform tests are separate; there are no test skips that imply
+unsupported execution is safe. `npm run test:sandbox` requires a real command
+sandbox and fails on Linux.
+
+Keep both runtime and Rust-helper command rejection until Linux containment and
+cancellation tests pass. The macOS workspace and runtime safety suites remain
+required before merge.
 
 For UI changes, inspect wide and narrow native windows. With Accessibility
 permission already granted, close Plait and run `bash scripts/smoke-macos.sh`.

@@ -6,19 +6,30 @@ The desktop has no dependency on the host crate and does not own its process.
 ## Launch and recovery
 
 Build `cargo build -p plait-host`; install runtime packages with
-`cd runtime && npm ci --ignore-scripts`. Node 22.19 or newer is required.
+`cd runtime && npm ci --ignore-scripts`. Node 22.19 or newer is required for
+source development. The [Mac host package](MACOS.md) includes pinned Node and
+runtime dependencies; it does not need a development checkout or shell Node.
 
 - `plait-host run [--store ABSOLUTE_PATH] [--runtime ABSOLUTE_PATH]`: foreground
   daemon. `--runtime` is the path to `runtime/src/main.ts`.
+- `plait-host run-user [same options]`: installed per-user service entry. Resolve
+  the home from the OS account, reject root, and set the sidecar home and working
+  directory explicitly. Do not inherit an installer's home or store override.
 - `plait-host start [same options]`: spawn an independent daemon and return when
   its socket answers, or report a startup error. Closing the client has no effect.
 - `plait-host status [--store ABSOLUTE_PATH]`: print the status JSON reply.
+- `plait-host version`: print local binary version/revision and protocol metadata.
+  This is a CLI operation, not a new socket operation.
 - Default store: `$PLAIT_HOST_STORE`, if set, otherwise `$HOME/.local/share/plait`.
   Socket: `STORE/host.sock`. Store overrides must be absolute.
 - The store directory is mode 0700 and socket mode 0600. A lifetime OS writer
   lock on `STORE/host.lock` rejects a second host, including after a crash.
 - The Rust host owns and monitors the Node sidecar. No TCP port is opened.
-  Sidecar failure closes the host; restart is explicit through `start`.
+  Sidecar failure closes the host. Development restart is explicit through
+  `start`; the installed Mac LaunchAgent restarts failed hosts. Neither route
+  replays interrupted work. The packaged host uses adjacent immutable Node and
+  runtime paths, not a build-machine source path. It removes inherited
+  `NODE_OPTIONS` and `NODE_PATH` before starting its sidecar.
 - Startup marks interrupted work as `interrupted`. It does not run the model
   or replay commands. A new user submission resumes the saved conversation.
   Thread IDs, submitted request IDs, and exact model choice survive restart.
@@ -26,6 +37,9 @@ Build `cargo build -p plait-host`; install runtime packages with
 ## Transport
 
 Owner-only Unix stream socket, UTF-8 newline-delimited JSON, protocol version 1.
+Clients and the daemon verify connected-peer user identity with `getpeereid` on
+macOS or `SO_PEERCRED` on Linux. Clients also check socket and parent ownership
+and private modes before connecting. This does not enable Linux commands.
 One request and one reply per connection, then EOF, except `watch`. No greeting.
 Request limit: 64 KiB including newline. Reply/event limit: 1 MiB including
 newline. Absolute input deadline: 5 seconds; sidecar exchange deadline: 20 seconds. Slow watchers are disconnected rather
@@ -188,7 +202,15 @@ or transcript data in the production host.
 
 ## Verification
 
-Verified on Apple Silicon macOS with Node 26 and the pinned Rust 1.98.1 toolchain:
+Use `bash scripts/check.sh` for the shared macOS/Linux development checks.
+`bash scripts/check.sh --require-command-sandbox` requires full command-sandbox
+coverage and currently fails on Linux. Runtime `npm test` labels its platform
+coverage; Linux runs common daemon/file tests and explicit execution-denial tests.
+See VERIFICATION.md for current results and LINUX-SANDBOX.md for the open backend
+decision. A Linux development pass is not full host-execution acceptance.
+
+The following records the earlier M2 Mac checkpoint, before the portable runtime
+refactor. Verified on Apple Silicon macOS with Node 26 and the pinned Rust 1.98.1 toolchain:
 
 ```sh
 cargo fmt --all -- --check

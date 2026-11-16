@@ -183,6 +183,35 @@ fn symlink_and_non_utf8_names_do_not_escape_or_change_identity() {
     assert!(preview.contains("not followed") && !preview.contains("root:"));
 }
 
+// Linux permits filename bytes that the macOS filesystem rejects.
+#[cfg(target_os = "linux")]
+#[test]
+fn non_utf8_paths_survive_real_status_and_diff_reads() {
+    use std::os::unix::ffi::OsStrExt;
+    let repo = Repo::new();
+    let name = OsStr::from_bytes(b"non-utf8-\xff");
+    let path = repo.0.join(name);
+    fs::write(&path, "base\n").unwrap();
+    let snapshot = status(&repo.0).unwrap();
+    assert_eq!(snapshot.changes.len(), 1);
+    let change = &snapshot.changes[0];
+    assert_eq!(change.path.as_os_str(), name);
+    assert!(text(&diff(&snapshot.root, change, DiffMode::Unstaged).unwrap()).contains("+base"));
+
+    repo.commit();
+    fs::write(&path, "changed\n").unwrap();
+    let index = fs::read(repo.0.join(".git/index")).unwrap();
+    let snapshot = status(&repo.0).unwrap();
+    assert_eq!(snapshot.changes.len(), 1);
+    let change = &snapshot.changes[0];
+    assert_eq!(change.path.as_os_str(), name);
+    let patch = text(&diff(&snapshot.root, change, DiffMode::Unstaged).unwrap());
+    assert!(patch.contains("-base") && patch.contains("+changed"));
+    assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(), index);
+    assert_eq!(fs::read_to_string(path).unwrap(), "changed\n");
+    assert!(!repo.0.join(".git/index.lock").exists());
+}
+
 #[test]
 fn external_diff_and_textconv_are_never_executed() {
     let repo = Repo::new();

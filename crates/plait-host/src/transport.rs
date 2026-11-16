@@ -1,3 +1,4 @@
+use plait_core::local_socket;
 use serde_json::{Value, json};
 #[cfg(test)]
 use std::io::BufRead;
@@ -103,7 +104,7 @@ fn timed_write(
 }
 
 pub fn status(store: &Path) -> io::Result<Vec<u8>> {
-    let mut socket = UnixStream::connect(store.join("host.sock"))?;
+    let mut socket = local_socket::connect(&store.join("host.sock"))?;
     socket.set_read_timeout(Some(Duration::from_secs(2)))?;
     socket.write_all(b"{\"op\":\"status\"}\n")?;
     let reply = timed_frame(
@@ -174,7 +175,12 @@ pub fn private_store(store: &Path) -> io::Result<File> {
     Ok(lock)
 }
 
-pub fn serve(store: &Path, runtime: &Path) -> io::Result<()> {
+pub fn serve(
+    store: &Path,
+    runtime: &Path,
+    node: &std::ffi::OsStr,
+    home: Option<&Path>,
+) -> io::Result<()> {
     // Private creation modes also apply to SQLite WALs and runtime scratch files.
     unsafe {
         libc::umask(0o077);
@@ -193,16 +199,22 @@ pub fn serve(store: &Path, runtime: &Path) -> io::Result<()> {
     if unsafe { libc::fcntl(lock.as_raw_fd(), libc::F_SETFD, 0) } < 0 {
         return Err(io::Error::last_os_error());
     }
-    let mut child = Command::new("node")
+    let mut command = Command::new(node);
+    command
         .arg("--disable-warning=ExperimentalWarning")
         .arg(runtime)
         .arg(store)
+        .env_remove("NODE_OPTIONS")
+        .env_remove("NODE_PATH")
         .env("PLAIT_HOST_EXE", std::env::current_exe()?)
         .env("PLAIT_LOCK_FD", lock.as_raw_fd().to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
+        .stderr(Stdio::null());
+    if let Some(home) = home {
+        command.env("HOME", home).current_dir(home);
+    }
+    let mut child = command.spawn()?;
     let input = child
         .stdin
         .take()
@@ -260,6 +272,7 @@ fn send(socket: &mut UnixStream, value: &Value) -> io::Result<()> {
 }
 
 fn connection(mut socket: UnixStream, sidecar: &Mutex<Sidecar>) -> io::Result<()> {
+    local_socket::require_same_user(&socket)?;
     socket.set_read_timeout(Some(Duration::from_secs(5)))?;
     socket.set_write_timeout(Some(Duration::from_secs(2)))?;
     let request = timed_frame(

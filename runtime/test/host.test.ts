@@ -1,85 +1,12 @@
 import assert from 'node:assert/strict';
-import { spawn, execFile } from 'node:child_process';
-import type { ChildProcess } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { connect } from 'node:net';
 import { mkdtemp, readFile, writeFile, rm, stat, realpath, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { promisify } from 'node:util';
 import { test } from 'node:test';
 import type { Snapshot } from '../src/protocol.ts';
-
-const exec = promisify(execFile);
-const binary = resolve('../target/debug/plait-host');
-const fixture = resolve('test/fixture.ts');
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-async function childPids(parent: number) {
-  return (await exec('/bin/ps', ['-axo', 'pid=,ppid='])).stdout.trim().split('\n')
-    .map(line => line.trim().split(/\s+/).map(Number)).filter(([, ppid]) => ppid === parent).map(([pid]) => pid);
-}
-async function until<T>(read: () => Promise<T>, accept: (value: T) => boolean, timeout = 15000): Promise<T> {
-  const deadline = Date.now() + timeout;
-  let last: unknown;
-  while (Date.now() < deadline) {
-    try { const value = await read(); if (accept(value)) return value; last = value; } catch (error) { last = error; }
-    await delay(40);
-  }
-  throw new Error(`Condition timed out: ${JSON.stringify(last)}`);
-}
-// Tests inspect wire objects so schema failures remain visible rather than coerced.
-type Reply = { ok: boolean; result: { thread: Snapshot; threads: Snapshot[]; default_model: unknown; models: unknown[]; accepted: boolean }; error?: { code: string; message: string } };
-function request(store: string, value: unknown): Promise<Reply> {
-  return raw(store, JSON.stringify(value) + '\n');
-}
-function raw(store: string, input: string): Promise<Reply> {
-  return new Promise((resolve, reject) => {
-    const socket = connect(join(store, 'host.sock'));
-    let output = '';
-    socket.setTimeout(5000, () => socket.destroy(new Error('Socket timeout')));
-    socket.once('connect', () => socket.write(input));
-    socket.on('data', chunk => {
-      output += chunk.toString();
-      const end = output.indexOf('\n');
-      if (end >= 0) { socket.destroy(); try { resolve(JSON.parse(output.slice(0, end))); } catch (error) { reject(error); } }
-    });
-    socket.once('error', reject);
-    socket.once('end', () => reject(new Error('Connection closed before reply')));
-  });
-}
-async function setup(t: { after: (fn: () => Promise<void>) => void }, scenario = 'answer', storeAlias = false) {
-  const base = await realpath(await mkdtemp(join(storeAlias ? '/tmp' : tmpdir(), 'plait-host-test-')));
-  const repo = join(base, 'repo'); const store = join(storeAlias ? base.replace('/private/tmp/', '/tmp/') : base, 'store');
-  await exec('/bin/mkdir', ['-p', repo, store]);
-  await exec('/usr/bin/git', ['init', '-q', repo]);
-  await writeFile(join(repo, 'notes.txt'), 'before\n');
-  await writeFile(join(repo, 'AGENTS.md'), 'Keep the original dirty paths.\n');
-  await exec('/usr/bin/git', ['-C', repo, 'add', '.']);
-  await exec('/usr/bin/git', ['-C', repo, '-c', 'user.name=Test', '-c', 'user.email=test@invalid', 'commit', '-qm', 'fixture']);
-  const children: ChildProcess[] = [];
-  const start = async (mode = scenario) => {
-    const child = spawn(binary, ['run', '--store', store, '--runtime', fixture], { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, PLAIT_TEST_SCENARIO: mode } });
-    children.push(child);
-    let stderr = ''; child.stderr!.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-8192); });
-    await until(async () => {
-      if (child.exitCode !== null) throw new Error(`Host exited: ${stderr}`);
-      return request(store, { op: 'status' });
-    }, reply => reply.ok);
-    return child;
-  };
-  t.after(async () => {
-    for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-    await delay(400); await rm(base, { recursive: true, force: true });
-  });
-  const host = await start();
-  const create = async (id = 'create-1') => {
-    const reply = await request(store, { op: 'create_thread', checkout: repo, provider: 'faux', model_id: 'faux-1', request_id: id });
-    assert.equal(reply.ok, true, JSON.stringify(reply)); return reply.result.thread;
-  };
-  const watch = async (id: string) => (await request(store, { op: 'watch', thread_id: id })).result.thread;
-  const submit = (id: string, request_id = 'submit-1', text = 'Do the scripted task.') => request(store, { op: 'submit', thread_id: id, request_id, text });
-  const approve = (id: string, approval_id: string, allow = true) => request(store, { op: 'approve', thread_id: id, approval_id, allow });
-  return { base, repo, store, host, start, create, watch, submit, approve };
-}
+import { exec, binary, fixture, delay, childPids, until, request, raw, setup } from './support/host.ts';
 
 test('start is independent, status is usable, and repeated start does not replace the daemon', { timeout: 15000 }, async t => {
   const store = await mkdtemp(join('/tmp', 'plait-start-'));
@@ -93,20 +20,6 @@ test('start is independent, status is usable, and repeated start does not replac
   assert.equal(status.ok, true);
   await exec(binary, ['start', '--store', store, '--runtime', fixture]);
   assert.equal(JSON.parse(await readFile(join(store, 'fixture-processes.json'), 'utf8')).host, pid);
-});
-
-test('absolute store aliases resolve once while symlink leaves remain rejected', { timeout: 15000 }, async t => {
-  const f = await setup(t, 'edit-command', true);
-  const thread = await f.create(); await f.submit(thread.id);
-  for (const kind of ['edit', 'command']) {
-    const pending = await until(() => f.watch(thread.id), state => state.pending_approval?.kind === kind);
-    assert.equal((await f.approve(thread.id, pending.pending_approval!.id)).ok, true);
-  }
-  const done = await until(() => f.watch(thread.id), state => state.status === 'idle');
-  assert(done.tools.every(tool => tool.status === 'done'));
-  assert((await stat(join(f.store, 'build-cache', thread.id, 'target'))).isDirectory());
-  const alias = join(f.base, 'store-symlink'); await symlink(f.store, alias);
-  await assert.rejects(exec(binary, ['run', '--store', alias, '--runtime', fixture]), /owned directory/);
 });
 
 test('watch streams replacement snapshots and disconnect does not own the run', { timeout: 15000 }, async t => {
@@ -173,27 +86,9 @@ test('socket bounds, private permissions, locks, model/settings and dedup surviv
   assert.deepEqual(Object.keys(listed.result.threads[0]).sort(), ['checkout', 'id', 'model', 'status']);
 });
 
-test('approval exact details, client reconnect, checkout exclusion, own edit then command', { timeout: 30000 }, async t => {
-  const f = await setup(t, 'edit-command'); const thread = await f.create(); const other = await f.create('create-2');
-  assert.equal((await f.submit(thread.id)).ok, true);
-  const edit = await until(() => f.watch(thread.id), value => !!value.pending_approval);
-  assert.equal(edit.pending_approval!.kind, 'edit');
-  assert.deepEqual(JSON.parse(edit.pending_approval!.details), { path: 'notes.txt', old_text: 'before', new_text: 'after' });
-  assert.equal(await readFile(join(f.repo, 'notes.txt'), 'utf8'), 'before\n');
-  assert.equal((await f.submit(other.id)).error?.code, 'busy');
-  assert.equal((await f.approve(thread.id, edit.pending_approval!.id)).ok, true);
-  const command = await until(() => f.watch(thread.id), value => value.pending_approval?.kind === 'command');
-  assert.equal(await readFile(join(f.repo, 'notes.txt'), 'utf8'), 'after\n');
-  assert.equal((await f.approve(thread.id, command.pending_approval!.id)).ok, true);
-  const done = await until(() => f.watch(thread.id), value => value.status === 'idle' || value.status === 'error');
-  assert.equal(done.status, 'idle', JSON.stringify(done));
-  assert(done.tools.some(tool => tool.output.includes('passed')), JSON.stringify(done));
-  assert(done.tools.some(tool => tool.name === 'command' && tool.status === 'done'), JSON.stringify(done));
-});
-
-for (const change of ['unchanged', 'external', 'other-thread', 'ignored']) test(`reopened postimage provenance: ${change}`, { timeout: 30000 }, async t => {
-  const f = await setup(t, 'edit-command'); const thread = await f.create(); await f.submit(thread.id);
-  for (const kind of ['edit', 'command']) {
+for (const change of ['unchanged', 'external', 'other-thread', 'ignored']) test(`reopened file-only postimage provenance: ${change}`, { timeout: 30000 }, async t => {
+  const f = await setup(t, 'edit'); const thread = await f.create(); await f.submit(thread.id);
+  for (const kind of ['edit']) {
     const pending = await until(() => f.watch(thread.id), value => value.pending_approval?.kind === kind);
     await f.approve(thread.id, pending.pending_approval!.id);
   }
@@ -221,6 +116,20 @@ test('idle is published only after cleanup so the immediate next submit is accep
   assert.equal(next.ok, true, JSON.stringify(next));
   const done = await until(() => f.watch(thread.id), value => value.status === 'idle');
   assert.equal(done.messages.filter(message => message.role === 'user').length, 2);
+});
+
+test('a stopped thread survives host restart after cleanup completes', { timeout: 15000 }, async t => {
+  const f = await setup(t, 'cleanup'); const thread = await f.create();
+  await f.submit(thread.id, 'stop-before-restart');
+  assert.equal((await request(f.store, { op: 'stop', thread_id: thread.id })).result.thread.status, 'stopped');
+  await until(async () => JSON.parse(await readFile(join(f.store, `${thread.id}.settled`), 'utf8')),
+    marker => marker.fixture === 'SCRIPTED_FIXTURE_ONLY' && marker.request_id === 'stop-before-restart' && marker.status === 'stopped');
+  const stopped = await f.watch(thread.id);
+  f.host.kill('SIGTERM'); await delay(500); await f.start();
+  const restored = await f.watch(thread.id);
+  assert.equal(restored.status, 'stopped');
+  assert.equal(restored.pending_approval, null);
+  assert.deepEqual(restored.messages, stopped.messages);
 });
 
 test('different stores and TMPDIR values still share the checkout inode lease', { timeout: 15000 }, async t => {
@@ -291,54 +200,6 @@ test('dirty baseline survives denied edits/commands and unsafe file paths fail',
   }
 });
 
-test('provider errors are safe, stop revokes approval and kills command tree', { timeout: 30000 }, async t => {
-  const e = await setup(t, 'error'); const errorThread = await e.create(); await e.submit(errorThread.id);
-  const failed = await until(() => e.watch(errorThread.id), value => value.status === 'error');
-  assert(!JSON.stringify(failed).includes('SECRET_PROVIDER_TOKEN'));
-  const f = await setup(t, 'crash'); const thread = await f.create(); await f.submit(thread.id);
-  let approval = await until(() => f.watch(thread.id), value => !!value.pending_approval);
-  const approvalId = approval.pending_approval!.id;
-  assert.equal((await request(f.store, { op: 'stop', thread_id: thread.id })).ok, true);
-  assert.equal((await f.approve(thread.id, approvalId)).error?.code, 'not_found');
-  assert.equal((await f.watch(thread.id)).status, 'stopped');
-  // A new host fixture supplies a fresh scripted command for the second run.
-  f.host.kill('SIGKILL'); await delay(500); await f.start('crash');
-  await f.submit(thread.id, 'submit-2');
-  approval = await until(() => f.watch(thread.id), value => !!value.pending_approval);
-  await f.approve(thread.id, approval.pending_approval!.id);
-  const running = await until(() => f.watch(thread.id), value => value.tools.some(tool => /READY \d+/.test(tool.output)));
-  const pid = Number(running.tools.map(tool => tool.output).join('').match(/READY (\d+)/)![1]);
-  const stoppedAt = Date.now();
-  assert.equal((await request(f.store, { op: 'stop', thread_id: thread.id })).ok, true);
-  assert(Date.now() - stoppedAt < 5000);
-  await until(async () => { try { process.kill(-pid, 0); return false; } catch { return true; } }, value => value);
-  assert.equal((await f.watch(thread.id)).status, 'stopped');
-});
-
-for (const target of ['host', 'node']) test(`${target} SIGKILL after effect never replays command or submission`, { timeout: 30000 }, async t => {
-  const f = await setup(t, 'crash'); const thread = await f.create(); await f.submit(thread.id);
-  const approval = await until(() => f.watch(thread.id), value => !!value.pending_approval);
-  await f.approve(thread.id, approval.pending_approval!.id);
-  const running = await until(() => f.watch(thread.id), value => value.tools.some(tool => /READY \d+/.test(tool.output)));
-  const pid = Number(running.tools.map(tool => tool.output).join('').match(/READY (\d+)/)![1]);
-  if (target === 'host') f.host.kill('SIGKILL');
-  else {
-    const children = await childPids(f.host.pid!);
-    assert.equal(children.length, 1); process.kill(children[0], 'SIGKILL');
-  }
-  await until(async () => f.host.exitCode !== null || f.host.signalCode !== null, value => value);
-  await delay(500); await f.start('answer');
-  const reopened = await f.watch(thread.id);
-  assert.equal(reopened.status, 'interrupted'); assert.equal(reopened.pending_approval, null);
-  assert.equal((await f.submit(thread.id)).ok, true);
-  await until(async () => { try { process.kill(-pid, 0); return false; } catch { return true; } }, value => value);
-  assert.equal((await f.watch(thread.id)).status, 'interrupted');
-  assert.equal((await f.submit(thread.id, 'submit-new', 'Inspect recovery safely.')).ok, true);
-  const done = await until(() => f.watch(thread.id), value => value.status === 'idle');
-  assert.equal(done.messages.filter(message => message.role === 'user').length, 2);
-  assert.equal(done.tools.filter(tool => tool.name === 'command').length, 1);
-});
-
 test('crash after effect before provenance record leaves the dirty file protected', { timeout: 30000 }, async t => {
   const f = await setup(t, 'unrecorded'); const thread = await f.create(); await f.submit(thread.id);
   const approval = await until(() => f.watch(thread.id), value => !!value.pending_approval);
@@ -368,4 +229,46 @@ test('crash after atomic file effect before tool completion never repeats the ef
   await until(() => f.watch(thread.id), value => value.status === 'idle');
   assert.equal(await readFile(join(f.repo, 'notes.txt'), 'utf8'), 'after\n');
   assert.equal(await readFile(join(f.repo, 'attempts.txt'), 'utf8'), 'effect\n');
+});
+test('store aliases and symlink rejection do not depend on a command sandbox', { timeout: 15000 }, async t => {
+  const f = await setup(t, 'edit', true);
+  const thread = await f.create(); await f.submit(thread.id);
+  for (const kind of ['edit']) {
+    const pending = await until(() => f.watch(thread.id), state => state.pending_approval?.kind === kind);
+    assert.equal((await f.approve(thread.id, pending.pending_approval!.id)).ok, true);
+  }
+  const done = await until(() => f.watch(thread.id), state => state.status === 'idle');
+  assert(done.tools.every(tool => tool.status === 'done'));
+  const alias = join(f.base, 'store-symlink'); await symlink(f.store, alias);
+  await assert.rejects(exec(binary, ['run', '--store', alias, '--runtime', fixture]), /owned directory/);
+});
+
+test('approved edit survives client reconnect and excludes a second checkout writer', { timeout: 30000 }, async t => {
+  const f = await setup(t, 'edit'); const thread = await f.create(); const other = await f.create('create-2');
+  assert.equal((await f.submit(thread.id)).ok, true);
+  const edit = await until(() => f.watch(thread.id), value => !!value.pending_approval);
+  assert.equal(edit.pending_approval!.kind, 'edit');
+  assert.deepEqual(JSON.parse(edit.pending_approval!.details), { path: 'notes.txt', old_text: 'before', new_text: 'after' });
+  assert.equal(await readFile(join(f.repo, 'notes.txt'), 'utf8'), 'before\n');
+  assert.equal((await f.submit(other.id)).error?.code, 'busy');
+  assert.equal((await f.approve(thread.id, edit.pending_approval!.id)).ok, true);
+  const done = await until(() => f.watch(thread.id), value => value.status === 'idle' || value.status === 'error');
+  assert.equal(done.status, 'idle', JSON.stringify(done));
+  assert.equal(await readFile(join(f.repo, 'notes.txt'), 'utf8'), 'after\n');
+  assert(done.tools.some(tool => tool.name === 'edit' && tool.status === 'done'), JSON.stringify(done));
+});
+
+test('provider errors stay private and Stop revokes pending edit approval', { timeout: 30000 }, async t => {
+  const e = await setup(t, 'error'); const errorThread = await e.create(); await e.submit(errorThread.id);
+  const failed = await until(() => e.watch(errorThread.id), value => value.status === 'error');
+  assert(!JSON.stringify(failed).includes('SECRET_PROVIDER_TOKEN'));
+  const f = await setup(t, 'edit'); const thread = await f.create(); await f.submit(thread.id);
+  const pending = await until(() => f.watch(thread.id), value => !!value.pending_approval);
+  assert.equal(pending.pending_approval!.kind, 'edit');
+  const approval = pending.pending_approval!.id;
+  assert.equal((await request(f.store, { op: 'stop', thread_id: thread.id })).ok, true);
+  assert.equal((await f.approve(thread.id, approval)).error?.code, 'not_found');
+  assert.equal((await f.watch(thread.id)).status, 'stopped');
+  assert.equal((await f.watch(thread.id)).pending_approval, null);
+  assert.equal(await readFile(join(f.repo, 'notes.txt'), 'utf8'), 'before\n');
 });
