@@ -11,6 +11,16 @@ import { fileAction } from '../src/safety.ts';
 import { prepareBuildCache } from '../src/build-cache.ts';
 import { exec, setup } from './support/safety.ts';
 
+test('sandboxed command streams preserve split UTF-8 on both output pipes', { timeout: 15000 }, async t => {
+  const { root } = await setup(t);
+  const script = 'process.stdout.write(Buffer.from([0xe2]));process.stderr.write(Buffer.from([0xf0,0x9f]));setTimeout(()=>{process.stdout.write(Buffer.from([0x82,0xac]));process.stderr.write(Buffer.from([0x9a,0x80]));},30);';
+  const chunks: string[] = [];
+  const result = await command(root, `'${process.execPath}' -e '${script}'`, [], new AbortController().signal, chunk => chunks.push(chunk));
+  assert(result.includes('€')); assert(result.includes('🚀'));
+  assert(!result.includes('�'));
+  assert.equal(chunks.join(''), result);
+});
+
 test('sandbox reuses compiled artifacts across commands in a private thread cache', { timeout: 30000 }, async t => {
   const { root, base } = await setup(t);
   const store = join(base, 'store'); await mkdir(store, { mode: 0o700 });

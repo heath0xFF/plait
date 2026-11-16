@@ -8,6 +8,7 @@ import { command } from './command.ts';
 import type { FileIdentity, Postimage } from './safety.ts';
 import type { BuildCache } from './build-cache.ts';
 import { fail } from './protocol.ts';
+import { clipHead } from './text.ts';
 import type { Snapshot } from './protocol.ts';
 
 export type ToolState = {
@@ -95,7 +96,7 @@ export function registry(state: ToolState) {
           text = result.text;
         }
       }
-      return { output: [{ type: 'text' as const, text: text.slice(0, 16384) }] };
+      return { output: [{ type: 'text' as const, text: clipHead(text, 16384) }] };
     },
   }));
   result.install(defineExtension({ name: 'plait-local', tools }));

@@ -1,6 +1,7 @@
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { Snapshot, InputRecord } from './protocol.ts';
 import { inputMessage } from './protocol.ts';
+import { clipTail } from './text.ts';
 
 type Part = { type?: string; text?: string; id?: string; name?: string; arguments?: unknown };
 type Message = { role?: string; content?: string | Part[]; toolCallId?: string; isError?: boolean };
@@ -14,15 +15,15 @@ export function boundSnapshot(snapshot: Snapshot) {
     snapshot.truncated = true;
     if (snapshot.messages.length > 1) snapshot.messages.shift();
     else if (snapshot.tools.length) snapshot.tools.shift();
-    else if (snapshot.live_text.length) snapshot.live_text = snapshot.live_text.slice(Math.ceil(snapshot.live_text.length / 2));
-    else if (snapshot.messages[0]?.text.length) snapshot.messages[0].text = snapshot.messages[0].text.slice(Math.ceil(snapshot.messages[0].text.length / 2));
+    else if (snapshot.live_text.length) snapshot.live_text = clipTail(snapshot.live_text, Math.floor(snapshot.live_text.length / 2));
+    else if (snapshot.messages[0]?.text.length) snapshot.messages[0].text = clipTail(snapshot.messages[0].text, Math.floor(snapshot.messages[0].text.length / 2));
     else throw new Error('Non-transcript snapshot exceeds bound');
   }
   return snapshot;
 }
 export function update(snapshot: Snapshot, view: ConversationView, inputs: InputRecord[] = []) {
   let truncated = false;
-  const clip = (text: string, limit = 4096) => { if (text.length > limit) truncated = true; return text.slice(-limit); };
+  const clip = (text: string, limit = 4096) => { if (text.length > limit) truncated = true; return clipTail(text, limit); };
   const messages: Snapshot['messages'] = [];
   const tools = new Map<string, Snapshot['tools'][number]>();
   const pending = inputs.filter(input => input.entry === null);
