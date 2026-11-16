@@ -150,6 +150,7 @@ impl Plait {
                 {
                     this.state.projects[0].name = name.to_string_lossy().into_owned();
                 }
+                this.deliver_files(cx);
                 this.pump(cx);
                 cx.notify();
             });

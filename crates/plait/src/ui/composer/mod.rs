@@ -1,21 +1,51 @@
-use super::theme::{self, BLUE, ButtonAction, EDGE, MUTED, RAIL, SUBTLE, TEXT};
+//! The message composer: a native multi-line input with IME, undo, prompt
+//! recall, and completion for files (`@`) and local commands (`/`).
+//!
+//! The composer owns editable text and reports intent through `ComposerEvent`.
+//! Its parent owns host requests, Git reads, and what a command does.
+
+mod commands;
+mod completion;
+mod draft;
+mod history;
+mod input;
+mod mentions;
+mod parent;
+mod trigger;
+
+pub use commands::CommandId;
+pub use completion::{Completion, CompletionEvent, CompletionItem};
+
+use super::theme::{self, ButtonAction, EDGE, MUTED, RAIL, SUBTLE, TEXT};
+use commands::COMMANDS;
+use draft::Draft;
 use gpui::{prelude::*, *};
-use std::ops::Range;
+use input::{InputElement, LINE_HEIGHT, Layout, PLACEHOLDER};
+use mentions::Latest;
+use plait_core::{fuzzy::fuzzy_match, git::FileList};
+use std::{
+    ops::Range,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use trigger::{Trigger, TriggerKind};
 use unicode_segmentation::UnicodeSegmentation;
 
-const LINE_HEIGHT: f32 = 21.;
-// Four lines: room to edit a prompt without crowding the conversation.
-const INPUT_HEIGHT: f32 = 84.;
 // Focus edge for the whole box, quieter than the keyboard ring on small controls.
 const FOCUS_EDGE: u32 = 0x6f8fc4;
-// shortcut: keep 100 full drafts; use edit deltas if large drafts become common.
-const HISTORY_LIMIT: usize = 100;
+/// Suggestions kept for one query; typing narrows the list faster than scrolling.
+const SUGGESTION_LIMIT: usize = 50;
+/// Two Escape presses this close together stop a run; one alone never does.
+const STOP_WINDOW: Duration = Duration::from_millis(1500);
 
 actions!(
     composer,
     [
         Submit,
+        SubmitNow,
         Newline,
+        Complete,
+        Cancel,
         Backspace,
         Delete,
         Left,
@@ -53,7 +83,11 @@ pub fn bind_keys(cx: &mut App) {
     let context = Some("PlaitComposer");
     cx.bind_keys([
         KeyBinding::new("enter", Submit, context),
+        KeyBinding::new("cmd-enter", SubmitNow, context),
         KeyBinding::new("shift-enter", Newline, context),
+        // Tab accepts a suggestion; with none open it moves focus as usual.
+        KeyBinding::new("tab", Complete, context),
+        KeyBinding::new("escape", Cancel, context),
         KeyBinding::new("backspace", Backspace, context),
         KeyBinding::new("delete", Delete, context),
         KeyBinding::new("alt-backspace", DeleteWordLeft, context),
@@ -93,274 +127,73 @@ pub fn bind_keys(cx: &mut App) {
 pub enum ComposerEvent {
     Submit(String),
     Stop,
+    /// A local command was chosen from the `/` list. The parent performs it.
+    Command(CommandId),
+    /// A file mention opened. The parent answers with `Composer::set_files`.
+    FilesNeeded,
 }
 
-#[derive(Clone, Default)]
-struct Snapshot {
-    text: String,
-    anchor: usize,
-    head: usize,
+/// The checkout's file list as the parent last reported it.
+#[derive(Clone)]
+pub enum MentionFiles {
+    /// Nothing reported yet, or a read is in progress.
+    Loading,
+    Ready(Arc<FileList>),
+    /// The list cannot be read; the reason is shown in the suggestion list.
+    Unavailable(String),
 }
 
+/// What accepting a suggestion does.
+#[derive(Clone)]
+enum Pick {
+    File(String),
+    Command(CommandId),
+}
+
+struct Popup {
+    trigger: Trigger,
+    completion: Completion<Pick>,
+}
+
+impl Popup {
+    fn new(trigger: Trigger) -> Self {
+        let name = match trigger.kind {
+            TriggerKind::Mention => "File suggestions",
+            TriggerKind::Command => "Command suggestions",
+        };
+        Self {
+            trigger,
+            completion: Completion::new(name),
+        }
+    }
+
+    fn key(&self) -> (TriggerKind, usize) {
+        (self.trigger.kind, self.trigger.start)
+    }
+}
+
+/// Escape stops a run only as a deliberate double press.
 #[derive(Default)]
-struct Draft {
-    value: Snapshot,
-    marked: Option<Range<usize>>,
-    composition_start: Option<Snapshot>,
-    undo: Vec<Snapshot>,
-    redo: Vec<Snapshot>,
-    revision: u64,
-    submitted: Option<(String, u64)>,
+struct StopGesture {
+    armed_at: Option<Instant>,
 }
 
-impl Draft {
-    fn selection(&self) -> Range<usize> {
-        self.value.anchor.min(self.value.head)..self.value.anchor.max(self.value.head)
+impl StopGesture {
+    /// Record a press. True when it is the second one inside the window.
+    fn press(&mut self, now: Instant) -> bool {
+        let confirmed = self.armed(now);
+        self.armed_at = (!confirmed).then_some(now);
+        confirmed
     }
 
-    fn boundary(&self, offset: usize, forward: bool) -> usize {
-        let mut indices = self.value.text.grapheme_indices(true).map(|(i, _)| i);
-        if forward {
-            indices
-                .find(|i| *i > offset)
-                .unwrap_or(self.value.text.len())
-        } else {
-            indices.take_while(|i| *i < offset).last().unwrap_or(0)
-        }
+    fn armed(&self, now: Instant) -> bool {
+        self.armed_at
+            .is_some_and(|at| now.saturating_duration_since(at) < STOP_WINDOW)
     }
 
-    fn snap(&self, offset: usize) -> usize {
-        if offset >= self.value.text.len() {
-            self.value.text.len()
-        } else {
-            self.value
-                .text
-                .grapheme_indices(true)
-                .map(|(i, _)| i)
-                .take_while(|i| *i <= offset)
-                .last()
-                .unwrap_or(0)
-        }
+    fn disarm(&mut self) {
+        self.armed_at = None;
     }
-
-    fn snap_end(&self, offset: usize) -> usize {
-        self.value
-            .text
-            .grapheme_indices(true)
-            .map(|(i, _)| i)
-            .find(|i| *i >= offset)
-            .unwrap_or(self.value.text.len())
-    }
-
-    fn normalize_selection(&mut self) {
-        let range = self.selection();
-        let start = if range.is_empty() {
-            self.snap_end(range.start)
-        } else {
-            self.snap(range.start)
-        };
-        let end = self.snap_end(range.end);
-        if self.value.head < self.value.anchor {
-            self.value.head = start;
-            self.value.anchor = end;
-        } else {
-            self.value.anchor = start;
-            self.value.head = end;
-        }
-    }
-
-    fn select(&mut self, offset: usize, extend: bool) {
-        self.value.head = self.snap(offset);
-        if !extend {
-            self.value.anchor = self.value.head;
-        }
-    }
-
-    fn remember(&mut self, before: Snapshot) {
-        if before.text == self.value.text {
-            return;
-        }
-        if self.undo.len() == HISTORY_LIMIT {
-            self.undo.remove(0);
-        }
-        self.undo.push(before);
-        self.redo.clear();
-    }
-
-    fn finish_composition(&mut self) {
-        self.marked = None;
-        self.normalize_selection();
-        if let Some(before) = self.composition_start.take() {
-            self.remember(before);
-        }
-    }
-
-    fn replace(&mut self, range: Range<usize>, text: &str, composing: bool) {
-        let before = self.value.clone();
-        if composing && self.composition_start.is_none() {
-            self.composition_start = Some(before.clone());
-        }
-        self.value.text.replace_range(range.clone(), text);
-        self.value.head = range.start + text.len();
-        self.value.anchor = self.value.head;
-        if before.text != self.value.text {
-            self.revision += 1;
-        }
-        if composing {
-            self.marked = Some(range.start..self.value.head);
-        } else if self.composition_start.is_some() {
-            self.finish_composition();
-        } else {
-            self.marked = None;
-            self.normalize_selection();
-            self.remember(before);
-        }
-    }
-
-    fn mark(&mut self, range: Range<usize>, text: &str, selected: Option<Range<usize>>) {
-        let start = range.start;
-        self.replace(range, text, true);
-        if let Some(selected) = selected {
-            self.value.anchor = start + byte_offset(text, selected.start);
-            self.value.head = start + byte_offset(text, selected.end);
-        }
-    }
-
-    fn set_external_value(&mut self, text: &str, enabled: bool) -> bool {
-        if !enabled {
-            return false;
-        }
-        // End the IME transaction before a whole-field accessibility edit.
-        self.finish_composition();
-        self.replace(0..self.value.text.len(), text, false);
-        true
-    }
-
-    fn insert(&mut self, text: &str) {
-        let range = self.marked.clone().unwrap_or_else(|| self.selection());
-        self.replace(range, text, false);
-    }
-
-    fn delete(&mut self, forward: bool) {
-        self.finish_composition();
-        let mut range = self.selection();
-        if range.is_empty() {
-            if forward {
-                range.end = self.boundary(range.end, true);
-            } else {
-                range.start = self.boundary(range.start, false);
-            }
-        }
-        self.replace(range, "", false);
-    }
-
-    /// Start of the previous word or end of the next one, skipping spaces and punctuation.
-    fn word_boundary(&self, offset: usize, forward: bool) -> usize {
-        let words = self.value.text.unicode_word_indices();
-        if forward {
-            words
-                .map(|(i, word)| i + word.len())
-                .find(|i| *i > offset)
-                .unwrap_or(self.value.text.len())
-        } else {
-            words
-                .map(|(i, _)| i)
-                .take_while(|i| *i < offset)
-                .last()
-                .unwrap_or(0)
-        }
-    }
-
-    /// Delete the selection, or from the cursor to `target` when nothing is selected.
-    /// A target at the cursor (line edge already reached) deletes one grapheme, as in
-    /// native macOS fields.
-    fn delete_to(&mut self, target: impl FnOnce(&Self) -> usize, forward: bool) {
-        self.finish_composition();
-        let range = self.selection();
-        if !range.is_empty() {
-            return self.replace(range, "", false);
-        }
-        let head = self.value.head;
-        let target = target(self);
-        let range = match target.cmp(&head) {
-            std::cmp::Ordering::Less => self.snap(target)..head,
-            std::cmp::Ordering::Greater => head..self.snap_end(target),
-            std::cmp::Ordering::Equal if forward => head..self.boundary(head, true),
-            std::cmp::Ordering::Equal => self.boundary(head, false)..head,
-        };
-        self.replace(range, "", false);
-    }
-
-    fn undo(&mut self, redo: bool) {
-        self.finish_composition();
-        let history = if redo { &mut self.redo } else { &mut self.undo };
-        if let Some(value) = history.pop() {
-            let previous = std::mem::replace(&mut self.value, value);
-            if previous.text != self.value.text {
-                self.revision += 1;
-            }
-            if redo {
-                self.undo.push(previous);
-            } else {
-                self.redo.push(previous);
-            }
-        }
-    }
-
-    fn can_submit(&self, enabled: bool, busy: bool) -> bool {
-        enabled && !busy && self.marked.is_none() && !self.value.text.trim().is_empty()
-    }
-
-    fn submit(&mut self, enabled: bool, busy: bool) -> Option<String> {
-        if !self.can_submit(enabled, busy) {
-            return None;
-        }
-        let text = self.value.text.clone();
-        self.submitted = Some((text.clone(), self.revision));
-        Some(text)
-    }
-
-    fn clear_if_unchanged(&mut self, submitted: &str) -> bool {
-        let Some((text, revision)) = self.submitted.take() else {
-            return false;
-        };
-        if text != submitted
-            || revision != self.revision
-            || self.value.text != submitted
-            || self.marked.is_some()
-        {
-            return false;
-        }
-        self.replace(0..self.value.text.len(), "", false);
-        true
-    }
-
-    fn utf16_range(&self, range: Range<usize>) -> Range<usize> {
-        self.value.text[..range.start].encode_utf16().count()
-            ..self.value.text[..range.end].encode_utf16().count()
-    }
-
-    fn byte_range(&self, range: Range<usize>) -> Range<usize> {
-        let start = byte_offset(&self.value.text, range.start);
-        start..byte_offset(&self.value.text, range.end).max(start)
-    }
-}
-
-// Native text services use UTF-16; editor state uses UTF-8 byte boundaries.
-fn byte_offset(text: &str, utf16: usize) -> usize {
-    let mut units = 0;
-    for (offset, ch) in text.char_indices() {
-        if units + ch.len_utf16() > utf16 {
-            return offset;
-        }
-        units += ch.len_utf16();
-    }
-    text.len()
-}
-
-struct VisualRow {
-    range: Range<usize>,
-    line: ShapedLine,
 }
 
 pub struct Composer {
@@ -370,13 +203,20 @@ pub struct Composer {
     reason: Option<String>,
     busy: bool,
     selecting: bool,
-    rows: Vec<VisualRow>,
+    layout: Layout,
     bounds: Option<Bounds<Pixels>>,
     scroll: Pixels,
     reveal_cursor: bool,
     input_changed: bool,
     layout_revision: u64,
     paint_error: Option<String>,
+    popup: Option<Popup>,
+    /// A trigger the user dismissed with Escape; it stays closed until it changes.
+    dismissed: Option<(TriggerKind, usize)>,
+    files: MentionFiles,
+    ranking: Latest,
+    rank_task: Option<Task<()>>,
+    stop: StopGesture,
 }
 
 impl Composer {
@@ -388,19 +228,28 @@ impl Composer {
             reason: Some("Connect a local thread to send messages.".into()),
             busy: false,
             selecting: false,
-            rows: Vec::new(),
+            layout: Layout::default(),
             bounds: None,
             scroll: px(0.),
             reveal_cursor: true,
             input_changed: false,
             layout_revision: 0,
             paint_error: None,
+            popup: None,
+            dismissed: None,
+            files: MentionFiles::Loading,
+            ranking: Latest::default(),
+            rank_task: None,
+            stop: StopGesture::default(),
         }
     }
 
+    /// The draft to keep across a restart, its edit revision, and the pending
+    /// submission. A recalled prompt on screen is not the draft; the text
+    /// being written underneath it is.
     pub fn saved_draft(&self) -> (&str, u64, &Option<(String, u64)>) {
         (
-            &self.draft.value.text,
+            self.draft.durable_text(),
             self.draft.revision,
             &self.draft.submitted,
         )
@@ -413,16 +262,12 @@ impl Composer {
         submitted: Option<(String, u64)>,
         cx: &mut Context<Self>,
     ) {
-        self.draft = Draft {
-            value: Snapshot {
-                anchor: text.len(),
-                head: text.len(),
-                text,
-            },
-            revision,
-            submitted,
-            ..Draft::default()
-        };
+        let history = std::mem::take(&mut self.draft.history);
+        self.draft = Draft::restored(text, revision, submitted, history);
+        // The restored revision can repeat one the layout has already seen.
+        self.layout.invalidate();
+        self.close_popup();
+        self.dismissed = None;
         self.input_changed = true;
         self.reveal_cursor = true;
         cx.notify();
@@ -436,6 +281,8 @@ impl Composer {
         self.reason = reason;
         if !enabled {
             self.draft.finish_composition();
+            self.close_popup();
+            self.stop.disarm();
         }
         self.input_changed = true;
         cx.notify();
@@ -444,13 +291,36 @@ impl Composer {
     pub fn set_busy(&mut self, busy: bool, cx: &mut Context<Self>) {
         if self.busy != busy {
             self.busy = busy;
+            self.stop.disarm();
+            // Some commands exist only while the agent works.
+            self.fill_commands();
             cx.notify();
         }
+    }
+
+    /// Supply the prompts already sent in this thread, oldest first, for
+    /// recall with Up and Down. Cheap when nothing changed.
+    pub fn set_history<'a>(&mut self, prompts: impl IntoIterator<Item = &'a str>) {
+        self.draft.history.set_host(prompts);
+    }
+
+    /// Answer `ComposerEvent::FilesNeeded` with the checkout's files. Matching
+    /// against them runs on the background executor.
+    pub fn set_files(&mut self, files: MentionFiles, cx: &mut Context<Self>) {
+        if let (MentionFiles::Ready(current), MentionFiles::Ready(next)) = (&self.files, &files)
+            && Arc::ptr_eq(current, next)
+        {
+            return;
+        }
+        self.files = files;
+        self.rank_files(cx);
+        cx.notify();
     }
 
     pub fn clear_if_unchanged(&mut self, submitted: &str, cx: &mut Context<Self>) -> bool {
         let cleared = self.draft.clear_if_unchanged(submitted);
         if cleared {
+            self.close_popup();
             self.reveal_cursor = true;
             self.input_changed = true;
             cx.notify();
@@ -460,13 +330,16 @@ impl Composer {
 
     fn changed(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.reveal_cursor = true;
+        self.stop.disarm();
         window.notify_text_input_changed(&self.focus);
         cx.notify();
     }
 
     fn submit(&mut self, cx: &mut Context<Self>) {
         if let Some(text) = self.draft.submit(self.enabled, self.busy) {
+            self.close_popup();
             cx.emit(ComposerEvent::Submit(text));
+            cx.notify();
         }
     }
 
@@ -478,6 +351,7 @@ impl Composer {
     ) {
         if self.enabled {
             operation(&mut self.draft);
+            self.refresh_popup(true, cx);
             self.changed(window, cx);
         }
     }
@@ -485,7 +359,9 @@ impl Composer {
     fn move_to(&mut self, offset: usize, extend: bool, window: &Window, cx: &mut Context<Self>) {
         self.draft.finish_composition();
         self.draft.select(offset, extend);
+        self.refresh_popup(false, cx);
         self.reveal_cursor = true;
+        self.stop.disarm();
         window.notify_text_selection_changed(&self.focus);
         cx.notify();
     }
@@ -517,18 +393,22 @@ impl Composer {
         );
     }
 
+    fn layout_is_current(&self) -> bool {
+        self.layout_revision == self.draft.revision
+    }
+
     /// Visual-row edge, matching Cmd-Left/Right; rows are the wrapped layout.
     fn row_edge(&self, end: bool) -> usize {
-        self.rows
-            .iter()
-            .rfind(|row| row.range.start <= self.draft.value.head)
+        self.layout
+            .rows
+            .get(self.layout.row_at(self.draft.value.head))
             .map(|row| if end { row.range.end } else { row.range.start })
             .unwrap_or(if end { self.draft.value.text.len() } else { 0 })
     }
 
     fn delete_to_line_edge(&mut self, end: bool, window: &Window, cx: &mut Context<Self>) {
         // A stale layout could point inside other text; fall back to one grapheme.
-        let target = if self.layout_revision == self.draft.revision {
+        let target = if self.layout_is_current() {
             self.row_edge(end)
         } else {
             self.draft.value.head
@@ -541,12 +421,9 @@ impl Composer {
     }
 
     fn position_for_offset(&self, offset: usize) -> Point<Pixels> {
-        let row = self
-            .rows
-            .iter()
-            .rposition(|row| row.range.start <= offset)
-            .unwrap_or(0);
+        let row = self.layout.row_at(offset);
         let x = self
+            .layout
             .rows
             .get(row)
             .map(|row| {
@@ -559,7 +436,8 @@ impl Composer {
 
     fn index_at(&self, position: Point<Pixels>) -> usize {
         let row = (position.y / px(LINE_HEIGHT)).floor().max(0.) as usize;
-        self.rows
+        self.layout
+            .rows
             .get(row)
             .map(|row| {
                 self.draft
@@ -585,6 +463,41 @@ impl Composer {
         self.move_to(offset, extend, window, cx);
     }
 
+    /// Whether the cursor is on the first (or last) line the user sees.
+    fn on_edge_row(&self, first: bool) -> bool {
+        let head = self.draft.value.head;
+        if !self.layout_is_current() {
+            // Before the next frame only logical lines are known.
+            let text = &self.draft.value.text;
+            return if first {
+                !text[..head].contains('\n')
+            } else {
+                !text[head..].contains('\n')
+            };
+        }
+        let row = self.layout.row_at(head);
+        if first {
+            row == 0
+        } else {
+            row + 1 >= self.layout.rows.len()
+        }
+    }
+
+    /// Up and Down: choose a suggestion, else walk sent prompts, else move the cursor.
+    fn arrow(&mut self, down: bool, window: &Window, cx: &mut Context<Self>) {
+        if let Some(popup) = self.popup.as_mut().filter(|p| p.completion.has_items()) {
+            popup.completion.step(down);
+            cx.notify();
+            return;
+        }
+        if self.enabled && self.draft.recall(!down, self.on_edge_row(!down)) {
+            self.close_popup();
+            self.changed(window, cx);
+            return;
+        }
+        self.vertical(down, false, window, cx);
+    }
+
     fn line_edge(&mut self, end: bool, extend: bool, window: &Window, cx: &mut Context<Self>) {
         self.move_to(self.row_edge(end), extend, window, cx);
     }
@@ -600,11 +513,13 @@ impl Composer {
 
     fn paste_clipboard(&mut self, window: &Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            self.edit(
-                |draft| draft.insert(&text.replace("\r\n", "\n").replace('\r', "\n")),
-                window,
-                cx,
-            );
+            // Most clipboards need no conversion; skip the copies when they do not.
+            let text = if text.contains('\r') {
+                text.replace("\r\n", "\n").replace('\r', "\n")
+            } else {
+                text
+            };
+            self.edit(|draft| draft.insert(&text), window, cx);
         }
     }
 
@@ -612,7 +527,7 @@ impl Composer {
         let Some(bounds) = self.bounds else {
             return Vec::new();
         };
-        if self.layout_revision != self.draft.revision {
+        if !self.layout_is_current() {
             return Vec::new();
         }
         if range.is_empty() {
@@ -621,11 +536,14 @@ impl Composer {
                 size(px(1.), px(LINE_HEIGHT)),
             )];
         }
-        self.rows
+        let rows = &self.layout.rows;
+        let first = self.layout.row_at(range.start);
+        rows[first.min(rows.len())..]
             .iter()
             .enumerate()
+            .take_while(|(_, row)| row.range.start < range.end)
             .filter_map(|(index, row)| {
-                if range.start > row.range.end || range.end <= row.range.start {
+                if range.start > row.range.end {
                     return None;
                 }
                 let start = range.start.max(row.range.start) - row.range.start;
@@ -633,11 +551,291 @@ impl Composer {
                 let x = row.line.x_for_index(start);
                 let width = (row.line.x_for_index(end) - x).max(px(2.));
                 Some(Bounds::new(
-                    bounds.origin + point(x, px(index as f32 * LINE_HEIGHT) - self.scroll),
+                    bounds.origin
+                        + point(x, px((first + index) as f32 * LINE_HEIGHT) - self.scroll),
                     size(width, px(LINE_HEIGHT)),
                 ))
             })
             .collect()
+    }
+}
+
+/// Completion: `@` files and `/` commands.
+impl Composer {
+    fn close_popup(&mut self) {
+        self.popup = None;
+        self.ranking.cancel();
+        self.rank_task = None;
+    }
+
+    /// Re-read the trigger under the cursor. Only an edit opens a list; moving
+    /// the cursor into an old `@word` does not.
+    fn refresh_popup(&mut self, edited: bool, cx: &mut Context<Self>) {
+        let draft = &self.draft;
+        let quiet = draft.marked.is_none()
+            && draft.selection().is_empty()
+            && draft.recall_position().is_none();
+        let trigger = (self.enabled && quiet)
+            .then(|| trigger::detect(&draft.value.text, draft.value.head))
+            .flatten();
+        let Some(trigger) = trigger else {
+            self.close_popup();
+            self.dismissed = None;
+            return;
+        };
+        let key = (trigger.kind, trigger.start);
+        if self.dismissed == Some(key) {
+            return self.close_popup();
+        }
+        self.dismissed = None;
+        match &mut self.popup {
+            Some(popup) if popup.key() == key => {
+                if popup.trigger.query == trigger.query {
+                    return;
+                }
+                popup.trigger = trigger;
+            }
+            _ if edited => {
+                self.close_popup();
+                if trigger.kind == TriggerKind::Mention {
+                    cx.emit(ComposerEvent::FilesNeeded);
+                }
+                self.popup = Some(Popup::new(trigger));
+            }
+            _ => return self.close_popup(),
+        }
+        self.fill_commands();
+        self.rank_files(cx);
+    }
+
+    fn fill_commands(&mut self) {
+        let Some(popup) = self
+            .popup
+            .as_mut()
+            .filter(|popup| popup.trigger.kind == TriggerKind::Command)
+        else {
+            return;
+        };
+        let items = commands::matching(COMMANDS, &popup.trigger.query, self.busy)
+            .into_iter()
+            .map(|found| CompletionItem {
+                label: format!("/{}", found.command.name).into(),
+                detail: found.command.detail.into(),
+                // The drawn label has a leading slash the match does not.
+                label_matches: found.name_matches.iter().map(|at| at + 1).collect(),
+                detail_matches: found.detail_matches,
+                name: format!("/{}: {}", found.command.name, found.command.detail).into(),
+                value: Pick::Command(found.command.id),
+            })
+            .collect();
+        popup.completion.set_items(items);
+    }
+
+    /// Start ranking files for the open mention. Results arrive through
+    /// `show_ranked`; a newer query or a closed list discards them.
+    fn rank_files(&mut self, cx: &mut Context<Self>) {
+        let Some(popup) = self
+            .popup
+            .as_mut()
+            .filter(|popup| popup.trigger.kind == TriggerKind::Mention)
+        else {
+            return;
+        };
+        let list = match &self.files {
+            MentionFiles::Ready(list) => list.clone(),
+            MentionFiles::Loading => {
+                return popup.completion.set_note(Some("Loading files…".into()));
+            }
+            MentionFiles::Unavailable(error) => {
+                popup.completion.set_items(Vec::new());
+                return popup
+                    .completion
+                    .set_note(Some(format!("Files unavailable: {error}").into()));
+            }
+        };
+        let ticket = self.ranking.begin();
+        let query = popup.trigger.query.clone();
+        let files = list.clone();
+        let ranked = cx
+            .background_executor()
+            .spawn(async move { mentions::rank(&files.paths, &query, SUGGESTION_LIMIT) });
+        self.rank_task = Some(cx.spawn(async move |this, cx| {
+            let ranked = ranked.await;
+            let _ = this.update(cx, |this, cx| this.show_ranked(ticket, &list, ranked, cx));
+        }));
+    }
+
+    fn show_ranked(
+        &mut self,
+        ticket: u64,
+        list: &FileList,
+        ranked: Vec<mentions::RankedFile>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.ranking.accepts(ticket) {
+            return;
+        }
+        let Some(popup) = self.popup.as_mut() else {
+            return;
+        };
+        let items: Vec<_> = ranked
+            .into_iter()
+            .filter_map(|file| {
+                let path = list.paths.get(file.index)?;
+                let (name, directory) = mentions::split(path);
+                let (label_matches, detail_matches) =
+                    mentions::split_positions(path, &file.positions);
+                Some(CompletionItem {
+                    label: name.to_owned().into(),
+                    detail: directory.to_owned().into(),
+                    label_matches,
+                    detail_matches,
+                    name: path.clone().into(),
+                    value: Pick::File(path.clone()),
+                })
+            })
+            .collect();
+        popup.completion.set_note(if items.is_empty() {
+            Some("No matching files".into())
+        } else if list.truncated {
+            Some(
+                format!(
+                    "Large checkout: only {} files are searched",
+                    list.paths.len()
+                )
+                .into(),
+            )
+        } else {
+            None
+        });
+        popup.completion.set_items(items);
+        cx.notify();
+    }
+
+    /// Accept the selected suggestion, or the one at `index`. False when no
+    /// list with suggestions is open, so the key keeps its usual meaning.
+    fn accept(&mut self, index: Option<usize>, window: &Window, cx: &mut Context<Self>) -> bool {
+        let Some(popup) = self.popup.as_ref() else {
+            return false;
+        };
+        let item = match index {
+            Some(index) => popup.completion.item(index),
+            None => popup.completion.selected_item(),
+        };
+        let Some(pick) = item.map(|item| item.value.clone()) else {
+            return false;
+        };
+        let trigger = popup.trigger.clone();
+        match pick {
+            Pick::File(path) => {
+                // Suggestions for the previous keystroke may still be on screen.
+                if fuzzy_match(&trigger.query, &path).is_none() {
+                    return true;
+                }
+                let range = trigger.start..self.draft.value.head;
+                let text = trigger::mention_text(&path);
+                self.close_popup();
+                self.edit(|draft| draft.replace(range, &text, false), window, cx);
+            }
+            Pick::Command(id) => {
+                self.close_popup();
+                self.edit(
+                    |draft| draft.replace(0..draft.value.text.len(), "", false),
+                    window,
+                    cx,
+                );
+                cx.emit(ComposerEvent::Command(id));
+            }
+        }
+        true
+    }
+
+    fn completion_event(
+        &mut self,
+        event: CompletionEvent,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            CompletionEvent::Pick(index) => {
+                self.accept(Some(index), window, cx);
+            }
+            CompletionEvent::Scroll(distance) => {
+                if let Some(popup) = &mut self.popup {
+                    popup.completion.scroll_by(distance);
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    /// Escape closes the innermost thing first. Stopping a run takes a second
+    /// press, so one stray key cannot cancel work.
+    fn cancel(&mut self, window: &Window, cx: &mut Context<Self>) {
+        // An IME owns Escape while it is composing.
+        if self.draft.marked.is_some() {
+            return;
+        }
+        if let Some(popup) = self.popup.as_ref().filter(|p| p.completion.is_visible()) {
+            self.dismissed = Some(popup.key());
+            self.close_popup();
+            return cx.notify();
+        }
+        if self.enabled && self.draft.cancel_recall() {
+            return self.changed(window, cx);
+        }
+        if !(self.enabled && self.busy) {
+            return cx.propagate();
+        }
+        if self.stop.press(Instant::now()) {
+            cx.emit(ComposerEvent::Stop);
+        } else {
+            // Redraw when the window lapses so the hint stops offering it.
+            let lapse = cx.background_executor().timer(STOP_WINDOW);
+            cx.spawn(async move |this, cx| {
+                lapse.await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
+    fn suggestions(&self) -> Option<&Completion<Pick>> {
+        self.popup
+            .as_ref()
+            .map(|popup| &popup.completion)
+            .filter(|completion| completion.is_visible())
+    }
+
+    /// One line under the draft: what the keys do right now, or why sending is off.
+    fn hint(&self) -> String {
+        if let Some(error) = &self.paint_error {
+            return error.clone();
+        }
+        if !self.enabled {
+            return self
+                .reason
+                .clone()
+                .unwrap_or_else(|| "Composer unavailable".into());
+        }
+        if self.suggestions().is_some_and(Completion::has_items) {
+            return "Up and Down to choose · Enter or Tab to accept · Esc to dismiss".into();
+        }
+        if let Some((position, total)) = self.draft.recall_position() {
+            return format!(
+                "Sent message {position} of {total} · Down for newer · Esc returns to your draft"
+            );
+        }
+        if !self.busy {
+            return "Enter to send · Shift-Enter for a new line · @ for files · / for commands"
+                .into();
+        }
+        if self.stop.armed(Instant::now()) {
+            "Press Esc again to stop the agent".into()
+        } else {
+            "Agent is working. You can edit the next message · Esc twice to stop".into()
+        }
     }
 }
 
@@ -686,9 +884,11 @@ impl EntityInputHandler for Composer {
         let range = self.draft.byte_range(range);
         self.draft.value.anchor = range.start;
         self.draft.value.head = range.end;
+        self.draft.touch();
         if self.draft.marked.is_none() {
             self.draft.normalize_selection();
         }
+        self.refresh_popup(false, cx);
         self.reveal_cursor = true;
         window.notify_text_selection_changed(&self.focus);
         cx.notify();
@@ -707,6 +907,7 @@ impl EntityInputHandler for Composer {
 
     fn unmark_text(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.draft.finish_composition();
+        self.refresh_popup(true, cx);
         self.changed(window, cx);
     }
 
@@ -779,7 +980,7 @@ impl EntityInputHandler for Composer {
         _: &mut Window,
         _: &mut Context<Self>,
     ) -> Option<usize> {
-        if self.layout_revision != self.draft.revision {
+        if !self.layout_is_current() {
             return None;
         }
         self.bounds?;
@@ -788,229 +989,49 @@ impl EntityInputHandler for Composer {
     }
 }
 
-struct InputElement(Entity<Composer>);
-
-impl Element for InputElement {
-    type RequestLayoutState = ();
-    type PrepaintState = Option<String>;
-
-    fn id(&self) -> Option<ElementId> {
-        None
-    }
-    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (LayoutId, ()) {
-        let mut style = Style::default();
-        style.size.width = relative(1.).into();
-        style.size.height = px(INPUT_HEIGHT).into();
-        (window.request_layout(style, [], cx), ())
-    }
-
-    fn prepaint(
-        &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
-        _: &mut (),
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Option<String> {
-        let style = window.text_style();
-        let font_size = style.font_size.to_pixels(window.rem_size());
-        self.0.update(cx, |input, _| {
-            let mut failure = None;
-            input.bounds = Some(bounds);
-            let content: SharedString = input.draft.value.text.clone().into();
-            let run = TextRun {
-                len: content.len(),
-                font: style.font(),
-                color: style.color,
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            };
-            let shaped = window.text_system().shape_text(
-                content,
-                font_size,
-                std::slice::from_ref(&run),
-                Some(bounds.size.width.max(px(1.))),
-                None,
-            );
-            input.rows.clear();
-            match shaped {
-                Ok(lines) => {
-                    let mut offset = 0;
-                    for line in lines {
-                        let mut start = 0;
-                        let ends = line
-                            .wrap_boundaries()
-                            .iter()
-                            .map(|boundary| {
-                                line.runs()[boundary.run_ix].glyphs[boundary.glyph_ix].index
-                            })
-                            .chain([line.len()]);
-                        for end in ends {
-                            let text: SharedString = line.text[start..end].to_owned().into();
-                            let row_run = TextRun {
-                                len: text.len(),
-                                ..run.clone()
-                            };
-                            let shaped =
-                                window
-                                    .text_system()
-                                    .shape_line(text, font_size, &[row_run], None);
-                            input.rows.push(VisualRow {
-                                range: offset + start..offset + end,
-                                line: shaped,
-                            });
-                            start = end;
-                        }
-                        offset += line.len() + 1;
-                    }
-                }
-                Err(error) => failure = Some(format!("Cannot display draft: {error}")),
-            }
-            input.layout_revision = input.draft.revision;
-            if input.reveal_cursor {
-                let y = input.cursor_position().y;
-                if y < input.scroll {
-                    input.scroll = y;
-                }
-                if y + px(LINE_HEIGHT) > input.scroll + bounds.size.height {
-                    input.scroll = y + px(LINE_HEIGHT) - bounds.size.height;
-                }
-                input.reveal_cursor = false;
-            }
-            let max = (px(input.rows.len() as f32 * LINE_HEIGHT) - bounds.size.height).max(px(0.));
-            input.scroll = input.scroll.clamp(px(0.), max);
-            failure
-        })
-    }
-
-    fn paint(
-        &mut self,
-        _: Option<&GlobalElementId>,
-        _: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
-        _: &mut (),
-        failure: &mut Option<String>,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        let focus = self.0.read(cx).focus.clone();
-        window.handle_input(&focus, ElementInputHandler::new(bounds, self.0.clone()), cx);
-        self.0.update(cx, |input, cx| {
-            if std::mem::take(&mut input.input_changed) {
-                window.notify_text_input_changed(&input.focus);
-            }
-            window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                if input.draft.value.text.is_empty() {
-                    let style = window.text_style();
-                    let text: SharedString = "Write a message…".into();
-                    let run = TextRun {
-                        len: text.len(),
-                        font: style.font(),
-                        color: rgb(SUBTLE).into(),
-                        background_color: None,
-                        underline: None,
-                        strikethrough: None,
-                    };
-                    let placeholder = window.text_system().shape_line(
-                        text,
-                        style.font_size.to_pixels(window.rem_size()),
-                        &[run],
-                        None,
-                    );
-                    if let Err(error) = placeholder.paint(
-                        bounds.origin,
-                        px(LINE_HEIGHT),
-                        TextAlign::Left,
-                        None,
-                        window,
-                        cx,
-                    ) {
-                        *failure = Some(format!("Cannot display draft: {error}"));
-                    }
-                }
-                for rect in input.rectangles(input.draft.selection()) {
-                    if !input.draft.selection().is_empty() {
-                        window.paint_quad(fill(rect, rgba(0x93b8f54d)));
-                    }
-                }
-                for (index, row) in input.rows.iter().enumerate() {
-                    let origin = bounds.origin
-                        + point(px(0.), px(index as f32 * LINE_HEIGHT) - input.scroll);
-                    if origin.y + px(LINE_HEIGHT) < bounds.top() || origin.y > bounds.bottom() {
-                        continue;
-                    }
-                    if let Err(error) =
-                        row.line
-                            .paint(origin, px(LINE_HEIGHT), TextAlign::Left, None, window, cx)
-                    {
-                        *failure = Some(format!("Cannot display draft: {error}"));
-                    }
-                }
-                if let Some(marked) = input.draft.marked.clone() {
-                    for rect in input.rectangles(marked) {
-                        window.paint_quad(fill(
-                            Bounds::new(
-                                point(rect.left(), rect.bottom() - px(1.)),
-                                size(rect.size.width, px(1.)),
-                            ),
-                            rgb(TEXT),
-                        ));
-                    }
-                }
-                if input.enabled
-                    && input.focus.is_focused(window)
-                    && input.draft.selection().is_empty()
-                {
-                    for rect in input.rectangles(input.draft.selection()) {
-                        window.paint_quad(fill(rect, rgb(BLUE)));
-                    }
-                }
-            });
-            if input.paint_error != *failure {
-                input.paint_error = failure.take();
-                cx.notify();
-            }
-        });
+impl Composer {
+    /// The suggestion list, floating just above the composer box.
+    fn suggestion_list(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let composer = cx.entity().downgrade();
+        let list =
+            self.suggestions()?
+                .render("composer-suggestions", move |event, window, cx| {
+                    let _ =
+                        composer.update(cx, |this, cx| this.completion_event(event, window, cx));
+                })?;
+        Some(
+            div()
+                .absolute()
+                .bottom_full()
+                .left_0()
+                .w_full()
+                .max_w(px(560.))
+                .pb(px(6.))
+                .child(list),
+        )
     }
 }
 
 impl Render for Composer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let hint = self
-            .paint_error
-            .clone()
-            .or_else(|| {
-                if self.enabled {
-                    Some(
-                        if self.busy {
-                            "Agent is working. You can edit the next message."
-                        } else {
-                            "Enter to send · Shift-Enter for a new line"
-                        }
-                        .into(),
-                    )
-                } else {
-                    self.reason.clone()
-                }
-            })
-            .unwrap_or_else(|| "Composer unavailable".into());
+        let hint = self.hint();
+        // Focus stays in the text, so the current suggestion is part of its description.
+        let description = match self
+            .suggestions()
+            .and_then(|list| Some((list.position()?, list.selected_item()?)))
+        {
+            Some(((position, total), item)) => {
+                format!("Suggestion {position} of {total}: {}. {hint}", item.name)
+            }
+            None => hint.clone(),
+        };
         let input = cx.entity().downgrade();
         let enabled = self.enabled;
         let can_send = self.draft.can_submit(enabled, self.busy);
         let can_stop = enabled && self.busy;
         let focused = self.focus.is_focused(window);
+        // Suggestions belong to typing; they do not outlive keyboard focus.
+        let suggestions = focused.then(|| self.suggestion_list(cx)).flatten();
         // One raised box holds the draft and its controls; the box shows focus.
         theme::column()
             .w_full()
@@ -1024,13 +1045,14 @@ impl Render for Composer {
                     .id("composer-input")
                     .role(Role::MultilineTextInput)
                     .aria_label("Message to agent")
-                    .aria_description(hint.clone())
+                    .aria_description(description)
                     .aria_value(self.draft.value.text.clone())
-                    .aria_placeholder("Write a message…")
+                    .aria_placeholder(PLACEHOLDER)
                     .on_a11y_action(AccessibleAction::SetValue, move |data, window, cx| {
                         if let Some(gpui::accesskit::ActionData::Value(text)) = data {
                             let _ = input.update(cx, |this, cx| {
                                 if this.draft.set_external_value(text, this.enabled) {
+                                    this.refresh_popup(false, cx);
                                     this.changed(window, cx);
                                 }
                             });
@@ -1052,7 +1074,18 @@ impl Render for Composer {
                     .text_color(rgb(if self.enabled { TEXT } else { MUTED }))
                     .text_size(px(13.))
                     .line_height(px(LINE_HEIGHT))
-                    .on_action(cx.listener(|this, _: &Submit, _, cx| this.submit(cx)))
+                    .on_action(cx.listener(|this, _: &Submit, window, cx| {
+                        if !this.accept(None, window, cx) {
+                            this.submit(cx);
+                        }
+                    }))
+                    .on_action(cx.listener(|this, _: &SubmitNow, _, cx| this.submit(cx)))
+                    .on_action(cx.listener(|this, _: &Complete, window, cx| {
+                        if !this.accept(None, window, cx) {
+                            window.focus_next(cx);
+                        }
+                    }))
+                    .on_action(cx.listener(|this, _: &Cancel, window, cx| this.cancel(window, cx)))
                     .on_action(cx.listener(|this, _: &Newline, window, cx| {
                         if this.draft.marked.is_none() {
                             this.edit(|draft| draft.insert("\n"), window, cx);
@@ -1092,12 +1125,8 @@ impl Render for Composer {
                     .on_action(cx.listener(|this, _: &SelectRight, w, cx| {
                         this.horizontal(true, true, w, cx)
                     }))
-                    .on_action(
-                        cx.listener(|this, _: &Up, w, cx| this.vertical(false, false, w, cx)),
-                    )
-                    .on_action(
-                        cx.listener(|this, _: &Down, w, cx| this.vertical(true, false, w, cx)),
-                    )
+                    .on_action(cx.listener(|this, _: &Up, w, cx| this.arrow(false, w, cx)))
+                    .on_action(cx.listener(|this, _: &Down, w, cx| this.arrow(true, w, cx)))
                     .on_action(
                         cx.listener(|this, _: &SelectUp, w, cx| this.vertical(false, true, w, cx)),
                     )
@@ -1252,271 +1281,40 @@ impl Render for Composer {
                         }),
                     ),
             )
+            .children(suggestions)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Draft, Snapshot};
+    // Not a glob: GPUI exports its own `test` attribute.
+    use super::{STOP_WINDOW, StopGesture};
+    use std::time::Instant;
 
     #[test]
-    fn multiline_editing_selection_and_history() {
-        let mut draft = Draft::default();
-        draft.insert("one\ntwo");
-        draft.select(0, false);
-        draft.select(3, true);
-        draft.insert("first");
-        assert_eq!(draft.value.text, "first\ntwo");
-        draft.undo(false);
-        assert_eq!(draft.value.text, "one\ntwo");
-        assert_eq!(draft.selection(), 0..3);
-        draft.undo(true);
-        assert_eq!(draft.value.text, "first\ntwo");
-        draft.insert("\n");
-        assert_eq!(draft.value.text, "first\n\ntwo");
-        draft.undo(false);
-        draft.insert("!");
-        draft.undo(true);
-        assert_eq!(draft.value.text, "first!\ntwo");
+    fn one_escape_arms_and_only_a_prompt_second_one_stops() {
+        let start = Instant::now();
+        let mut gesture = StopGesture::default();
+        assert!(!gesture.armed(start));
+        assert!(!gesture.press(start));
+        assert!(gesture.armed(start + STOP_WINDOW / 2));
+        assert!(gesture.press(start + STOP_WINDOW / 2));
+        // A confirmed stop starts over; a third press alone does nothing.
+        assert!(!gesture.armed(start + STOP_WINDOW / 2));
+        assert!(!gesture.press(start + STOP_WINDOW / 2));
     }
 
     #[test]
-    fn deletion_and_movement_preserve_graphemes() {
-        for grapheme in ["e\u{301}", "👩🏽‍💻", "🇺🇦", "क्‍ष"] {
-            let mut draft = Draft::default();
-            draft.insert(&format!("A{grapheme}Z"));
-            assert_eq!(draft.boundary(1, true), 1 + grapheme.len());
-            draft.select(1 + grapheme.len(), false);
-            draft.delete(false);
-            assert_eq!(draft.value.text, "AZ");
-            draft.undo(false);
-            draft.select(1, false);
-            draft.delete(true);
-            assert_eq!(draft.value.text, "AZ");
-        }
-    }
-
-    #[test]
-    fn insertion_that_joins_a_grapheme_keeps_cursor_at_its_end() {
-        let mut draft = Draft::default();
-        draft.insert("\u{301}Z");
-        draft.select(0, false);
-        draft.insert("e");
-        assert_eq!(draft.value.head, "e\u{301}".len());
-        draft.delete(false);
-        assert_eq!(draft.value.text, "Z");
-    }
-
-    #[test]
-    fn utf16_offsets_clamp_without_splitting_scalars() {
-        let mut draft = Draft::default();
-        draft.insert("A🙂é\n漢");
-        assert_eq!(draft.byte_range(1..3), 1..5);
-        assert_eq!(draft.byte_range(2..2), 1..1);
-        assert_eq!(draft.byte_range(99..usize::MAX), 11..11);
-        assert_eq!(draft.byte_range(std::ops::Range { start: 3, end: 1 }), 5..5);
-        assert_eq!(draft.utf16_range(1..5), 1..3);
-    }
-
-    #[test]
-    fn composition_is_one_undo_step_and_blocks_submit() {
-        let mut draft = Draft::default();
-        draft.insert("A");
-        draft.replace(1..1, "n", true);
-        assert!(draft.submit(true, false).is_none());
-        draft.replace(1..2, "に", true);
-        draft.replace(1..4, "日本", false);
-        assert_eq!(draft.submit(true, false).as_deref(), Some("A日本"));
-        draft.undo(false);
-        assert_eq!(draft.value.text, "A");
-        draft.undo(true);
-        assert_eq!(draft.value.text, "A日本");
-    }
-
-    #[test]
-    fn marked_selection_is_relative_utf16_and_updates_replace_the_mark() {
-        let mut draft = Draft::default();
-        draft.insert("A🙂Z");
-        draft.mark(draft.byte_range(1..3), "é🙂", Some(1..3));
-        assert_eq!(draft.value.text, "Aé🙂Z");
-        assert_eq!(draft.marked, Some(1..7));
-        assert_eq!(draft.selection(), 3..7);
-        draft.mark(draft.marked.clone().unwrap(), "漢", Some(1..99));
-        assert_eq!(draft.value.text, "A漢Z");
-        assert_eq!(draft.selection(), 4..4);
-        draft.finish_composition();
-        draft.undo(false);
-        assert_eq!(draft.value.text, "A🙂Z");
-    }
-
-    #[test]
-    fn cancelled_composition_does_not_add_an_undo_step() {
-        let mut draft = Draft::default();
-        draft.insert("A");
-        draft.submit(true, false);
-        draft.mark(1..1, "に", None);
-        draft.mark(1..4, "", None);
-        draft.finish_composition();
-        assert!(!draft.clear_if_unchanged("A"));
-        draft.undo(false);
-        assert!(draft.value.text.is_empty());
-    }
-
-    #[test]
-    fn empty_composition_still_blocks_enter() {
-        let mut draft = Draft::default();
-        draft.insert("draft");
-        draft.replace(5..5, "", true);
-        assert!(draft.submit(true, false).is_none());
-        draft.finish_composition();
-        assert!(draft.submit(true, false).is_some());
-    }
-
-    #[test]
-    fn submission_never_clears_and_rejects_blank_disabled_busy() {
-        let mut draft = Draft::default();
-        for text in ["", " \n\t", "\u{2003}"] {
-            draft.replace(0..draft.value.text.len(), text, false);
-            assert!(draft.submit(true, false).is_none());
-        }
-        draft.insert("hello");
-        assert!(draft.submit(false, false).is_none());
-        assert!(draft.submit(true, true).is_none());
-        let submitted = draft.submit(true, false).unwrap();
-        assert_eq!(draft.value.text, submitted);
-        assert!(draft.clear_if_unchanged(&submitted));
-        assert!(draft.value.text.is_empty());
-        assert!(!draft.clear_if_unchanged(&submitted));
-    }
-
-    #[test]
-    fn acceptance_checks_revision_not_just_text() {
-        let mut draft = Draft::default();
-        draft.insert("hello");
-        let submitted = draft.submit(true, false).unwrap();
-        draft.insert("!");
-        draft.undo(false);
-        assert_eq!(draft.value.text, submitted);
-        assert!(!draft.clear_if_unchanged(&submitted));
-        assert_eq!(draft.value.text, "hello");
-        draft.submit(true, false);
-        draft.select(0, false);
-        assert!(draft.clear_if_unchanged("hello"));
-    }
-
-    #[test]
-    fn restored_submission_keeps_the_edit_revision_guard() {
-        let restore = |revision| Draft {
-            value: Snapshot {
-                text: "hello".into(),
-                anchor: 5,
-                head: 5,
-            },
-            revision,
-            submitted: Some(("hello".into(), 3)),
-            ..Draft::default()
-        };
-        let mut unchanged = restore(3);
-        assert!(unchanged.clear_if_unchanged("hello"));
-        let mut edited_then_restored = restore(5);
-        assert!(!edited_then_restored.clear_if_unchanged("hello"));
-        assert_eq!(edited_then_restored.value.text, "hello");
-    }
-
-    #[test]
-    fn external_replacement_preserves_history_and_acceptance_guard() {
-        let mut draft = Draft::default();
-        draft.insert("submitted");
-        draft.submit(true, false);
-        assert!(draft.set_external_value("next\n🙂", true));
-        assert_eq!(draft.value.text, "next\n🙂");
-        draft.undo(false);
-        assert_eq!(draft.value.text, "submitted");
-        assert!(!draft.clear_if_unchanged("submitted"));
-        draft.undo(true);
-        assert_eq!(draft.value.text, "next\n🙂");
-    }
-
-    #[test]
-    fn external_replacement_finishes_composition_as_a_separate_undo_step() {
-        let mut draft = Draft::default();
-        draft.insert("A");
-        draft.mark(1..1, "日本", Some(0..2));
-        draft.set_external_value("replacement", true);
-        assert!(draft.marked.is_none());
-        draft.undo(false);
-        assert_eq!(draft.value.text, "A日本");
-        draft.undo(false);
-        assert_eq!(draft.value.text, "A");
-    }
-
-    #[test]
-    fn disabled_external_replacement_preserves_draft_and_marked_text() {
-        let mut draft = Draft::default();
-        draft.insert("draft");
-        draft.mark(5..5, "に", None);
-        let revision = draft.revision;
-        assert!(!draft.set_external_value("replacement", false));
-        assert_eq!(draft.value.text, "draftに");
-        assert_eq!(draft.marked, Some(5..8));
-        assert_eq!(draft.revision, revision);
-    }
-
-    #[test]
-    fn word_deletion_skips_separators_and_respects_selection() {
-        let mut draft = Draft::default();
-        draft.insert("fix the bug.  ");
-        draft.delete_to(|d| d.word_boundary(d.value.head, false), false);
-        assert_eq!(draft.value.text, "fix the ");
-        draft.select(5, false);
-        draft.delete_to(|d| d.word_boundary(d.value.head, false), false);
-        assert_eq!(draft.value.text, "fix he ");
-        draft.select(0, false);
-        draft.delete_to(|d| d.word_boundary(d.value.head, true), true);
-        assert_eq!(draft.value.text, " he ");
-        draft.select(1, false);
-        draft.select(3, true);
-        draft.delete_to(|_| 0, false);
-        assert_eq!(draft.value.text, "  ");
-        draft.undo(false);
-        assert_eq!(draft.value.text, " he ");
-    }
-
-    #[test]
-    fn line_deletion_stops_at_the_target_and_joins_lines_at_an_edge() {
-        let mut draft = Draft::default();
-        draft.insert("one\ntwo three");
-        draft.delete_to(|_| 4, false);
-        assert_eq!(draft.value.text, "one\n");
-        draft.delete_to(|_| 4, false);
-        assert_eq!(draft.value.text, "one");
-        draft.select(1, false);
-        draft.delete_to(|_| 3, true);
-        assert_eq!(draft.value.text, "o");
-        draft.undo(false);
-        draft.undo(false);
-        assert_eq!(draft.value.text, "one\n");
-    }
-
-    #[test]
-    fn word_deletion_keeps_graphemes_and_finishes_composition() {
-        let mut draft = Draft::default();
-        draft.insert("go 👩🏽‍💻");
-        draft.delete_to(|d| d.value.head, false);
-        assert_eq!(draft.value.text, "go ");
-        draft.mark(3..3, "に", None);
-        draft.delete_to(|d| d.word_boundary(d.value.head, false), false);
-        assert!(draft.marked.is_none());
-        assert_eq!(draft.value.text, "go ");
-    }
-
-    #[test]
-    fn unrelated_acceptance_cannot_clear_draft() {
-        let mut draft = Draft::default();
-        draft.insert("hello");
-        assert!(!draft.clear_if_unchanged("hello"));
-        draft.submit(true, false);
-        assert!(!draft.clear_if_unchanged("another message"));
-        assert_eq!(draft.value.text, "hello");
+    fn a_late_or_interrupted_second_escape_only_arms_again() {
+        let start = Instant::now();
+        let mut gesture = StopGesture::default();
+        assert!(!gesture.press(start));
+        assert!(!gesture.armed(start + STOP_WINDOW));
+        assert!(!gesture.press(start + STOP_WINDOW));
+        assert!(gesture.armed(start + STOP_WINDOW + STOP_WINDOW / 2));
+        // Typing or moving the cursor in between cancels the gesture.
+        gesture.disarm();
+        assert!(!gesture.press(start + STOP_WINDOW + STOP_WINDOW / 2));
+        assert!(gesture.press(start + STOP_WINDOW + STOP_WINDOW / 2));
     }
 }
