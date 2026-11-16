@@ -28,7 +28,7 @@ fn tool_tint(status: ToolStatus) -> u32 {
 }
 
 impl Plait {
-    fn live_message(&self, message: &Message) -> AnyElement {
+    fn live_message(&self, message: &Message, cx: &mut Context<Self>) -> AnyElement {
         let user = message.role == MessageRole::User;
         let body = if user { bubble() } else { prose() }
             .id((
@@ -41,7 +41,41 @@ impl Plait {
                 if user { "Your" } else { "Assistant" },
                 message.text
             ))
-            .child(message.text.clone());
+            .child(
+                column()
+                    .gap_1()
+                    .child(
+                        row()
+                            .justify_between()
+                            .child(tag(if user { "You" } else { "Plait" }, SUBTLE))
+                            .child(
+                                button(
+                                    SharedString::from(format!("copy-message-{}", message.id)),
+                                    "Copy",
+                                )
+                                .aria_label("Copy message source")
+                                .on_activate(cx, {
+                                    let text = message.text.clone();
+                                    move |_, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            text.clone(),
+                                        ))
+                                    }
+                                }),
+                            ),
+                    )
+                    .child(if !user {
+                        self.formatted
+                            .messages
+                            .get(&message.id)
+                            .map(|body| self.markdown(&message.id, body, cx))
+                            .unwrap_or_else(|| {
+                                prose().child(message.text.clone()).into_any_element()
+                            })
+                    } else {
+                        prose().child(message.text.clone()).into_any_element()
+                    }),
+            );
         if user {
             row().justify_end().child(body).into_any_element()
         } else {
@@ -92,6 +126,18 @@ impl Plait {
             .when(expanded, |el| {
                 el.child(
                     code_block()
+                        .child(
+                            button(
+                                SharedString::from(format!("copy-tool-{}", tool.id)),
+                                "Copy tool details",
+                            )
+                            .on_activate(cx, {
+                                let text = format!("{}\n{}", tool.input, tool.output);
+                                move |_, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
+                                }
+                            }),
+                        )
                         .child(div().child(text!(tool.input.clone())))
                         .child(
                             div()
@@ -112,11 +158,19 @@ impl Plait {
         };
         let tool = matches!(row, Row::Tool(_));
         let content = match row {
-            Row::Message(message) => self.live_message(message),
+            Row::Message(message) => self.live_message(message, cx),
             Row::Streaming(text) => column()
                 .gap_1()
                 .child(tag("Assistant · streaming", BLUE))
-                .child(prose().child(text!(text.to_owned())))
+                .child(
+                    self.formatted
+                        .live
+                        .as_ref()
+                        .map(|body| self.markdown("stream", body, cx))
+                        .unwrap_or_else(|| {
+                            prose().child(text!(text.to_owned())).into_any_element()
+                        }),
+                )
                 .into_any_element(),
             Row::Tool(tool) => self.live_tool(tool, cx),
         };
@@ -257,7 +311,7 @@ Tone::Filled,
             );
         }
         if pending {
-            let ready = self.host.connected && !self.host.submitting;
+            let ready = self.host.connected && !self.host.submitting && self.session.ready();
             banners.push(
                 banner(MUTED)
                     .child(div().flex_1().min_w_0().child(if self.host.submitting {

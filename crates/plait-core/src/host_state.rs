@@ -179,7 +179,7 @@ impl HostState {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PendingSubmit {
     pub request_id: String,
     pub text: String,
@@ -213,6 +213,11 @@ impl Submissions {
         }
         self.pending.insert(thread_id.into(), submission.clone());
         Ok(submission)
+    }
+
+    pub fn restore(&mut self, thread_id: String, pending: PendingSubmit) {
+        // Loading disk state must not replace a newer in-memory submission.
+        self.pending.entry(thread_id).or_insert(pending);
     }
 
     pub fn pending(&self, thread_id: &str) -> Option<&PendingSubmit> {

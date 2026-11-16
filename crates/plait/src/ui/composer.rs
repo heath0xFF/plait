@@ -353,6 +353,36 @@ impl Composer {
         }
     }
 
+    pub fn saved_draft(&self) -> (&str, u64, &Option<(String, u64)>) {
+        (
+            &self.draft.value.text,
+            self.draft.revision,
+            &self.draft.submitted,
+        )
+    }
+
+    pub fn restore_draft(
+        &mut self,
+        text: String,
+        revision: u64,
+        submitted: Option<(String, u64)>,
+        cx: &mut Context<Self>,
+    ) {
+        self.draft = Draft {
+            value: Snapshot {
+                anchor: text.len(),
+                head: text.len(),
+                text,
+            },
+            revision,
+            submitted,
+            ..Draft::default()
+        };
+        self.input_changed = true;
+        self.reveal_cursor = true;
+        cx.notify();
+    }
+
     pub fn set_enabled(&mut self, enabled: bool, reason: Option<String>, cx: &mut Context<Self>) {
         if self.enabled == enabled && self.reason == reason {
             return;
@@ -1159,7 +1189,7 @@ impl Render for Composer {
 
 #[cfg(test)]
 mod tests {
-    use super::Draft;
+    use super::{Draft, Snapshot};
 
     #[test]
     fn multiline_editing_selection_and_history() {
@@ -1304,6 +1334,25 @@ mod tests {
         draft.submit(true, false);
         draft.select(0, false);
         assert!(draft.clear_if_unchanged("hello"));
+    }
+
+    #[test]
+    fn restored_submission_keeps_the_edit_revision_guard() {
+        let restore = |revision| Draft {
+            value: Snapshot {
+                text: "hello".into(),
+                anchor: 5,
+                head: 5,
+            },
+            revision,
+            submitted: Some(("hello".into(), 3)),
+            ..Draft::default()
+        };
+        let mut unchanged = restore(3);
+        assert!(unchanged.clear_if_unchanged("hello"));
+        let mut edited_then_restored = restore(5);
+        assert!(!edited_then_restored.clear_if_unchanged("hello"));
+        assert_eq!(edited_then_restored.value.text, "hello");
     }
 
     #[test]

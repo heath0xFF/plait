@@ -4,7 +4,9 @@ mod conversation;
 mod host;
 mod jump;
 mod live_conversation;
+mod markdown;
 mod navigation;
+mod session;
 mod settings;
 #[cfg(all(test, target_os = "linux"))]
 mod snapshot;
@@ -14,7 +16,7 @@ use gpui::{prelude::*, *};
 use plait_core::{
     host_state::HostState,
     model::DiffMode,
-    state::{AppState, Load, project_name},
+    state::{AppState, Load},
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -52,7 +54,9 @@ pub struct Plait {
     composers: HashMap<String, Entity<composer::Composer>>,
     live_scroll: ListState,
     live_count: usize,
+    formatted: std::sync::Arc<plait_core::markdown::Transcript>,
     settings_open: bool,
+    show_all_models: bool,
     new_thread_open: bool,
     focus: FocusHandle,
     expanded_live_tools: HashSet<String>,
@@ -62,6 +66,7 @@ pub struct Plait {
     sidebar: bool,
     diagnostics: bool,
     preferences: jump::PreferenceState,
+    session: session::SessionState,
     picker_open: bool,
     notice: Option<String>,
     last_render_us: u128,
@@ -90,7 +95,9 @@ impl Plait {
             composers: HashMap::new(),
             live_scroll: ListState::new(0, ListAlignment::Bottom, px(300.)),
             live_count: 0,
+            formatted: Default::default(),
             settings_open: false,
+            show_all_models: false,
             new_thread_open: false,
             focus,
             expanded_live_tools: HashSet::new(),
@@ -100,6 +107,7 @@ impl Plait {
             sidebar: true,
             diagnostics: false,
             preferences: jump::PreferenceState::default(),
+            session: session::SessionState::default(),
             picker_open: false,
             notice: None,
             last_render_us: 0,
@@ -236,21 +244,7 @@ impl Plait {
                 match result {
                     Ok(Ok(Some(paths))) => {
                         if let Some(path) = paths.into_iter().next() {
-                            this.state.projects[0].name = project_name(&path);
-                            let epoch = this.host.epoch + 1;
-                            let submissions = std::mem::take(&mut this.host.submissions);
-                            this.host = HostState::new(path.clone());
-                            this.host.epoch = epoch;
-                            this.host.submissions = submissions;
-                            this.reconnect_host(window, cx);
-                            this.state.repository.open(path);
-                            // The new checkout's threads come from the reconnect.
-                            this.host_watch = None;
-                            this.settings_open = false;
-                            this.new_thread_open = false;
-                            this.file_scroll = UniformListScrollHandle::new();
-                            this.notice = None;
-                            this.pump(cx);
+                            this.change_checkout(path, window, cx);
                         }
                     }
                     Ok(Ok(None)) => {}
@@ -460,7 +454,7 @@ impl Render for Plait {
         } else if self.new_thread_open {
             "New local thread".to_owned()
         } else if real {
-            self.host.selected.clone().unwrap_or_default()
+            self.thread_title(self.host.selected.as_deref().unwrap_or_default())
         } else {
             project.name.clone()
         };
@@ -517,7 +511,12 @@ impl Render for Plait {
             )
             .on_action(cx.listener(|_, _: &Tab, window, cx| window.focus_next(cx)))
             .on_action(cx.listener(|_, _: &BackTab, window, cx| window.focus_prev(cx)))
-            .on_action(cx.listener(|_, _: &Close, window, _| window.remove_window()))
+            .on_action(
+                cx.listener(|this, _: &Close, window, cx| this.close_desktop(false, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &Quit, window, cx| this.close_desktop(true, window, cx)),
+            )
             .on_action(cx.listener(|_, _: &Minimize, window, _| window.minimize_window()))
             .map(|root| self.on_jump_actions(root, cx))
             .size_full()
@@ -539,6 +538,16 @@ impl Render for Plait {
                             .min_w_0()
                             .min_h_0()
                             .child(self.header(title, location, status, wide, cx))
+                            .when_some(self.session.note.clone(), |el, note| {
+                                el.child(
+                                    div()
+                                        .px_4()
+                                        .py_2()
+                                        .text_size(px(12.))
+                                        .text_color(rgb(AMBER))
+                                        .child(note),
+                                )
+                            })
                             .when_some(self.notice.clone(), |el, notice| {
                                 el.child(
                                     div()

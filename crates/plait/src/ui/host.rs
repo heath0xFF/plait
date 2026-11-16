@@ -9,6 +9,7 @@ use plait_core::{
     transcript::{self, Update},
 };
 use serde::de::DeserializeOwned;
+use std::sync::Arc;
 
 pub(super) struct WatchLease {
     cancel: Option<host::CancelWatch>,
@@ -36,7 +37,20 @@ impl Plait {
         + 'static,
     ) {
         let epoch = self.host.epoch;
+        let persist = matches!(request, Request::Submit { .. }) && self.session.required;
+        if persist {
+            self.capture_session(cx);
+        }
+        let journal = self.session.journal.clone();
         let task = cx.background_executor().spawn(async move {
+            if persist {
+                let journal = journal.ok_or_else(|| {
+                    std::io::Error::other(
+                        "Desktop recovery is unavailable. Submission was not sent.",
+                    )
+                })?;
+                journal.flush().map_err(std::io::Error::other)?;
+            }
             if let Request::ListThreads { checkout } | Request::CreateThread { checkout, .. } =
                 &mut request
             {
@@ -96,8 +110,11 @@ impl Plait {
             Request::ListThreads { checkout },
             window,
             cx,
-            |this, result, _, _| match result {
-                Ok(reply) => this.host.threads = reply.threads,
+            |this, result, window, cx| match result {
+                Ok(reply) => {
+                    this.host.threads = reply.threads;
+                    this.restore_thread_selection(window, cx);
+                }
                 Err(error) => this.host.error = Some(error.to_string()),
             },
         );
@@ -116,8 +133,12 @@ impl Plait {
         self.new_thread_open = false;
         self.show_changes = false;
         self.refresh_live_list(None);
+        self.formatted = Default::default();
         if !self.composers.contains_key(&id) {
             let composer = cx.new(|cx| Composer::new(window, cx));
+            self.restore_composer(&id, &composer, cx);
+            cx.observe(&composer, |this, _, cx| this.capture_session(cx))
+                .detach();
             let thread_id = id.clone();
             cx.subscribe_in(&composer, window, move |this, _, event, window, cx| {
                 if this.host.selected.as_ref() != Some(&thread_id) {
@@ -131,6 +152,7 @@ impl Plait {
             .detach();
             self.composers.insert(id.clone(), composer);
         }
+        self.capture_session(cx);
         self.sync_composer(cx);
         if self.host.connected {
             self.watch_thread(id, window, cx);
@@ -180,7 +202,21 @@ impl Plait {
                     .detach();
                 return;
             }
+            let mut formatted = Arc::new(plait_core::markdown::Transcript::default());
             while let Some(result) = snapshots.next().await {
+                if let Ok(snapshot) = &result {
+                    let snapshot = snapshot.clone();
+                    let previous = formatted.clone();
+                    formatted = cx
+                        .background_executor()
+                        .spawn(async move {
+                            Arc::new(plait_core::markdown::Transcript::update(
+                                &previous, &snapshot,
+                            ))
+                        })
+                        .await;
+                }
+                let prepared = formatted.clone();
                 let keep = this
                     .update_in(cx, |this, _, cx| {
                         if !this.host.accepts_watch(epoch, watch_epoch, &id) {
@@ -207,7 +243,21 @@ impl Plait {
                                     cx.notify();
                                     return false;
                                 }
+                                this.formatted = prepared;
                                 this.refresh_live_list(previous.as_deref());
+                                this.record_snapshot(cx);
+                                if previous
+                                    .as_ref()
+                                    .is_some_and(|snapshot| snapshot.status.busy())
+                                    && this
+                                        .host
+                                        .snapshot
+                                        .as_ref()
+                                        .is_some_and(|snapshot| !snapshot.status.busy())
+                                {
+                                    this.state.repository.refresh();
+                                    this.pump(cx);
+                                }
                                 this.sync_composer(cx);
                                 cx.notify();
                                 true
@@ -342,12 +392,26 @@ impl Plait {
         let Some(id) = self.host.selected.clone() else {
             return;
         };
-        if !self.host.connected || self.host.submitting {
+        if !self.host.connected || self.host.submitting || !self.session.ready() {
             return;
         }
         let Some(pending) = self.host.submissions.pending(&id).cloned() else {
             return;
         };
+        if self.session.required
+            && !self
+                .host
+                .threads
+                .iter()
+                .find(|thread| thread.id == id)
+                .is_some_and(|thread| self.saved_thread(thread).is_some())
+        {
+            self.host.error = Some(
+                "Saved submission identity does not match this thread. Nothing was sent.".into(),
+            );
+            cx.notify();
+            return;
+        }
         let composer = self.composers.get(&id).cloned();
         self.host.submitting = true;
         self.host.error = None;
@@ -388,6 +452,7 @@ impl Plait {
                         this.host.error = Some(error.to_string());
                     }
                 }
+                this.capture_session(cx);
             },
         );
         cx.notify();
@@ -481,7 +546,8 @@ impl Plait {
     }
 
     fn can_submit(&self) -> bool {
-        self.host.connected
+        self.session.ready()
+            && self.host.connected
             && !self.host.submitting
             && self.host.snapshot.as_ref().is_some_and(|snapshot| {
                 !snapshot.status.busy()
@@ -502,7 +568,11 @@ impl Plait {
             .snapshot
             .as_ref()
             .is_some_and(|snapshot| snapshot.status.busy());
-        let reason = if !self.host.connected {
+        let reason = if !self.session.ready() {
+            Some(
+                "Waiting for desktop recovery. Saved work must be available before sending.".into(),
+            )
+        } else if !self.host.connected {
             Some("Host disconnected. Reconnect to send.".into())
         } else if self.host.snapshot.is_none() {
             Some("Loading saved thread…".into())

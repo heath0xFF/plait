@@ -5,10 +5,8 @@ use std::{path::PathBuf, time::Instant};
 
 fn main() {
     let startup = Instant::now();
-    let path = std::env::args_os()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
+    let requested = std::env::args_os().nth(1).map(PathBuf::from);
+    let path = requested.clone().unwrap_or_else(|| PathBuf::from("."));
     gpui_platform::application()
         .with_assets(ui::theme::Assets)
         .run(move |cx| {
@@ -32,7 +30,13 @@ fn main() {
                     app_id: Some("dev.plait.desktop".into()),
                     ..Default::default()
                 },
-                |window, cx| cx.new(|cx| ui::Plait::new(path, startup, window, cx)),
+                |window, cx| {
+                    cx.new(|cx| {
+                        let mut view = ui::Plait::new(path, startup, window, cx);
+                        view.restore_desktop(requested, window, cx);
+                        view
+                    })
+                },
             ) {
                 eprintln!("Cannot open Plait: {error}");
                 cx.quit();

@@ -130,7 +130,7 @@ fn thread_snapshot(checkout: &Path, approval: bool) -> Snapshot {
             message(
                 "m2",
                 MessageRole::Assistant,
-                "I’ll change refresh() to queue the read and notify when it is ready. The edit is limited to src/review.rs; nothing else in the checkout is touched.",
+                "## Planned change\n\nI’ll change `refresh()` to **queue the read**, then notify when it is ready.\n\n```rust\npub fn refresh() {\n    queue_status();\n    notify_when_ready();\n}\n```\n\nThe edit is limited to `src/review.rs`.",
             ),
             message("m3", MessageRole::User, "Go ahead."),
         ],
@@ -241,6 +241,10 @@ impl Harness {
         self.update(|plait, _, _| {
             let previous = plait.host.snapshot.clone().expect("sample snapshot");
             change(Arc::make_mut(plait.host.snapshot.as_mut().unwrap()));
+            plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
+                &plait.formatted,
+                plait.host.snapshot.as_ref().unwrap(),
+            ));
             plait.refresh_live_list(Some(&previous));
         });
     }
@@ -286,6 +290,10 @@ impl Harness {
             // Mirror select_host_thread without opening a socket.
             plait.host.selected = Some(THREAD.into());
             plait.host.snapshot = Some(Arc::new(thread_snapshot(&checkout, approval)));
+            plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
+                &plait.formatted,
+                plait.host.snapshot.as_ref().unwrap(),
+            ));
             plait.settings_open = false;
             plait.new_thread_open = false;
             plait.show_changes = false;
