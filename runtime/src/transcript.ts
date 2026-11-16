@@ -105,6 +105,7 @@ export function update(snapshot: Snapshot, view: ConversationView, inputs: Input
   };
   for (const entry of view.entries) {
     appendPending(Number(entry.id));
+    if (entry.kind === 'pi.compaction') continue;
     for (const [index, message] of ((entry.model ?? []) as readonly Message[]).entries()) {
       if (message.role === 'user' || message.role === 'assistant') {
         const text = messageText(message);
@@ -129,7 +130,7 @@ export function update(snapshot: Snapshot, view: ConversationView, inputs: Input
   appendPending(Infinity);
   const live = view.docs['pi.live'] as unknown as {
     generation?: { attempt?: number; message?: Message; retry?: { at: number } }; tools?: { callId: string; output?: string }[];
-    runFailure?: { reason: string };
+    runFailure?: { reason: string }; compactionFailure?: unknown;
   } | undefined;
   for (const item of live?.tools ?? []) {
     const tool = tools.get(item.callId);
@@ -147,7 +148,9 @@ export function update(snapshot: Snapshot, view: ConversationView, inputs: Input
   pruneOrder(snapshot);
   boundSnapshot(snapshot);
   if (live?.runFailure && snapshot.status !== 'stopped' && snapshot.status !== 'interrupted') {
-    snapshot.error = live.runFailure.reason === 'turn_limit'
+    snapshot.error = live.runFailure.reason === 'model_error' && live.compactionFailure
+      ? { code: 'context_compaction', message: 'Conversation summarization failed. Full history is saved. Send a message to retry or choose another model.' }
+      : live.runFailure.reason === 'turn_limit'
       ? { code: 'turn_limit', message: `The run paused after ${MAX_TURNS} tool rounds, its limit. Send a message to continue.` }
       : { code: 'runtime_error', message: `Agent ended without an answer (${live.runFailure.reason}). Inspect the transcript before retrying.` };
   }

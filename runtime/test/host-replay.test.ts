@@ -87,7 +87,7 @@ test('production Pi runtime routes loopback replay, retains instructions, and re
   assert(JSON.stringify(replay.requests[0].body.messages).includes('Reply using the local fixture.'));
   assert(JSON.stringify(replay.requests[1].body.messages).includes('Loopback production-runtime fixture response.'));
   const tools = replay.requests[0].body.tools as { name: string }[];
-  assert.deepEqual(tools.map(tool => tool.name).sort(), ['command', 'edit', 'read', 'write']);
+  assert.deepEqual(tools.map(tool => tool.name).sort(), ['command', 'edit', 'read', 'read_output', 'write']);
   const messages = replay.requests[2].body.messages as { content: unknown }[];
   const blocks = messages.flatMap(message => Array.isArray(message.content) ? message.content : []) as {
     type: string; tool_use_id?: string; is_error?: boolean; content?: unknown;

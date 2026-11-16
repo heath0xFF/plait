@@ -318,7 +318,7 @@ export class Runtime {
       authorization = new RunAuthorization(mode === 'auto' ? automaticApproval : approvals);
       const session: Session = {
         snapshot, baseline: [], protected: [], rootIdentity: this.store.rootIdentity(id), buildCache: { store: this.directory, thread: id }, owned: new Map(), inputs: [], requestId,
-        authorization, approvals, lease, save, record: image => this.store.record(id, image), steered: new Map(),
+        authorization, approvals, lease, save, outputs: this.store.outputs, record: image => this.store.record(id, image), steered: new Map(),
       };
       // Read once here: the run keeps this policy, and a later change waits for the next run.
       session.commandPolicy = commandPolicy(this.store, snapshot.checkout, session.rootIdentity);

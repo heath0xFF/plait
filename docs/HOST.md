@@ -813,6 +813,44 @@ commands run under `/bin/sh`.
   a command that leaves more than 500 of them makes file tools and later runs
   fail until they are removed, committed, or ignored by directory.
 
+## Development tools
+
+The runtime exposes `read`, `read_output`, `edit`, `write`, and `command`.
+These are model tools, independent of the client socket protocol version.
+
+- `read`: `{path, offset?, limit?}` reads a regular UTF-8 checkout file. Offsets
+  count bytes from zero; limit defaults to 8192 and is 4–12000 bytes. The result
+  gives the next offset when more remains. Pages never split a UTF-8 character;
+  an offset inside a character is rejected. Reads keep the descriptor, root,
+  symlink, hard-link, and Git-metadata checks, without loading the whole file.
+- `edit`: `{path, old_text, new_text}` replaces exactly one occurrence in a file
+  up to 8 MiB. Approval compares its complete fingerprint, including content
+  hash, before atomic replacement. Tool arguments still have a 16384-byte bound.
+- `write`: `{path, content}` creates a new file and never overwrites an existing
+  one. The same argument bound applies.
+- `command`: `{command}` returns a bounded tail preview and a stored-output ID,
+  including after nonzero exit. Live output stays bounded. Captured stdout and
+  stderr are combined in arrival order, decoded independently as UTF-8.
+- `read_output`: `{id, offset?, limit?}` pages captured command output from the
+  current thread without executing anything. Range units and bounds match
+  `read`. After interruption, the original command tool-call ID also resolves
+  its most recent retained log. IDs grant no access to another thread or
+  arbitrary host files.
+
+The host stores command output in additive SQLite tables, outside the checkout,
+using the host store's durability settings. It retains the first 16 MiB of each
+command and the newest 32 logs per thread (at most 512 MiB of payload per thread).
+Crossing that limit is explicit; expired IDs return `not_found`. Interrupted
+captures are marked incomplete. Storage errors are reported without retrying the
+command. Deletions free database pages for reuse rather than shrinking the file.
+Logs may contain secrets a command prints; the host does not redact their contents.
+
+Automatic model-context compaction keeps all original history entries. Its
+internal summary entries are omitted from displayed messages. If a required
+summary fails, version 3 reports `context_compaction`; older clients retain the
+existing `runtime_error` shape. A new user submission can retry; host restart or
+history reads never restart model work automatically.
+
 ## Safety boundary
 
 Command rules in this section describe the default `sandboxed` policy. A

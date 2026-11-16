@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use std::{
     ffi::CString,
     fs::File,
-    io::{self, Read, Write},
+    io::{self, Read, Seek, SeekFrom, Write},
     os::{
         fd::{AsRawFd, FromRawFd},
         unix::fs::MetadataExt,
@@ -104,22 +104,55 @@ fn parent(
     Ok((directory, (*name).to_owned()))
 }
 
-fn text(file: &mut File) -> io::Result<String> {
+fn text(file: &mut File, limit: u64) -> io::Result<String> {
     let meta = file.metadata()?;
-    if !meta.is_file() || meta.nlink() != 1 || meta.len() > 262144 {
+    if !meta.is_file() || meta.nlink() != 1 || meta.len() > limit {
         return Err(io::Error::other(
-            "expected a regular, single-link file under 256 KiB",
+            "expected a regular, single-link file within the size limit",
         ));
     }
     let mut value = String::new();
-    (&mut *file).take(262145).read_to_string(&mut value)?;
-    if value.len() > 262144 {
+    (&mut *file).take(limit + 1).read_to_string(&mut value)?;
+    if value.len() as u64 > limit {
         return Err(io::Error::other("file too large"));
     }
     if stamp(&meta) != stamp(&file.metadata()?) {
         return Err(io::Error::other("file changed while reading"));
     }
     Ok(value)
+}
+
+// Range reads never allocate the whole file and keep the same descriptor/path checks.
+fn read_range(file: &mut File, request: &Value) -> io::Result<Value> {
+    let offset = request["offset"].as_u64().unwrap_or(0);
+    let limit = request["limit"].as_u64().unwrap_or(8192);
+    let meta = file.metadata()?;
+    if !meta.is_file() || meta.nlink() != 1 || offset > meta.len() || !(4..=12000).contains(&limit)
+    {
+        return Err(io::Error::other("invalid file range"));
+    }
+    file.seek(SeekFrom::Start(offset))?;
+    let mut bytes = Vec::new();
+    (&mut *file).take(limit).read_to_end(&mut bytes)?;
+    let end = match std::str::from_utf8(&bytes) {
+        Ok(_) => bytes.len(),
+        Err(error) if error.error_len().is_none() && offset + (bytes.len() as u64) < meta.len() => {
+            error.valid_up_to()
+        }
+        Err(_) => {
+            return Err(io::Error::other(
+                "range must start at a UTF-8 boundary in a UTF-8 file",
+            ));
+        }
+    };
+    let next = offset + end as u64;
+    let value = std::str::from_utf8(&bytes[..end]).map_err(io::Error::other)?;
+    if stamp(&meta) != stamp(&file.metadata()?) {
+        return Err(io::Error::other("file changed while reading"));
+    }
+    Ok(
+        json!({"text":value,"offset":offset,"next_offset":(next < meta.len()).then_some(next),"total_bytes":meta.len()}),
+    )
 }
 
 fn replace(
@@ -161,7 +194,10 @@ fn replace(
         let mut current = open_at(directory, name, libc::O_RDONLY)?;
         check_protected(&current, protected)?;
         let now = current.metadata()?;
-        if now.dev() != meta.dev() || now.ino() != meta.ino() || text(&mut current)? != before {
+        if now.dev() != meta.dev()
+            || now.ino() != meta.ino()
+            || text(&mut current, 8 * 1024 * 1024)? != before
+        {
             return Err(io::Error::other("file changed during approval or edit"));
         }
         if unsafe {
@@ -190,21 +226,32 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
     if args.len() != 3 && args.len() != 5 {
         return Err(io::Error::other("file expects action checkout path"));
     }
-    let request: Value = if args[0] == "edit" || args[0] == "write" {
+    let request: Value = if matches!(args[0].as_str(), "edit" | "write" | "read_range") {
         serde_json::from_reader(io::stdin().take(393217))?
     } else {
         Value::Null
     };
     let (directory, name) = parent(&args[1], &args[2], &request["protected"], &args[3..])?;
     let result = match args[0].as_str() {
-        "read" => {
+        "read_range" => {
+            let mut file = open_at(&directory, &name, libc::O_RDONLY)?;
+            read_range(&mut file, &request)?
+        }
+        "read" | "inspect" => {
             let mut file = open_at(&directory, &name, libc::O_RDONLY)?;
             let before = stamp(&file.metadata()?);
-            let value = text(&mut file)?;
+            let value = text(
+                &mut file,
+                if args[0] == "inspect" {
+                    8 * 1024 * 1024
+                } else {
+                    262144
+                },
+            )?;
             if before != stamp(&file.metadata()?) {
                 return Err(io::Error::other("file changed while reading"));
             }
-            json!({"text":value,"postimage":postimage(&file, &args[1], value.as_bytes())?})
+            json!({"text":if args[0] == "inspect" { "" } else { &value },"postimage":postimage(&file, &args[1], value.as_bytes())?})
         }
         "edit" | "write" => {
             let value = request["content"]
@@ -229,7 +276,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
                 // Opening a provenance-marked original for write can itself change ctime.
                 let mut file = open_at(&directory, &name, libc::O_RDONLY)?;
                 check_protected(&file, &request["protected"])?;
-                let before = text(&mut file)?;
+                let before = text(&mut file, 8 * 1024 * 1024)?;
                 if expected.is_empty() || before.matches(expected).count() != 1 {
                     return Err(io::Error::other("edit must match exactly once"));
                 }
@@ -248,7 +295,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
                     ));
                 }
                 let after = before.replacen(expected, value, 1);
-                if after.len() > 262144 {
+                if after.len() > 8 * 1024 * 1024 {
                     return Err(io::Error::other("result exceeds file bound"));
                 }
                 let replacement = replace(

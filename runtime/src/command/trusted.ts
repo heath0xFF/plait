@@ -21,7 +21,7 @@ export type TrustedRun = {
   forget?: (path: string) => void;
   loginEnvironment?: Promise<LoginEnvironment>;
 };
-export type TrustedOptions = { account?: Account; timeoutMs?: number };
+export type TrustedOptions = { account?: Account; timeoutMs?: number; capture?: (chunk: string) => void };
 
 const RESULT_LIMIT = 16384;
 const LISTED_PATHS = 20;
@@ -100,7 +100,7 @@ export async function refreshChanged(run: TrustedRun) {
     try {
       safePath(record.path, ignored);
       safePath(record.path, run.baseline);
-      const current = (await fileAction(root, 'read', record.path, undefined, run.lease?.fd, run.rootIdentity)).postimage;
+      const current = (await fileAction(root, 'inspect', record.path, undefined, run.lease?.fd, run.rootIdentity)).postimage;
       if (pathKey(current.path) !== pathKey(record.path)) continue;
       // Durable first, as for a file-tool write: memory never outlives the store.
       run.record?.(current);
@@ -134,7 +134,7 @@ export async function trustedCommand(run: TrustedRun, text: string, signal: Abor
   let result = ''; let failure: unknown;
   try {
     result = await runGuardian({ root, text, env: environment.env, checkoutFd: run.lease?.fd, trusted: true },
-      signal, output, options.timeoutMs ?? COMMAND_TIMEOUT_MS);
+      signal, output, options.timeoutMs ?? COMMAND_TIMEOUT_MS, options.capture);
   } catch (error) { failure = error ?? new Error('Command failed.'); }
   // Reconcile after success, failure, and Stop alike: a killed command still ran.
   try {

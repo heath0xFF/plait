@@ -12,7 +12,7 @@ type GuardianCommand = {
 } & ({ policy: string } | { trusted: true });
 
 // Only platform policy preparation may supply a production guardian request.
-export async function runGuardian(command: GuardianCommand, signal: AbortSignal, output: (chunk: string) => void, timeoutMs = COMMAND_TIMEOUT_MS): Promise<string> {
+export async function runGuardian(command: GuardianCommand, signal: AbortSignal, output: (chunk: string) => void, timeoutMs = COMMAND_TIMEOUT_MS, capture?: (chunk: string) => void): Promise<string> {
   if (signal.aborted) fail('permission_denied', 'Run stopped.');
   const executable = process.env.PLAIT_HOST_EXE;
   if (!executable) fail('internal', 'Host command guardian is not configured.');
@@ -41,6 +41,7 @@ export async function runGuardian(command: GuardianCommand, signal: AbortSignal,
     signal.addEventListener('abort', cancel, { once: true });
     const collect = (chunk: string) => {
       result = clipTail(result + chunk, 16384);
+      capture?.(chunk);
       output(clipTail(chunk, 4096));
     };
     // Pipe chunks can split UTF-8 bytes; each stream needs its own decoder.

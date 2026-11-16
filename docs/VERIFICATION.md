@@ -51,8 +51,8 @@ development tests only:
   client's strict types.
 
 Not verified: a live model, a real provider's reasoning or usage figures, the
-installed package, and any desktop view, since no view uses these operations
-yet. Thread-list backpressure relies on the code path shared with `watch` and
+installed package with a live provider. Desktop integration is covered by the
+conversation, composer, and navigation checks below. Thread-list backpressure relies on the code path shared with `watch` and
 has no test of its own.
 
 ## Recovery and startup regressions
@@ -224,3 +224,19 @@ keystrokes into their desktop.
 Record the build, OS, model/provider, steps, and result. Do not publish credentials,
 private prompts, or authentication seeds. Performance claims need separate,
 repeatable measurements; see the [ADEMark plan](ADEMARK.md).
+
+## Self-hosting tool and context coverage
+
+Runtime integration tests exercise ranged reads beyond the former whole-file
+bound, exact edits guarded by a full fingerprint, Unicode page boundaries,
+unsafe paths, and stale edit rejection. Command-output tests cover scope,
+retention, explicit size limits, incomplete capture, database reopen, and a
+failed real sandboxed command whose earlier diagnostics remain readable after
+a host restart without rerunning it.
+
+Real-host tests trigger the pinned runtime's automatic compaction policy with
+a scripted provider. They verify that the model keeps the task goal, original
+history remains available, internal summaries do not become user messages,
+restart during summarization makes no new requests until submission, and a
+failed required summary can recover. They establish orchestration and storage
+behavior, not the quality of summaries produced by a live model.

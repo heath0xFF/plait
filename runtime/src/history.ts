@@ -49,6 +49,8 @@ function assign(item: HistoryItem, field: Field, value: string, ref: string) {
 function entryUnit(entry: EntryRecord, placed: Map<number, string>): Unit {
   const id = Number(entry.id);
   const unit: Unit = { key: `${id}:0:0`, items: [], results: new Map(), bytes: 0, entry: id };
+  // A model-context summary is not a message the user sent; original entries remain readable.
+  if (entry.kind === 'pi.compaction') return unit;
   for (const [index, message] of ((entry.model ?? []) as readonly Message[]).entries()) {
     const ref = `e${id}.${index}`;
     if (message.role === 'user' || message.role === 'assistant') {

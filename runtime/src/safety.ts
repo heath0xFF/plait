@@ -102,7 +102,7 @@ export async function acquireCheckout(root: string) {
     return lease;
   } catch (error) { await lease.close(); throw error; }
 }
-export async function fileAction(root: string, action: string, path: string, input?: unknown, checkoutFd?: number, identity?: FileIdentity) {
+export async function fileAction<T = FileResult>(root: string, action: string, path: string, input?: unknown, checkoutFd?: number, identity?: FileIdentity) {
   safePath(path);
   const executable = process.env.PLAIT_HOST_EXE;
   if (!executable) fail('internal', 'Host file helper is not configured.');
@@ -112,8 +112,10 @@ export async function fileAction(root: string, action: string, path: string, inp
     });
     child.stdin!.on('error', () => {});
     child.stdin!.end(input === undefined ? undefined : JSON.stringify(input));
-    return await new Promise<FileResult>((resolve, reject) => {
+    return await new Promise<T>((resolve, reject) => {
       let output = ''; let diagnostic = '';
+      child.stdout!.setEncoding('utf8');
+      child.stderr!.setEncoding('utf8');
       child.stderr!.on('data', data => { diagnostic = (diagnostic + data).slice(-4096); });
       const timer = setTimeout(() => child.kill('SIGKILL'), 10000);
       child.stdout!.on('data', data => { output += data; if (output.length > 1048576) child.kill('SIGKILL'); });

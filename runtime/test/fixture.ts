@@ -4,7 +4,7 @@ import type { FauxResponseStep } from '@earendil-works/pi-ai/providers/faux';
 import { Runtime } from '../src/runtime.ts';
 import { defineExtension, hook, ToolTask } from '@earendil-works/pi-durable';
 import { appendFile } from 'node:fs/promises';
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ToolState } from '../src/tools.ts';
 import { RunAuthorization } from '../src/authorization.ts';
@@ -13,6 +13,8 @@ import { serve } from '../src/stdio.ts';
 writeFileSync(join(process.argv[2], 'fixture-processes.json'), JSON.stringify({ node: process.pid, host: process.ppid, store: process.argv[2] }));
 const models = createModels();
 const mode = process.env.PLAIT_TEST_SCENARIO;
+const compacting = mode?.startsWith('self-host-compaction');
+const fast = compacting || mode === 'v3-long';
 // Records what the model is told (instructions and tool declarations) for one request.
 const recordContext = (context: { messages: unknown }) => {
   appendFileSync(join(process.argv[2], 'model-contexts.jsonl'), JSON.stringify(context.messages) + '\n');
@@ -20,12 +22,29 @@ const recordContext = (context: { messages: unknown }) => {
 };
 // Version 3 scenarios add a reasoning model; the long one streams fast enough for a large reply.
 const faux = fauxProvider({
-  tokensPerSecond: mode === 'v3-long' ? 1e8 : 120, tokenSize: mode === 'v3-long' ? { min: 2048, max: 2048 } : { min: 1, max: 1 },
+  tokensPerSecond: fast ? 1e8 : 120, tokenSize: fast ? { min: 2048, max: 2048 } : { min: 1, max: 1 },
+  ...(compacting ? { models: [{ id: 'faux-1', name: 'Faux Model', contextWindow: 65536 }] } : {}),
   ...(mode?.startsWith('v3') ? { models: [{ id: 'faux-1', name: 'Faux Model' }, { id: 'faux-think', name: 'Faux Thinking', reasoning: true, contextWindow: 64000 }] } : {}),
 });
-const call = (name: string, args: Record<string, string>, id: string) => fauxAssistantMessage([fauxToolCall(name, args, { id })], { stopReason: 'toolUse' });
+const call = (name: string, args: Record<string, string | number>, id: string) => fauxAssistantMessage([fauxToolCall(name, args, { id })], { stopReason: 'toolUse' });
 const overloaded = () => fauxAssistantMessage([], { stopReason: 'error', errorMessage: 'overloaded_error: SECRET_PROVIDER_TOKEN_DO_NOT_LEAK' });
-const responses: FauxResponseStep[] = mode === 'v3-thinking' ? [
+const responses: FauxResponseStep[] = compacting ? Array.from({ length: 40 }, () => async (context: { messages: unknown }) => {
+  const text = JSON.stringify(context.messages);
+  const summary = text.includes('You are a context summarization assistant');
+  appendFileSync(join(process.argv[2], 'compaction-observed.jsonl'), JSON.stringify({ summary, goal: text.includes('KEEP_SELF_HOST_GOAL'), length: text.length }) + '\n');
+  if (summary) {
+    if (mode === 'self-host-compaction-crash') {
+      writeFileSync(join(process.argv[2], 'summary-started'), 'ready');
+      await new Promise(() => {});
+    }
+    if (mode === 'self-host-compaction-failure') return fauxAssistantMessage([], { stopReason: 'error', errorMessage: 'Fixture summary failed.' });
+    return fauxAssistantMessage('KEEP_SELF_HOST_GOAL: finish the project. Preserve notes.txt and continue the review.');
+  }
+  return fauxAssistantMessage('Development record. '.repeat(2500));
+}) : mode === 'self-host-script'
+  ? (JSON.parse(readFileSync(join(process.argv[2], 'script.json'), 'utf8')) as { name?: string; args?: Record<string, string | number>; id?: string; text?: string }[])
+    .map(step => step.name ? call(step.name, step.args!, step.id!) : fauxAssistantMessage([fauxText(step.text!)]))
+  : mode === 'v3-thinking' ? [
   fauxAssistantMessage([fauxThinking('Plan: read the notes first. '.repeat(20).trim()), fauxToolCall('read', { path: 'notes.txt' }, { id: 'think-read' })], { stopReason: 'toolUse' }),
   fauxAssistantMessage([fauxThinking('The file says before.'), fauxText('The notes say before.')]),
 ] : mode === 'v3-long' ? [
