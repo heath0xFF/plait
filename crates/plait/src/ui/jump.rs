@@ -28,6 +28,9 @@ pub(super) enum PreferenceGroup {
 #[derive(Default)]
 pub(super) struct PreferenceState {
     pub value: Preferences,
+    pub loaded: bool,
+    writable: bool,
+    writes: preferences::SaveQueue,
     /// `None` when the platform gives no home directory; changes then last one session.
     path: Option<std::path::PathBuf>,
     /// Only the newest save may report its result.
@@ -58,14 +61,18 @@ impl Plait {
 
     /// Select the Nth thread, machine, or project in sidebar order.
     pub(super) fn jump_to(&mut self, number: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(jump) = preferences::jump(
+        let Some(jump) = plait_core::navigation::jump(
             &self.state.projects,
-            self.host.threads.len(),
+            &self.host.threads,
+            &self.filtered_threads(cx),
             self.preferences.value.jump_target,
             number,
         ) else {
             return;
         };
+        self.navigation
+            .collapsed
+            .remove(&self.state.projects[jump.project].checkout);
         self.state.collapsed_projects.remove(&jump.project);
         self.state
             .collapsed_machines
@@ -86,19 +93,38 @@ impl Plait {
             let _ = this.update(cx, |this, cx| {
                 let state = &mut this.preferences;
                 state.path = path;
-                // A choice made before loading finished is newer than the file.
-                if state.revision == 0 {
-                    state.failed = !matches!(loaded, Some(Ok(_)));
-                    match loaded {
-                        Some(Ok(value)) => state.value = value,
-                        Some(Err(error)) => state.note = Some(error),
-                        None => {
-                            state.note = Some(
-                                "No home directory; preferences last until Plait quits.".into(),
-                            )
+                state.loaded = true;
+                state.writable = matches!(loaded, Some(Ok(_)));
+                let edited = state.value.clone();
+                state.failed = !state.writable;
+                match loaded {
+                    Some(Ok(value)) => match preferences::merge_startup(value.clone(), &edited) {
+                        Ok(merged) => {
+                            if merged != value {
+                                state.revision += 1;
+                                state.writes.queue(state.revision, merged.clone());
+                            }
+                            state.value = merged;
                         }
+                        Err(error) => {
+                            state.writable = false;
+                            state.failed = true;
+                            state.note = Some(error);
+                        }
+                    },
+                    Some(Err(error)) => state.note = Some(error),
+                    None => {
+                        state.note =
+                            Some("No home directory; preferences last until Plait quits.".into())
                     }
                 }
+                this.pump_preferences(cx);
+                let mut value = this.preferences.value.clone();
+                value.navigation.observe(&this.host.threads, None, true);
+                if value != this.preferences.value {
+                    this.persist_navigation(value, cx);
+                }
+                this.rebuild_projects(cx);
                 cx.notify();
             });
         })
@@ -126,40 +152,64 @@ impl Plait {
         state.revision += 1;
         state.group = Some(group);
         state.failed = state.path.is_none();
-        let revision = state.revision;
-        let Some(path) = state.path.clone() else {
-            state.note =
-                Some("Not saved: no preferences location. Applies until Plait quits.".into());
+        if !state.loaded {
+            state.note = Some("Waiting for saved preferences…".into());
+        } else if !state.writable {
+            state.failed = true;
+            state.note = Some("Preferences were not loaded safely. Changes last until Plait quits; the saved file was left intact.".into());
+        } else {
+            state.note = Some("Saving…".into());
+            state.writes.queue(state.revision, value);
+            self.pump_preferences(cx);
+        }
+        cx.notify();
+    }
+
+    /// Background activity may update memory before loading, but cannot replace
+    /// an unreadable file or suppress its error message.
+    pub(super) fn persist_navigation(&mut self, value: Preferences, cx: &mut Context<Self>) {
+        if self.preferences.loaded && self.preferences.writable {
+            self.set_preferences(value, PreferenceGroup::View, cx);
+        } else {
+            self.preferences.value.navigation = value.navigation;
             cx.notify();
+        }
+    }
+
+    fn pump_preferences(&mut self, cx: &mut Context<Self>) {
+        if !self.preferences.writable {
+            return;
+        }
+        let Some(path) = self.preferences.path.clone() else {
             return;
         };
-        state.note = Some("Saving…".into());
+        let Some((revision, value)) = self.preferences.writes.next_write() else {
+            return;
+        };
         let task = cx
             .background_executor()
             .spawn(async move { preferences::save(&path, &value) });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                if this.preferences.revision != revision {
-                    return;
-                }
-                this.preferences.failed = result.is_err();
-                this.preferences.note = Some(match result {
-                    Ok(()) => "Saved.".into(),
-                    Err(error) => {
-                        let note = format!("{error} The choice applies until Plait quits.");
-                        // A picker is where favorites change; report it there too.
-                        if group == PreferenceGroup::Models {
-                            this.overlay_note(Some(note.clone().into()), cx);
-                        }
-                        note
+                this.preferences.writes.finish(revision);
+                if this.preferences.revision == revision {
+                    this.preferences.failed = result.is_err();
+                    this.preferences.note = Some(match result {
+                        Ok(()) => "Saved.".into(),
+                        Err(error) => format!("{error} The choice applies until Plait quits."),
+                    });
+                    if this.preferences.failed
+                        && this.preferences.group == Some(PreferenceGroup::Models)
+                    {
+                        this.overlay_note(this.preferences.note.clone().map(Into::into), cx);
                     }
-                });
+                }
+                this.pump_preferences(cx);
                 cx.notify();
             });
         })
         .detach();
-        cx.notify();
     }
 
     /// The preference file's state, for the section whose control changed it.

@@ -12,8 +12,8 @@ use serde::de::DeserializeOwned;
 use std::sync::Arc;
 
 pub(super) struct WatchLease {
-    cancel: Option<host::CancelWatch>,
-    executor: BackgroundExecutor,
+    pub(super) cancel: Option<host::CancelWatch>,
+    pub(super) executor: BackgroundExecutor,
 }
 impl Drop for WatchLease {
     fn drop(&mut self) {
@@ -28,7 +28,7 @@ impl Drop for WatchLease {
 }
 
 impl Plait {
-    fn host_request<T: DeserializeOwned + Send + 'static>(
+    pub(super) fn host_request<T: DeserializeOwned + Send + 'static>(
         &mut self,
         mut request: Request,
         window: &mut Window,
@@ -77,6 +77,8 @@ impl Plait {
             return;
         }
         self.host_watch = None;
+        self.navigation.watch = None;
+        self.navigation.generation += 1;
         self.host.reconnect();
         self.sync_composer(cx);
         self.host_request(
@@ -107,6 +109,10 @@ impl Plait {
         if !self.host.connected {
             return;
         }
+        if self.host.protocol() >= 3 {
+            self.watch_all_threads(window, cx);
+            return;
+        }
         let checkout = self.host.checkout.clone();
         self.host_request::<host::ThreadsReply>(
             Request::ListThreads { checkout },
@@ -115,6 +121,7 @@ impl Plait {
             |this, result, window, cx| match result {
                 Ok(reply) => {
                     this.host.threads = reply.threads;
+                    this.rebuild_projects(cx);
                     this.restore_thread_selection(window, cx);
                 }
                 Err(error) => this.host.error = Some(error.to_string()),
@@ -128,6 +135,27 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let Some(checkout) = self
+            .host
+            .threads
+            .iter()
+            .find(|thread| thread.id == id)
+            .map(|thread| thread.checkout.clone())
+        else {
+            return;
+        };
+        if checkout != self.host.checkout {
+            if self.host.creating || self.host.pending_create.is_some() {
+                self.notice =
+                    Some("Resolve the pending thread creation before changing checkout.".into());
+                cx.notify();
+                return;
+            }
+            self.change_checkout(checkout, window, cx);
+        }
+        self.mark_thread_read(&id, cx);
+        self.navigation.menu = None;
+        self.navigation.rename = None;
         window.focus(&self.focus, cx);
         self.host_watch = None;
         self.host.select(Some(id.clone()));
@@ -553,6 +581,7 @@ impl Plait {
 
     fn can_submit(&self) -> bool {
         self.session.ready()
+            && self.navigation.available.get(&self.host.checkout) != Some(&false)
             && self.host.connected
             && !self.host.submitting
             && self.host.snapshot.as_ref().is_some_and(|snapshot| {
@@ -575,7 +604,9 @@ impl Plait {
             .snapshot
             .as_ref()
             .is_some_and(|snapshot| snapshot.status.busy());
-        let reason = if !self.session.ready() {
+        let reason = if self.navigation.available.get(&self.host.checkout) == Some(&false) {
+            Some("Checkout folder unavailable. Open its current location before sending.".into())
+        } else if !self.session.ready() {
             Some(
                 "Waiting for desktop recovery. Saved work must be available before sending.".into(),
             )

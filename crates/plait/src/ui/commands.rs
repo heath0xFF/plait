@@ -12,13 +12,14 @@ use super::{
     theme::*,
 };
 use gpui::{prelude::*, *};
-use plait_core::{host::ModelChoice, preferences};
+use plait_core::host::ModelChoice;
 use std::{collections::HashMap, time::Instant};
 
 pub(super) enum Command {
     /// An application action, dispatched as its menu item or shortcut would be.
     Action(Box<dyn Action>),
     OpenThread(String),
+    OpenProject(std::path::PathBuf),
     NewThread(ModelChoice),
     /// A model chosen in the model picker. The picker's purpose gives it meaning.
     Model(ModelChoice),
@@ -29,6 +30,7 @@ impl Clone for Command {
         match self {
             Self::Action(action) => Self::Action(action.boxed_clone()),
             Self::OpenThread(id) => Self::OpenThread(id.clone()),
+            Self::OpenProject(path) => Self::OpenProject(path.clone()),
             Self::NewThread(choice) => Self::NewThread(choice.clone()),
             Self::Model(choice) => Self::Model(choice.clone()),
         }
@@ -88,25 +90,40 @@ fn action_items(window: &Window) -> Vec<Item> {
 
 impl Plait {
     /// Threads of the open checkout, by title, with the Cmd-number that reaches each.
-    fn thread_items(&self) -> Vec<Item> {
-        let count = self.host.threads.len();
+    fn thread_items(&self, cx: &App) -> Vec<Item> {
+        let indices = self.filtered_threads(cx);
         let target = self.preferences.value.jump_target;
         let mut numbers = HashMap::new();
         for number in 1..=9 {
-            if let Some(jump) = preferences::jump(&self.state.projects, count, target, number) {
+            if let Some(jump) = plait_core::navigation::jump(
+                &self.state.projects,
+                &self.host.threads,
+                &indices,
+                target,
+                number,
+            ) {
                 numbers.entry(jump.thread).or_insert(number);
             }
         }
-        let threads = self.host.threads.iter().enumerate();
+        let threads = self
+            .host
+            .threads
+            .iter()
+            .enumerate()
+            .filter(|(_, thread)| self.navigation.archived || thread.archived != Some(true));
         threads
             .map(|(index, thread)| {
                 let model = model_picker::model_label(&thread.model);
                 let item = Item::new(
                     format!("thread:{}", thread.id),
-                    self.thread_title(&thread.id),
+                    self.summary_title(thread),
                     Command::OpenThread(thread.id.clone()),
                 )
-                .detail(format!("{} · {model}", thread.status.label()))
+                .detail(format!(
+                    "{} · {} · {model}",
+                    plait_core::state::project_name(&thread.checkout),
+                    plait_core::navigation::state_label(thread)
+                ))
                 .section("Threads")
                 .glyph("thread", VIOLET)
                 .hint(
@@ -153,8 +170,27 @@ impl Plait {
     }
 
     /// Everything the command palette lists, in the order shown before typing.
-    fn command_items(&self, window: &Window) -> Vec<Item> {
-        let mut items = self.thread_items();
+    fn command_items(&self, window: &Window, cx: &App) -> Vec<Item> {
+        let mut items = self.thread_items(cx);
+        let mut preferences = self.preferences.value.navigation.clone();
+        preferences.hidden.clear();
+        for project in plait_core::navigation::projects(
+            &self.host.threads,
+            &preferences,
+            &self.host.checkout,
+            &self.active_project().machines[0].name,
+        ) {
+            items.push(
+                Item::new(
+                    format!("project:{}", project.checkout.display()),
+                    project.name,
+                    Command::OpenProject(project.checkout.clone()),
+                )
+                .detail(project.checkout.display().to_string())
+                .section("Projects")
+                .glyph("folder", MINT),
+            );
+        }
         items.extend(action_items(window));
         items.extend(self.new_thread_items());
         items
@@ -170,7 +206,7 @@ impl Plait {
         if open {
             return;
         }
-        let items = self.command_items(window);
+        let items = self.command_items(window, cx);
         let options = Options {
             name: "Command palette".into(),
             placeholder: "Search threads, commands, and models…".into(),
@@ -281,6 +317,11 @@ impl Plait {
                     self.interaction = Some(Instant::now());
                     self.select_host_thread(id, window, cx);
                     self.focus_composer(window, cx);
+                }
+            }
+            Command::OpenProject(path) => {
+                if self.host.pending_create.is_none() && !self.host.creating {
+                    self.change_checkout(path, window, cx);
                 }
             }
             Command::NewThread(choice) => self.new_thread(Some(choice), window, cx),

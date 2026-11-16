@@ -12,7 +12,7 @@ use std::{
 };
 
 /// Larger files are not ours; refuse them rather than parse arbitrary input.
-const FILE_LIMIT: u64 = 64 * 1024;
+const FILE_LIMIT: u64 = 512 * 1024;
 
 /// What Cmd-1 through Cmd-9 select, counted in sidebar order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +76,7 @@ impl PartialEq<ModelChoice> for ModelKey {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
+    pub navigation: crate::navigation::Preferences,
     pub jump_target: JumpTarget,
     /// Ask before each edit and command. Off by default: runs approve their own
     /// edits and sandboxed commands, and file protections still apply.
@@ -119,6 +120,7 @@ impl Preferences {
 
     /// A hand-edited file may repeat entries or exceed the limits.
     fn normalize(mut self) -> Self {
+        self.navigation.normalize();
         for list in [&mut self.favorite_models, &mut self.recent_models] {
             let mut seen = std::collections::HashSet::new();
             list.retain(|key| key.fits() && seen.insert(key.clone()));
@@ -132,6 +134,83 @@ impl Preferences {
 fn trim_oldest(list: &mut Vec<ModelKey>, limit: usize) {
     let excess = list.len().saturating_sub(limit);
     list.drain(..excess);
+}
+
+/// Overlay changes made before disk loading finished without losing untouched
+/// settings from disk. New preference fields participate through serialization.
+pub fn merge_startup(loaded: Preferences, edited: &Preferences) -> Result<Preferences, String> {
+    fn merge(
+        loaded: serde_json::Value,
+        defaults: serde_json::Value,
+        edited: serde_json::Value,
+    ) -> serde_json::Value {
+        if edited == defaults {
+            return loaded;
+        }
+        match (loaded, defaults, edited) {
+            (
+                serde_json::Value::Object(mut loaded),
+                serde_json::Value::Object(defaults),
+                serde_json::Value::Object(edited),
+            ) => {
+                for (key, value) in edited {
+                    let old = loaded.remove(&key).unwrap_or(serde_json::Value::Null);
+                    let default = defaults
+                        .get(&key)
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
+                    loaded.insert(key, merge(old, default, value));
+                }
+                serde_json::Value::Object(loaded)
+            }
+            (_, _, edited) => edited,
+        }
+    }
+    let opened = loaded.navigation.opened.clone();
+    let encode = |preferences: &Preferences| {
+        serde_json::to_value(preferences).map_err(|_| "Cannot merge saved preferences.".to_owned())
+    };
+    let value = merge(
+        encode(&loaded)?,
+        encode(&Preferences::default())?,
+        encode(edited)?,
+    );
+    let mut preferences: Preferences =
+        serde_json::from_value(value).map_err(|_| "Cannot merge saved preferences.".to_owned())?;
+    for checkout in opened {
+        if !preferences.navigation.hidden.contains(&checkout) {
+            preferences.navigation.open(&checkout);
+        }
+    }
+    Ok(preferences)
+}
+
+/// One atomic write at a time; edits during it coalesce to the newest snapshot.
+#[derive(Default)]
+pub struct SaveQueue {
+    pending: Option<(u64, Preferences)>,
+    running: Option<u64>,
+}
+
+impl SaveQueue {
+    pub fn queue(&mut self, revision: u64, value: Preferences) {
+        self.pending = Some((revision, value));
+    }
+
+    pub fn next_write(&mut self) -> Option<(u64, Preferences)> {
+        if self.running.is_some() {
+            return None;
+        }
+        let next = self.pending.take()?;
+        self.running = Some(next.0);
+        Some(next)
+    }
+
+    pub fn finish(&mut self, revision: u64) {
+        if self.running == Some(revision) {
+            self.running = None;
+        }
+    }
 }
 
 /// The per-user location, from the environment. `None` without a home directory.
@@ -171,6 +250,11 @@ pub fn load(path: &Path) -> Result<Preferences, String> {
 /// Replace the file atomically so a crash never leaves a half-written file.
 pub fn save(path: &Path, preferences: &Preferences) -> Result<(), String> {
     let fail = |error: std::io::Error| format!("Cannot save preferences: {error}");
+    let bytes = serde_json::to_vec_pretty(preferences)
+        .map_err(|error| format!("Cannot encode preferences: {error}"))?;
+    if bytes.len() as u64 + 1 > FILE_LIMIT {
+        return Err("Preferences exceed the file limit; the saved file was left intact.".into());
+    }
     let directory = path
         .parent()
         .ok_or_else(|| "Cannot save preferences: no parent directory.".to_owned())?;
@@ -178,7 +262,7 @@ pub fn save(path: &Path, preferences: &Preferences) -> Result<(), String> {
     let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
     let result = (|| {
         let mut file = fs::File::create(&temporary)?;
-        serde_json::to_writer_pretty(&mut file, preferences).map_err(std::io::Error::other)?;
+        file.write_all(&bytes)?;
         file.write_all(b"\n")?;
         file.sync_all()?;
         fs::rename(&temporary, path)
@@ -255,6 +339,48 @@ mod tests {
             std::env::temp_dir().join(format!("plait-preferences-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
         path
+    }
+
+    #[test]
+    fn startup_edits_keep_other_saved_settings_and_projects() {
+        let mut loaded = Preferences {
+            ask_before_actions: true,
+            ..Default::default()
+        };
+        loaded.navigation.open(std::path::Path::new("/previous"));
+        loaded.toggle_favorite(&choice("p", "m"));
+        let mut edited = Preferences {
+            hide_inspector: true,
+            ..Default::default()
+        };
+        edited.navigation.open(std::path::Path::new("/current"));
+        let merged = merge_startup(loaded, &edited).unwrap();
+        assert!(merged.ask_before_actions && merged.hide_inspector);
+        assert!(merged.is_favorite(&choice("p", "m")));
+        assert_eq!(merged.navigation.opened.len(), 2);
+    }
+
+    #[test]
+    fn preference_writes_coalesce_without_overlapping_or_finishing_the_wrong_write() {
+        let mut writes = SaveQueue::default();
+        writes.queue(1, Preferences::default());
+        assert_eq!(writes.next_write().unwrap().0, 1);
+        let mut latest = Preferences {
+            hide_inspector: true,
+            ..Default::default()
+        };
+        writes.queue(2, latest.clone());
+        latest.ask_before_actions = true;
+        writes.queue(3, latest.clone());
+        assert!(writes.next_write().is_none());
+        writes.finish(0);
+        assert!(writes.next_write().is_none());
+        writes.finish(1);
+        assert_eq!(writes.next_write(), Some((3, latest)));
+        writes.finish(1);
+        assert!(writes.next_write().is_none());
+        writes.finish(3);
+        assert!(writes.next_write().is_none());
     }
 
     #[test]
@@ -422,6 +548,21 @@ mod tests {
     }
 
     #[test]
+    fn an_oversized_save_does_not_replace_a_readable_file() {
+        let root = scratch("oversized-save");
+        let path = root.join("desktop.json");
+        save(&path, &Preferences::default()).unwrap();
+        let mut value = Preferences::default();
+        value
+            .navigation
+            .observed
+            .insert("x".repeat(FILE_LIMIT as usize), Default::default());
+        assert!(save(&path, &value).unwrap_err().contains("left intact"));
+        assert_eq!(load(&path).unwrap(), Preferences::default());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn save_failure_is_reported() {
         let root = scratch("blocked");
         fs::create_dir_all(&root).unwrap();
@@ -439,10 +580,12 @@ mod tests {
         };
         vec![
             Project {
+                checkout: "/fixture".into(),
                 name: "plait".into(),
                 machines: vec![machine("zaphod", true), machine("arthur", false)],
             },
             Project {
+                checkout: "/fixture".into(),
                 name: "notes".into(),
                 machines: vec![machine("arthur", false)],
             },

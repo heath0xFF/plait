@@ -130,7 +130,7 @@ fn fixture_repository(root: &Path) -> PathBuf {
     .unwrap();
     std::fs::write(repository.join("notes.md"), "# Read-only review\n").unwrap();
     std::fs::remove_file(repository.join("README.md")).unwrap();
-    repository
+    repository.canonicalize().unwrap()
 }
 
 fn choice() -> ModelChoice {
@@ -806,8 +806,14 @@ fn keys_drive_the_palette_and_picker() {
     press(&mut harness, "cmd-k");
     assert_eq!(
         shown(&mut harness).len(),
-        2 + 18 + 5,
-        "threads, commands, models"
+        2 + super::actions::ACTIONS
+            .iter()
+            .filter(|action| action.place != super::actions::Place::Hidden
+                && action.id != "palette.toggle")
+            .count()
+            + 1
+            + 5,
+        "threads, commands, projects, models"
     );
     press(&mut harness, "escape");
     harness.update(|plait, _, _| assert!(plait.overlay.is_none()));
@@ -917,6 +923,7 @@ fn walk(output: Option<&Path>) {
         picker_walk(&mut harness, &repository, suffix);
         new_thread_walk(&mut harness, &repository, suffix);
         inspector_walk(&mut harness, &repository, suffix);
+        navigation_walk(&mut harness, &repository, suffix);
         // Threads exist, but none is open.
         harness.update(|plait, _, _| {
             plait.host_watch = None;
@@ -1621,4 +1628,193 @@ fn snapshot() {
     };
     std::fs::create_dir_all(&output).unwrap();
     walk(Some(&output));
+}
+
+fn navigation_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
+    harness.connect(repository, false);
+    let root = repository.to_owned();
+    harness.update(move |plait, _, cx| {
+        plait.sidebar = true;
+        plait.host.status.as_mut().unwrap().protocol_version = 3;
+        plait.preferences.value.navigation = Default::default();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        plait.host.threads = (0..28)
+            .map(|index| {
+                let checkout = match index % 3 {
+                    0 => root.clone(),
+                    1 => root.join("sample-api"),
+                    _ => root.join("sample-long-project-name-that-must-truncate"),
+                };
+                ThreadSummary {
+                    id: if index == 0 {
+                        THREAD.into()
+                    } else {
+                        format!("sample-navigation-{index}")
+                    },
+                    checkout,
+                    model: choice(),
+                    title: Some(
+                        [
+                            "Review parser recovery and Unicode boundaries",
+                            "Repair the failing tests",
+                            "Explain deployment configuration",
+                            "Update documentation",
+                        ][index % 4]
+                            .into(),
+                    ),
+                    status: [
+                        ThreadStatus::Running,
+                        ThreadStatus::Idle,
+                        ThreadStatus::AwaitingApproval,
+                        ThreadStatus::Error,
+                        ThreadStatus::Stopped,
+                        ThreadStatus::Interrupted,
+                    ][index % 6],
+                    created_at: Some(now - 86_400_000),
+                    updated_at: Some(now - index as u64 * 180_000),
+                    archived: Some(index == 3),
+                    pending_approval: Some(index % 6 == 2),
+                }
+            })
+            .collect();
+        plait
+            .preferences
+            .value
+            .navigation
+            .observe(&plait.host.threads, None, true);
+        plait
+            .preferences
+            .value
+            .navigation
+            .unread
+            .insert("sample-navigation-1".into());
+        plait
+            .preferences
+            .value
+            .navigation
+            .unread
+            .insert("sample-navigation-3".into());
+        plait.rebuild_projects(cx);
+        for project in &plait.state.projects {
+            plait
+                .navigation
+                .available
+                .insert(project.checkout.clone(), project.checkout == root);
+        }
+    });
+    harness.capture(&format!("navigation-projects-{suffix}"));
+    harness.update(|plait, _, cx| {
+        plait.navigation.attention = true;
+        cx.notify();
+    });
+    harness.capture(&format!("navigation-attention-{suffix}"));
+    harness.update(|plait, _, cx| {
+        plait.navigation.attention = false;
+        plait.navigation.archived = true;
+        cx.notify();
+    });
+    harness.capture(&format!("navigation-archived-{suffix}"));
+    harness.update(|plait, window, cx| plait.begin_rename(THREAD.into(), window, cx));
+    harness.capture(&format!("navigation-rename-{suffix}"));
+    harness.update(|plait, _, cx| {
+        plait.navigation.rename = None;
+        plait
+            .navigation
+            .filter
+            .update(cx, |field, cx| field.set_text("repair", cx));
+    });
+    harness.capture(&format!("navigation-filter-{suffix}"));
+    harness.update(|plait, _, cx| {
+        plait
+            .navigation
+            .filter
+            .update(cx, |field, cx| field.set_text("nothing matches this", cx))
+    });
+    harness.capture(&format!("navigation-empty-{suffix}"));
+    harness.update(|plait, _, cx| {
+        plait
+            .navigation
+            .filter
+            .update(cx, |field, cx| field.set_text("", cx));
+        plait.navigation.menu = Some(THREAD.into());
+    });
+    harness.capture(&format!("navigation-actions-{suffix}"));
+    harness.update(|plait, _, _| {
+        plait.navigation.menu = None;
+        plait.navigation.error = Some(
+            "Thread updates paused: the host disconnected. Refresh to load current states.".into(),
+        );
+    });
+    harness.capture(&format!("navigation-paused-{suffix}"));
+    harness.update(|plait, _, _| plait.navigation.error = None);
+
+    harness.update(|plait, _, cx| {
+        plait.navigation.menu = None;
+        plait.navigation.archived = false;
+        plait.preferences.value.navigation = Default::default();
+        plait.navigation.available.clear();
+        plait.navigation.collapsed.clear();
+        cx.notify();
+    });
+    harness.connect(repository, false);
+    harness.update(|plait, _, cx| plait.rebuild_projects(cx));
+    harness.capture(&format!("navigation-v2-{suffix}"));
+}
+
+#[core::prelude::v1::test]
+fn project_switching_keeps_each_draft_and_rejects_the_old_watch() {
+    if !isolated("project_switching_keeps_each_draft_and_rejects_the_old_watch") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-projects-ui-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    let other = repository.join("other");
+    harness.update(|plait, window, cx| {
+        plait.host.status.as_mut().unwrap().protocol_version = 3;
+        plait.host.threads.push(ThreadSummary {
+            id: "other-thread".into(),
+            checkout: other.clone(),
+            model: choice(),
+            title: Some("Other work".into()),
+            ..Default::default()
+        });
+        plait
+            .composers
+            .get(THREAD)
+            .unwrap()
+            .update(cx, |composer, cx| {
+                composer.restore_draft("Original draft".into(), 8, None, cx)
+            });
+        let old_epoch = plait.host.epoch;
+        let old_watch = plait.host.watch_epoch;
+        plait.select_host_thread("other-thread".into(), window, cx);
+        assert_eq!(plait.host.checkout, other);
+        assert_eq!(plait.state.repository.path, other);
+        assert!(!plait.host.accepts_watch(old_epoch, old_watch, THREAD));
+        plait
+            .composers
+            .get("other-thread")
+            .unwrap()
+            .update(cx, |composer, cx| {
+                composer.restore_draft("Separate draft".into(), 3, None, cx)
+            });
+        plait.select_host_thread(THREAD.into(), window, cx);
+        assert_eq!(plait.host.checkout, repository);
+        assert_eq!(
+            plait.composers[THREAD].read(cx).saved_draft().0,
+            "Original draft"
+        );
+        assert_eq!(
+            plait.composers["other-thread"].read(cx).saved_draft().0,
+            "Separate draft"
+        );
+        assert_eq!(plait.host.threads.len(), 3);
+    });
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
 }
