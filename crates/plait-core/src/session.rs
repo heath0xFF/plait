@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io::{self, Read, Write},
     os::{
         fd::AsRawFd,
         unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
@@ -155,9 +155,33 @@ pub fn locations() -> Result<(PathBuf, PathBuf), String> {
     Ok((directory, host))
 }
 
+struct Lease(File);
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        // A forked child can keep the file description alive until exec. Only the
+        // journal owns this lease, unlike host leases shared with command guardians.
+        if let Err(error) = file_lock(&self.0, libc::LOCK_UN) {
+            eprintln!("Plait workspace lock release failed: {error}");
+        }
+    }
+}
+
+fn file_lock(file: &File, operation: libc::c_int) -> io::Result<()> {
+    loop {
+        if unsafe { libc::flock(file.as_raw_fd(), operation) } == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
 pub struct Journal {
     directory: PathBuf,
-    _lease: File,
+    _lease: Lease,
     queued: Mutex<(u64, Arc<Session>)>,
     written: Mutex<u64>,
 }
@@ -188,9 +212,16 @@ impl Journal {
         {
             return Err("Invalid desktop recovery lock.".into());
         }
-        if unsafe { libc::flock(lease.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            return Err("Another Plait client owns this saved workspace. Close it before sending work here.".into());
-        }
+        file_lock(&lease, libc::LOCK_EX | libc::LOCK_NB).map_err(|error| {
+            if error.kind() == io::ErrorKind::WouldBlock {
+                "Another Plait client owns this saved workspace. Close it before sending work here."
+                    .into()
+            } else {
+                format!("Cannot lock saved workspace: {error}")
+            }
+        })?;
+        // Acquire the guard before reading so failed recovery also releases ownership.
+        let lease = Lease(lease);
         let path = directory.join("desktop.json");
         let session = match OpenOptions::new()
             .read(true)
@@ -369,6 +400,70 @@ mod tests {
         fs::set_permissions(&lock, fs::Permissions::from_mode(0o644)).unwrap();
         assert!(Journal::open(&root, "/host".into()).is_err());
         assert_eq!(fs::read(&lock).unwrap(), b"existing");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn duplicated_descriptor_does_not_extend_journal_ownership() {
+        let root = root("inherited-descriptor");
+        let (journal, mut state) = Journal::open(&root, "/host".into()).unwrap();
+        state.threads.insert("thread-1".into(), thread());
+        journal.queue(state.clone());
+        journal.flush().unwrap();
+        let owner = journal.clone();
+        // dup and fork share a flock's open file description, even with close-on-exec.
+        let inherited = journal._lease.0.try_clone().unwrap();
+        assert_ne!(
+            unsafe { libc::fcntl(inherited.as_raw_fd(), libc::F_GETFD) } & libc::FD_CLOEXEC,
+            0
+        );
+        drop(journal);
+        assert!(Journal::open(&root, "/host".into()).is_err());
+        drop(owner);
+        let (reopened, saved) = Journal::open(&root, "/host".into()).unwrap();
+        assert_eq!(saved, state);
+        drop(inherited);
+        assert!(Journal::open(&root, "/host".into()).is_err());
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fork_before_exec_does_not_delay_journal_reopen() {
+        use std::{os::unix::net::UnixStream, os::unix::process::CommandExt, process::Command};
+        let root = root("fork-reopen");
+        let (journal, _) = Journal::open(&root, "/host".into()).unwrap();
+        let (mut parent, child) = UnixStream::pair().unwrap();
+        let timeout = Some(std::time::Duration::from_secs(10));
+        parent.set_read_timeout(timeout).unwrap();
+        child.set_read_timeout(timeout).unwrap();
+        let spawner = std::thread::spawn(move || {
+            let fd = child.as_raw_fd();
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", "exit 0"]);
+            // Only async-signal-safe I/O runs between fork and exec. The handshake
+            // holds the inherited descriptor without timing sleeps or a live child leak.
+            unsafe {
+                command.pre_exec(move || {
+                    let mut byte = 0_u8;
+                    if libc::write(fd, (&byte as *const u8).cast(), 1) != 1
+                        || libc::read(fd, (&mut byte as *mut u8).cast(), 1) != 1
+                    {
+                        return Err(io::Error::from_raw_os_error(libc::EIO));
+                    }
+                    Ok(())
+                });
+            }
+            command.spawn().unwrap().wait().unwrap()
+        });
+        parent.read_exact(&mut [0]).unwrap();
+        drop(journal);
+        let reopened = Journal::open(&root, "/host".into());
+        let released = parent.write_all(&[1]);
+        let status = spawner.join().unwrap();
+        released.unwrap();
+        assert!(status.success());
+        drop(reopened.unwrap());
         fs::remove_dir_all(root).unwrap();
     }
 
