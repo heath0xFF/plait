@@ -1117,6 +1117,111 @@ mod tests {
         assert!(decode::<ThreadsPage>(br#"{"ok":true,"result":{"threads":[{"id":"t","checkout":"/repo","model":{"provider":"p","model_id":"m"},"status":"idle","extra":1}],"next_cursor":null}}"#).is_err());
     }
 
+    /// Replies recorded from the real host and runtime in a scripted session, so the
+    /// strict decoders are checked against what the host sends, not a hand-written copy.
+    /// Paths are replaced and strings over 200 characters are shortened.
+    #[test]
+    fn decodes_version_three_replies_recorded_from_the_host() {
+        let recorded: serde_json::Value =
+            serde_json::from_str(include_str!("host/testdata/replies-v3.json")).unwrap();
+        fn read<T: DeserializeOwned>(recorded: &serde_json::Value, name: &str) -> T {
+            decode(recorded[name].to_string().as_bytes())
+                .unwrap_or_else(|error| panic!("{name}: {error}"))
+        }
+        let status: Status = read(&recorded, "status");
+        assert_eq!(status.protocol_version, 3);
+        assert_eq!(status.models[1].reasoning, Some(true));
+        assert!(
+            status
+                .models
+                .iter()
+                .all(|model| model.thinking_levels.is_some()
+                    && model.context_window.is_some()
+                    && model.input.is_some())
+        );
+
+        for name in ["create", "configure", "cancel", "rename", "archive", "stop"] {
+            let reply: ThreadReply = read(&recorded, name);
+            assert!(reply.thread.title.is_some() && reply.thread.created_at.is_some());
+        }
+        let configured: ThreadReply = read(&recorded, "configure");
+        assert_eq!(configured.thread.thinking_level, Some(ThinkingLevel::High));
+        let busy: ThreadReply = read(&recorded, "watch_busy");
+        assert_eq!(
+            busy.thread
+                .queued
+                .iter()
+                .map(|queued| (queued.request_id.as_str(), queued.mode, queued.approval))
+                .collect::<Vec<_>>(),
+            [
+                ("f1", QueueMode::FollowUp, ApprovalMode::Ask),
+                ("f2", QueueMode::Steer, ApprovalMode::Ask)
+            ]
+        );
+        let idle: ThreadReply = read(&recorded, "watch_idle");
+        assert!(idle.thread.queued.is_empty() && idle.thread.retry.is_none());
+        assert!(
+            idle.thread
+                .usage
+                .as_ref()
+                .is_some_and(|usage| usage.total > 0)
+        );
+        assert!(
+            idle.thread
+                .messages
+                .iter()
+                .any(|message| message.text.is_empty() && !message.reasoning.is_empty())
+        );
+        let archived: ThreadReply = read(&recorded, "archive");
+        assert_eq!(
+            (archived.thread.archived, archived.thread.title.as_deref()),
+            (Some(true), Some("Recorded thread"))
+        );
+        for name in ["submit", "submit_queued"] {
+            assert!(read::<SubmitReply>(&recorded, name).accepted);
+        }
+
+        let page: ThreadsPage = read(&recorded, "list");
+        assert_eq!(page.threads[0].archived, Some(true));
+        assert!(page.next_cursor.is_none());
+
+        let long: HistoryPage = read(&recorded, "history_long");
+        let more = &long.items[1].more()[0];
+        assert_eq!(
+            (more.field, more.offset, more.length),
+            (HistoryField::Text, 65536, 200010)
+        );
+        let part: HistoryText = read(&recorded, "history_text");
+        assert_eq!((part.offset, part.next_offset), (65536, Some(131072)));
+        let last: HistoryText = read(&recorded, "history_text_last");
+        assert_eq!((last.next_offset, last.length), (None, 200010));
+        let history: HistoryPage = read(&recorded, "history");
+        assert_eq!(history.items.len(), 2);
+        assert!(history.before.is_some());
+
+        // The thread-list frames run through the real reader.
+        use std::os::unix::net::UnixStream;
+        let (socket, mut peer) = UnixStream::pair().unwrap();
+        let mut watch = threads::ThreadWatch::reading(Frames {
+            reader: BufReader::new(socket),
+            pending: Vec::new(),
+            partial_since: None,
+        });
+        let frames = recorded["thread_frames"].as_array().unwrap();
+        for frame in frames {
+            peer.write_all(format!("{frame}\n").as_bytes()).unwrap();
+        }
+        let mut list = Vec::new();
+        for index in 0..frames.len() {
+            list = watch.next_list().unwrap();
+            if index == 0 {
+                assert_eq!(list.len(), 1);
+            }
+        }
+        // The last recorded frame removes the archived thread.
+        assert!(list.is_empty());
+    }
+
     #[test]
     fn rejects_inconsistent_or_unknown_replies() {
         assert!(decode::<DefaultReply>(br#"{"ok":true,"result":{"default_model":{"provider":"p","model_id":"m"}},"error":{"code":"internal","message":"bad"}}"#).is_err());

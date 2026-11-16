@@ -44,6 +44,16 @@ impl Client {
 }
 
 impl ThreadWatch {
+    #[cfg(test)]
+    pub(super) fn reading(frames: Frames) -> Self {
+        Self {
+            frames,
+            first: true,
+            initial_deadline: Instant::now() + Duration::from_secs(15),
+            threads: Vec::new(),
+        }
+    }
+
     pub(super) fn socket(&self) -> std::io::Result<UnixStream> {
         self.frames.reader.get_ref().try_clone()
     }

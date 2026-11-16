@@ -46,8 +46,9 @@ development tests only:
 - Recorded version 1 and 2 replies are compared byte for byte with the current
   host, including for a thread that used version 3 features and a store saved
   before version 3.
-- Rust tests cover negotiation from 3 to 2 to 1, request and reply shapes, and
-  the thread-list reader.
+- Rust tests cover negotiation from 3 to 2 to 1, request shapes, and the
+  thread-list reader, and decode replies recorded from the real host with the
+  client's strict types.
 
 Not verified: a live model, a real provider's reasoning or usage figures, the
 installed package, and any desktop view, since no view uses these operations
