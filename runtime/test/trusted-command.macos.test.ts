@@ -9,8 +9,7 @@ import type { Account } from '../src/command/login-environment.ts';
 import { trustedCommand } from '../src/command/trusted.ts';
 import type { TrustedRun } from '../src/command/trusted.ts';
 import { COMMAND_TIMEOUT_MS } from '../src/command/supervisor.ts';
-import { fileAction, pathKey, rootIdentity } from '../src/safety.ts';
-import type { Postimage } from '../src/safety.ts';
+import { fileAction, pathKey, rootIdentity, sameImage } from '../src/safety.ts';
 import { exec, setup } from './support/safety.ts';
 
 // These commands really run unsandboxed. Each uses a disposable checkout and a
@@ -129,24 +128,63 @@ test('the deadline and output bounds apply to trusted commands', { timeout: 3000
   assert(decoded.includes('€')); assert(decoded.includes('🚀')); assert(!decoded.includes('�'));
 });
 
-test('a file a trusted command changed is no longer owned; untouched files stay owned', { timeout: 30000 }, async t => {
-  const f = await fixture(t);
-  for (const name of ['changed.txt', 'kept.txt', 'removed.txt']) await writeFile(join(f.root, name), 'before\n');
-  await git(f.root, 'add', '.'); await git(f.root, 'commit', '-qm', 'fixture');
-  const forgotten: string[] = [];
+/** Commits the named files, then makes the thread their owner as the edit tool would. */
+async function own(f: Awaited<ReturnType<typeof fixture>>, names: string[]) {
+  const recorded: string[] = []; const forgotten: string[] = [];
+  f.run.record = image => { recorded.push(image.path); };
   f.run.forget = path => { forgotten.push(path); };
-  for (const name of ['changed.txt', 'kept.txt', 'removed.txt']) {
+  for (const name of names) await writeFile(join(f.root, name), 'before\n');
+  await git(f.root, 'add', '.'); await git(f.root, 'commit', '-qm', 'fixture');
+  for (const name of names) {
     const current = await fileAction(f.root, 'read', name);
     const written = await fileAction(f.root, 'edit', name, { expected: 'before', content: 'thread', expected_image: current.postimage });
-    f.run.owned.set(pathKey(name), written.postimage as Postimage);
+    f.run.owned.set(pathKey(name), written.postimage);
   }
-  await f.execute('printf "by command\\n" >> changed.txt && rm removed.txt');
-  assert.deepEqual([...f.run.owned.keys()], ['kept.txt']);
-  assert.deepEqual(forgotten.sort(), ['changed.txt', 'removed.txt']);
-  // A failing command is reconciled too, and rewriting identical bytes still ends ownership.
-  await assert.rejects(f.execute('printf "thread\\n" > kept.txt; exit 3'), /Command ended without success \(1\)/);
-  assert.equal(f.run.owned.size, 0);
-  assert.deepEqual(forgotten.sort(), ['changed.txt', 'kept.txt', 'removed.txt']);
+  return { recorded, forgotten };
+}
+const image = async (root: string, name: string) => (await fileAction(root, 'read', name)).postimage;
+
+test('a file this thread owned stays owned, with a fresh record, when its trusted command changes it', { timeout: 30000 }, async t => {
+  const f = await fixture(t);
+  const { recorded, forgotten } = await own(f, ['formatted.txt', 'kept.txt', 'removed.txt']);
+  const before = new Map(f.run.owned);
+  await f.execute('printf "by command\\n" >> formatted.txt && rm removed.txt && printf "by command\\n" > generated.txt');
+  // The untouched record is the same one; the removed file and the command's new file are not owned.
+  assert.deepEqual([...f.run.owned.keys()].sort(), ['formatted.txt', 'kept.txt']);
+  assert.equal(f.run.owned.get('kept.txt'), before.get('kept.txt'));
+  const fresh = f.run.owned.get('formatted.txt')!;
+  assert.notEqual(fresh.sha256, before.get('formatted.txt')!.sha256);
+  assert(sameImage(fresh, await image(f.root, 'formatted.txt')));
+  assert.deepEqual(recorded, ['formatted.txt']);
+  assert.deepEqual(forgotten.sort(), ['formatted.txt', 'removed.txt']);
+  // The fresh record is what the next edit is checked against, and the old one no longer passes.
+  await assert.rejects(fileAction(f.root, 'edit', 'formatted.txt', { expected: 'by command', content: 'stale', expected_image: before.get('formatted.txt') }));
+  await fileAction(f.root, 'edit', 'formatted.txt', { expected: 'by command', content: 'by thread', expected_image: fresh });
+  assert.equal(await readFile(join(f.root, 'formatted.txt'), 'utf8'), 'thread\nby thread\n');
+  // A failing command and an atomic replacement are refreshed the same way.
+  await assert.rejects(f.execute('printf "replaced\\n" > kept.tmp && mv kept.tmp kept.txt; exit 3'), /Command ended without success \(1\)/);
+  const replaced = f.run.owned.get('kept.txt')!;
+  assert.notEqual(replaced.ino, before.get('kept.txt')!.ino);
+  assert(sameImage(replaced, await image(f.root, 'kept.txt')));
+});
+
+test('a file that changed before the command started is dropped, not refreshed', { timeout: 30000 }, async t => {
+  const f = await fixture(t);
+  const { recorded, forgotten } = await own(f, ['outside.txt', 'outside-then-command.txt', 'command-only.txt']);
+  await writeFile(join(f.root, 'dirty.txt'), 'user work\n');
+  f.run.baseline = ['dirty.txt'];
+  // Something other than this thread's command changes two owned files first.
+  await writeFile(join(f.root, 'outside.txt'), 'someone else\n');
+  await writeFile(join(f.root, 'outside-then-command.txt'), 'someone else\n');
+  await f.execute('for name in outside-then-command.txt command-only.txt dirty.txt; do printf "by command\\n" >> "$name"; done');
+  assert.deepEqual([...f.run.owned.keys()], ['command-only.txt']);
+  assert.deepEqual(recorded, ['command-only.txt']);
+  assert.deepEqual(forgotten.sort(), ['command-only.txt', 'outside-then-command.txt', 'outside.txt']);
+  assert.equal(await readFile(join(f.root, 'outside-then-command.txt'), 'utf8'), 'someone else\nby command\n');
+  // A later command cannot bring a dropped file, or a pre-existing dirty one, into ownership.
+  await f.execute('printf "again\\n" >> outside.txt && printf "again\\n" >> dirty.txt');
+  assert.deepEqual([...f.run.owned.keys()], ['command-only.txt']);
+  assert.deepEqual(recorded, ['command-only.txt']);
 });
 
 test('a trusted command that changes a pre-existing dirty path is reported, not prevented', { timeout: 30000 }, async t => {

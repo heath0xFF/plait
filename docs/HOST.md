@@ -262,19 +262,34 @@ commands run under `/bin/sh`.
   [Safety boundary](#safety-boundary). Paths that were dirty or ignored before
   the run stay refused for the whole run, even if a command commits them.
 - Approval text. A command prompt reads `Run command with full user access and
-  network`, and every prompt in a trusted run states the risk below instead of
-  the sandboxed wording.
+  network`, and the risk text of every prompt in a trusted run says that
+  commands run as the user, outside the sandbox, with network access.
 - Model instructions. The run's instructions and the `command` tool description
   describe the mode in force. The sandboxed wording is unchanged.
 
-**After each trusted command**, whether it succeeded, failed, or was stopped:
+**Around each trusted command**, whether it succeeds, fails, or is stopped:
 
-- The host compares each file this thread owns with its postimage record. A
-  file the command changed, replaced, or removed loses its record, in memory
-  and in the store. It then has no special standing: while it is dirty, file
-  tools refuse it, in this run and later ones, until it is clean again, for
-  example after a commit. An unchanged file stays owned. If the host stops before this step, the stale
-  record remains but still never matches, as before.
+- Before it starts, the host compares each file this thread owns with its
+  postimage record: identity, mode, size, and times. A file that already
+  differs was changed by something else. Its record is dropped, in memory and
+  in the store, so the command cannot bring that change into the thread's
+  ownership.
+- After it ends, a file the thread still owned at the start and that changed
+  during the command gets a fresh record of its new state, read through the
+  checked file helper and committed to the store. The thread keeps ownership,
+  so edit, format or generate, then edit again works. The host cannot tell the
+  command's change from another program's change made while the command ran;
+  both are refreshed.
+- A file that is gone, ignored, or no longer one the file helper accepts loses
+  its record instead.
+- Nothing else becomes owned. A file the command creates, or changes without
+  the thread having owned it, is an ordinary dirty path: file tools refuse it,
+  in this run and later ones, until it is clean again, for example after a
+  commit. Paths that were dirty before the run stay refused whatever the
+  command does.
+- A later edit still compares the whole record, including the content hash. If
+  the host stops between the command and the refresh, the old record remains
+  and never matches, as before.
 - If a path that was dirty before the run changed during the command, the
   command's output begins with a notice naming up to 20 such files.
   Directories are not examined. This reports the change; it does not prevent
@@ -297,9 +312,12 @@ commands run under `/bin/sh`.
   own writes to other places.
 - With automatic approval, trusted commands run without a prompt.
 - Build output and dependency installs land in the checkout or your home, not
-  in a private cache. Dirty and ignored entries count toward the 500-entry
-  baseline bound, so a command that leaves many of them can make file tools
-  and later runs fail until they are cleaned up or ignored by directory.
+  in a private cache. An ignored directory such as `node_modules` or `target`
+  is one entry of the 500-entry dirty baseline however many files it holds,
+  whether it existed before the run or a command created it. Untracked files,
+  and files ignored one at a time by a file pattern such as `*.o`, each count:
+  a command that leaves more than 500 of them makes file tools and later runs
+  fail until they are removed, committed, or ignored by directory.
 
 ## Safety boundary
 

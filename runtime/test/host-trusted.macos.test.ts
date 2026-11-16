@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -62,15 +62,16 @@ test('the default policy is sandboxed: same prompts, no checkout or Git writes',
   assert.deepEqual(approvals.map(approval => approval.summary), ['Run sandboxed command', 'Change notes.txt', 'Run sandboxed command', 'Change notes.txt']);
   assert(approvals.every(approval => approval.risk === SANDBOXED_RISK));
   assert.deepEqual(state.tools.map(item => [item.id, item.status]), [
-    ['commit-1', 'error'], ['own-edit', 'done'], ['append-1', 'error'], ['later-edit', 'done'], ['dirty-edit', 'error'], ['dirty-write', 'error'],
+    ['commit-1', 'error'], ['own-edit', 'done'], ['append-1', 'error'], ['later-edit', 'done'], ['unowned-edit', 'error'], ['dirty-edit', 'error'], ['dirty-write', 'error'],
   ]);
   assert.equal(existsSync(join(f.repo, 'generated.txt')), false);
+  assert.equal(existsSync(join(f.repo, 'scratch.txt')), false);
   assert.equal((await git(f.repo, 'log', '--format=%s')).stdout, 'fixture\n');
   assert.equal(await readFile(join(f.repo, 'notes.txt'), 'utf8'), 'again\n');
   assert.equal(await readFile(join(f.repo, 'dirty.txt'), 'utf8'), 'dirty\n');
 });
 
-test('trusted commands write and commit; file tools still refuse dirty paths and files a command changed', { timeout: 60000 }, async t => {
+test('trusted commands write and commit; the thread keeps its own files, and file tools refuse dirty and unowned ones', { timeout: 60000 }, async t => {
   const f = await setup(t, 'trusted-work');
   await writeFile(join(f.repo, 'dirty.txt'), 'dirty\n');
   assert.deepEqual((await policy(f, 'trusted')).result, { checkout: f.repo, policy: 'trusted' });
@@ -78,34 +79,62 @@ test('trusted commands write and commit; file tools still refuse dirty paths and
   assert.equal((await f.submit(thread.id)).ok, true);
   const { state, approvals } = await allowAll(f, thread.id);
   assert.equal(state.status, 'idle', JSON.stringify(state));
-  // The later edit is refused before any prompt: the command changed that file.
+  // The edits of the command's own new file and of the dirty file are refused before any prompt.
   assert.deepEqual(approvals.map(approval => [approval.kind, approval.summary]), [
-    ['command', TRUSTED_COMMAND_SUMMARY], ['edit', 'Change notes.txt'], ['command', TRUSTED_COMMAND_SUMMARY],
+    ['command', TRUSTED_COMMAND_SUMMARY], ['edit', 'Change notes.txt'], ['command', TRUSTED_COMMAND_SUMMARY], ['edit', 'Change notes.txt'],
   ]);
   assert.equal(TRUSTED_COMMAND_SUMMARY, 'Run command with full user access and network');
   assert(approvals.every(approval => approval.risk === TRUSTED_RISK && approval.dirty_paths.includes('dirty.txt')));
   assert.match(TRUSTED_RISK, /outside the sandbox, with network access/);
   assert.deepEqual(state.tools.map(item => [item.id, item.status]), [
-    ['commit-1', 'done'], ['own-edit', 'done'], ['append-1', 'done'], ['later-edit', 'error'], ['dirty-edit', 'error'], ['dirty-write', 'error'],
+    ['commit-1', 'done'], ['own-edit', 'done'], ['append-1', 'done'], ['later-edit', 'done'], ['unowned-edit', 'error'], ['dirty-edit', 'error'], ['dirty-write', 'error'],
   ]);
   assert.match(tool(state, 'commit-1')!.output, /COMMITTED/);
   assert.equal(await readFile(join(f.repo, 'generated.txt'), 'utf8'), 'made by command\n');
   assert.equal((await git(f.repo, 'log', '--format=%an <%ae> %s')).stdout, 'Fixture <fixture@invalid> trusted commit\nTest <test@invalid> fixture\n');
-  assert.equal(await readFile(join(f.repo, 'notes.txt'), 'utf8'), 'after\nappended\n');
+  // The thread edited its own file again after its command changed it.
+  assert.equal(await readFile(join(f.repo, 'notes.txt'), 'utf8'), 'again\nappended\n');
+  // A file the command created was never the thread's, and the dirty file is untouched.
+  assert.equal(await readFile(join(f.repo, 'scratch.txt'), 'utf8'), 'by command\n');
   assert.equal(await readFile(join(f.repo, 'dirty.txt'), 'utf8'), 'dirty\n');
 
-  // The durable ownership record is gone, so a later run does not trust it either.
+  // The refreshed record is durable: the next run still owns that one file, and only it.
   await settled(f, thread.id);
   f.host.kill('SIGKILL'); await delay(500);
   const database = new DatabaseSync(join(f.store, 'host.sqlite'), { readOnly: true });
-  try { assert.equal(database.prepare('SELECT COUNT(*) AS records FROM postimages WHERE thread_id=?').get(thread.id)!.records, 0); }
+  try { assert.deepEqual(database.prepare('SELECT path FROM postimages WHERE thread_id=?').all(thread.id).map(row => row.path), ['notes.txt']); }
   finally { database.close(); }
-  await f.start('followup');
+  await f.start('trusted-followup');
   assert.equal((await policy(f)).result.policy, 'trusted');
   assert.equal((await submitAuto(f, thread.id, 'submit-2')).ok, true);
   const later = await until(() => f.watch(thread.id), value => value.status === 'idle');
-  assert.equal(tool(later, 'followup-1')!.status, 'error', JSON.stringify(later));
-  assert.equal(await readFile(join(f.repo, 'notes.txt'), 'utf8'), 'after\nappended\n');
+  assert.equal(tool(later, 'followup-1')!.status, 'done', JSON.stringify(later));
+  assert.equal(await readFile(join(f.repo, 'notes.txt'), 'utf8'), 'followup\nappended\n');
+});
+
+test('an install or in-place build of thousands of ignored files leaves file tools and the next run working', { timeout: 60000 }, async t => {
+  const f = await setup(t, 'trusted-install');
+  await writeFile(join(f.repo, '.gitignore'), 'node_modules/\n/target\n');
+  await git(f.repo, 'add', '.gitignore');
+  await git(f.repo, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@invalid', 'commit', '-qm', 'ignore build output');
+  await policy(f, 'trusted');
+  const thread = await f.create();
+  assert.equal((await submitAuto(f, thread.id)).ok, true);
+  const first = await until(() => f.watch(thread.id), value => value.status === 'idle' || value.status === 'error');
+  assert.deepEqual(first.tools.map(item => [item.id, item.status]), [['install-1', 'done'], ['after-install-edit', 'done'], ['after-install-write', 'done']], JSON.stringify(first));
+  assert.equal((await readdir(join(f.repo, 'node_modules', 'package', 'lib'))).length, 3000);
+  assert.equal((await readdir(join(f.repo, 'target', 'debug', 'deps'))).length, 3000);
+
+  // The directories now exist before the next run; each is one protected entry.
+  await settled(f, thread.id);
+  f.host.kill('SIGKILL'); await delay(500); await f.start('followup');
+  assert.equal((await f.submit(thread.id, 'submit-2')).ok, true);
+  const pending = await until(() => f.watch(thread.id), value => !!value.pending_approval || value.status === 'error');
+  assert.deepEqual(pending.pending_approval?.dirty_paths.sort(), ['node_modules', 'target'], JSON.stringify(pending));
+  await f.approve(thread.id, pending.pending_approval!.id);
+  const second = await until(() => f.watch(thread.id), value => value.status === 'idle' || value.status === 'error');
+  assert.equal(tool(second, 'followup-1')!.status, 'done', JSON.stringify(second));
+  assert.equal(await readFile(join(f.repo, 'notes.txt'), 'utf8'), 'followup\n');
 });
 
 test('Stop kills a trusted command tree, and an approval after Stop does nothing', { timeout: 60000 }, async t => {

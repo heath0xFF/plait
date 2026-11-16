@@ -45,10 +45,16 @@ const responses: FauxResponseStep[] = mode === 'unicode-read' ? [
   : mode === 'trusted-work' ? [
     call('command', { command: 'printf "made by command\\n" > generated.txt && git add generated.txt && git -c user.name=Fixture -c user.email=fixture@invalid commit -qm "trusted commit" && printf COMMITTED' }, 'commit-1'),
     call('edit', { path: 'notes.txt', old_text: 'before', new_text: 'after' }, 'own-edit'),
-    call('command', { command: 'printf "appended\\n" >> notes.txt && printf APPENDED' }, 'append-1'),
+    call('command', { command: 'printf "appended\\n" >> notes.txt && printf "by command\\n" > scratch.txt && printf APPENDED' }, 'append-1'),
     call('edit', { path: 'notes.txt', old_text: 'after', new_text: 'again' }, 'later-edit'),
+    call('edit', { path: 'scratch.txt', old_text: 'by command', new_text: 'DESTROYED' }, 'unowned-edit'),
     call('edit', { path: 'dirty.txt', old_text: 'dirty', new_text: 'DESTROYED' }, 'dirty-edit'),
     call('write', { path: 'dirty.txt', content: 'DESTROYED' }, 'dirty-write'),
+  ] : mode === 'trusted-followup' ? [call('edit', { path: 'notes.txt', old_text: 'again', new_text: 'followup' }, 'followup-1')]
+  : mode === 'trusted-install' ? [
+    call('command', { command: 'mkdir -p node_modules/package/lib target/debug/deps && i=0; while [ $i -lt 3000 ]; do : > node_modules/package/lib/f$i; : > target/debug/deps/f$i; i=$((i+1)); done; printf INSTALLED' }, 'install-1'),
+    call('edit', { path: 'notes.txt', old_text: 'before', new_text: 'after' }, 'after-install-edit'),
+    call('write', { path: 'created.txt', content: 'new\n' }, 'after-install-write'),
   ] : mode === 'trusted-stop' ? [call('command', { command: 'printf started > started.txt; sleep 300 & printf "READY %s %s\\n" "$$" "$!"; wait' }, 'stop-1')]
   : mode === 'trusted-twice' ? [
     call('command', { command: 'printf one > first.txt && printf "FIRST %s" "$HOME"' }, 'first-1'),

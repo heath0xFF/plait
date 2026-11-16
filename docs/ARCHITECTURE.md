@@ -159,8 +159,10 @@ and tool output use these helpers; the original input journal is not clipped.
 operations, and the trusted wording for instructions, the tool description, and
 approvals. `command/login-environment.ts` reads the account's login-shell
 environment for trusted commands. `command/trusted.ts` runs a trusted command
-through the same supervisor and guardian, then drops ownership records for
-files the command changed and reports changes to pre-existing dirty paths.
+through the same supervisor and guardian. Before the command it drops
+ownership records that had already drifted; afterwards it refreshes the records
+of this thread's files that the command changed and reports changes to
+pre-existing dirty paths.
 `tools.ts` chooses the path from the policy the run was admitted with.
 
 `bash scripts/check.sh` is the common development entry point. Runtime test
