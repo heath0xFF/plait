@@ -161,7 +161,9 @@ both component packages; either package can also be installed alone. The host
 unit includes Rust, pinned Node, and locked production runtime dependencies.
 It runs as a per-user LaunchAgent, never as a root agent executor.
 
-Host releases use content-derived directory names. The loaded job and sidecar
+Host releases use content-derived directory names and distinct package receipts.
+A shared receipt would let PackageKit remove the old code during an update.
+The LaunchAgent label remains stable. The loaded job and sidecar
 keep their original paths while a new package stages the next release. An
 identical host reinstall is rejected before payload writes. Activation requires
 an explicit session restart after work finishes. Client updates do not control

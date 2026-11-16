@@ -4,7 +4,7 @@
 
 The installer branch adds combined and independent component packages. Linux
 checks passed with 51 workspace Rust tests, strict Clippy, and the portable
-runtime suite (41 tests). Eleven portable package-planning tests pass.
+runtime suite (41 tests). Twelve portable package-planning tests pass.
 Mac source workspace checks, the real command sandbox suite, release builds,
 and the offline runtime recovery probe passed in workflow run `43774184163`.
 Actual installation, native launch, and installed-runtime acceptance remain pending.
@@ -22,8 +22,11 @@ package verification and completed the combined installation, but the user servi
 did not become ready. Its nested runtime-suite invocation also hit Node's recursive
 test guard and ran no files; that apparent pass is invalid. A new runner regression
 test prevents that skip. Service startup now uses an explicit OS-account context,
-and the next install check retains the service and update assertions. Installed
-runtime, active update, and native app acceptance are still pending.
+and run `43779567292` passed user-service startup and all 57 packaged runtime tests
+without skips. Its active-update check then caught PackageKit removing the old
+release under a shared receipt. Host receipts now include the content build ID;
+the stable LaunchAgent still selects the next release. Active-update and native
+app acceptance remain pending. No failed installer run published a release artifact.
 
 The new CI install test uses a labeled upgrade fixture with unchanged program
 code. It checks install/activation lifetime and durable state, not compatibility

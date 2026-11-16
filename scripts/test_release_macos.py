@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 
 from release_macos import (
     AGENT_LABEL, HOST_BASE, client_preinstall, component_manifests, distribution,
-    host_postinstall, host_preinstall, launch_agent, manifest, normalize_modes, payload_digest, platform_preflight,
+    host_package_id, host_postinstall, host_preinstall, launch_agent, manifest, normalize_modes, payload_digest, platform_preflight,
 )
 
 
@@ -69,11 +69,13 @@ class ReleaseTests(unittest.TestCase):
         self.assertNotIn("launchctl", client_preinstall())
 
     def test_combined_installer_contains_independently_selectable_components(self):
-        document = ET.fromstring(distribution("client.pkg", "host.pkg"))
+        host_id = host_package_id({"build_id": "0.1.0-" + "a" * 20})
+        document = ET.fromstring(distribution("client.pkg", "host.pkg", host_id))
         choices = document.findall("choice")
         self.assertEqual([choice.get("id") for choice in choices], ["client", "host"])
         self.assertEqual([choice.get("start_selected") for choice in choices], ["true", "true"])
         self.assertEqual([ref.text for ref in document.findall("pkg-ref")], ["client.pkg", "host.pkg"])
+        self.assertEqual([ref.get("id") for ref in document.findall("pkg-ref")], ["dev.plait.client", host_id])
         self.assertEqual(document.find("volume-check/allowed-os-versions/os-version").get("min"), "15.0")
 
     def test_existing_host_release_is_rejected_without_writes(self):
@@ -122,6 +124,14 @@ class ReleaseTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('{}')
             self.assertEqual(component_manifests(root), [client, host])
+
+    def test_immutable_host_releases_have_distinct_package_receipts(self):
+        first = host_package_id({'build_id': '0.1.0-' + 'a' * 20})
+        second = host_package_id({'build_id': '0.1.0-' + 'b' * 20})
+        self.assertNotEqual(first, second)
+        self.assertEqual(first, host_package_id({'build_id': '0.1.0-' + 'a' * 20}))
+        with self.assertRaises(ValueError):
+            host_package_id({'build_id': '../escape'})
 
     def test_node_download_is_pinned(self):
         path = Path(__file__).resolve().parent.parent / "packaging/macos/node.json"

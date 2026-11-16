@@ -230,10 +230,24 @@ def stage_host(work, version, revision):
     return payload, scripts, metadata
 
 
+def host_package_id(metadata):
+    build_id = metadata["build_id"]
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+-[0-9a-f]{20}", build_id):
+        raise ValueError("Invalid immutable host build ID")
+    return f"dev.plait.host.release.{build_id}"
+
+
 def component_package(root, scripts, component, version, output, work):
     normalize_modes(root)
+    identifier = "dev.plait.client"
+    if component == "host":
+        manifests = component_manifests(root)
+        if len(manifests) != 1:
+            raise ValueError("Expected one immutable host release")
+        identifier = host_package_id(json.loads(manifests[0].read_text()))
+    # A stable host receipt makes PackageKit delete the previous release on upgrade.
     args = ["pkgbuild", "--root", root, "--scripts", scripts, "--ownership", "recommended",
-            "--identifier", f"dev.plait.{component}", "--version", version, "--install-location", "/"]
+            "--identifier", identifier, "--version", version, "--install-location", "/"]
     if component == "client":
         components = work / "client-components.plist"
         components.write_bytes(plistlib.dumps([{
@@ -252,7 +266,7 @@ def component_package(root, scripts, component, version, output, work):
     run(*args, output)
 
 
-def distribution(client_name, host_name):
+def distribution(client_name, host_name, host_identifier):
     root = ET.Element("installer-gui-script", {"minSpecVersion": "1"})
     ET.SubElement(root, "title").text = "Plait — Client and Host"
     ET.SubElement(root, "options", {"customize": "always", "hostArchitectures": "arm64"})
@@ -263,8 +277,7 @@ def distribution(client_name, host_name):
     allowed = ET.SubElement(volume, "allowed-os-versions")
     ET.SubElement(allowed, "os-version", {"min": "15.0"})
     outline = ET.SubElement(root, "choices-outline")
-    for component, name in [("client", client_name), ("host", host_name)]:
-        identifier = f"dev.plait.{component}"
+    for component, name, identifier in [("client", client_name, "dev.plait.client"), ("host", host_name, host_identifier)]:
         ET.SubElement(outline, "line", {"choice": component})
         choice = ET.SubElement(root, "choice", {"id": component, "title": f"Plait {component.title()}", "start_selected": "true"})
         ET.SubElement(choice, "pkg-ref", {"id": identifier})
@@ -294,7 +307,7 @@ def build_installers(bundle, client_version, host_version, revision, work):
     component_package(host_payload, host_scripts, "host", host_version, host, work)
     resources = ROOT / "packaging/macos/installer"
     description = work / "Distribution.xml"
-    description.write_bytes(distribution(client.name, host.name))
+    description.write_bytes(distribution(client.name, host.name, host_package_id(metadata)))
     combined = work / f"Plait-Installer-{client_version}-{revision}-macos-arm64.pkg"
     run("productbuild", "--distribution", description, "--resources", resources, "--package-path", work, combined)
     for component in [client, host, combined]:

@@ -88,7 +88,9 @@ changing the default affects only new threads.
 - **Client:** quit only the client and run a client-only package. The host and
   accepted work remain running. Reopen the client to reconnect.
 - **Host:** run a newer host-only package. It installs a content-addressed release
-  directory and updates the LaunchAgent file. It does not stop the active host.
+  directory and updates the LaunchAgent file. Each host release has a distinct
+  package receipt, so Installer does not remove the previous release's files.
+  The LaunchAgent label stays `dev.plait.host`. Installation does not stop the active host.
   Finish or Stop active threads, then log out and back in to activate the update.
 - Installing the **same exact host build again is rejected before payload writes**.
   This prevents Installer from rewriting code used by a running process. Use the
