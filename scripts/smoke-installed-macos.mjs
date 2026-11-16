@@ -73,6 +73,11 @@ test('user LaunchAgent and isolated packaged host start without developer Node',
   assert(version.revision.startsWith(release.revision));
 });
 
+test('installed host starts repeatedly with standard service scheduling', { timeout: 180000 }, async () => {
+  const { verifyInstalledStartup } = await import('./verify-startup-macos.mjs');
+  await verifyInstalledStartup(binary);
+});
+
 test('installed runtime passes the full macOS safety suite', { timeout: 240000 }, async () => {
   await new Promise((resolve, reject) => {
     const child = spawn(node, ['test/run.mjs', '--require-command-sandbox'], {
