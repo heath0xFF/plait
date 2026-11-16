@@ -107,6 +107,14 @@ and releases its subscription on disconnect. EOF or malformed notification
 frames stop the host rather than leave clients silently stale. The public watch
 frames, request deadlines, durable writes, and recovery rules are unchanged.
 
+The desktop client waits for snapshots without a periodic read timeout. Its
+initial watch reply has a 15-second deadline; after that, a partial frame must
+finish within 15 seconds of its first byte. An idle, complete connection can
+wait indefinitely. Explicit cancellation closes only that subscription on
+selection, reconnect, or window release. A dedicated reader and one-slot async
+inbox keep blocked sockets and snapshot backlogs out of GPUI's worker pool and
+UI loop. Cancellation never submits a Stop operation.
+
 ## Snapshot
 
 All keys below are always present. Nullable fields use JSON null.

@@ -10,6 +10,22 @@ use plait_core::{
 };
 use serde::de::DeserializeOwned;
 
+pub(super) struct WatchLease {
+    cancel: Option<host::CancelWatch>,
+    executor: BackgroundExecutor,
+}
+impl Drop for WatchLease {
+    fn drop(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            self.executor
+                .spawn(async move {
+                    drop(cancel);
+                })
+                .detach();
+        }
+    }
+}
+
 impl Plait {
     fn host_request<T: DeserializeOwned + Send + 'static>(
         &mut self,
@@ -46,6 +62,7 @@ impl Plait {
         if self.host.connecting {
             return;
         }
+        self.host_watch = None;
         self.host.reconnect();
         self.sync_composer(cx);
         self.host_request(
@@ -93,6 +110,7 @@ impl Plait {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus, cx);
+        self.host_watch = None;
         self.host.select(Some(id.clone()));
         self.show_local_machine();
         self.settings_open = false;
@@ -122,16 +140,23 @@ impl Plait {
     }
 
     fn watch_thread(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.host_watch = None;
         self.host.watch_epoch += 1;
         let epoch = self.host.epoch;
         let watch_epoch = self.host.watch_epoch;
         let watch_id = id.clone();
-        let task = cx
-            .background_executor()
-            .spawn(async move { Client::from_environment()?.watch(watch_id) });
+        let executor = cx.background_executor().clone();
+        let task = cx.background_executor().spawn(async move {
+            let snapshots = Client::from_environment()?.subscribe(watch_id)?;
+            let lease = WatchLease {
+                cancel: Some(snapshots.cancel_handle()),
+                executor,
+            };
+            Ok::<_, host::Error>((snapshots, lease))
+        });
         cx.spawn_in(window, async move |this, cx| {
-            let mut watch = match task.await {
-                Ok(watch) => watch,
+            let (mut snapshots, lease) = match task.await {
+                Ok(subscription) => subscription,
                 Err(error) => {
                     let _ = this.update_in(cx, |this, _, cx| {
                         this.watch_failed(epoch, watch_epoch, &id, error, cx)
@@ -139,20 +164,31 @@ impl Plait {
                     return;
                 }
             };
-            loop {
-                let task = cx.background_executor().spawn(async move {
-                    let next = watch.next_snapshot();
-                    (watch, next)
-                });
-                let (next_watch, result) = task.await;
-                watch = next_watch;
+            let registered = this
+                .update_in(cx, |this, _, _| {
+                    if !this.host.accepts_watch(epoch, watch_epoch, &id) {
+                        return false;
+                    }
+                    this.host_watch = Some(lease);
+                    true
+                })
+                .unwrap_or(false);
+            if !registered {
+                cx.background_executor()
+                    .spawn(async move {
+                        drop(snapshots);
+                    })
+                    .detach();
+                return;
+            }
+            while let Some(result) = snapshots.next().await {
                 let keep = this
                     .update_in(cx, |this, _, cx| {
                         if !this.host.accepts_watch(epoch, watch_epoch, &id) {
                             return false;
                         }
                         match result {
-                            Ok(Some(snapshot)) => {
+                            Ok(snapshot) => {
                                 if snapshot.id != id {
                                     this.watch_failed(
                                         epoch,
@@ -167,6 +203,7 @@ impl Plait {
                                 }
                                 let previous = this.host.snapshot.clone();
                                 if !this.host.apply_snapshot(epoch, watch_epoch, snapshot) {
+                                    this.host_watch = None;
                                     this.sync_composer(cx);
                                     cx.notify();
                                     return false;
@@ -176,7 +213,6 @@ impl Plait {
                                 cx.notify();
                                 true
                             }
-                            Ok(None) => true,
                             Err(error) => {
                                 this.watch_failed(epoch, watch_epoch, &id, error, cx);
                                 false
@@ -185,14 +221,14 @@ impl Plait {
                     })
                     .unwrap_or(false);
                 if !keep {
-                    cx.background_executor()
-                        .spawn(async move {
-                            drop(watch);
-                        })
-                        .detach();
                     break;
                 }
             }
+            cx.background_executor()
+                .spawn(async move {
+                    drop(snapshots);
+                })
+                .detach();
         })
         .detach();
     }
@@ -208,6 +244,7 @@ impl Plait {
         if !self.host.accepts_watch(epoch, watch_epoch, id) {
             return;
         }
+        self.host_watch = None;
         self.host.connected = false;
         self.host.error = Some(error.to_string());
         self.sync_composer(cx);

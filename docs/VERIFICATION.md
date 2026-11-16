@@ -1,5 +1,24 @@
 # Verification
 
+## Cancellable desktop subscriptions — Linux checks, 2026-11-16
+
+Removed the desktop watch's one-second read timeout and repeated UI stale-watch
+checks. Explicit cancellation closes the old subscription on thread selection,
+reconnect, or view release, without a Stop request. A dedicated reader sleeps
+outside GPUI's shared worker pool. Its async inbox holds one latest snapshot,
+not a growing queue of intermediate snapshots.
+
+Checked formatting, strict workspace Clippy, 68 Rust tests, TypeScript, 86 runtime
+tests, and release headless builds. The GPUI layout/scroll-state walk still passes.
+Six new core tests cover an idle read lasting beyond the old polling interval,
+cancellation without a Stop request, initial-reply deadlines, async wake/closure,
+combined reply/event framing, identity checks before coalescing, and bounded
+delivery under 1,000 updates. Existing
+partial-frame, size-bound, stale-result, reconnect, and approval tests still pass.
+
+This is lifecycle and bounded-memory evidence, not a measured whole-app CPU,
+energy, or native typing-latency result. Native macOS checks remain the CI gate.
+
 ## Incremental conversation rows — Linux checks, 2026-11-16
 
 Live snapshots now retain measured rows by stable message/tool identity. Only
@@ -24,9 +43,12 @@ Inspected these headless Linux renders at wide and narrow sizes:
 - [History held steady while streaming](screenshots/stream-history-linux.png)
 - [Correct tool still expanded after row movement](screenshots/stream-tool-linux.png)
 
-These are sample-state renders, not Mac input or ADEMark measurements. Native
-macOS build/installed-client checks run in CI; hands-on Mac streaming and typing
-latency remain unmeasured. No host protocol, storage, or permission change.
+These are sample-state renders, not Mac input or ADEMark measurements. Commit
+`0cab4d4` passed Linux CI and macOS build/installed-client/real sandbox checks
+(macOS run `43825444052`). Inspected its
+[installed native window](screenshots/installed-macos-0cab4d4.png); that capture
+shows the labeled fixture view, not a live stream. Hands-on Mac streaming and
+typing latency remain unmeasured. No host protocol, storage, or permission change.
 
 ## Event-driven host watches — Linux checks, 2026-11-16
 

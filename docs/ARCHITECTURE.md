@@ -30,7 +30,8 @@ ui/                     GPUI layout, actions, focus, lists, theme
   snapshot.rs           Linux-only headless layout checks (tests only)
 
 crates/plait-core/src/
-host.rs                 bounded blocking Unix-socket client; background only
+host.rs                 bounded Unix-socket framing and requests; background only
+host/watch.rs           cancellable reader and bounded async snapshot delivery
 host_state.rs           host selection, request identity, and stale-result guards
 transcript.rs           stable row identity and incremental list-change plans
 local_socket.rs         owner-only paths and OS peer-identity checks
@@ -78,6 +79,15 @@ has at most one pending wakeup. Watches register before the initial read and
 wait on both the wakeup and client disconnect. Channel EOF replaces the host's
 periodic child-process check. Client protocol version 1 and durable schemas are
 unchanged; the internal channel ships with the host/runtime update unit.
+
+The desktop owns a cancellation lease for its selected subscription. Selection,
+reconnect, and view release drop that lease; socket shutdown runs on the background
+executor and does not send Stop. A dedicated reader keeps idle socket waits off
+GPUI's shared worker pool. A one-slot async inbox delivers the newest snapshot
+without periodic UI wakeups or an unbounded event queue. Thread ID, model, and
+checkout are checked before coalescing, so an invalid frame cannot be hidden by
+a later valid one. Initial replies and
+partial frames retain absolute deadlines; an idle established watch has no timer.
 
 A repository epoch, watch epoch, and thread ID guard each async result. An uncertain submission keeps its request
 ID for an explicit retry. Reconnect loads state; it does not submit a new task.

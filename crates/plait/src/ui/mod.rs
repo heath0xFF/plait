@@ -47,6 +47,7 @@ actions!(
 pub struct Plait {
     state: AppState,
     host: HostState,
+    host_watch: Option<host::WatchLease>,
     composers: HashMap<String, Entity<composer::Composer>>,
     live_scroll: ListState,
     live_count: usize,
@@ -86,6 +87,7 @@ impl Plait {
         let mut this = Self {
             state,
             host,
+            host_watch: None,
             composers: HashMap::new(),
             live_scroll: ListState::new(0, ListAlignment::Bottom, px(300.)),
             live_count: 0,
@@ -161,6 +163,7 @@ impl Plait {
 
     fn select_thread(&mut self, selection: Selection, cx: &mut Context<Self>) {
         self.interaction = Some(Instant::now());
+        self.host_watch = None;
         self.host.select(None);
         self.settings_open = false;
         self.new_thread_open = false;

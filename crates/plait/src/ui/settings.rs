@@ -361,6 +361,7 @@ Tone::Primary,
                 .and_then(|status| status.default_model.clone())
                 .filter(|choice| self.host.available(Some(choice)));
         }
+        self.host_watch = None;
         self.host.select(None);
         // Cancel returns to this machine's first example thread.
         self.show_local_machine();

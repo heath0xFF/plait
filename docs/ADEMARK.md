@@ -86,6 +86,15 @@ during 20 streaming updates, history clipping, and tool movement. Tool disclosur
 follows its stable ID, not its current row number. See the
 [verification and labeled Linux captures](VERIFICATION.md).
 
+## Idle desktop subscriptions
+
+The desktop no longer wakes each second to check for a stale watch. An explicit
+cancellation lease closes the old subscription on selection, reconnect, or view
+release. A dedicated reader delivers the latest snapshot through a one-slot
+async inbox, leaving shared background workers available for Git and other work.
+Initial replies and partial frames still have absolute deadlines. This removes
+a known source of idle work; whole-app CPU and memory still need Mac measurement.
+
 ## Next delivery: a valid Mac baseline
 
 1. **Pin the installed build.** Record client and active host build IDs,

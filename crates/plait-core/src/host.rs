@@ -294,7 +294,6 @@ impl Client {
             ));
         }
         let mut socket = crate::local_socket::connect(&self.path)?;
-        socket.set_read_timeout(Some(Duration::from_secs(1)))?;
         socket.set_write_timeout(Some(Duration::from_secs(5)))?;
         socket.write_all(&bytes)?;
         socket.write_all(b"\n")?;
@@ -307,21 +306,18 @@ impl Client {
 
     pub fn request<T: DeserializeOwned>(&self, request: &Request) -> Result<T, Error> {
         let mut frames = self.connect(request)?;
-        let deadline = Instant::now() + Duration::from_secs(15);
-        loop {
-            if let Some(line) = frames.next(Some(deadline))? {
-                return decode(&line);
-            }
-            if Instant::now() >= deadline {
-                return Err(Error::Transport("Host reply timed out. Reconnect before retrying; the request may have been accepted.".into()));
-            }
-        }
+        decode(&frames.next(Some(Instant::now() + Duration::from_secs(15)))?)
     }
 
     pub fn watch(&self, thread_id: String) -> Result<Watch, Error> {
         Ok(Watch {
-            frames: self.connect(&Request::Watch { thread_id })?,
+            frames: self.connect(&Request::Watch {
+                thread_id: thread_id.clone(),
+            })?,
+            thread_id,
+            identity: None,
             first: true,
+            initial_deadline: Instant::now() + Duration::from_secs(15),
         })
     }
 }
@@ -332,7 +328,7 @@ struct Frames {
     partial_since: Option<Instant>,
 }
 impl Frames {
-    fn next(&mut self, deadline: Option<Instant>) -> Result<Option<Vec<u8>>, Error> {
+    fn next(&mut self, deadline: Option<Instant>) -> Result<Vec<u8>, Error> {
         loop {
             let deadline = deadline.or_else(|| {
                 self.partial_since
@@ -343,11 +339,11 @@ impl Frames {
                 if remaining.is_zero() {
                     return Err(Error::Transport("Host frame timed out. The request may have been accepted; reconnect before retrying.".into()));
                 }
-                remaining.min(Duration::from_secs(1))
+                Some(remaining)
             } else {
-                Duration::from_secs(1)
+                None
             };
-            self.reader.get_ref().set_read_timeout(Some(timeout))?;
+            self.reader.get_ref().set_read_timeout(timeout)?;
             let available = match self.reader.fill_buf() {
                 Ok(bytes) => bytes,
                 Err(error)
@@ -356,8 +352,9 @@ impl Frames {
                         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                     ) =>
                 {
-                    return Ok(None);
+                    return Err(Error::Transport("Host frame timed out. Reconnect before retrying; the request may have been accepted.".into()));
                 }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(error) => return Err(error.into()),
             };
             if available.is_empty() {
@@ -377,39 +374,60 @@ impl Frames {
             self.reader.consume(count);
             if end.is_some() {
                 self.partial_since = None;
-                return Ok(Some(std::mem::take(&mut self.pending)));
+                return Ok(std::mem::take(&mut self.pending));
             }
         }
     }
 }
 
+mod watch;
+pub use watch::{CancelWatch, Snapshots};
+
 pub struct Watch {
     frames: Frames,
+    thread_id: String,
+    identity: Option<(PathBuf, ModelChoice)>,
     first: bool,
+    initial_deadline: Instant,
 }
 impl Watch {
-    pub fn next_snapshot(&mut self) -> Result<Option<Snapshot>, Error> {
-        let Some(line) = self.frames.next(None)? else {
-            return Ok(None);
-        };
-        if self.first {
+    pub fn next_snapshot(&mut self) -> Result<Snapshot, Error> {
+        let line = self
+            .frames
+            .next(self.first.then_some(self.initial_deadline))?;
+        let snapshot = if self.first {
             let reply: ThreadReply = decode(&line)?;
             self.first = false;
-            return Ok(Some(reply.thread));
+            reply.thread
+        } else {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Event {
+                event: String,
+                thread: Snapshot,
+            }
+            let event: Event = serde_json::from_slice(&line).map_err(|_| {
+                Error::Protocol("Invalid host event; reconnect to load current state.".into())
+            })?;
+            if event.event != "snapshot" {
+                return Err(Error::Protocol("Unsupported host event.".into()));
+            }
+            event.thread
+        };
+        // Validate before coalescing so a later good frame cannot hide an identity violation.
+        if snapshot.id != self.thread_id {
+            return Err(Error::Protocol("Host returned the wrong thread.".into()));
         }
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Event {
-            event: String,
-            thread: Snapshot,
+        if let Some((checkout, model)) = &self.identity {
+            if *checkout != snapshot.checkout || *model != snapshot.model {
+                return Err(Error::Protocol(
+                    "Host changed this thread's saved model or checkout.".into(),
+                ));
+            }
+        } else {
+            self.identity = Some((snapshot.checkout.clone(), snapshot.model.clone()));
         }
-        let event: Event = serde_json::from_slice(&line).map_err(|_| {
-            Error::Protocol("Invalid host event; reconnect to load current state.".into())
-        })?;
-        if event.event != "snapshot" {
-            return Err(Error::Protocol("Unsupported host event.".into()));
-        }
-        Ok(Some(event.thread))
+        Ok(snapshot)
     }
 }
 
@@ -474,13 +492,10 @@ mod tests {
             partial_since: None,
         };
         let deadline = Instant::now() + Duration::from_millis(20);
-        loop {
-            match frames.next(Some(deadline)) {
-                Err(Error::Transport(_)) => break,
-                Ok(None) => continue,
-                _ => panic!("unterminated frame must time out"),
-            }
-        }
+        assert!(matches!(
+            frames.next(Some(deadline)),
+            Err(Error::Transport(_))
+        ));
         assert!(!frames.pending.is_empty());
         drop(frames);
         writer.join().unwrap();
@@ -501,12 +516,11 @@ mod tests {
         assert!(
             frames
                 .next(Some(Instant::now() + Duration::from_millis(5)))
-                .unwrap()
-                .is_none()
+                .is_err()
         );
         writer.write_all(b"\nnext\n").unwrap();
-        assert_eq!(frames.next(None).unwrap().unwrap(), b"partial\n");
-        assert_eq!(frames.next(None).unwrap().unwrap(), b"next\n");
+        assert_eq!(frames.next(None).unwrap(), b"partial\n");
+        assert_eq!(frames.next(None).unwrap(), b"next\n");
         frames.pending = vec![b'x'; REPLY_LIMIT];
         writer.write_all(b"x").unwrap();
         assert!(matches!(frames.next(None), Err(Error::Protocol(_))));
