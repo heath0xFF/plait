@@ -83,7 +83,10 @@ The response labels the scripted provider. No sample-view code ships in the app.
   guards with injected test state, on macOS and Linux. Exported macOS images use
   the app's Metal renderer and Core Text offscreen; Linux images use Linux fonts
   and software rendering. Neither validates the native window, input, focus
-  that follows input, the accessibility tree, or latency.
+  that follows input, the accessibility tree, or latency. Conversation text
+  selection, copy, link hover, and the jump to the newest row are exercised by
+  pointer and key events sent through GPUI's dispatch in these scenes, not by
+  a native pointer.
 
 The optional headless PNG export is ignored in the normal Rust suite and runs
 explicitly when requested; CI does not run it on either platform. See
@@ -97,6 +100,9 @@ explicitly when requested; CI does not run it on either platform. See
   runtime behavior, Intel macOS, and a native Linux client are not validated.
 - Full VoiceOver, keyboard focus, IME, and sustained typing/streaming checks
   remain open for the installed release.
+- Text selection, link clicks, and hover-revealed copy controls have not been
+  checked with a native pointer in the installed app. Links inside conversation
+  text are not reachable from the keyboard.
 - Conversation and tool previews are bounded. There is no paginated full-history
   view, automatic updater, or published ADEMark result.
 

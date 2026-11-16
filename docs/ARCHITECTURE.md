@@ -349,8 +349,10 @@ kept by row identity, so it survives streaming and list changes. Cmd-C copies
 it once a press in the conversation has moved focus there; the composer keeps
 its own Cmd-C while it has focus. Copy controls for a message's source, a code
 block, and a tool's details appear when the pointer is over their row or when
-they take keyboard focus. Selection follows only rows that are on screen: a
-drag does not scroll the list by itself, though the wheel still does.
+they take keyboard focus. Dragging past the top or bottom edge scrolls the list
+one step for each pointer movement; it does not keep scrolling while the
+pointer rests. Rows between the two ends are copied whether or not they are on
+screen; a tool's details are copied only while they are open.
 
 Conversation events use GPUI's variable-height `list`. User messages render as
 right-aligned bubbles; agent replies remain open text. Tool details start
