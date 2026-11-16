@@ -37,6 +37,9 @@ fn run() -> io::Result<()> {
     if operation == "command" {
         return command::run(args.collect());
     }
+    if operation == "trusted-command" {
+        return command::run_trusted(args.collect());
+    }
     if operation == "version" {
         serde_json::to_writer(
             io::stdout(),
