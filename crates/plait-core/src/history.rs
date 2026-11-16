@@ -167,11 +167,19 @@ impl History {
         let mut entries: Vec<_> = page
             .entries
             .into_iter()
-            .filter(|entry| !known.contains(&entry.key()))
+            .take_while(|entry| !known.contains(&entry.key()))
             .collect();
+        // A stored-entry boundary can make one page larger than the window.
+        // Keep its nearest older portion, with room for the current scroll anchor.
+        let excess = entries.len().saturating_sub(MAX_ITEMS / 2);
+        self.older = if excess > 0 {
+            entries.drain(..excess);
+            entries.first().map(|entry| entry.cursor.clone())
+        } else {
+            page.before.map(Some)
+        };
         entries.append(&mut self.entries);
         self.entries = entries;
-        self.older = page.before.map(Some);
         self.loaded = true;
         self.bound(true);
     }
@@ -737,6 +745,30 @@ mod tests {
         });
         assert!(cache.bytes() <= MAX_BYTES);
         assert_eq!(cache.older, Some(Some("reload-page".into())));
+    }
+
+    #[test]
+    fn oversized_page_walks_back_in_contiguous_windows_without_skipping() {
+        let names: Vec<_> = (0..MAX_ITEMS * 5 / 2).map(|i| i.to_string()).collect();
+        let source = page(&names.iter().map(String::as_str).collect::<Vec<_>>(), None);
+        let mut cache = History::default();
+        let mut visited = HashSet::new();
+        cache.latest(source.clone());
+        for start in [900, 600, 300, 0] {
+            let display = cache.project(&live(&[]));
+            assert_eq!(display.messages.len(), MAX_ITEMS);
+            for (offset, item) in display.messages.iter().enumerate() {
+                assert_eq!(item.id, (start + offset).to_string());
+                visited.insert(item.id.clone());
+            }
+            if start == 0 {
+                assert_eq!(cache.older, None);
+            } else {
+                assert_eq!(cache.older, Some(None));
+                cache.prepend(source.clone());
+            }
+        }
+        assert_eq!(visited.len(), names.len());
     }
 
     #[test]
