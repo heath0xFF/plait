@@ -167,6 +167,10 @@ Use efficient rendering, virtualization for long conversations, cached state, an
 
 No unnecessary polling, full-view rebuilds, or large synchronous operations on the UI thread.
 
+[ADEMark](https://ademark.dev) is an external performance target. See
+[our baseline work and remaining gaps](docs/ADEMARK.md). Plait has no ADEMark
+score yet; internal probes are not native benchmark results.
+
 ## Development milestones
 
 ### M1 — Native desktop foundation

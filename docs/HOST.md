@@ -96,6 +96,17 @@ A host admits at most eight active checkouts. Empty submissions are rejected.
 more `{"event":"snapshot","thread":SNAPSHOT}` lines. The connection stays open
 until disconnect, failure, or host shutdown. A disconnect does not stop work.
 
+Delivery is event-driven. The runtime signals changed thread IDs through a
+private inherited socket (`PLAIT_NOTIFY_FD`); the host fetches state only after
+an invalidation. This internal channel is separate from request/reply stdio and
+is not a client API. The host and runtime must be updated together, as packaged.
+No snapshot or credential travels in a notification. Repeated changes coalesce;
+a full ID set becomes an all-watch invalidation instead of an unbounded queue.
+Each client has one pending wakeup, registers before its initial snapshot read,
+and releases its subscription on disconnect. EOF or malformed notification
+frames stop the host rather than leave clients silently stale. The public watch
+frames, request deadlines, durable writes, and recovery rules are unchanged.
+
 ## Snapshot
 
 All keys below are always present. Nullable fields use JSON null.

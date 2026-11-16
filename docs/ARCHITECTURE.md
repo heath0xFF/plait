@@ -69,8 +69,16 @@ and the default model. The desktop receives availability, not credentials.
 Each thread keeps its exact provider/model pair. Saving a default does not
 change an existing thread.
 
-The desktop uses bounded snapshot subscriptions. A repository epoch, watch epoch,
-and thread ID guard each async result. An uncertain submission keeps its request
+The desktop uses bounded snapshot subscriptions. Runtime state changes signal
+the host through a private inherited Unix socket, separate from request/reply
+stdio. The host wakes matching watchers and reads the latest snapshot; idle
+watches do not poll the sidecar. IDs coalesce under backpressure, and each client
+has at most one pending wakeup. Watches register before the initial read and
+wait on both the wakeup and client disconnect. Channel EOF replaces the host's
+periodic child-process check. Client protocol version 1 and durable schemas are
+unchanged; the internal channel ships with the host/runtime update unit.
+
+A repository epoch, watch epoch, and thread ID guard each async result. An uncertain submission keeps its request
 ID for an explicit retry. Reconnect loads state; it does not submit a new task.
 The composer keeps its draft until acceptance and clears it only if its edit
 revision still matches the submitted draft. Each thread has its own composer.
@@ -241,6 +249,9 @@ Toggle Diagnostics (Cmd-Shift-D) shows them in a footer; it is hidden by
 default. Git panels show background read durations. These are diagnostics,
 **not** measurements of GPU frame time, input-to-display latency, or complete
 launch time. Instrumentation does not write a log from the UI thread.
+
+The [ADEMark plan](ADEMARK.md) tracks external performance goals and the local
+transport probe. These probes do not measure native input-to-pixel latency.
 
 ### Layout checks without a Mac
 

@@ -31,6 +31,16 @@ export class Runtime {
   models: Models;
   directory: string;
   authenticated: Set<string>;
+  private listeners = new Set<(id: string) => void>();
+  subscribe(listener: (id: string) => void) {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+  private changed(id: string) { for (const listener of this.listeners) listener(id); }
+  private save(snapshot: Snapshot, head = 0) {
+    this.store.save(snapshot, head);
+    this.changed(snapshot.id);
+  }
   constructor(directory: string, models: Models, authenticated: Set<string>) {
     this.directory = directory; this.models = models; this.authenticated = authenticated;
     this.store = new Store(directory);
@@ -76,7 +86,7 @@ export class Runtime {
         const session = this.sessions.get(id);
         snapshot.status = 'stopped'; snapshot.pending_approval = null;
         session?.authorization.revoke();
-        this.store.save(snapshot);
+        this.save(snapshot);
         if (session) void session.root?.abort(context).catch(() => {});
         return { thread: snapshot };
       }
@@ -121,7 +131,7 @@ export class Runtime {
       if (call.kind !== 'value') return;
       await this.syncInputs(session);
       update(snapshot, call.value, session.inputs);
-      this.store.save(snapshot, Math.max(0, ...call.value.entries.map(entry => Number(entry.id))));
+      this.save(snapshot, Math.max(0, ...call.value.entries.map(entry => Number(entry.id))));
     });
   }
   async submit(id: string, requestId: string, text: string) {
@@ -139,7 +149,7 @@ export class Runtime {
     try {
       await checkRoot(snapshot.checkout, this.store.rootIdentity(id));
       lease = await acquireCheckout(snapshot.checkout);
-      const save = () => this.store.save(snapshot);
+      const save = () => this.save(snapshot);
       const approvals = new InteractiveApproval(snapshot, save);
       authorization = new RunAuthorization(approvals);
       const session: Session = {
@@ -150,6 +160,7 @@ export class Runtime {
       snapshot.status = 'running'; snapshot.error = null; snapshot.live_text = ''; snapshot.pending_approval = null;
       const result = { thread_id: id, request_id: requestId, accepted: true };
       this.store.admit(id, requestId, text, result, snapshot);
+      this.changed(id);
       session.inputs = this.store.inputs(id); session.requestId = requestId;
       accepted = true;
       session.finished = this.run(session, requestId, text);

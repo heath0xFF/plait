@@ -1,5 +1,33 @@
 # Verification
 
+## Event-driven host watches — Linux checks, 2026-11-16
+
+Replaced the 150 ms sidecar watch poll and the one-second child-process poll
+with a private notification channel. The public client protocol, durable schema,
+exact-call approval policy, and sandbox are unchanged. Each watch has one pending
+wakeup; backpressure coalesces changes instead of retaining snapshot queues.
+
+Checked on Arthur: formatting, strict workspace Clippy, 57 Rust tests, TypeScript,
+86 runtime tests, and debug/release host builds. The optional PNG export test
+remains ignored in the normal Rust suite. New cases cover notification bounds,
+coalescing, idle request counts, thread routing, disconnect cleanup, sidecar
+death, approval/Stop updates, and joining an active stream without polling.
+
+The release transport probe used a scripted sidecar and 40 latency samples per
+watcher count. It made no model requests and opened no desktop window:
+
+| Socket watchers | Delivery p50, before → after | Delivery p95, before → after | Idle sidecar watch reads over about 2 s |
+| --- | --- | --- | --- |
+| 1 | 95.11 → 0.88 ms | 133.97 → 10.44 ms | 13 → 0 |
+| 20 | 96.16 → 1.83 ms | 136.44 → 9.34 ms | 260 → 0 |
+
+[All samples and build details](performance/watch-2026-11-16.json) are preserved.
+This is one before/after batch on a development Linux machine, not a controlled
+macOS benchmark. It measures neither CPU usage nor input-to-pixel latency. The
+20-watcher case is not ADEMark's 20-thread workload. See the
+[ADEMark plan and probe command](ADEMARK.md). Mac installation and real sandbox
+acceptance for this change remain the macOS CI gate; no ADEMark result is claimed.
+
 ## BB look-and-feel pass — Linux layout check only, 2026-11-16
 
 Branch `ui/bb-look-and-feel`, written on Arthur. This is a presentation change
@@ -342,7 +370,9 @@ work; it is not UI blocking time. Cached diffs require no Git subprocess.
 
 **The 60 FPS and complete warm-launch targets are not yet validated.** Measure
 frame presentation and repeated launches before treating them as release gates.
-There is no idle polling or continuous animation.
+These M1 observations used the fixture desktop, with no idle polling or
+continuous animation. They do not describe the later M2 host's original polling
+transport; see the event-driven host checkpoint above.
 
 ## Conversation refinement
 

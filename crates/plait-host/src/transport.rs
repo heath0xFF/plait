@@ -22,6 +22,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod notifications;
+use notifications::Notifications;
+
 const REQUEST_LIMIT: usize = 65536;
 const OUTPUT_LIMIT: usize = 1048576;
 
@@ -199,6 +202,11 @@ pub fn serve(
     if unsafe { libc::fcntl(lock.as_raw_fd(), libc::F_SETFD, 0) } < 0 {
         return Err(io::Error::last_os_error());
     }
+    let (notify_reader, notify_writer) = UnixStream::pair()?;
+    // Keep change notifications separate from the serialized request/reply pipe.
+    if unsafe { libc::fcntl(notify_writer.as_raw_fd(), libc::F_SETFD, 0) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
     let mut command = Command::new(node);
     command
         .arg("--disable-warning=ExperimentalWarning")
@@ -208,13 +216,16 @@ pub fn serve(
         .env_remove("NODE_PATH")
         .env("PLAIT_HOST_EXE", std::env::current_exe()?)
         .env("PLAIT_LOCK_FD", lock.as_raw_fd().to_string())
+        .env("PLAIT_NOTIFY_FD", notify_writer.as_raw_fd().to_string())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     if let Some(home) = home {
         command.env("HOME", home).current_dir(home);
     }
-    let mut child = command.spawn()?;
+    let child = command.spawn();
+    drop(notify_writer);
+    let mut child = child?;
     let input = child
         .stdin
         .take()
@@ -234,16 +245,12 @@ pub fn serve(
     }
     let listener = UnixListener::bind(&socket_path)?;
     fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))?;
-    let monitor = Arc::clone(&sidecar);
+    let notifications = Arc::new(Notifications::default());
+    let relay = Arc::clone(&notifications);
     thread::spawn(move || {
-        loop {
-            thread::sleep(Duration::from_secs(1));
-            if let Ok(mut guard) = monitor.try_lock()
-                && !matches!(guard.child.try_wait(), Ok(None))
-            {
-                std::process::exit(1);
-            }
-        }
+        // EOF also detects sidecar death, with no periodic child-process check.
+        let _ = notifications::relay(notify_reader, &relay);
+        std::process::exit(1);
     });
     let clients = Arc::new(AtomicUsize::new(0));
     for socket in listener.incoming() {
@@ -254,8 +261,9 @@ pub fn serve(
         }
         let sidecar = Arc::clone(&sidecar);
         let clients = Arc::clone(&clients);
+        let notifications = Arc::clone(&notifications);
         thread::spawn(move || {
-            let _ = connection(socket, &sidecar);
+            let _ = connection(socket, &sidecar, &notifications);
             clients.fetch_sub(1, Ordering::Relaxed);
         });
     }
@@ -271,7 +279,11 @@ fn send(socket: &mut UnixStream, value: &Value) -> io::Result<()> {
     timed_write(socket, &bytes, Instant::now() + Duration::from_secs(2))
 }
 
-fn connection(mut socket: UnixStream, sidecar: &Mutex<Sidecar>) -> io::Result<()> {
+fn connection(
+    mut socket: UnixStream,
+    sidecar: &Mutex<Sidecar>,
+    notifications: &Arc<Notifications>,
+) -> io::Result<()> {
     local_socket::require_same_user(&socket)?;
     socket.set_read_timeout(Some(Duration::from_secs(5)))?;
     socket.set_write_timeout(Some(Duration::from_secs(2)))?;
@@ -290,18 +302,28 @@ fn connection(mut socket: UnixStream, sidecar: &Mutex<Sidecar>) -> io::Result<()
             );
         }
     };
-    let watching = request["op"] == "watch";
+    // Register before reading state so a concurrent change cannot be missed.
+    let mut subscription = if request["op"] == "watch" {
+        request["thread_id"]
+            .as_str()
+            .map(|id| notifications.subscribe(id.to_owned()))
+            .transpose()?
+    } else {
+        None
+    };
     let reply = sidecar
         .lock()
         .map_err(|_| io::Error::other("sidecar failed"))?
         .request(&request)?;
     send(&mut socket, &reply)?;
-    if !watching || reply["ok"] != true {
+    if reply["ok"] != true {
         return Ok(());
     }
+    let Some(subscription) = subscription.as_mut() else {
+        return Ok(());
+    };
     let mut previous = reply["result"]["thread"].clone();
-    loop {
-        thread::sleep(Duration::from_millis(150));
+    while subscription.wait(&socket)? {
         let reply = sidecar
             .lock()
             .map_err(|_| io::Error::other("sidecar failed"))?
@@ -313,25 +335,9 @@ fn connection(mut socket: UnixStream, sidecar: &Mutex<Sidecar>) -> io::Result<()
         if *snapshot != previous {
             send(&mut socket, &json!({"event":"snapshot","thread":snapshot}))?;
             previous = snapshot.clone();
-        } else {
-            // A zero-byte write does not detect EOF; peek without consuming data.
-            let mut byte = 0u8;
-            let result = unsafe {
-                libc::recv(
-                    socket.as_raw_fd(),
-                    (&mut byte as *mut u8).cast(),
-                    1,
-                    libc::MSG_PEEK | libc::MSG_DONTWAIT,
-                )
-            };
-            if result >= 0 {
-                return Ok(());
-            }
-            if io::Error::last_os_error().kind() != io::ErrorKind::WouldBlock {
-                return Err(io::Error::last_os_error());
-            }
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
