@@ -62,7 +62,8 @@ The core uses Unix filesystem and socket APIs; it is not a Windows port.
 Filesystem, socket, and Git operations run on the background executor.
 
 A Linux build does not enable agent command execution. The runtime still rejects
-non-macOS commands, and the Rust command guardian still requires Seatbelt. Linux
+non-macOS commands under either command policy, and the Rust command guardian
+rejects both its sandboxed and trusted entries there. Linux
 containment and cancellation need a separate safety review. Local peer identity
 is checked with `getpeereid` on macOS and `SO_PEERCRED` on Linux.
 Both platforms use the same local protocol (version 1, with opt-in version 2)
@@ -114,7 +115,10 @@ revision still matches the submitted draft. Each thread has its own composer.
 Each run is submitted with an approval mode. In `ask` mode every file change and
 command needs a one-call approval with full arguments; in `auto` mode, the
 desktop default with a version 2 host, they run without a prompt. File helpers own checkout writes; command execution reads the checkout and uses
-private scratch space for build output. Stop revokes pending approvals and
+private scratch space for build output. A project can instead be set to the
+opt-in trusted [command policy](HOST.md#command-policy), in which commands run
+as the user and may write the checkout; the desktop control for it is not
+shipped yet. Stop revokes pending approvals and
 cancels work. Interrupted work must not replay automatically after host failure.
 These boundaries need the tests listed in HOST.md before valuable-repository use.
 
@@ -132,6 +136,9 @@ registry asks the run for authorization without owning the approval lifecycle.
 Argument limits, dirty-path protection, checked file helpers, and command
 containment remain mandatory in `tools.ts` and its helpers. Authorization is
 checked again before an effect starts, so a late Allow cannot override Stop.
+Command containment is a property of the checkout's command policy, not of the
+approval mode: a run reads the policy once at admission, and only a trusted
+project takes the separate uncontained path. File-tool checks apply to both.
 
 The submitting desktop chooses the mode for one run (see
 [protocol version 2](HOST.md#protocol-version-2)). There is no persisted grant,
@@ -159,6 +166,16 @@ cannot keep a subscription open. Each output pipe decodes UTF-8 across read
 boundaries. `runtime/src/text.ts` keeps text cuts on whole Unicode code points
 within the existing UTF-16 budgets. Accepted-input previews, transcript fields,
 and tool output use these helpers; the original input journal is not clipped.
+
+`command/policy.ts` owns the per-checkout command policy, its two host
+operations, and the trusted wording for instructions, the tool description, and
+approvals. `command/login-environment.ts` reads the account's login-shell
+environment for trusted commands. `command/trusted.ts` runs a trusted command
+through the same supervisor and guardian. Before the command it drops
+ownership records that had already drifted; afterwards it refreshes the records
+of this thread's files that the command changed and reports changes to
+pre-existing dirty paths.
+`tools.ts` chooses the path from the policy the run was admitted with.
 
 `bash scripts/check.sh` is the common development entry point. Runtime test
 selection is explicit: common daemon/file tests on both systems, real sandbox

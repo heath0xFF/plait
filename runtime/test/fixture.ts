@@ -1,9 +1,10 @@
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider, fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
+import type { FauxResponseStep } from '@earendil-works/pi-ai/providers/faux';
 import { Runtime } from '../src/runtime.ts';
 import { defineExtension, hook, ToolTask } from '@earendil-works/pi-durable';
 import { appendFile } from 'node:fs/promises';
-import { writeFileSync } from 'node:fs';
+import { appendFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ToolState } from '../src/tools.ts';
 import { RunAuthorization } from '../src/authorization.ts';
@@ -14,7 +15,12 @@ const models = createModels();
 const faux = fauxProvider({ tokensPerSecond: 120, tokenSize: { min: 1, max: 1 } });
 const call = (name: string, args: Record<string, string>, id: string) => fauxAssistantMessage([fauxToolCall(name, args, { id })], { stopReason: 'toolUse' });
 const mode = process.env.PLAIT_TEST_SCENARIO;
-const responses = mode === 'unicode-read' ? [
+// Records what the model is told (instructions and tool declarations) for one request.
+const recordContext = (context: { messages: unknown }) => {
+  appendFileSync(join(process.argv[2], 'model-contexts.jsonl'), JSON.stringify(context.messages) + '\n');
+  return fauxAssistantMessage([fauxText('Recorded the scripted model context.')]);
+};
+const responses: FauxResponseStep[] = mode === 'unicode-read' ? [
   call('read', { path: 'unicode.txt' }, 'unicode-read-1'),
 ] : mode === 'edit' ? [
   call('read', { path: 'notes.txt' }, 'read-1'),
@@ -36,6 +42,25 @@ const responses = mode === 'unicode-read' ? [
   : mode === 'followup' ? [call('edit', { path: 'notes.txt', old_text: 'after', new_text: 'followup' }, 'followup-1')]
   : mode === 'effect' || mode === 'unrecorded' ? [call('edit', { path: 'notes.txt', old_text: 'before', new_text: 'after' }, 'effect-1')]
   : mode === 'dirty' ? [call('edit', { path: 'notes.txt', old_text: 'dirty', new_text: 'DESTROYED' }, 'dirty-1'), call('command', { command: 'printf DESTROYED > notes.txt' }, 'dirty-2')]
+  : mode === 'trusted-work' ? [
+    call('command', { command: 'printf "made by command\\n" > generated.txt && git add generated.txt && git -c user.name=Fixture -c user.email=fixture@invalid commit -qm "trusted commit" && printf COMMITTED' }, 'commit-1'),
+    call('edit', { path: 'notes.txt', old_text: 'before', new_text: 'after' }, 'own-edit'),
+    call('command', { command: 'printf "appended\\n" >> notes.txt && printf "by command\\n" > scratch.txt && printf APPENDED' }, 'append-1'),
+    call('edit', { path: 'notes.txt', old_text: 'after', new_text: 'again' }, 'later-edit'),
+    call('edit', { path: 'scratch.txt', old_text: 'by command', new_text: 'DESTROYED' }, 'unowned-edit'),
+    call('edit', { path: 'dirty.txt', old_text: 'dirty', new_text: 'DESTROYED' }, 'dirty-edit'),
+    call('write', { path: 'dirty.txt', content: 'DESTROYED' }, 'dirty-write'),
+  ] : mode === 'trusted-followup' ? [call('edit', { path: 'notes.txt', old_text: 'again', new_text: 'followup' }, 'followup-1')]
+  : mode === 'trusted-install' ? [
+    call('command', { command: 'mkdir -p node_modules/package/lib target/debug/deps && i=0; while [ $i -lt 3000 ]; do : > node_modules/package/lib/f$i; : > target/debug/deps/f$i; i=$((i+1)); done; printf INSTALLED' }, 'install-1'),
+    call('edit', { path: 'notes.txt', old_text: 'before', new_text: 'after' }, 'after-install-edit'),
+    call('write', { path: 'created.txt', content: 'new\n' }, 'after-install-write'),
+  ] : mode === 'trusted-stop' ? [call('command', { command: 'printf started > started.txt; sleep 300 & printf "READY %s %s\\n" "$$" "$!"; wait' }, 'stop-1')]
+  : mode === 'trusted-twice' ? [
+    call('command', { command: 'printf one > first.txt && printf "FIRST %s" "$HOME"' }, 'first-1'),
+    fauxAssistantMessage([fauxText('First scripted turn finished.')]),
+    call('command', { command: 'printf two > second.txt && printf SECOND' }, 'second-1'),
+  ] : mode === 'record-context' ? [recordContext, recordContext]
   : mode === 'error' ? [fauxAssistantMessage([], { stopReason: 'error', errorMessage: 'SECRET_PROVIDER_TOKEN_DO_NOT_LEAK' })]
   : [];
 responses.push(...Array.from({ length: 8 }, () => fauxAssistantMessage([fauxText('Scripted test response with incremental real runtime events. This is not a live model.')] )));

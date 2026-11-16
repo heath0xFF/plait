@@ -5,6 +5,8 @@ export type EffectCall = Readonly<{
   name: 'edit' | 'write' | 'command';
   arguments: Readonly<Record<string, string>>;
   dirtyPaths: readonly string[];
+  // Present only for a trusted run, so approval text can describe it honestly.
+  commandPolicy?: 'trusted';
 }>;
 
 export interface AuthorizationPolicy {

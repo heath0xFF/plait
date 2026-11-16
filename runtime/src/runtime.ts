@@ -20,6 +20,7 @@ import { restoreOwned } from './provenance.ts';
 import { RunAuthorization } from './authorization.ts';
 import { InteractiveApproval, automaticApproval } from './approval.ts';
 import type { Providers } from './providers.ts';
+import { commandPolicy, commandPolicyOperation, TRUSTED_INSTRUCTIONS } from './command/policy.ts';
 
 type Session = ToolState & {
   harness?: Harness; root?: Conversation; watch?: ConversationWatch; finished?: Promise<void>;
@@ -108,6 +109,7 @@ export class Runtime {
         session.approvals.answer(String(request.approval_id), request.allow === true);
         return { thread: session.snapshot };
       }
+      case 'command_policy': case 'set_command_policy': return commandPolicyOperation(this.store, request);
       default: fail('invalid_request', 'Unknown operation.');
     }
   }
@@ -171,6 +173,9 @@ export class Runtime {
         snapshot, baseline: [], protected: [], rootIdentity: this.store.rootIdentity(id), buildCache: { store: this.directory, thread: id }, owned: new Map(), inputs: [], requestId,
         authorization, approvals, lease, save, record: image => this.store.record(id, image),
       };
+      // Read once here: the run keeps this policy, and a later change waits for the next run.
+      session.commandPolicy = commandPolicy(this.store, snapshot.checkout, session.rootIdentity);
+      session.forget = path => this.store.forget(id, path);
       this.sessions.set(id, session);
       snapshot.status = 'running'; snapshot.error = null; snapshot.live_text = ''; snapshot.pending_approval = null;
       snapshot.approval_mode = mode;
@@ -197,6 +202,7 @@ export class Runtime {
       session.baseline = baseline.filter(path => !session.owned.has(pathKey(path)));
       session.protected = await identities(snapshot.checkout, session.baseline);
       let instructions = 'You are Plait, a local coding assistant. File tools are the only checkout writers; edits and commands may require the user\'s approval. Commands read the checkout and write only private scratch (HOME/TMPDIR) and this thread\'s private build cache (CARGO_HOME/CARGO_TARGET_DIR), with no external network and a 15 minute limit. Tests may use scratch-local Git repositories and Unix sockets. Use offline locked builds. Unchanged files this thread previously wrote can be edited again. Never modify other dirty or ignored paths, bypass approval, or start daemons. Read project instructions below.\n';
+      if (session.commandPolicy === 'trusted') instructions = TRUSTED_INSTRUCTIONS;
       try {
         await lstat(join(snapshot.checkout, 'AGENTS.md'));
         const { text: project } = await fileAction(snapshot.checkout, 'read', 'AGENTS.md', undefined, session.lease?.fd, session.rootIdentity);

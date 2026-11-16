@@ -74,6 +74,17 @@ export class Store {
   setDefault(model: ModelChoice) {
     this.db.prepare("INSERT INTO settings VALUES ('default_model',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(model));
   }
+  setting(key: string): string | null {
+    const row = this.db.prepare('SELECT value FROM settings WHERE key=?').get(key);
+    return row ? String(row.value) : null;
+  }
+  setSetting(key: string, value: string | null) {
+    if (value === null) this.db.prepare('DELETE FROM settings WHERE key=?').run(key);
+    else this.db.prepare('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key, value);
+  }
+  forget(id: string, path: string) {
+    this.db.prepare('DELETE FROM postimages WHERE thread_id=? AND path=?').run(id, path);
+  }
   duplicate(scope: string, id: string, input: unknown): unknown | undefined {
     const row = this.db.prepare('SELECT hash,result FROM requests WHERE scope=? AND id=?').get(scope, id);
     if (!row) return undefined;

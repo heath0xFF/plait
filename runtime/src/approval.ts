@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { AuthorizationPolicy, EffectCall } from './authorization.ts';
 import { fail } from './protocol.ts';
 import type { Approval, Snapshot } from './protocol.ts';
+import { TRUSTED_COMMAND_SUMMARY, TRUSTED_RISK } from './command/policy.ts';
 
 type SettlementFailure = { error: unknown };
 type PendingApproval = {
@@ -85,6 +86,11 @@ export class InteractiveApproval implements AuthorizationPolicy {
 }
 
 function describeApproval(call: EffectCall): Approval {
+  if (call.commandPolicy === 'trusted') return {
+    id: randomUUID(), tool_id: call.toolId, kind: call.name === 'command' ? 'command' : 'edit',
+    summary: call.name === 'command' ? TRUSTED_COMMAND_SUMMARY : `Change ${call.arguments.path}`,
+    details: JSON.stringify(call.arguments), dirty_paths: [...call.dirtyPaths], risk: TRUSTED_RISK,
+  };
   return {
     id: randomUUID(), tool_id: call.toolId, kind: call.name === 'command' ? 'command' : 'edit',
     summary: call.name === 'command' ? 'Run sandboxed command' : `Change ${call.arguments.path}`,
