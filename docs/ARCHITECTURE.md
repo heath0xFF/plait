@@ -261,7 +261,8 @@ normal app shutdown also flushes the journal. Force quit and power loss cannot
 guarantee the last unsaved keystroke. No filesystem work runs in render.
 
 The journal keeps the last checkout/thread, readable titles, draft text/edit
-revisions, and unconfirmed submission IDs. It never contains provider credentials.
+revisions, and unconfirmed submission IDs. It does not read or copy provider
+credential stores. Draft text is private local JSON, not application-encrypted.
 A submission's exact ID and text must be durable before the socket request starts.
 Reopening never submits automatically. Explicit retry uses that same ID, and a
 matching accepted-input event can resolve it. The composer revision guard survives

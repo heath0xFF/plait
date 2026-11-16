@@ -37,8 +37,8 @@ cleanup() {
     rm -rf -- "$fixture"
 }
 trap cleanup EXIT
-git init -q "$fixture"
-PLAIT_DESKTOP_STATE_DIR="$fixture/desktop" /Applications/Plait.app/Contents/MacOS/plait "$fixture" > dist/installed-client.log 2>&1 &
+git init -q "$fixture/plait-acceptance"
+PLAIT_DESKTOP_STATE_DIR="$fixture/desktop" /Applications/Plait.app/Contents/MacOS/plait "$fixture/plait-acceptance" > dist/installed-client.log 2>&1 &
 pid=$!
 sleep 5
 kill -0 "$pid"
@@ -48,7 +48,7 @@ root = sys.argv[1]
 path = os.path.join(root, 'desktop', 'desktop.json')
 with open(path) as stream:
     state = json.load(stream)
-assert os.path.realpath(state['checkout']) == os.path.realpath(root), state
+assert os.path.realpath(state['checkout']) == os.path.realpath(os.path.join(root, 'plait-acceptance')), state
 assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
 print('Installed desktop persisted the selected checkout privately.')
 PY

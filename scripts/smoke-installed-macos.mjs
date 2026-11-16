@@ -76,7 +76,8 @@ test('user LaunchAgent and isolated packaged host start without developer Node',
 test('installed runtime passes the full macOS safety suite', { timeout: 240000 }, async () => {
   await new Promise((resolve, reject) => {
     const child = spawn(node, ['test/run.mjs', '--require-command-sandbox'], {
-      cwd: join(repository, 'runtime'), stdio: 'inherit', env: process.env,
+      cwd: join(repository, 'runtime'), stdio: 'inherit',
+      env: { ...process.env, PLAIT_VERIFY_INSTALLED_UI: '1', PLAIT_INSTALLED_UI_ARTIFACTS: join(repository, 'dist') },
     });
     child.once('error', reject);
     child.once('exit', code => code === 0 ? resolve() : reject(new Error(`Installed runtime suite failed: ${code}`)));

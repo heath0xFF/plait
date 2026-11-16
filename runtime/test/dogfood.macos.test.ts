@@ -7,6 +7,8 @@ import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { binary, delay, exec, request, until } from './support/host.ts';
 import { replayKey, replayModel, replayServer } from './support/openai-replay.ts';
+import { installedClient } from './support/installed-ui.ts';
+import type { Snapshot } from '../src/protocol.ts';
 
 // This is real Plait source and real Cargo execution, but a scripted model, not a live account.
 test('production runtime edits Plait source, runs Cargo, reconnects and resumes without replay', { timeout: 240000 }, async t => {
@@ -15,21 +17,31 @@ test('production runtime edits Plait source, runs Cargo, reconnects and resumes 
   const source = resolve(import.meta.dirname, '../..');
   const path = 'crates/plait-core/src/session.rs';
   const before = await readFile(join(source, path), 'utf8');
-  const oldTest = 'assert_eq!(title(&"🙂".repeat(100)).chars().count(), 72);';
-  const newTest = oldTest.replace(', 72)', ', 80)');
-  assert(before.includes('.take(72)') && before.includes(oldTest), 'Update the dogfood fixture when the title contract changes.');
+  const oldConstant = 'const FILE_LIMIT: usize = 4 * 1024 * 1024;';
+  const newConstant = oldConstant + '\nconst TITLE_LIMIT: usize = 72;';
+  const marker = '    #[test]\n    fn titles_are_plain_whitespace_normalized_and_unicode_safe()';
+  const regression = '    #[test]\n    fn dogfood_normalizes_before_applying_the_title_limit() {\n'
+    + '        let input = format!(" \\t{} \\n", "x".repeat(TITLE_LIMIT + 1));\n'
+    + '        assert_eq!(title(&input), "x".repeat(TITLE_LIMIT));\n    }\n\n' + marker;
+  assert(before.includes('.take(72)') && before.includes(oldConstant) && before.includes(marker), 'Update the dogfood fixture when the title implementation changes.');
   const edit = (id: string, old_text: string, new_text: string) => ({ tool: { id, name: 'edit', input: { path, old_text, new_text } } });
-  const command = (id: string) => ({ tool: { id, name: 'command', input: { command: 'sleep 1; cargo test --offline --locked -p plait-core --lib' } } });
+  const command = (id: string) => ({ tool: { id, name: 'command', input: {
+    command: `sleep ${id === 'test_refactor' && process.env.PLAIT_VERIFY_INSTALLED_UI === '1' ? 8 : 1}; cargo test --offline --locked -p plait-core --lib`,
+  } } });
   const replay = await replayServer([
-    edit('extend_title', '.take(72)', '.take(80)'), edit('extend_test', oldTest, newTest),
-    command('test_extended_title'), { text: 'Scripted fixture: the changed Plait core passed its tests.' },
-    edit('restore_title', '.take(80)', '.take(72)'), edit('restore_test', newTest, oldTest),
-    command('test_restored_title'), { text: 'Scripted fixture: the follow-up passed with the original limit restored.' },
+    edit('extract_limit', '.take(72)', '.take(TITLE_LIMIT)'), edit('name_limit', oldConstant, newConstant),
+    edit('add_regression', marker, regression), command('test_refactor'), { text: '## Refactor verified\n\nScripted provider; real approved edits and Cargo tests.\n\n```rust\nconst TITLE_LIMIT: usize = 72;\n```\n\nThe regression test passed. This is not a live-model session.' },
+    edit('restore_limit', '.take(TITLE_LIMIT)', '.take(72)'), edit('remove_constant', newConstant, oldConstant),
+    edit('remove_regression', regression, marker), command('test_original'), { text: 'Scripted fixture: the follow-up passed with the original source restored.' },
   ]);
   const hosts: ChildProcess[] = [];
+  let client: Awaited<ReturnType<typeof installedClient>>;
   t.after(async () => {
-    for (const host of hosts) if (host.exitCode === null && host.signalCode === null) host.kill('SIGKILL');
-    await delay(500); await replay.close(); await rm(base, { recursive: true, force: true });
+    try { await client?.close(); }
+    finally {
+      for (const host of hosts) if (host.exitCode === null && host.signalCode === null) host.kill('SIGKILL');
+      await delay(500); await replay.close(); await rm(base, { recursive: true, force: true });
+    }
   });
   for (const directory of [repo, store, agent]) await mkdir(directory, { recursive: true, mode: 0o700 });
   // No user's Git metadata, ignored files, credentials, or build output enter the disposable checkout.
@@ -54,16 +66,19 @@ test('production runtime edits Plait source, runs Cargo, reconnects and resumes 
     const host = spawn(binary, ['run', '--store', store], { stdio: ['ignore', 'ignore', 'pipe'], env: environment });
     hosts.push(host);
     let errors = ''; host.stderr!.on('data', chunk => { errors = (errors + chunk.toString()).slice(-8192); });
-    await until(async () => {
-      if (host.exitCode !== null || host.signalCode !== null) throw new Error(`Fixture host exited: ${errors}`);
-      return request(store, { op: 'status' });
-    }, reply => reply.ok);
+    try {
+      await until(async () => {
+        if (host.exitCode !== null || host.signalCode !== null) throw new Error(`Fixture host exited: ${errors}`);
+        return request(store, { op: 'status' });
+      }, reply => reply.ok);
+    } catch (error) { throw new Error(`Fixture host did not become ready: ${errors}`, { cause: error }); }
     return host;
   };
   let host = await start();
   const created = await request(store, { op: 'create_thread', checkout: repo, provider: 'plait-replay', model_id: replayModel, request_id: 'dogfood-create' });
   assert.equal(created.ok, true, JSON.stringify(created));
   const id = created.result.thread.id;
+  client = await installedClient(base, store, repo, created.result.thread);
   const watch = async () => (await request(store, { op: 'watch', thread_id: id })).result.thread;
   const submit = (request_id: string) => request(store, { op: 'submit', thread_id: id, request_id, text: 'Perform the next scripted fixture turn.' });
   for (const turn of [1, 2]) {
@@ -71,7 +86,10 @@ test('production runtime edits Plait source, runs Cargo, reconnects and resumes 
     assert.equal((await submit(requestId)).ok, true);
     const answered = new Set<string>();
     let disconnected = false;
-    const done = await until(async () => {
+    let closedNativeWhileActive = !client || turn !== 1;
+    const deadline = Date.now() + 180000;
+    let done: Snapshot | undefined;
+    while (Date.now() < deadline) {
       const snapshot = await watch();
       if (snapshot.pending_approval && !answered.has(snapshot.pending_approval.id)) {
         answered.add(snapshot.pending_approval.id);
@@ -83,23 +101,36 @@ test('production runtime edits Plait source, runs Cargo, reconnects and resumes 
           observer.write(JSON.stringify({ op: 'watch', thread_id: id }) + '\n');
           await delay(100); observer.destroy(); disconnected = true;
           assert.equal((await watch()).status, 'running');
+          if (client && turn === 1) {
+            await client.open(true); await client.capture('active'); await client.close();
+            assert.equal((await watch()).status, 'running', 'Closing the native client must not cancel the command.');
+            closedNativeWhileActive = true;
+          }
         }
       }
-      return snapshot;
-    }, snapshot => snapshot.status === 'idle' || snapshot.status === 'error', 180000);
+      if (['idle', 'error', 'stopped'].includes(snapshot.status)) { done = snapshot; break; }
+      await delay(40);
+    }
+    assert(done, 'The coding turn did not finish within its deadline.');
     assert.equal(done.status, 'idle', JSON.stringify(done));
-    assert.equal(answered.size, 3);
+    assert.equal(answered.size, 4);
     assert(disconnected);
+    assert(closedNativeWhileActive, 'The installed client must open and close during accepted work.');
     assert(done.tools.every(tool => tool.status === 'done'), JSON.stringify(done.tools));
     const commands = done.tools.filter(tool => tool.name === 'command');
     assert.equal(commands.length, turn);
     assert.match(commands.at(-1)!.output, /test result: ok/);
-    assert.equal(replay.requests.length, turn * 4);
+    assert.equal(replay.requests.length, turn * 5);
     assert.equal((await submit(requestId)).ok, true);
-    assert.equal(replay.requests.length, turn * 4, 'Retry must not call the model again.');
+    assert.equal(replay.requests.length, turn * 5, 'Retry must not call the model again.');
     assert.deepEqual(await readFile(join(repo, '.git/index')), index);
     assert.equal(await readFile(join(repo, 'existing-dirty.txt'), 'utf8'), 'Do not change this pre-existing work.\n');
     if (turn === 1) {
+      assert.match((await git(['diff', '--', path])).stdout, /TITLE_LIMIT/);
+      if (client) {
+        await client.open(false); await client.capture('coding'); await client.close();
+        assert.equal(replay.requests.length, 5, 'Reopening a saved draft must not submit it.');
+      }
       const messages = done.messages.map(message => message.id);
       const tools = done.tools.map(tool => tool.id);
       host.kill('SIGTERM'); await until(async () => host.signalCode !== null, value => value); await delay(500);
@@ -108,7 +139,7 @@ test('production runtime edits Plait source, runs Cargo, reconnects and resumes 
       assert.equal(restored.status, 'idle');
       assert.deepEqual(restored.messages.map(message => message.id), messages);
       assert.deepEqual(restored.tools.map(tool => tool.id), tools);
-      await delay(100); assert.equal(replay.requests.length, 4);
+      await delay(100); assert.equal(replay.requests.length, 5);
     }
   }
   assert.equal(await readFile(join(repo, path), 'utf8'), before);

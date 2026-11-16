@@ -43,10 +43,11 @@ different change. Worktrees are not required.
 
 A good first task is:
 
-> Add a regression test for Plait's thread-title handling of emoji, control
-> characters, and repeated whitespace. Make a small fix only if the test finds
-> a problem. Read the project instructions first. Preserve existing dirty files.
-> Run `cargo test --offline --locked -p plait-core --lib`. Do not stage or commit.
+> Make Plait's thread title omit trailing whitespace when its 72-character
+> limit cuts just after a word. Add a regression test for that boundary. Do not
+> add dependencies. Read the project instructions first and preserve existing
+> dirty files. Run `cargo test --offline --locked -p plait-core --lib`.
+> Show the real diff and test result. Do not stage or commit.
 
 Review each exact edit and command before **Allow once**. The command reads the
 checkout and writes build output only to a private thread cache. It cannot write

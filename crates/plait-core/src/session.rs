@@ -47,6 +47,28 @@ pub struct Session {
 }
 
 impl Session {
+    pub fn saved_thread(&self, summary: &crate::host::ThreadSummary) -> Option<&Thread> {
+        self.threads
+            .get(&summary.id)
+            .filter(|saved| saved.checkout == summary.checkout && saved.model == summary.model)
+    }
+
+    pub fn accepts(&self, summary: &crate::host::ThreadSummary) -> bool {
+        !self.threads.contains_key(&summary.id) || self.saved_thread(summary).is_some()
+    }
+
+    pub fn update_thread(&mut self, id: String, thread: Thread) -> Result<(), String> {
+        if self
+            .threads
+            .get(&id)
+            .is_some_and(|saved| saved.checkout != thread.checkout || saved.model != thread.model)
+        {
+            return Err("Thread identity conflicts with saved work. Its draft and submission were not changed. Start a new thread or check the host store.".into());
+        }
+        self.threads.insert(id, thread);
+        Ok(())
+    }
+
     pub fn empty(host_store: PathBuf) -> Self {
         Self {
             schema_version: 1,
@@ -303,6 +325,51 @@ mod tests {
                 text: "Do the task".into(),
             }),
         }
+    }
+
+    #[test]
+    fn capture_cannot_reassign_a_draft_or_pending_request_to_a_new_identity() {
+        let mut saved = Session::empty("/host".into());
+        let original = thread();
+        saved
+            .update_thread("thread".into(), original.clone())
+            .unwrap();
+        for model_change in [false, true] {
+            let mut changed = original.clone();
+            if model_change {
+                changed.model.model_id = "another-model".into();
+            } else {
+                changed.checkout = "/another-checkout".into();
+            }
+            let summary = crate::host::ThreadSummary {
+                id: "thread".into(),
+                checkout: changed.checkout.clone(),
+                model: changed.model.clone(),
+                status: crate::host::ThreadStatus::Idle,
+            };
+            assert!(!saved.accepts(&summary));
+            assert!(saved.saved_thread(&summary).is_none());
+            assert!(saved.update_thread("thread".into(), changed).is_err());
+            assert_eq!(saved.threads["thread"], original);
+        }
+        let mut edited = original;
+        edited.draft.text = "A later draft".into();
+        saved
+            .update_thread("thread".into(), edited.clone())
+            .unwrap();
+        assert_eq!(saved.threads["thread"], edited);
+    }
+
+    #[test]
+    fn shared_lock_permissions_are_rejected_without_replacement() {
+        let root = root("shared-lock");
+        fs::create_dir_all(&root).unwrap();
+        let lock = root.join("desktop.lock");
+        fs::write(&lock, b"existing").unwrap();
+        fs::set_permissions(&lock, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(Journal::open(&root, "/host".into()).is_err());
+        assert_eq!(fs::read(&lock).unwrap(), b"existing");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

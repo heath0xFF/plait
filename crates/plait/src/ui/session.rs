@@ -189,12 +189,20 @@ impl Plait {
     }
 
     pub(super) fn saved_thread(&self, summary: &ThreadSummary) -> Option<&Thread> {
-        self.session
-            .data
-            .as_ref()?
+        self.session.data.as_ref()?.saved_thread(summary)
+    }
+
+    pub(super) fn session_accepts_thread(&self, id: &str) -> bool {
+        self.host
             .threads
-            .get(&summary.id)
-            .filter(|saved| saved.checkout == summary.checkout && saved.model == summary.model)
+            .iter()
+            .find(|summary| summary.id == id)
+            .is_some_and(|summary| {
+                self.session
+                    .data
+                    .as_ref()
+                    .is_none_or(|data| data.accepts(summary))
+            })
     }
 
     pub(super) fn restore_composer(
@@ -255,7 +263,7 @@ impl Plait {
                         .map(|message| session::title(&message.text))
                 })
                 .unwrap_or_default();
-            next.threads.insert(
+            if let Err(error) = next.update_thread(
                 summary.id.clone(),
                 Thread {
                     checkout: summary.checkout.clone(),
@@ -268,7 +276,9 @@ impl Plait {
                     },
                     pending: self.host.submissions.pending(&summary.id).cloned(),
                 },
-            );
+            ) {
+                self.session.note = Some(error);
+            }
         }
         if *data == next {
             return;
@@ -305,6 +315,7 @@ impl Plait {
             .data
             .as_ref()
             .and_then(|data| data.threads.get(id))
+            .filter(|_| self.session_accepts_thread(id))
             .map(|thread| thread.title.clone())
             .filter(|title| !title.is_empty())
             .unwrap_or_else(|| format!("Thread {}", id.chars().take(8).collect::<String>()))
@@ -315,6 +326,9 @@ impl Plait {
             return;
         };
         let id = snapshot.id.clone();
+        if !self.session_accepts_thread(&id) {
+            return;
+        }
         if let Some(pending) = self.host.submissions.pending(&id).cloned()
             && snapshot
                 .messages

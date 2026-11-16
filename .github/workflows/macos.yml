@@ -96,7 +96,7 @@ jobs:
             dist/*.sha256
             dist/*.pkg
             dist/Plait-Release-*.json
-            dist/installed-client.png
+            dist/installed-client*.png
             dist/installed-client.log
           if-no-files-found: error
           retention-days: 14
@@ -143,8 +143,13 @@ jobs:
             'The host includes Node and the runtime. Model credentials and project build tools are not included.' \
             'Client updates leave agent work running. Host updates are staged until an explicit session restart.' \
             '' \
-            'See docs/MACOS.md and docs/VERIFICATION.md at this tag for setup and limits.' > notes.md
-          gh release create "$RELEASE_TAG" --verify-tag --prerelease \
+            'Native code display, copy controls, saved drafts, and safe submission recovery are included.' \
+            'The installed coding/reconnect test uses a scripted provider and real sandboxed Cargo commands, not a live model.' \
+            '' \
+            'The attached installed-client images show that labeled test, not a personal-account session.' \
+            'See docs/MACOS.md, docs/SELF-HOSTING.md, and docs/VERIFICATION.md at this tag for setup and limits.' > notes.md
+          gh release create "$RELEASE_TAG" --verify-tag --prerelease --draft \
             --title "Plait $RELEASE_TAG — local preview" --notes-file notes.md \
             release/*.dmg release/*.pkg release/*.zip release/*.sha256 \
-            release/install.sh release/release.json release/Plait-Release-*.json
+            release/install.sh release/release.json release/Plait-Release-*.json release/installed-client*.png
+          gh release edit "$RELEASE_TAG" --draft=false

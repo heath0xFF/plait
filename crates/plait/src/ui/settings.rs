@@ -4,8 +4,10 @@ use gpui::{prelude::*, *};
 const MODEL_ROW_HEIGHT: f32 = 36.;
 
 /// Centered reading column for settings-style pages.
-fn page() -> Div {
+fn page(id: &'static str) -> Stateful<Div> {
     column()
+        .id(id)
+        .overflow_y_scroll()
         .flex_1()
         .min_h_0()
         .w_full()
@@ -101,7 +103,7 @@ impl Plait {
     fn model_picker(&self, settings: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let list = column()
             .flex_1()
-            .min_h_0()
+            .min_h(px(108.))
             .rounded_lg()
             .border_1()
             .border_color(rgb(BORDER))
@@ -126,7 +128,7 @@ impl Plait {
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
         indices.sort_by_key(|index| !status.models[*index].authenticated);
-        let container = column().flex_1().min_h_0().gap_2().child(
+        let container = column().flex_1().min_h(px(144.)).gap_2().child(
             row()
                 .justify_between()
                 .child(tag(format!("{} models shown", indices.len()), SUBTLE))
@@ -280,7 +282,7 @@ impl Plait {
             );
         let can_save = !self.host.saving && self.host.available(self.host.settings_model.as_ref());
         div().flex().flex_1().min_h_0().px_6().py_5().child(
-            page()
+            page("settings-page")
                 .child(
                     row()
                         .justify_between()
@@ -291,7 +293,6 @@ impl Plait {
                         )),
                 )
                 .child(self.host_status(cx))
-                .child(self.keyboard_settings(cx))
                 .child(note(
                     "Authentication stays on the host. This page shows status only; it never reads or saves credentials.",
                 ))
@@ -336,7 +337,8 @@ Tone::Primary,
                                     .child(text!(message)),
                             )
                         }),
-                ),
+                )
+                .child(self.keyboard_settings(cx)),
         )
     }
 
@@ -346,7 +348,7 @@ Tone::Primary,
             && (self.host.pending_create.is_some()
                 || self.host.available(self.host.new_model.as_ref()));
         div().flex().flex_1().min_h_0().px_6().py_5().child(
-            page()
+            page("new-thread-page")
                 .child(
                     column()
                         .gap_1()

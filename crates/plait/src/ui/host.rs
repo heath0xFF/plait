@@ -551,6 +551,7 @@ impl Plait {
             && !self.host.submitting
             && self.host.snapshot.as_ref().is_some_and(|snapshot| {
                 !snapshot.status.busy()
+                    && self.session_accepts_thread(&snapshot.id)
                     && self.host.available(Some(&snapshot.model))
                     && self.host.submissions.pending(&snapshot.id).is_none()
             })
@@ -572,6 +573,8 @@ impl Plait {
             Some(
                 "Waiting for desktop recovery. Saved work must be available before sending.".into(),
             )
+        } else if !self.session_accepts_thread(id) {
+            Some("This thread does not match the saved draft's checkout and model. Start a new thread; the original work is preserved.".into())
         } else if !self.host.connected {
             Some("Host disconnected. Reconnect to send.".into())
         } else if self.host.snapshot.is_none() {
