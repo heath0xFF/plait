@@ -20,7 +20,7 @@ main.rs                 native app lifecycle, window, startup
 ui/                     GPUI layout, actions, focus, lists, theme
   mod.rs                UI state and background-task dispatch
   navigation.rs         Project → Machine → Thread
-  conversation.rs       labeled fixture events
+  conversation.rs       no-thread state and the Git inspector
   live_conversation.rs  real host messages, tools, and exact-call approvals
   composer.rs           native input, IME, clipboard, undo, submit/stop events
   host.rs               background host requests and event subscriptions
@@ -37,7 +37,8 @@ transcript.rs           stable row identity and incremental list-change plans
 local_socket.rs         owner-only paths and OS peer-identity checks
 state.rs                selection, collapse state, request queue, cache
 model.rs                plain Rust data, no GPUI
-fixtures.rs             example projects, machines, threads, events
+machine.rs              this machine's display name
+preferences.rs          desktop-only preferences and Cmd-number order
 git.rs                  synchronous, read-only Git adapter; background only
 ```
 
@@ -162,7 +163,7 @@ current snapshot's cache, but cannot replace another selected file.
 
 Diffs are loaded on demand. Up to eight diffs are cached per status snapshot.
 Refresh clears that cache. All threads on Zaphod share the same local checkout.
-Remote fixture selection never starts Git, SSH, or a network connection.
+There are no remote machines yet, so nothing starts SSH or a network connection.
 
 ## Git boundary
 
@@ -255,8 +256,7 @@ Structural changes use `splice`; changed content uses `remeasure_items` so the
 scroll anchor and measured unchanged rows survive streaming. Duplicate IDs or
 a changed thread identity reset the list rather than reuse the wrong row.
 Live tool disclosure and element IDs follow tool/message IDs, not row positions.
-Expanding a live tool remeasures only that row. Fixture disclosure remains
-separate. Changed files and diff
+Expanding a live tool remeasures only that row. Changed files and diff
 lines use `uniform_list`; only visible rows are built. Cached data uses `Arc`
 rather than cloning large strings on every render. Long diff lines scroll
 horizontally.
@@ -274,8 +274,7 @@ points, the conversation's 280-point Git inspector is removed; Git remains avail
 the Changes tab. The minimum window is 900 × 600. Cmd-B hides the sidebar.
 
 Controls have focus rings, tab stops, accessible names, and semantic roles.
-Real thread state has both a color and a text label. Example rows show a `mock`
-label and a state dot; their header and accessible name give the sample state.
+Thread state has both a color and a text label.
 No decorative animation is used.
 
 The app records root-view construction time, peak construction time,

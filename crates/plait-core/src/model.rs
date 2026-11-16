@@ -1,54 +1,15 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ThreadStatus {
-    Ready,
-    Working,
-    NeedsInput,
-    Complete,
-}
-
-impl ThreadStatus {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Ready => "Ready",
-            Self::Working => "Working",
-            Self::NeedsInput => "Needs input",
-            Self::Complete => "Complete",
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct Event {
-    pub author: &'static str,
-    pub time: &'static str,
-    pub body: &'static str,
-    pub tool: bool,
-}
-
-pub struct Thread {
-    pub title: &'static str,
-    pub status: ThreadStatus,
-    pub events: Arc<Vec<Event>>,
-}
-
+/// An independent execution environment. Before M3 only this computer exists.
 pub struct Machine {
-    pub name: &'static str,
+    pub name: String,
     pub local: bool,
-    pub threads: Vec<Thread>,
 }
 
+/// A checkout and the machines that hold it. Threads come from each machine's host.
 pub struct Project {
     pub name: String,
     pub machines: Vec<Machine>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Selection {
-    pub project: usize,
-    pub machine: usize,
-    pub thread: usize,
 }
 
 #[derive(Clone, Debug)]

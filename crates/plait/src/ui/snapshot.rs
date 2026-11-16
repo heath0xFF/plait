@@ -16,7 +16,7 @@ use plait_core::{
         Approval, ApprovalKind, Message, MessageRole, Model, ModelChoice, Snapshot, Status,
         ThreadStatus, ThreadSummary, Tool, ToolStatus,
     },
-    model::{DiffMode, Selection},
+    model::DiffMode,
     state::Load,
 };
 use std::{
@@ -284,7 +284,6 @@ impl Harness {
                 },
             ];
             // Mirror select_host_thread without opening a socket.
-            plait.show_local_machine();
             plait.host.selected = Some(THREAD.into());
             plait.host.snapshot = Some(Arc::new(thread_snapshot(&checkout, approval)));
             plait.settings_open = false;
@@ -310,27 +309,19 @@ fn walk(output: Option<&Path>) {
 
     for (suffix, width, height) in [("wide", 1380., 860.), ("narrow", 900., 600.)] {
         let mut harness = Harness::new(&repository, output, width, height);
-        harness.capture(&format!("fixture-{suffix}"));
-        harness.update(|plait, _, cx| plait.toggle_tool(2, cx));
-        harness.capture(&format!("fixture-tool-{suffix}"));
+        // No socket in tests, so the host starts disconnected.
+        harness.capture(&format!("home-disconnected-{suffix}"));
         harness.update(|plait, window, cx| {
             plait.select_file(1, DiffMode::Unstaged, window, cx);
         });
         harness.capture(&format!("changes-{suffix}"));
-        harness.update(|plait, _, cx| {
+        harness.update(|plait, _, _| {
             plait.show_changes = false;
-            plait.select_thread(
-                Selection {
-                    project: 1,
-                    machine: 0,
-                    thread: 0,
-                },
-                cx,
-            );
+            plait.host.connecting = false;
+            plait.host.connected = true;
+            plait.host.status = Some(status());
         });
-        harness.capture(&format!("fixture-empty-{suffix}"));
-        harness.update(|plait, _, _| plait.show_changes = true);
-        harness.capture(&format!("changes-remote-{suffix}"));
+        harness.capture(&format!("home-empty-{suffix}"));
         harness.connect(&repository, false);
         harness.capture(&format!("live-{suffix}"));
         harness.update(|plait, _, _| {
@@ -346,20 +337,18 @@ fn walk(output: Option<&Path>) {
         harness.capture(&format!("settings-{suffix}"));
         harness.update(|plait, _, cx| plait.open_new_thread(cx));
         harness.capture(&format!("new-thread-{suffix}"));
-        // Cancelling from an empty example thread must show the first one in full.
-        harness.update(|plait, _, cx| {
-            plait.select_thread(
-                Selection {
-                    project: 1,
-                    machine: 0,
-                    thread: 0,
-                },
-                cx,
-            );
-            plait.open_new_thread(cx);
-            plait.new_thread_open = false;
-            let events = plait.state.projects[0].machines[0].threads[0].events.len();
-            assert_eq!(plait.conversation_scroll.item_count(), events);
+        harness.update(|plait, _, _| plait.new_thread_open = false);
+        harness.capture(&format!("home-threads-{suffix}"));
+        // Cmd-2 selects the second thread; next/previous wrap around the list.
+        harness.update(|plait, window, cx| {
+            plait.jump_to(2, window, cx);
+            assert_eq!(plait.host.selected.as_deref(), Some("thr_0c44a9d1"));
+            plait.step_thread(true, window, cx);
+            assert_eq!(plait.host.selected.as_deref(), Some(THREAD));
+            plait.step_thread(false, window, cx);
+            assert_eq!(plait.host.selected.as_deref(), Some("thr_0c44a9d1"));
+            plait.jump_to(9, window, cx);
+            assert_eq!(plait.host.selected.as_deref(), Some("thr_0c44a9d1"));
             plait.sidebar = false;
             plait.diagnostics = true;
         });

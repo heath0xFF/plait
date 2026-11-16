@@ -400,13 +400,6 @@ impl Plait {
     }
 
     pub(super) fn changes(&self, wide: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        if !self.state.local() {
-            return empty(
-                "Remote Git is not connected",
-                "Marvin and Arthur are fixture machines in M1. Select Zaphod to inspect a real local repository. No connection attempt has been made.",
-            )
-            .into_any_element();
-        }
         row()
             .gap_0()
             .flex_1()

@@ -1,6 +1,5 @@
 use super::{OpenRepository, Plait, theme::*};
 use gpui::{prelude::*, *};
-use plait_core::model::Selection;
 
 /// One-line title that gives way to the trailing state.
 fn title(text: impl Into<SharedString>) -> Div {
@@ -44,9 +43,9 @@ impl Plait {
                 "{}, {}",
                 machine.name,
                 if machine.local {
-                    "local Git"
+                    "this machine"
                 } else {
-                    "remote fixture, not connected"
+                    "remote machine"
                 }
             ),
             false,
@@ -63,10 +62,9 @@ impl Plait {
                 .text_size(px(12.))
                 .text_color(rgb(TEXT))
                 .child(icon("machine").size(px(12.)).text_color(rgb(BLUE)))
-                .child(div().min_w_0().truncate().child(machine.name)),
+                .child(div().min_w_0().truncate().child(machine.name.clone())),
         )
         .child(div().flex_1())
-        .when(!machine.local, |el| el.child(tag("fixture", SUBTLE)))
         .on_activate(cx, move |this, _, cx| {
             if !this.state.collapsed_machines.remove(&(pi, mi)) {
                 this.state.collapsed_machines.insert((pi, mi));
@@ -82,7 +80,7 @@ impl Plait {
         nav_row(
             ("host-thread", index),
             format!(
-                "Local thread {} · {} · {} / {}",
+                "Thread {} · {} · {} / {}",
                 id,
                 thread.status.label(),
                 thread.model.provider,
@@ -94,7 +92,8 @@ impl Plait {
         .aria_level(3)
         .aria_selected(selected)
         .pl(px(36.))
-        .child(icon("thread").text_color(rgb(MINT)))
+        // Category glyph colours from the brand kit: violet for threads.
+        .child(icon("thread").text_color(rgb(VIOLET)))
         .child(title(id.clone()).text_color(rgb(TEXT)))
         .child(
             pill()
@@ -106,38 +105,11 @@ impl Plait {
         })
     }
 
-    fn fixture_thread_row(&self, selection: Selection, cx: &mut Context<Self>) -> Stateful<Div> {
-        let Selection {
-            project: pi,
-            machine: mi,
-            thread: ti,
-        } = selection;
-        let thread = &self.state.projects[pi].machines[mi].threads[ti];
-        let selected = self.host.selected.is_none() && selection == self.state.selection;
-        nav_row(
-            ("thread", pi * 10000 + mi * 100 + ti),
-            format!("{}, {} (mock)", thread.title, thread.status.label()),
-            selected,
-        )
-        .role(Role::TreeItem)
-        .aria_level(3)
-        .aria_selected(selected)
-        .pl(px(36.))
-        .child(icon("thread").text_color(rgb(VIOLET)))
-        .child(title(thread.title).text_color(rgb(TEXT)))
-        // Sample state is a dot here; the header and accessible name spell it out.
-        .child(pill().child(dot(status_color(thread.status))).child("mock"))
-        .on_activate(cx, move |this, window, cx| {
-            window.focus(&this.focus, cx);
-            this.select_thread(selection, cx)
-        })
-    }
-
     fn tree(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut tree = column()
             .id("project-tree")
             .role(Role::Tree)
-            .aria_label("Projects, machines, host threads and labeled fixtures")
+            .aria_label("Projects, machines, and threads")
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -160,14 +132,6 @@ impl Plait {
                         for index in 0..self.host.threads.len() {
                             group = group.child(self.host_thread_row(index, cx));
                         }
-                    }
-                    for ti in 0..machine.threads.len() {
-                        let selection = Selection {
-                            project: pi,
-                            machine: mi,
-                            thread: ti,
-                        };
-                        group = group.child(self.fixture_thread_row(selection, cx));
                     }
                 }
             }

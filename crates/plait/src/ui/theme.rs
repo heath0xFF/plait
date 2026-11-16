@@ -1,5 +1,5 @@
 use gpui::{prelude::*, *};
-use plait_core::{host, model::ThreadStatus};
+use plait_core::host;
 use std::borrow::Cow;
 
 pub const BG: u32 = 0x171819;
@@ -217,15 +217,6 @@ pub fn pill() -> Div {
         .border_color(rgb(EDGE))
         .text_size(px(11.))
         .text_color(rgb(MUTED))
-}
-
-pub fn status_color(status: ThreadStatus) -> u32 {
-    match status {
-        ThreadStatus::Ready => MINT,
-        ThreadStatus::Working => BLUE,
-        ThreadStatus::NeedsInput => AMBER,
-        ThreadStatus::Complete => VIOLET,
-    }
 }
 
 pub fn host_status_color(status: host::ThreadStatus) -> u32 {

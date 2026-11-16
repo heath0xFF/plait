@@ -30,20 +30,20 @@ optional wide-window Git inspector. Keep machine and thread context visible.
   reference sheet. The Dock/Finder icon uses the kit's rounded tile. Host state
   sits in a one-line footer with Settings.
 - **Thread rows.** A thread's state is a pill with a dot and a text label.
-  Example threads show `mock` in that pill; the header and the accessible name
-  spell out the sample state. Selection is a neutral fill.
+  Selection is a neutral fill.
+- **Real data only.** No sample threads or placeholder machines. With no
+  thread open, the workspace says why (not connected, no threads yet, or
+  nothing selected) and offers the one useful action.
 - **Pills** are for metadata (machine, state), not for every label, so they
   stay meaningful.
 - **Conversation.** Right-aligned, neutral user bubbles. Agent replies remain
   open text on the conversation surface. Tool events are compact disclosure rows
-  aligned to the text edge; expand them in place for details. Keep one clear
-  example-thread notice and visible mock labels on tool rows, with full
-  author/context labels for assistive technology.
+  aligned to the text edge; expand them in place for details. Give each row a
+  full author/context label for assistive technology.
 - **Composer.** One raised, rounded box holds the draft, its hint, and a single
   send control that becomes Stop while the agent works. Directly beneath it, a
   context line names the Project, Machine, and checkout branch, the thread's
-  saved model, and the approval rule. An example thread shows the same box
-  visibly unavailable, with no send control.
+  saved model, and the approval rule.
 - **Approval.** A bordered card above the composer shows the exact arguments,
   the risk, protected dirty paths, and Deny once / Allow once.
 - **Git.** Changed files are 28-point rows: a one-letter state, file name first,

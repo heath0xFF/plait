@@ -290,8 +290,9 @@ are unsigned and not notarized. There is no automatic updater. See
 - **Real:** native input, local host connection, model choice and authentication
   status, saved defaults, host threads, and read-only Git status/diffs. Host
   execution is still subject to the M2 safety validation below.
-- **Example:** the original preview conversations and the Marvin and Arthur
-  machine entries remain labeled fixtures. Selecting them never runs an agent.
+- **Nothing is sample data.** The sidebar shows the opened checkout on this
+  machine and its real host threads. Remote machines appear when remote
+  execution exists (M3).
 - **Not included:** remote execution, Git-write controls, a file editor, an
   embedded terminal, automatic updates, or mandatory worktrees.
 

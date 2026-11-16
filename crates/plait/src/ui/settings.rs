@@ -364,8 +364,6 @@ Tone::Primary,
         }
         self.host_watch = None;
         self.host.select(None);
-        // Cancel returns to this machine's first example thread.
-        self.show_local_machine();
         self.settings_open = false;
         self.new_thread_open = true;
         self.show_changes = false;

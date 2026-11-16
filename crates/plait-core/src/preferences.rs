@@ -3,7 +3,7 @@
 //! The host owns model defaults and credentials. This file holds presentation
 //! choices that belong to one desktop installation, so it never leaves the Mac.
 
-use crate::model::{Project, Selection};
+use crate::model::Project;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -97,37 +97,23 @@ pub fn save(path: &Path, preferences: Preferences) -> Result<(), String> {
     result.map_err(fail)
 }
 
-/// A thread as the sidebar lists it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ThreadRef {
-    /// Index into the host's thread list. Host threads belong to the local machine.
-    Host(usize),
-    Fixture(Selection),
-}
-
 /// One sidebar thread and the project and machine rows that contain it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Jump {
     pub project: usize,
     pub machine: usize,
-    pub thread: ThreadRef,
+    /// Index into the host's thread list. Host threads belong to the local machine.
+    pub thread: usize,
 }
 
-/// Threads grouped by machine, in sidebar order: host threads before examples.
+/// Threads grouped by machine, in sidebar order.
 fn machines(projects: &[Project], host_threads: usize) -> Vec<Vec<Jump>> {
     let mut rows = Vec::new();
     for (project, p) in projects.iter().enumerate() {
         for (machine, m) in p.machines.iter().enumerate() {
-            let host = (0..if m.local { host_threads } else { 0 }).map(ThreadRef::Host);
-            let fixtures = (0..m.threads.len()).map(|thread| {
-                ThreadRef::Fixture(Selection {
-                    project,
-                    machine,
-                    thread,
-                })
-            });
+            let threads = if m.local { host_threads } else { 0 };
             rows.push(
-                host.chain(fixtures)
+                (0..threads)
                     .map(|thread| Jump {
                         project,
                         machine,
@@ -163,7 +149,7 @@ pub fn jump(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fixtures;
+    use crate::model::Machine;
 
     fn scratch(name: &str) -> PathBuf {
         let path =
@@ -223,65 +209,51 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    fn fixture(project: usize, machine: usize, thread: usize) -> Jump {
+    /// Two projects: this machine and a remote one, then a remote-only project.
+    fn layout() -> Vec<Project> {
+        let machine = |name: &str, local| Machine {
+            name: name.into(),
+            local,
+        };
+        vec![
+            Project {
+                name: "plait".into(),
+                machines: vec![machine("zaphod", true), machine("arthur", false)],
+            },
+            Project {
+                name: "notes".into(),
+                machines: vec![machine("arthur", false)],
+            },
+        ]
+    }
+
+    fn thread(thread: usize) -> Jump {
         Jump {
-            project,
-            machine,
-            thread: ThreadRef::Fixture(Selection {
-                project,
-                machine,
-                thread,
-            }),
+            project: 0,
+            machine: 0,
+            thread,
         }
     }
 
     #[test]
-    fn threads_count_host_threads_first_on_the_local_machine() {
-        let projects = fixtures::projects();
-        let host = |index| Jump {
-            project: 0,
-            machine: 0,
-            thread: ThreadRef::Host(index),
-        };
-        let threads = JumpTarget::Threads;
-        assert_eq!(jump(&projects, 2, threads, 1), Some(host(0)));
-        assert_eq!(jump(&projects, 2, threads, 2), Some(host(1)));
-        assert_eq!(jump(&projects, 2, threads, 3), Some(fixture(0, 0, 0)));
-        assert_eq!(jump(&projects, 0, threads, 1), Some(fixture(0, 0, 0)));
-        // Five example threads: two on Zaphod, Marvin, Arthur, then Field notes.
-        assert_eq!(jump(&projects, 0, threads, 5), Some(fixture(1, 0, 0)));
-        assert_eq!(jump(&projects, 0, threads, 6), None);
-        assert_eq!(jump(&projects, 0, threads, 0), None);
+    fn threads_are_counted_in_sidebar_order() {
+        let projects = layout();
+        assert_eq!(jump(&projects, 3, JumpTarget::Threads, 1), Some(thread(0)));
+        assert_eq!(jump(&projects, 3, JumpTarget::Threads, 3), Some(thread(2)));
+        assert_eq!(jump(&projects, 3, JumpTarget::Threads, 4), None);
+        assert_eq!(jump(&projects, 3, JumpTarget::Threads, 0), None);
+        assert_eq!(jump(&projects, 0, JumpTarget::Threads, 1), None);
     }
 
     #[test]
     fn machines_and_projects_select_their_first_thread() {
-        let projects = fixtures::projects();
-        let machines = JumpTarget::Machines;
-        assert_eq!(
-            jump(&projects, 1, machines, 1).map(|j| j.thread),
-            Some(ThreadRef::Host(0))
-        );
-        assert_eq!(jump(&projects, 1, machines, 2), Some(fixture(0, 1, 0)));
-        assert_eq!(jump(&projects, 1, machines, 4), Some(fixture(1, 0, 0)));
-        assert_eq!(jump(&projects, 1, machines, 5), None);
-        let projects_target = JumpTarget::Projects;
-        assert_eq!(
-            jump(&projects, 0, projects_target, 2),
-            Some(fixture(1, 0, 0))
-        );
-        assert_eq!(jump(&projects, 0, projects_target, 3), None);
-    }
-
-    #[test]
-    fn a_machine_without_threads_selects_nothing() {
-        let mut projects = fixtures::projects();
-        projects[0].machines[1].threads.clear();
-        assert_eq!(jump(&projects, 0, JumpTarget::Machines, 2), None);
-        // Thread numbering skips the empty machine.
-        assert_eq!(
-            jump(&projects, 0, JumpTarget::Threads, 3),
-            Some(fixture(0, 2, 0))
-        );
+        let projects = layout();
+        assert_eq!(jump(&projects, 2, JumpTarget::Machines, 1), Some(thread(0)));
+        // A machine or project with no threads selects nothing.
+        assert_eq!(jump(&projects, 2, JumpTarget::Machines, 2), None);
+        assert_eq!(jump(&projects, 2, JumpTarget::Machines, 3), None);
+        assert_eq!(jump(&projects, 2, JumpTarget::Projects, 1), Some(thread(0)));
+        assert_eq!(jump(&projects, 2, JumpTarget::Projects, 2), None);
+        assert_eq!(jump(&projects, 2, JumpTarget::Projects, 9), None);
     }
 }

@@ -2,7 +2,7 @@
 
 use super::{Plait, theme::*};
 use gpui::{prelude::*, *};
-use plait_core::preferences::{self, JumpTarget, Preferences, ThreadRef};
+use plait_core::preferences::{self, JumpTarget, Preferences};
 
 actions!(
     plait,
@@ -54,7 +54,7 @@ impl Plait {
     }
 
     /// Select the Nth thread, machine, or project in sidebar order.
-    fn jump_to(&mut self, number: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn jump_to(&mut self, number: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(jump) = preferences::jump(
             &self.state.projects,
             self.host.threads.len(),
@@ -67,16 +67,8 @@ impl Plait {
         self.state
             .collapsed_machines
             .remove(&(jump.project, jump.machine));
-        match jump.thread {
-            ThreadRef::Host(index) => {
-                let id = self.host.threads[index].id.clone();
-                self.select_host_thread(id, window, cx);
-            }
-            ThreadRef::Fixture(selection) => {
-                window.focus(&self.focus, cx);
-                self.select_thread(selection, cx);
-            }
-        }
+        let id = self.host.threads[jump.thread].id.clone();
+        self.select_host_thread(id, window, cx);
     }
 
     /// Read the file in the background. Until it loads, the default applies.

@@ -7,7 +7,8 @@
 - Run all filesystem and Git work on the background executor, never in render.
 - The app's Git interface stays read-only through M2. Disable optional locks,
   external diff, and textconv. Normal development commits are permitted.
-- Keep fixture events and remote machines visibly labeled. Do not imply execution.
+- Show only real data in the app: no sample threads or placeholder machines.
+  Test scenes may inject sample state, never in a shipped view. Do not imply execution.
 - Pin dependencies. Check upstream source at the pinned revision before using APIs.
 - Use small functions, explicit errors, and short comments explaining why.
 - Test parsers, async result guards, and repository edge cases.

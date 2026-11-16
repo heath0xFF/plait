@@ -1,6 +1,6 @@
 use crate::{
-    fixtures, git,
-    model::{Diff, DiffMode, Project, Selection, Snapshot},
+    git, machine,
+    model::{Diff, DiffMode, Machine, Project, Snapshot},
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -181,68 +181,33 @@ impl RepositoryState {
 
 pub struct AppState {
     pub projects: Vec<Project>,
-    pub selection: Selection,
     pub collapsed_projects: HashSet<usize>,
     pub collapsed_machines: HashSet<(usize, usize)>,
     pub repository: RepositoryState,
 }
 
+/// The project's name is the checkout's folder name, or the whole path for `/`.
+pub fn project_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy()
+        .into_owned()
+}
+
 impl AppState {
+    /// One project, the opened checkout, on this machine. Remote machines arrive with M3.
     pub fn new(path: PathBuf) -> Self {
         Self {
-            projects: fixtures::projects(),
-            selection: Selection {
-                project: 0,
-                machine: 0,
-                thread: 0,
-            },
+            projects: vec![Project {
+                name: project_name(&path),
+                machines: vec![Machine {
+                    name: machine::local_name(),
+                    local: true,
+                }],
+            }],
             collapsed_projects: HashSet::new(),
             collapsed_machines: HashSet::new(),
             repository: RepositoryState::new(path),
-        }
-    }
-
-    pub fn select(&mut self, selection: Selection) {
-        if self
-            .projects
-            .get(selection.project)
-            .and_then(|p| p.machines.get(selection.machine))
-            .and_then(|m| m.threads.get(selection.thread))
-            .is_some()
-        {
-            self.selection = selection;
-        }
-    }
-
-    pub fn local(&self) -> bool {
-        self.projects[self.selection.project].machines[self.selection.machine].local
-    }
-
-    pub fn step_thread(&mut self, forward: bool) {
-        let selections: Vec<_> = self
-            .projects
-            .iter()
-            .enumerate()
-            .flat_map(|(project, p)| {
-                p.machines.iter().enumerate().flat_map(move |(machine, m)| {
-                    (0..m.threads.len()).map(move |thread| Selection {
-                        project,
-                        machine,
-                        thread,
-                    })
-                })
-            })
-            .collect();
-        if let Some(index) = selections.iter().position(|s| s == &self.selection) {
-            let next = if forward {
-                (index + 1) % selections.len()
-            } else {
-                (index + selections.len() - 1) % selections.len()
-            };
-            self.selection = selections[next];
-            self.collapsed_projects.remove(&self.selection.project);
-            self.collapsed_machines
-                .remove(&(self.selection.project, self.selection.machine));
         }
     }
 }
@@ -315,19 +280,12 @@ mod tests {
     }
 
     #[test]
-    fn navigation_is_valid_and_reveals_collapsed_parents() {
-        let mut s = AppState::new(".".into());
-        s.collapsed_projects.insert(1);
-        s.step_thread(false);
-        assert_eq!(s.selection.project, 1);
-        assert!(!s.local());
-        assert!(!s.collapsed_projects.contains(&1));
-        let before = s.selection;
-        s.select(Selection {
-            project: 50,
-            machine: 0,
-            thread: 0,
-        });
-        assert_eq!(s.selection, before);
+    fn the_checkout_is_the_only_project_on_this_machine() {
+        let s = AppState::new("/tmp/plait-fixture".into());
+        assert_eq!(s.projects.len(), 1);
+        assert_eq!(s.projects[0].name, "plait-fixture");
+        assert_eq!(s.projects[0].machines.len(), 1);
+        assert!(s.projects[0].machines[0].local);
+        assert_eq!(project_name(std::path::Path::new("/")), "/");
     }
 }

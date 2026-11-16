@@ -112,7 +112,6 @@ impl Plait {
         window.focus(&self.focus, cx);
         self.host_watch = None;
         self.host.select(Some(id.clone()));
-        self.show_local_machine();
         self.settings_open = false;
         self.new_thread_open = false;
         self.show_changes = false;
