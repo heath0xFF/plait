@@ -11,6 +11,7 @@ mod settings;
 #[cfg(all(test, target_os = "linux"))]
 mod snapshot;
 pub mod theme;
+mod update;
 
 use gpui::{prelude::*, *};
 use plait_core::{
@@ -33,6 +34,7 @@ actions!(
         Minimize,
         OpenRepository,
         Settings,
+        CheckForUpdates,
         Refresh,
         ToggleSidebar,
         ToggleDiagnostics,
@@ -54,6 +56,7 @@ pub struct Plait {
     composers: HashMap<String, Entity<composer::Composer>>,
     live_scroll: ListState,
     live_count: usize,
+    live_layout: Vec<plait_core::transcript::Slot>,
     formatted: std::sync::Arc<plait_core::markdown::Transcript>,
     settings_open: bool,
     show_all_models: bool,
@@ -66,6 +69,7 @@ pub struct Plait {
     sidebar: bool,
     diagnostics: bool,
     preferences: jump::PreferenceState,
+    updates: update::UpdateState,
     session: session::SessionState,
     picker_open: bool,
     notice: Option<String>,
@@ -95,6 +99,7 @@ impl Plait {
             composers: HashMap::new(),
             live_scroll: ListState::new(0, ListAlignment::Bottom, px(300.)),
             live_count: 0,
+            live_layout: Vec::new(),
             formatted: Default::default(),
             settings_open: false,
             show_all_models: false,
@@ -107,6 +112,7 @@ impl Plait {
             sidebar: true,
             diagnostics: false,
             preferences: jump::PreferenceState::default(),
+            updates: update::UpdateState::default(),
             session: session::SessionState::default(),
             picker_open: false,
             notice: None,
@@ -120,6 +126,10 @@ impl Plait {
         this.pump(cx);
         this.load_preferences(cx);
         this.reconnect_host(window, cx);
+        // Test scenes stay offline.
+        if !cfg!(test) {
+            this.check_for_updates(true, cx);
+        }
         this
     }
 
@@ -488,6 +498,10 @@ impl Render for Plait {
             .on_action(cx.listener(|this, _: &Settings, window, cx| {
                 this.show_settings(!this.settings_open, window, cx)
             }))
+            .on_action(cx.listener(|this, _: &CheckForUpdates, window, cx| {
+                this.show_settings(true, window, cx);
+                this.check_for_updates(false, cx);
+            }))
             .on_action(
                 cx.listener(|this, _: &ToggleSidebar, window, cx| this.toggle_sidebar(window, cx)),
             )
@@ -605,6 +619,7 @@ pub fn menus(cx: &mut App) {
     cx.set_menus([
         Menu::new("Plait").items([
             MenuItem::action("Settings…", Settings),
+            MenuItem::action("Check for Updates…", CheckForUpdates),
             MenuItem::separator(),
             MenuItem::action("Quit Plait", Quit),
         ]),

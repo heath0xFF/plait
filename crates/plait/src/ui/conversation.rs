@@ -1,5 +1,6 @@
 use super::{Plait, theme::*};
 use gpui::{prelude::*, *};
+use plait_core::host::ApprovalMode;
 
 impl Plait {
     /// Git for the checkout beside the conversation on wide windows.
@@ -42,8 +43,12 @@ impl Plait {
         } else if self.host.threads.is_empty() {
             (
                 "No threads yet",
-                "Start a thread in this checkout. Every edit and command waits for your approval."
-                    .into(),
+                if self.next_approval_mode() == Some(ApprovalMode::Auto) {
+                    "Start a thread in this checkout. The agent edits and runs sandboxed commands without asking; files you had already changed stay protected."
+                } else {
+                    "Start a thread in this checkout. Every edit and command waits for your approval."
+                }
+                .into(),
                 Some("New thread"),
             )
         } else {

@@ -6,6 +6,7 @@ mod lease;
 mod service;
 mod startup;
 mod transport;
+mod update;
 
 use std::{
     env,
@@ -42,10 +43,14 @@ fn run() -> io::Result<()> {
             &serde_json::json!({
                 "component": "host", "version": env!("CARGO_PKG_VERSION"),
                 "revision": option_env!("PLAIT_BUILD_REVISION").unwrap_or("development"),
-                "protocol_version": 1,
+                "release": plait_core::update::current_version().map(|version| version.to_string()),
+                "protocol_version": 2,
             }),
         )?;
         return Ok(());
+    }
+    if operation == "update" {
+        return update::run(args.collect());
     }
     let paths = installation::runtime_paths(&env::current_exe()?)?;
     let service_home = (operation == "run-user")
@@ -121,7 +126,7 @@ fn run() -> io::Result<()> {
             ))
         }
         _ => Err(io::Error::other(
-            "usage: plait-host run|run-user|start|status [--store PATH] [--runtime PATH], or plait-host version",
+            "usage: plait-host run|run-user|start|status [--store PATH] [--runtime PATH], or plait-host version|update [--check]",
         )),
     }
 }

@@ -1,6 +1,7 @@
 # Local host contract (M2)
 
-This is the frozen version 1 contract. Changes require compatibility review.
+This is the version 1 contract plus the opt-in version 2 additions described in
+[Protocol version 2](#protocol-version-2). Changes require compatibility review.
 All values below are JSON. The desktop has no dependency on the host crate and
 does not own its process.
 
@@ -37,7 +38,8 @@ runtime dependencies; it does not need a development checkout or shell Node.
 
 ## Transport
 
-Owner-only Unix stream socket, UTF-8 newline-delimited JSON, protocol version 1.
+Owner-only Unix stream socket, UTF-8 newline-delimited JSON, protocol version 1
+by default; version 2 is opt-in per request.
 Clients and the daemon verify connected-peer user identity with `getpeereid` on
 macOS or `SO_PEERCRED` on Linux. Clients also check socket and parent ownership
 and private modes before connecting. This does not enable Linux commands.
@@ -140,24 +142,52 @@ The original accepted input remains in the private journal. The complete seriali
 snapshot is also limited to 512 KiB; older content is removed first. Approval
 arguments are never clipped. `truncated` flags clipping.
 
+## Protocol version 2
+
+Version 2 is negotiated per request, so desktops and hosts can update separately.
+Every operation accepts an optional `"protocol_version":1` or `2`; omitting it
+means version 1, and version 1 replies are byte-for-byte unchanged.
+
+- **Negotiation.** A client sends `{"op":"status","protocol_version":2}`. A
+  version 2 host replies with `"protocol_version":2`. A version 1 host rejects the
+  unknown field with `invalid_request`; the client then repeats plain `status` and
+  uses version 1. Clients send version 2 fields only to a host that negotiated them.
+- **Snapshots.** Requests with `"protocol_version":2` receive snapshots with two
+  extra keys. Each tool has `after`: the ID of the message it followed, or null
+  for a tool before any message; tools saved before version 2 omit it and are shown
+  in the old order. Clients show tools after that message. A tool
+  whose message was clipped from the preview is shown first. The snapshot has
+  `approval_mode`: `"ask"` or `"auto"`, the mode of the latest accepted run.
+- **Submit.** `submit` accepts `"approval":"ask"` or `"approval":"auto"`, only with
+  `"protocol_version":2`. Omitted means `ask`. The mode applies to that run only;
+  the next submission chooses again. Request-ID deduplication still compares only
+  the text, so a retry returns the original acceptance and mode.
+
+Version 1 clients that watch a thread started in `auto` mode still see version 1
+snapshots, without the mode. Downgrading a host after version 2 snapshots were
+saved is not supported.
+
 ## Internal authorization boundary
 
-Each accepted run gets a new in-memory authorization object. The only production
-policy is exact-call interactive approval. A thread ID, an earlier approval, or
-a recovered snapshot does not grant permission to another run. Recovery keeps
-authorization inactive; Stop and shutdown revoke it. Answers after cancellation
-or consumption return `not_found`, as before.
+Each accepted run gets a new in-memory authorization object. Its policy is either
+exact-call interactive approval (`ask`) or automatic approval (`auto`), chosen by
+that run's submission. A thread ID, an earlier approval, or a recovered snapshot
+does not grant permission to another run. Recovery keeps authorization inactive;
+Stop and shutdown revoke it. Answers after cancellation or consumption return
+`not_found`, as before.
 
-Authorization and tool execution are separate. File checks and the command
-sandbox still apply after permission is granted. There is no unattended
-permission or scheduler in this contract. Future automation grants require
-separate protocol, persistence, and permission review.
+Authorization and tool execution are separate. Argument limits, dirty-path and
+ignored-path protection, checked file helpers, and the command sandbox still
+apply in both modes. Automatic approval removes the prompt, not those checks.
+There is no scheduler or persisted grant in this contract. Future automation
+grants require separate protocol, persistence, and permission review.
 
 ## Safety boundary
 
 Load checkout `AGENTS.md` explicitly before execution. Model and thread settings
 are immutable once a thread exists; changing the default affects only new threads.
-Every edit and command needs explicit approval. Protect pre-existing dirty paths,
+Edits and commands need explicit approval unless the run was submitted with
+automatic approval. Either way, protect pre-existing dirty paths,
 including untracked and ignored paths. File descriptors are checked against
 saved pre-run device/inode identities; case and Unicode aliases cannot bypass
 these checks. New outside changes are checked again before each edit.

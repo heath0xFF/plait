@@ -33,16 +33,84 @@ pub fn row_count(snapshot: &Snapshot) -> usize {
     snapshot.messages.len() + usize::from(!snapshot.live_text.is_empty()) + snapshot.tools.len()
 }
 
-pub fn row(snapshot: &Snapshot, index: usize) -> Option<Row<'_>> {
-    if let Some(message) = snapshot.messages.get(index) {
-        return Some(Row::Message(message));
+/// A row by position in the snapshot, cheap to cache between snapshots.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Slot {
+    Message(usize),
+    Streaming,
+    Tool(usize),
+}
+
+/// Conversation order: each tool follows the message it came after, and live
+/// text comes last. Version 1 hosts send no order, so their tools follow the
+/// stream as before; a tool whose message was clipped leads the preview.
+pub fn layout(snapshot: &Snapshot) -> Vec<Slot> {
+    let positions: HashMap<&str, usize> = snapshot
+        .messages
+        .iter()
+        .enumerate()
+        .map(|(index, message)| (message.id.as_str(), index))
+        .collect();
+    let mut leading = Vec::new();
+    let mut following: Vec<Vec<usize>> = vec![Vec::new(); snapshot.messages.len()];
+    let mut unordered = Vec::new();
+    for (index, tool) in snapshot.tools.iter().enumerate() {
+        match &tool.after {
+            None => unordered.push(index),
+            Some(after) => match after.as_deref().and_then(|id| positions.get(id)) {
+                Some(&message) => following[message].push(index),
+                None => leading.push(index),
+            },
+        }
     }
-    let offset = index.checked_sub(snapshot.messages.len())?;
-    let streaming = usize::from(!snapshot.live_text.is_empty());
-    if offset < streaming {
-        return Some(Row::Streaming(&snapshot.live_text));
+    let mut slots = Vec::with_capacity(row_count(snapshot));
+    slots.extend(leading.into_iter().map(Slot::Tool));
+    for (message, tools) in following.into_iter().enumerate() {
+        slots.push(Slot::Message(message));
+        slots.extend(tools.into_iter().map(Slot::Tool));
     }
-    snapshot.tools.get(offset - streaming).map(Row::Tool)
+    if !snapshot.live_text.is_empty() {
+        slots.push(Slot::Streaming);
+    }
+    slots.extend(unordered.into_iter().map(Slot::Tool));
+    slots
+}
+
+pub fn resolve(snapshot: &Snapshot, slot: Slot) -> Option<Row<'_>> {
+    match slot {
+        Slot::Message(index) => snapshot.messages.get(index).map(Row::Message),
+        Slot::Streaming => {
+            (!snapshot.live_text.is_empty()).then_some(Row::Streaming(&snapshot.live_text))
+        }
+        Slot::Tool(index) => snapshot.tools.get(index).map(Row::Tool),
+    }
+}
+
+pub fn rows(snapshot: &Snapshot) -> Vec<Row<'_>> {
+    layout(snapshot)
+        .into_iter()
+        .filter_map(|slot| resolve(snapshot, slot))
+        .collect()
+}
+
+/// What a tool acted on, for its one-line label: the command or the path.
+/// Inputs are clipped previews, so unparseable JSON has no subject.
+pub fn tool_subject(tool: &Tool) -> Option<String> {
+    let input: serde_json::Value = serde_json::from_str(&tool.input).ok()?;
+    let key = if tool.name == "command" {
+        "command"
+    } else {
+        "path"
+    };
+    let value = input.get(key)?.as_str()?.trim();
+    let line = value.lines().next().unwrap_or_default();
+    (!line.is_empty()).then(|| {
+        if line.len() < value.len() {
+            format!("{line} …")
+        } else {
+            line.to_owned()
+        }
+    })
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -70,10 +138,8 @@ pub fn changes(previous: Option<&Snapshot>, next: Option<&Snapshot>) -> Update {
     {
         return Update::Reset(count);
     }
-    let old: Vec<_> = (0..row_count(previous))
-        .filter_map(|index| row(previous, index))
-        .collect();
-    let new: Vec<_> = (0..count).filter_map(|index| row(next, index)).collect();
+    let old = rows(previous);
+    let new = rows(next);
     let positions: HashMap<_, _> = old
         .iter()
         .enumerate()
@@ -155,12 +221,8 @@ mod tests {
     }
 
     fn assert_applies(old: &Snapshot, new: &Snapshot) {
-        let mut result: Vec<_> = (0..row_count(old))
-            .map(|index| row(old, index).unwrap())
-            .collect();
-        let expected: Vec<_> = (0..row_count(new))
-            .map(|index| row(new, index).unwrap())
-            .collect();
+        let mut result = rows(old);
+        let expected = rows(new);
         match changes(Some(old), Some(new)) {
             Update::Reset(count) => assert_eq!(count, expected.len()),
             Update::Patch { splices, remeasure } => {
@@ -236,10 +298,75 @@ mod tests {
         new.messages.push(snapshot(&[2]).messages.remove(0));
         new.tools[0].output = "done".into();
         assert_applies(&old, &new);
-        assert!(matches!(row(&old, 1), Some(Row::Streaming(_))));
-        assert!(matches!(row(&old, 2), Some(Row::Tool(_))));
-        assert_eq!(row(&old, 3), None);
-        assert_eq!(row(&old, usize::MAX), None);
+        let legacy = rows(&old);
+        assert!(matches!(legacy[1], Row::Streaming(_)));
+        assert!(matches!(legacy[2], Row::Tool(_)));
+        assert_eq!(legacy.len(), 3);
+        assert_eq!(resolve(&old, Slot::Tool(usize::MAX)), None);
+    }
+
+    fn tool(id: &str, after: serde_json::Value, input: serde_json::Value) -> Tool {
+        let mut value = serde_json::json!({
+            "id": id, "name": "command", "status": "done", "input": input.to_string(), "output": ""
+        });
+        if !after.is_null() || id.starts_with("null") {
+            value["after"] = after;
+        }
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn ordered_tools_follow_their_message_and_stream_comes_last() {
+        let mut snapshot = snapshot(&[1, 2]);
+        snapshot.live_text = "partial".into();
+        snapshot.tools = vec![
+            tool("a", "1".into(), serde_json::json!({})),
+            tool("null-b", serde_json::Value::Null, serde_json::json!({})),
+            tool("c", "2".into(), serde_json::json!({})),
+            tool("d", "clipped".into(), serde_json::json!({})),
+            tool("e", "1".into(), serde_json::json!({})),
+        ];
+        let order: Vec<_> = rows(&snapshot)
+            .into_iter()
+            .map(|row| match row {
+                Row::Message(message) => format!("m{}", message.id),
+                Row::Streaming(_) => "live".into(),
+                Row::Tool(tool) => tool.id.clone(),
+            })
+            .collect();
+        assert_eq!(order, ["null-b", "d", "m1", "a", "e", "m2", "c", "live"]);
+        assert_eq!(layout(&snapshot).len(), row_count(&snapshot));
+        let mut next = snapshot.clone();
+        next.messages.push(super::super::host::Message {
+            id: "3".into(),
+            role: MessageRole::Assistant,
+            text: "Done.".into(),
+        });
+        next.tools
+            .push(tool("f", "3".into(), serde_json::json!({})));
+        next.live_text.clear();
+        assert_applies(&snapshot, &next);
+    }
+
+    #[test]
+    fn tool_subject_names_the_command_or_path() {
+        let command = tool(
+            "1",
+            "1".into(),
+            serde_json::json!({"command": "cargo test\n--locked"}),
+        );
+        assert_eq!(tool_subject(&command).as_deref(), Some("cargo test …"));
+        let mut edit = tool(
+            "2",
+            "1".into(),
+            serde_json::json!({"path": " src/main.rs "}),
+        );
+        edit.name = "edit".into();
+        assert_eq!(tool_subject(&edit).as_deref(), Some("src/main.rs"));
+        edit.input = "{\"path\": \"clipped".into();
+        assert_eq!(tool_subject(&edit), None);
+        edit.input = serde_json::json!({"command": "x"}).to_string();
+        assert_eq!(tool_subject(&edit), None);
     }
 
     #[test]

@@ -31,9 +31,9 @@ export function registry(state: ToolState) {
   const tools = (Object.keys(schemas) as (keyof typeof schemas)[]).map(name => defineTool({
     name,
     description: name === 'read' ? 'Read a UTF-8 regular file inside the checkout.'
-      : name === 'edit' ? 'Replace one unique exact old_text with new_text. Requires permission; dirty paths are protected.'
-      : name === 'write' ? 'Create a new file only; never overwrite. Requires permission.'
-      : 'Run a command with permission: checkout read-only, writes only to private TMPDIR and this thread\'s CARGO_HOME/CARGO_TARGET_DIR cache, no external network or checkout/Git writes, 15 minute limit. Tests may use scratch-local Git repositories and Unix sockets. Do not start background services. Use offline locked builds.',
+      : name === 'edit' ? 'Replace one unique exact old_text with new_text. May require approval; dirty paths are protected.'
+      : name === 'write' ? 'Create a new file only; never overwrite. May require approval.'
+      : 'Run a command (may require approval): checkout read-only, writes only to private TMPDIR and this thread\'s CARGO_HOME/CARGO_TARGET_DIR cache, no external network or checkout/Git writes, 15 minute limit. Tests may use scratch-local Git repositories and Unix sockets. Do not start background services. Use offline locked builds.',
     parameters: { type: 'object', properties: schemas[name], required: Object.keys(schemas[name]), additionalProperties: false },
     replay: 'unsafe' as const,
     executionMode: 'sequential' as const,

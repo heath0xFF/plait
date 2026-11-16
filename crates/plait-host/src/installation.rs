@@ -28,9 +28,10 @@ pub fn runtime_paths(executable: &Path) -> io::Result<RuntimePaths> {
         Err(error) => return Err(error),
     };
     let manifest: Value = serde_json::from_reader(manifest.take(65537))?;
+    // The manifest names the newest protocol the host speaks; 1 and 2 are supported.
     if manifest["schema_version"] != 1
         || manifest["component"] != "host"
-        || manifest["protocol_version"] != 1
+        || !(manifest["protocol_version"] == 1 || manifest["protocol_version"] == 2)
     {
         return Err(io::Error::other("incompatible host installation manifest"));
     }
@@ -68,9 +69,15 @@ mod tests {
         let installed = runtime_paths(&executable).unwrap();
         assert_eq!(installed.node, root.join("bin/node").as_os_str());
         assert_eq!(installed.runtime, root.join("runtime/src/main.ts"));
+        std::fs::write(
+            &manifest,
+            r#"{"schema_version":1,"component":"host","protocol_version":2}"#,
+        )
+        .unwrap();
+        assert!(runtime_paths(&executable).is_ok());
         for invalid in [
             r#"{"schema_version":1,"component":"client","protocol_version":1}"#,
-            r#"{"schema_version":1,"component":"host","protocol_version":2}"#,
+            r#"{"schema_version":1,"component":"host","protocol_version":3}"#,
             "not json",
         ] {
             std::fs::write(&manifest, invalid).unwrap();

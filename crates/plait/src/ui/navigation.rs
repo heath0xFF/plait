@@ -193,9 +193,24 @@ impl Plait {
                     .child(tag(label, MUTED).truncate()),
             )
             .child(
-                icon_button("settings", "sliders", "Settings…")
-                    .aria_keyshortcuts("Meta+,")
-                    .on_activate(cx, |this, window, cx| this.show_settings(true, window, cx)),
+                row()
+                    .gap_1()
+                    .when(self.update_available(), |el| {
+                        el.child(
+                            toned_button("sidebar-update", "Update", Tone::Filled)
+                                .aria_label("Update available. Open Settings to install.")
+                                .on_activate(cx, |this, window, cx| {
+                                    this.show_settings(true, window, cx)
+                                }),
+                        )
+                    })
+                    .child(
+                        icon_button("settings", "sliders", "Settings…")
+                            .aria_keyshortcuts("Meta+,")
+                            .on_activate(cx, |this, window, cx| {
+                                this.show_settings(true, window, cx)
+                            }),
+                    ),
             )
     }
 

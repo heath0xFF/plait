@@ -338,8 +338,76 @@ Tone::Primary,
                             )
                         }),
                 )
-                .child(self.keyboard_settings(cx)),
+                .child(self.approval_settings(cx))
+                .child(self.keyboard_settings(cx))
+                .child(self.build_details(cx)),
         )
+    }
+
+    /// Identifies the running build, so an installed update can be confirmed.
+    fn build_details(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let revision = option_env!("PLAIT_BUILD_REVISION").unwrap_or("source build");
+        let built = option_env!("PLAIT_BUILD_TIME")
+            .map(|time| format!(" · built {time}"))
+            .unwrap_or_default();
+        let host = if self.host.connected {
+            format!("Host protocol {}", self.host.protocol())
+        } else {
+            "Host not connected".into()
+        };
+        column()
+            .gap_1()
+            .flex_shrink_0()
+            .child(section_label("About"))
+            .child(tag(
+                format!("Desktop {} · {revision}{built}", env!("CARGO_PKG_VERSION")),
+                MUTED,
+            ))
+            .child(tag(host, SUBTLE))
+            .child(self.update_controls(cx))
+    }
+
+    fn approval_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let ask = self.preferences.value.ask_before_actions;
+        let mut choices = segmented();
+        for (index, (label, value)) in [("Automatic", false), ("Ask each time", true)]
+            .into_iter()
+            .enumerate()
+        {
+            choices = choices.child(
+                segment(("approval-mode", index), label, value == ask)
+                    .role(Role::RadioButton)
+                    .aria_toggled(if value == ask {
+                        Toggled::True
+                    } else {
+                        Toggled::False
+                    })
+                    .aria_label(format!("Edits and commands: {label}"))
+                    .on_activate(cx, move |this, _, cx| {
+                        let mut preferences = this.preferences.value;
+                        preferences.ask_before_actions = value;
+                        this.set_preferences(preferences, cx);
+                    }),
+            );
+        }
+        let detail = if self.host.connected && self.host.protocol() < 2 {
+            "This host asks before every edit and command. Update the host to use Automatic."
+        } else if ask {
+            "Each edit and command waits for Allow once."
+        } else {
+            "The agent edits files and runs commands without asking. Files you had already changed stay protected; commands cannot write the checkout or reach the network. Applies from your next message."
+        };
+        column()
+            .gap_2()
+            .flex_shrink_0()
+            .child(section_label("Approvals"))
+            .child(
+                row()
+                    .justify_between()
+                    .child(tag("Edits and commands", MUTED))
+                    .child(choices),
+            )
+            .child(tag(detail, SUBTLE))
     }
 
     pub(super) fn new_thread(&self, cx: &mut Context<Self>) -> impl IntoElement {

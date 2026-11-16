@@ -101,13 +101,19 @@ impl Plait {
         .detach();
     }
 
-    /// Apply now; report "Saved" only once the file write succeeds.
     pub(super) fn set_jump_target(&mut self, target: JumpTarget, cx: &mut Context<Self>) {
+        let mut value = self.preferences.value;
+        value.jump_target = target;
+        self.set_preferences(value, cx);
+    }
+
+    /// Apply now; report "Saved" only once the file write succeeds.
+    pub(super) fn set_preferences(&mut self, value: Preferences, cx: &mut Context<Self>) {
         let state = &mut self.preferences;
-        if state.value.jump_target == target && state.revision > 0 {
+        if state.value == value && state.revision > 0 {
             return;
         }
-        state.value.jump_target = target;
+        state.value = value;
         state.revision += 1;
         let revision = state.revision;
         let value = state.value;

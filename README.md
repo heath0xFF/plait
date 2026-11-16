@@ -31,8 +31,9 @@ curl --proto '=https' -fsSL \
 
 Run as your normal user. The script requests administrator access for package
 installation and verifies SHA-256 checksums, not publisher signatures.
-See [independent updates](docs/MACOS.md#independent-updates) before replacing an
-existing installation; client updates do not restart the host.
+Later releases install from **Plait → Check for Updates…** once Plait is a
+per-user install. See [updates](docs/MACOS.md#updates); package installs move
+over once with `scripts/update-installed-macos.sh`.
 
 ## Start working
 
@@ -76,7 +77,10 @@ flowchart TB
     sandbox -->|Write output| cache
 ```
 
-Each file change and command needs **Allow once**. Sandboxed commands cannot
+In v0.1.0-preview.2, each file change and command needs **Allow once**. Source
+builds after it run edits and commands without asking by default; choose
+**Ask each time** under Settings → Approvals to restore prompts. In both modes,
+files you had already changed are protected, and sandboxed commands cannot
 write the checkout or use external networking. The desktop never receives
 provider credentials. Closing it does not stop accepted work; pending approvals
 still wait for you.

@@ -9,8 +9,8 @@ import { Harness } from '@earendil-works/pi-durable';
 import type { Conversation, ConversationWatch } from '@earendil-works/pi-durable';
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
 import { openNodeSqliteDatabase } from '@earendil-works/pi-durable/storage/sqlite/node';
-import { fail, failure, validate } from './protocol.ts';
-import type { ModelChoice, Snapshot, InputRecord } from './protocol.ts';
+import { fail, failure, validate, version, view } from './protocol.ts';
+import type { ApprovalMode, ModelChoice, Snapshot, InputRecord } from './protocol.ts';
 import { Store } from './store.ts';
 import { checkout, dirtyPaths, fileAction, identities, acquireCheckout, rootIdentity, checkRoot, pathKey } from './safety.ts';
 import { registry } from './tools.ts';
@@ -18,7 +18,7 @@ import type { ToolState } from './tools.ts';
 import { update } from './transcript.ts';
 import { restoreOwned } from './provenance.ts';
 import { RunAuthorization } from './authorization.ts';
-import { InteractiveApproval } from './approval.ts';
+import { InteractiveApproval, automaticApproval } from './approval.ts';
 
 type Session = ToolState & {
   harness?: Harness; root?: Conversation; watch?: ConversationWatch; finished?: Promise<void>;
@@ -56,8 +56,15 @@ export class Runtime {
   snapshot(id: string) { return this.sessions.get(id)?.snapshot ?? this.store.get(id); }
   async handle(input: unknown): Promise<unknown> {
     const request = validate(input);
+    const protocol = version(request);
+    const result = await this.dispatch(request, protocol);
+    // Every snapshot leaves through the negotiated wire shape.
+    if (result && typeof result === 'object' && 'thread' in result) return { ...result, thread: view(result.thread as Snapshot, protocol) };
+    return result;
+  }
+  private async dispatch(request: ReturnType<typeof validate>, protocol: 1 | 2): Promise<unknown> {
     switch (request.op) {
-      case 'status': return { protocol_version: 1, default_model: this.store.defaultModel(), models: this.catalog() };
+      case 'status': return { protocol_version: protocol, default_model: this.store.defaultModel(), models: this.catalog() };
       case 'set_default_model': {
         const choice = { provider: String(request.provider), model_id: String(request.model_id) };
         this.model(choice); this.store.setDefault(choice); return { default_model: choice };
@@ -79,7 +86,8 @@ export class Runtime {
         return result;
       }
       case 'watch': return { thread: this.snapshot(String(request.thread_id)) };
-      case 'submit': return this.submit(String(request.thread_id), String(request.request_id), String(request.text));
+      case 'submit': return this.submit(String(request.thread_id), String(request.request_id), String(request.text),
+        request.approval === 'auto' ? 'auto' : 'ask');
       case 'stop': {
         const id = String(request.thread_id);
         const snapshot = this.snapshot(id);
@@ -134,7 +142,7 @@ export class Runtime {
       this.save(snapshot, Math.max(0, ...call.value.entries.map(entry => Number(entry.id))));
     });
   }
-  async submit(id: string, requestId: string, text: string) {
+  async submit(id: string, requestId: string, text: string, mode: ApprovalMode = 'ask') {
     const snapshot = this.snapshot(id);
     const duplicate = this.store.duplicate(id, requestId, text);
     if (duplicate !== undefined) return duplicate;
@@ -151,13 +159,15 @@ export class Runtime {
       lease = await acquireCheckout(snapshot.checkout);
       const save = () => this.save(snapshot);
       const approvals = new InteractiveApproval(snapshot, save);
-      authorization = new RunAuthorization(approvals);
+      // The mode belongs to this admission only; the next submission chooses again.
+      authorization = new RunAuthorization(mode === 'auto' ? automaticApproval : approvals);
       const session: Session = {
         snapshot, baseline: [], protected: [], rootIdentity: this.store.rootIdentity(id), buildCache: { store: this.directory, thread: id }, owned: new Map(), inputs: [], requestId,
         authorization, approvals, lease, save, record: image => this.store.record(id, image),
       };
       this.sessions.set(id, session);
       snapshot.status = 'running'; snapshot.error = null; snapshot.live_text = ''; snapshot.pending_approval = null;
+      snapshot.approval_mode = mode;
       const result = { thread_id: id, request_id: requestId, accepted: true };
       this.store.admit(id, requestId, text, result, snapshot);
       this.changed(id);
@@ -180,7 +190,7 @@ export class Runtime {
       session.owned = await restoreOwned(snapshot.checkout, baseline, this.store.owned(snapshot.id), session.rootIdentity, session.lease?.fd);
       session.baseline = baseline.filter(path => !session.owned.has(pathKey(path)));
       session.protected = await identities(snapshot.checkout, session.baseline);
-      let instructions = 'You are Plait, a local coding assistant. File tools are the only checkout writers and require permission. Commands read the checkout and write only private scratch (HOME/TMPDIR) and this thread\'s private build cache (CARGO_HOME/CARGO_TARGET_DIR), with no external network and a 15 minute limit. Tests may use scratch-local Git repositories and Unix sockets. Use offline locked builds. Unchanged files this thread previously wrote can be edited again with permission. Never modify other dirty or ignored paths, bypass permission, or start daemons. Read project instructions below.\n';
+      let instructions = 'You are Plait, a local coding assistant. File tools are the only checkout writers; edits and commands may require the user\'s approval. Commands read the checkout and write only private scratch (HOME/TMPDIR) and this thread\'s private build cache (CARGO_HOME/CARGO_TARGET_DIR), with no external network and a 15 minute limit. Tests may use scratch-local Git repositories and Unix sockets. Use offline locked builds. Unchanged files this thread previously wrote can be edited again. Never modify other dirty or ignored paths, bypass approval, or start daemons. Read project instructions below.\n';
       try {
         await lstat(join(snapshot.checkout, 'AGENTS.md'));
         const { text: project } = await fileAction(snapshot.checkout, 'read', 'AGENTS.md', undefined, session.lease?.fd, session.rootIdentity);

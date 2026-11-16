@@ -42,6 +42,10 @@ actions!(
         WordRight,
         SelectWordLeft,
         SelectWordRight,
+        DeleteWordLeft,
+        DeleteWordRight,
+        DeleteToLineStart,
+        DeleteToLineEnd,
     ]
 );
 
@@ -52,6 +56,10 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-enter", Newline, context),
         KeyBinding::new("backspace", Backspace, context),
         KeyBinding::new("delete", Delete, context),
+        KeyBinding::new("alt-backspace", DeleteWordLeft, context),
+        KeyBinding::new("alt-delete", DeleteWordRight, context),
+        KeyBinding::new("cmd-backspace", DeleteToLineStart, context),
+        KeyBinding::new("cmd-delete", DeleteToLineEnd, context),
         KeyBinding::new("left", Left, context),
         KeyBinding::new("right", Right, context),
         KeyBinding::new("up", Up, context),
@@ -243,6 +251,43 @@ impl Draft {
                 range.start = self.boundary(range.start, false);
             }
         }
+        self.replace(range, "", false);
+    }
+
+    /// Start of the previous word or end of the next one, skipping spaces and punctuation.
+    fn word_boundary(&self, offset: usize, forward: bool) -> usize {
+        let words = self.value.text.unicode_word_indices();
+        if forward {
+            words
+                .map(|(i, word)| i + word.len())
+                .find(|i| *i > offset)
+                .unwrap_or(self.value.text.len())
+        } else {
+            words
+                .map(|(i, _)| i)
+                .take_while(|i| *i < offset)
+                .last()
+                .unwrap_or(0)
+        }
+    }
+
+    /// Delete the selection, or from the cursor to `target` when nothing is selected.
+    /// A target at the cursor (line edge already reached) deletes one grapheme, as in
+    /// native macOS fields.
+    fn delete_to(&mut self, target: impl FnOnce(&Self) -> usize, forward: bool) {
+        self.finish_composition();
+        let range = self.selection();
+        if !range.is_empty() {
+            return self.replace(range, "", false);
+        }
+        let head = self.value.head;
+        let target = target(self);
+        let range = match target.cmp(&head) {
+            std::cmp::Ordering::Less => self.snap(target)..head,
+            std::cmp::Ordering::Greater => head..self.snap_end(target),
+            std::cmp::Ordering::Equal if forward => head..self.boundary(head, true),
+            std::cmp::Ordering::Equal => self.boundary(head, false)..head,
+        };
         self.replace(range, "", false);
     }
 
@@ -460,21 +505,35 @@ impl Composer {
     }
 
     fn word(&mut self, forward: bool, extend: bool, window: &Window, cx: &mut Context<Self>) {
-        let head = self.draft.value.head;
-        let words = self.draft.value.text.unicode_word_indices();
-        let offset = if forward {
-            words
-                .map(|(i, word)| i + word.len())
-                .find(|i| *i > head)
-                .unwrap_or(self.draft.value.text.len())
-        } else {
-            words
-                .map(|(i, _)| i)
-                .take_while(|i| *i < head)
-                .last()
-                .unwrap_or(0)
-        };
+        let offset = self.draft.word_boundary(self.draft.value.head, forward);
         self.move_to(offset, extend, window, cx);
+    }
+
+    fn delete_word(&mut self, forward: bool, window: &Window, cx: &mut Context<Self>) {
+        self.edit(
+            |draft| draft.delete_to(|d| d.word_boundary(d.value.head, forward), forward),
+            window,
+            cx,
+        );
+    }
+
+    /// Visual-row edge, matching Cmd-Left/Right; rows are the wrapped layout.
+    fn row_edge(&self, end: bool) -> usize {
+        self.rows
+            .iter()
+            .rfind(|row| row.range.start <= self.draft.value.head)
+            .map(|row| if end { row.range.end } else { row.range.start })
+            .unwrap_or(if end { self.draft.value.text.len() } else { 0 })
+    }
+
+    fn delete_to_line_edge(&mut self, end: bool, window: &Window, cx: &mut Context<Self>) {
+        // A stale layout could point inside other text; fall back to one grapheme.
+        let target = if self.layout_revision == self.draft.revision {
+            self.row_edge(end)
+        } else {
+            self.draft.value.head
+        };
+        self.edit(|draft| draft.delete_to(|_| target, end), window, cx);
     }
 
     fn cursor_position(&self) -> Point<Pixels> {
@@ -527,14 +586,7 @@ impl Composer {
     }
 
     fn line_edge(&mut self, end: bool, extend: bool, window: &Window, cx: &mut Context<Self>) {
-        let row = self
-            .rows
-            .iter()
-            .rfind(|row| row.range.start <= self.draft.value.head);
-        let offset = row
-            .map(|row| if end { row.range.end } else { row.range.start })
-            .unwrap_or(0);
-        self.move_to(offset, extend, window, cx);
+        self.move_to(self.row_edge(end), extend, window, cx);
     }
 
     fn copy(&self, cx: &mut App) {
@@ -1013,6 +1065,22 @@ impl Render for Composer {
                         cx.listener(|this, _: &Delete, w, cx| this.edit(|d| d.delete(true), w, cx)),
                     )
                     .on_action(
+                        cx.listener(|this, _: &DeleteWordLeft, w, cx| {
+                            this.delete_word(false, w, cx)
+                        }),
+                    )
+                    .on_action(
+                        cx.listener(|this, _: &DeleteWordRight, w, cx| {
+                            this.delete_word(true, w, cx)
+                        }),
+                    )
+                    .on_action(cx.listener(|this, _: &DeleteToLineStart, w, cx| {
+                        this.delete_to_line_edge(false, w, cx)
+                    }))
+                    .on_action(cx.listener(|this, _: &DeleteToLineEnd, w, cx| {
+                        this.delete_to_line_edge(true, w, cx)
+                    }))
+                    .on_action(
                         cx.listener(|this, _: &Left, w, cx| this.horizontal(false, false, w, cx)),
                     )
                     .on_action(
@@ -1392,6 +1460,54 @@ mod tests {
         assert_eq!(draft.value.text, "draftに");
         assert_eq!(draft.marked, Some(5..8));
         assert_eq!(draft.revision, revision);
+    }
+
+    #[test]
+    fn word_deletion_skips_separators_and_respects_selection() {
+        let mut draft = Draft::default();
+        draft.insert("fix the bug.  ");
+        draft.delete_to(|d| d.word_boundary(d.value.head, false), false);
+        assert_eq!(draft.value.text, "fix the ");
+        draft.select(5, false);
+        draft.delete_to(|d| d.word_boundary(d.value.head, false), false);
+        assert_eq!(draft.value.text, "fix he ");
+        draft.select(0, false);
+        draft.delete_to(|d| d.word_boundary(d.value.head, true), true);
+        assert_eq!(draft.value.text, " he ");
+        draft.select(1, false);
+        draft.select(3, true);
+        draft.delete_to(|_| 0, false);
+        assert_eq!(draft.value.text, "  ");
+        draft.undo(false);
+        assert_eq!(draft.value.text, " he ");
+    }
+
+    #[test]
+    fn line_deletion_stops_at_the_target_and_joins_lines_at_an_edge() {
+        let mut draft = Draft::default();
+        draft.insert("one\ntwo three");
+        draft.delete_to(|_| 4, false);
+        assert_eq!(draft.value.text, "one\n");
+        draft.delete_to(|_| 4, false);
+        assert_eq!(draft.value.text, "one");
+        draft.select(1, false);
+        draft.delete_to(|_| 3, true);
+        assert_eq!(draft.value.text, "o");
+        draft.undo(false);
+        draft.undo(false);
+        assert_eq!(draft.value.text, "one\n");
+    }
+
+    #[test]
+    fn word_deletion_keeps_graphemes_and_finishes_composition() {
+        let mut draft = Draft::default();
+        draft.insert("go 👩🏽‍💻");
+        draft.delete_to(|d| d.value.head, false);
+        assert_eq!(draft.value.text, "go ");
+        draft.mark(3..3, "に", None);
+        draft.delete_to(|d| d.word_boundary(d.value.head, false), false);
+        assert!(draft.marked.is_none());
+        assert_eq!(draft.value.text, "go ");
     }
 
     #[test]

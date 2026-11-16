@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import tempfile
 
-from release_macos import build_installers, manifest, write_json
+from release_macos import build_installers, embed_host, manifest, stage_host, write_json
 from distribution_macos import build_distribution
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -32,6 +32,8 @@ def verify_bundle(bundle):
         dependency = line.strip().split(" (", 1)[0]
         assert dependency.startswith(("/System/Library/", "/usr/lib/")), f"Unbundled dependency: {dependency}"
     assert (bundle / "Contents/Resources/LICENSE").read_text().startswith("MIT License")
+    host = json.loads((bundle / "Contents/Resources/host.json").read_text())
+    assert host["component"] == "host" and (bundle / "Contents/Resources/Host.tar.gz").stat().st_size > 0
     assert info["CFBundleIconFile"] == "Plait.icns"
     assert (bundle / "Contents/Resources/Plait.icns").read_bytes()[:4] == b"icns"
     notices = (bundle / "Contents/Resources/THIRD_PARTY_NOTICES.txt").read_text()
@@ -95,6 +97,8 @@ def main():
             "PlaitBuildChannel": "development",
         }
         write_json(resources / "component.json", manifest("client", version, revision))
+        staged = stage_host(work, host_version, revision)
+        embed_host(resources, staged[0], staged[2])
         with (contents / "Info.plist").open("wb") as file:
             plistlib.dump(info, file)
         # Ad-hoc signing permits local use; it is not a notarized Developer ID release.
@@ -106,7 +110,11 @@ def main():
         subprocess.run(["ditto", "-x", "-k", str(archive), str(unpacked)], check=True)
         verify_bundle(unpacked / "Plait.app")
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-        installers = build_installers(bundle, version, host_version, revision, work)
+        installers = build_installers(bundle, version, host_version, revision, work, staged)
+        # The same host archive, alone, for `plait-host update` on machines without the app.
+        host_archive = work / f"Plait-Host-{host_version}-{revision}-macos-arm64.tar.gz"
+        shutil.copy2(resources / "Host.tar.gz", host_archive)
+        installers.append(host_archive)
         installers += build_distribution(installers, version, revision, work)
         # Only replace generated output after both the bundle and its archive pass verification.
         destination = dist / "Plait.app"

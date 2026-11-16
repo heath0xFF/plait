@@ -88,7 +88,7 @@ impl HostState {
             return false;
         }
         self.connecting = false;
-        if status.protocol_version != 1 {
+        if !(1..=crate::host::PROTOCOL_VERSION).contains(&status.protocol_version) {
             self.connected = false;
             self.error =
                 Some("Unsupported host protocol. Update the host and desktop together.".into());
@@ -106,6 +106,13 @@ impl HostState {
         self.settings_model = status.default_model.clone();
         self.status = Some(status);
         true
+    }
+
+    /// The negotiated protocol; version 1 until a status reply says otherwise.
+    pub fn protocol(&self) -> u32 {
+        self.status
+            .as_ref()
+            .map_or(1, |status| status.protocol_version)
     }
 
     fn model_available(&self, choice: Option<&ModelChoice>, status: &Status) -> bool {
@@ -202,11 +209,8 @@ impl Submissions {
             request_id: request_id(),
             text,
         };
-        let request = crate::host::Request::Submit {
-            thread_id: thread_id.into(),
-            request_id: submission.request_id.clone(),
-            text: submission.text.clone(),
-        };
+        let request =
+            crate::host::Request::submit_bound(thread_id, &submission.request_id, &submission.text);
         let bytes = serde_json::to_vec(&request).map_err(|_| "Cannot encode this submission.")?;
         if bytes.len() + 1 > crate::host::REQUEST_LIMIT {
             return Err("Message exceeds the host's 64 KiB request limit. Shorten the draft before sending.".into());
@@ -265,6 +269,32 @@ mod tests {
             "pending_approval":null, "error":null, "truncated":false
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn negotiated_protocol_accepts_versions_one_and_two_only() {
+        let mut state = HostState::new("/repo".into());
+        assert_eq!(state.protocol(), 1);
+        for (version, accepted) in [(1, true), (2, true), (3, false), (0, false)] {
+            state.reconnect();
+            let mut reply = status(None, Vec::new());
+            reply.protocol_version = version;
+            assert_eq!(state.apply_status(state.epoch, reply), accepted);
+            assert_eq!(state.connected, accepted);
+            if accepted {
+                assert_eq!(state.protocol(), version);
+            }
+        }
+        // Submissions are sized as their largest negotiated form.
+        let request = crate::host::Request::submit_bound("t", "r", "hi");
+        let wire = serde_json::to_value(&request).unwrap();
+        assert_eq!(wire["protocol_version"], 2);
+        assert_eq!(wire["approval"], "auto");
+        let legacy = crate::host::Request::submit("t".into(), "r".into(), "hi".into(), None);
+        assert_eq!(
+            serde_json::to_value(&legacy).unwrap(),
+            serde_json::json!({"op":"submit","thread_id":"t","request_id":"r","text":"hi"})
+        );
     }
 
     #[test]

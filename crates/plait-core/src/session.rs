@@ -106,11 +106,8 @@ impl Session {
                 return Err("Saved thread or draft exceeds its limits.".into());
             }
             if let Some(pending) = &thread.pending {
-                let request = crate::host::Request::Submit {
-                    thread_id: id.clone(),
-                    request_id: pending.request_id.clone(),
-                    text: pending.text.clone(),
-                };
+                let request =
+                    crate::host::Request::submit_bound(id, &pending.request_id, &pending.text);
                 if !identifier(&pending.request_id)
                     || pending.text.trim().is_empty()
                     || serde_json::to_vec(&request)

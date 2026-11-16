@@ -80,8 +80,8 @@ impl Drop for Snapshots {
 }
 
 impl Client {
-    pub fn subscribe(&self, thread_id: String) -> Result<Snapshots, Error> {
-        Snapshots::start(self.watch(thread_id)?)
+    pub fn subscribe(&self, thread_id: String, protocol: u32) -> Result<Snapshots, Error> {
+        Snapshots::start(self.watch(thread_id, protocol)?)
     }
 }
 
