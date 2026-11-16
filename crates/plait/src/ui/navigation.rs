@@ -56,12 +56,17 @@ impl Plait {
         .aria_expanded(open)
         .pl(px(16.))
         .child(icon(if open { "down" } else { "right" }))
-        .child(icon("machine").text_color(rgb(BLUE)))
-        .child(title(machine.name).text_color(rgb(TEXT)))
-        .child(tag(
-            if machine.local { "local" } else { "fixture" },
-            if machine.local { MINT } else { SUBTLE },
-        ))
+        .child(
+            pill()
+                // Long machine names truncate instead of pushing the row wider.
+                .flex_shrink(1.)
+                .text_size(px(12.))
+                .text_color(rgb(TEXT))
+                .child(icon("machine").size(px(12.)).text_color(rgb(BLUE)))
+                .child(div().min_w_0().truncate().child(machine.name)),
+        )
+        .child(div().flex_1())
+        .when(!machine.local, |el| el.child(tag("fixture", SUBTLE)))
         .on_activate(cx, move |this, _, cx| {
             if !this.state.collapsed_machines.remove(&(pi, mi)) {
                 this.state.collapsed_machines.insert((pi, mi));
@@ -91,8 +96,11 @@ impl Plait {
         .pl(px(36.))
         .child(icon("thread").text_color(rgb(MINT)))
         .child(title(id.clone()).text_color(rgb(TEXT)))
-        .child(tag(thread.status.label(), SUBTLE))
-        .child(dot(host_status_color(thread.status)))
+        .child(
+            pill()
+                .child(dot(host_status_color(thread.status)))
+                .child(thread.status.label()),
+        )
         .on_activate(cx, move |this, window, cx| {
             this.select_host_thread(id.clone(), window, cx)
         })
@@ -118,8 +126,7 @@ impl Plait {
         .child(icon("thread").text_color(rgb(VIOLET)))
         .child(title(thread.title).text_color(rgb(TEXT)))
         // Sample state is a dot here; the header and accessible name spell it out.
-        .child(tag("mock", SUBTLE))
-        .child(dot(status_color(thread.status)))
+        .child(pill().child(dot(status_color(thread.status))).child("mock"))
         .on_activate(cx, move |this, window, cx| {
             window.focus(&this.focus, cx);
             this.select_thread(selection, cx)
@@ -170,9 +177,11 @@ impl Plait {
     }
 
     fn actions(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // The first row centers on the 44-point header beside it.
         column()
             .flex_shrink_0()
             .px_2()
+            .pt(px((CHROME_HEIGHT - ROW_HEIGHT) / 2.))
             .pb_1()
             .gap(px(1.))
             .child(
@@ -233,22 +242,6 @@ impl Plait {
             .bg(rgb(RAIL))
             .border_r_1()
             .border_color(rgb(BORDER))
-            .child(
-                row().h(px(CHROME_HEIGHT)).px_4().flex_shrink_0().child(
-                    row()
-                        .id("plait-brand")
-                        .role(Role::Image)
-                        .aria_label("Plait")
-                        .gap(px(10.))
-                        .child(img("plait-mark.svg").w(px(18.)).h(px(22.)).flex_shrink_0())
-                        .child(
-                            img("plait-wordmark.svg")
-                                .w(px(50.))
-                                .h(px(24.))
-                                .flex_shrink_0(),
-                        ),
-                ),
-            )
             .child(self.actions(cx))
             .child(self.tree(cx))
             .child(self.host_footer(cx))

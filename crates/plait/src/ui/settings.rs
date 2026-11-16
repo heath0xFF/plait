@@ -253,6 +253,7 @@ impl Plait {
                         )),
                 )
                 .child(self.host_status(cx))
+                .child(self.keyboard_settings(cx))
                 .child(note(
                     "Authentication stays on the host. This page shows status only; it never reads or saves credentials.",
                 ))

@@ -8,5 +8,6 @@ pub mod host;
 pub mod host_state;
 pub mod local_socket;
 pub mod model;
+pub mod preferences;
 pub mod state;
 pub mod transcript;

@@ -2,6 +2,7 @@ mod changes;
 mod composer;
 mod conversation;
 mod host;
+mod jump;
 mod live_conversation;
 mod navigation;
 mod settings;
@@ -62,6 +63,7 @@ pub struct Plait {
     show_changes: bool,
     sidebar: bool,
     diagnostics: bool,
+    preferences: jump::PreferenceState,
     picker_open: bool,
     notice: Option<String>,
     last_render_us: u128,
@@ -102,6 +104,7 @@ impl Plait {
             show_changes: false,
             sidebar: true,
             diagnostics: false,
+            preferences: jump::PreferenceState::default(),
             picker_open: false,
             notice: None,
             last_render_us: 0,
@@ -112,6 +115,7 @@ impl Plait {
             switch_us: 0,
         };
         this.pump(cx);
+        this.load_preferences(cx);
         this.reconnect_host(window, cx);
         this
     }
@@ -367,12 +371,12 @@ impl Plait {
                 segmented()
                     .child(
                         segment("conversation-tab", "Conversation", !self.show_changes)
-                            .aria_keyshortcuts("Meta+1")
+                            .aria_keyshortcuts("Meta+Shift+1")
                             .on_click(cx.listener(|this, _, _, cx| this.show_tab(false, cx))),
                     )
                     .child(
                         segment("changes-tab", "Changes", self.show_changes)
-                            .aria_keyshortcuts("Meta+2")
+                            .aria_keyshortcuts("Meta+Shift+2")
                             // The accessible name stays "Changes"; the count is visual.
                             .when_some(changed, |el, count| {
                                 el.child(
@@ -556,6 +560,7 @@ impl Render for Plait {
             .on_action(cx.listener(|_, _: &BackTab, window, cx| window.focus_prev(cx)))
             .on_action(cx.listener(|_, _: &Close, window, _| window.remove_window()))
             .on_action(cx.listener(|_, _: &Minimize, window, _| window.minimize_window()))
+            .map(|root| self.on_jump_actions(root, cx))
             .size_full()
             .overflow_hidden()
             .bg(rgb(BG))
@@ -608,6 +613,7 @@ impl Render for Plait {
 
 pub fn menus(cx: &mut App) {
     composer::bind_keys(cx);
+    jump::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-w", Close, Some("Plait")),
@@ -617,8 +623,9 @@ pub fn menus(cx: &mut App) {
         KeyBinding::new("cmd-r", Refresh, Some("Plait")),
         KeyBinding::new("cmd-b", ToggleSidebar, Some("Plait")),
         KeyBinding::new("cmd-shift-d", ToggleDiagnostics, Some("Plait")),
-        KeyBinding::new("cmd-1", Conversation, Some("Plait")),
-        KeyBinding::new("cmd-2", Changes, Some("Plait")),
+        // Cmd-1 to Cmd-9 jump to sidebar items; see jump.rs.
+        KeyBinding::new("cmd-shift-1", Conversation, Some("Plait")),
+        KeyBinding::new("cmd-shift-2", Changes, Some("Plait")),
         KeyBinding::new("cmd-alt-down", NextThread, Some("Plait")),
         KeyBinding::new("cmd-alt-up", PreviousThread, Some("Plait")),
         KeyBinding::new("alt-down", NextFile, Some("Plait")),

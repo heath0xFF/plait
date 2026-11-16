@@ -223,10 +223,28 @@ See [Mac installation](MACOS.md) for paths and operational limits.
 ## UI and performance
 
 Use GPUI's native macOS platform, Metal renderer, system sans-serif font, and
-Menlo for code. SVG assets are embedded strings, not runtime file reads. GPUI
-renders the supplied ribbon mark and outlined wordmark as full-color images;
-category glyphs use its tinted SVG path. Brand files live in `assets/branding`.
-The development bundle and icon build are described in [MACOS.md](MACOS.md).
+Menlo for code. SVG assets are embedded strings, not runtime file reads. The
+app shows no in-window logo; category glyphs use GPUI's tinted SVG path. Brand
+files live in `assets/branding`. The development bundle and icon build are
+described in [MACOS.md](MACOS.md).
+
+### Desktop preferences
+
+Model defaults and credentials belong to the host. Choices that belong to one
+desktop installation live in `plait_core::preferences`, saved as JSON at
+`~/Library/Application Support/Plait/desktop.json` on macOS
+(`$XDG_CONFIG_HOME/plait/desktop.json` or `~/.config/plait/desktop.json`
+elsewhere). Today it holds one setting: what Cmd-1 to Cmd-9 select.
+
+The file is read and written on the background executor. A missing file means
+defaults. A malformed or oversized file is reported in Settings and left in
+place; defaults apply. Saves replace the file atomically, and Settings says
+"Saved" only after the write succeeds. Only the newest save reports a result.
+Unknown fields are ignored so a newer client's file still loads.
+
+Cmd-N counts rows in sidebar order: host threads come before the examples on
+the local machine. A machine or project selects its first thread; a row with
+no thread does nothing. Jumping expands collapsed parents.
 
 Conversation events use GPUI's variable-height `list`. User messages render as
 right-aligned bubbles; agent replies remain open text. Tool details start

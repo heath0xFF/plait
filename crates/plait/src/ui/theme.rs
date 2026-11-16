@@ -204,6 +204,21 @@ pub fn tag(text: impl Into<SharedString>, color: u32) -> Div {
         .child(text!(id = text.clone(), text))
 }
 
+/// Rounded, outlined label for metadata: a machine, a state. Callers add children.
+pub fn pill() -> Div {
+    row()
+        .gap(px(5.))
+        .h(px(20.))
+        .px(px(7.))
+        .min_w_0()
+        .flex_shrink_0()
+        .rounded_full()
+        .border_1()
+        .border_color(rgb(EDGE))
+        .text_size(px(11.))
+        .text_color(rgb(MUTED))
+}
+
 pub fn status_color(status: ThreadStatus) -> u32 {
     match status {
         ThreadStatus::Ready => MINT,

@@ -301,7 +301,8 @@ are unsigned and not notarized. There is no automatic updater. See
 |---|---|
 | Cmd-O | Open a local repository |
 | Cmd-R | Refresh local Git status and invalidate cached diffs |
-| Cmd-1 / Cmd-2 | Conversation / Changes |
+| Cmd-1 … Cmd-9 | Jump to the Nth thread in the sidebar (Settings: threads, machines, or projects) |
+| Cmd-Shift-1 / Cmd-Shift-2 | Conversation / Changes |
 | Cmd-B | Show or hide the sidebar |
 | Cmd-Shift-D | Show or hide render timing diagnostics |
 | Cmd-comma | Open local host settings |
