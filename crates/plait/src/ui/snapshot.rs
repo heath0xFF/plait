@@ -546,12 +546,18 @@ impl Harness {
         self.settle();
     }
 
-    /// Draw the scene, which runs layout and paint, and save it when rendering.
-    fn capture(&mut self, name: &str) {
+    /// Run layout and paint without saving an image.
+    fn draw(&mut self) {
         let window = self.window.into();
         self.cx
             .update_window(window, |_, window, cx| window.draw(cx).clear(cx))
             .expect("draw");
+    }
+
+    /// Draw the scene, which runs layout and paint, and save it when rendering.
+    fn capture(&mut self, name: &str) {
+        self.draw();
+        let window = self.window.into();
         if let Some(output) = &self.output {
             let image = self.cx.capture_screenshot(window).expect("screenshot");
             image
@@ -963,6 +969,33 @@ fn reading_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         "a plain click clears the selection"
     );
 
+    // Dragging past the bottom edge scrolls, and the selection follows.
+    let (below, before) = harness
+        .window
+        .update(&mut harness.cx, |plait, _, _| {
+            let list = plait.live_scroll.viewport_bounds();
+            let offset = plait.live_scroll.scroll_px_offset_for_scrollbar().y;
+            (point(from.x, list.bottom() + px(60.)), offset)
+        })
+        .unwrap();
+    harness.pointer(press(from, 1));
+    for _ in 0..16 {
+        harness.pointer(moved(below, Some(MouseButton::Left)));
+        harness.draw();
+    }
+    harness.capture(&format!("read-drag-scroll-{suffix}"));
+    harness.pointer(release(below));
+    harness.update(|plait, _, _| {
+        let offset = plait.live_scroll.scroll_px_offset_for_scrollbar().y;
+        assert!(offset < before - px(200.), "{offset} {before}");
+        let copied = plait.selected_text().expect("selection across rows");
+        assert!(copied.starts_with("See the GPUI site"), "{copied}");
+        assert!(
+            copied.contains("\n\nAnd the code samples.\n\n// Sample code"),
+            "{copied}"
+        );
+    });
+
     harness.update(|plait, _, _| plait.live_scroll.scroll_to(at(3)));
     harness.capture(&format!("read-code-{suffix}"));
     // In code, a triple click takes one line.
@@ -987,7 +1020,12 @@ fn reading_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         .update(&mut harness.cx, |plait, _, _| {
             assert!(plait.live_scroll.logical_scroll_top().item_ix < plait.live_count);
             let list = plait.live_scroll.viewport_bounds();
-            point(list.center().x, list.bottom() - px(24.))
+            // It ends at the right edge of the text column.
+            let column = (list.size.width - px(48.)).min(px(760.));
+            point(
+                list.center().x + column * 0.5 - px(40.),
+                list.bottom() - px(24.),
+            )
         })
         .unwrap();
     harness.pointer(press(jump, 1));

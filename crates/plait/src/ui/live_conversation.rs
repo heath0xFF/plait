@@ -208,33 +208,42 @@ impl Plait {
             )
             .when(away, |el| {
                 el.child(
+                    // Laid out like a row, so the control ends at the text's right
+                    // edge and stays clear of a hovered link's address on the left.
                     div()
                         .absolute()
                         .bottom(px(10.))
                         .left_0()
                         .right_0()
-                        .flex()
-                        .justify_center()
+                        .px_6()
                         .child(
-                            toned_button("jump-to-latest", "", Tone::Filled)
-                                .occlude()
-                                .gap(px(6.))
-                                .aria_label(if unseen {
-                                    "New activity. Jump to latest"
-                                } else {
-                                    "Jump to latest"
-                                })
-                                .when(unseen, |el| el.child(dot(BLUE)))
-                                .child(if unseen {
-                                    "New activity · Jump to latest"
-                                } else {
-                                    "Jump to latest"
-                                })
-                                .child(icon("down").text_color(rgb(TEXT)))
-                                .on_activate(cx, |this, _, cx| {
-                                    this.live_scroll.scroll_to_end();
-                                    cx.notify();
-                                }),
+                            div()
+                                .flex()
+                                .justify_end()
+                                .w_full()
+                                .max_w(px(CONTENT_WIDTH))
+                                .mx_auto()
+                                .child(
+                                    toned_button("jump-to-latest", "", Tone::Filled)
+                                        .occlude()
+                                        .gap(px(6.))
+                                        .aria_label(if unseen {
+                                            "New activity. Jump to latest"
+                                        } else {
+                                            "Jump to latest"
+                                        })
+                                        .when(unseen, |el| el.child(dot(BLUE)))
+                                        .child(if unseen {
+                                            "New activity · Jump to latest"
+                                        } else {
+                                            "Jump to latest"
+                                        })
+                                        .child(icon("down").text_color(rgb(TEXT)))
+                                        .on_activate(cx, |this, _, cx| {
+                                            this.live_scroll.scroll_to_end();
+                                            cx.notify();
+                                        }),
+                                ),
                         ),
                 )
             })
@@ -244,7 +253,7 @@ impl Plait {
                         .absolute()
                         .bottom(px(6.))
                         .left(px(8.))
-                        .max_w(relative(0.8))
+                        .max_w(relative(0.6))
                         .px_2()
                         .py_1()
                         .rounded_md()

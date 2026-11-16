@@ -27,6 +27,9 @@ pub(super) fn bind_keys(cx: &mut App) {
     cx.bind_keys([KeyBinding::new("cmd-c", CopySelection, Some("Plait"))]);
 }
 
+/// The most one pointer movement scrolls the list while dragging past its edge.
+const SCROLL_STEP: f32 = 48.;
+
 /// The conversation row a piece of text belongs to, by identity rather than position.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Owner {
@@ -365,7 +368,11 @@ impl Plait {
                     }
                     if event.pressed_button == Some(MouseButton::Left) {
                         let hit = nearest(&move_regions.borrow(), event.position);
-                        let _ = move_entity.update(cx, |this, cx| this.drag_text(hit, cx));
+                        // How far the pointer is past the top or bottom of the list.
+                        let y = event.position.y;
+                        let past =
+                            (y - bounds.bottom()).max(px(0.)) + (y - bounds.top()).min(px(0.));
+                        let _ = move_entity.update(cx, |this, cx| this.drag_text(hit, past, cx));
                     } else {
                         let link = under(&move_regions.borrow(), event.position, window)
                             .and_then(|hit| hit.link);
@@ -500,9 +507,18 @@ impl Plait {
         cx.notify();
     }
 
-    fn drag_text(&mut self, hit: Option<Hit>, cx: &mut Context<Self>) {
+    fn drag_text(&mut self, hit: Option<Hit>, past: Pixels, cx: &mut Context<Self>) {
         if !self.reading.dragging {
             return;
+        }
+        // Dragging past an edge scrolls that way, so a selection can outgrow
+        // the screen. Each pointer movement scrolls once; nothing is animated.
+        if past != px(0.) {
+            let step = past.clamp(px(-SCROLL_STEP), px(SCROLL_STEP));
+            let offset = self.live_scroll.scroll_px_offset_for_scrollbar();
+            self.live_scroll
+                .set_offset_from_scrollbar(point(px(0.), offset.y - step));
+            cx.notify();
         }
         let (Some(hit), Some(selection)) = (hit, &mut self.reading.selection) else {
             return;
