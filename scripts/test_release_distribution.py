@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -119,6 +120,16 @@ class InstallerTests(unittest.TestCase):
         result = self.run_installer("--download", str(output))
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(package.read_bytes(), b"existing data")
+        self.assertFalse(any(name == "sudo" for name, _ in self.calls()))
+
+    @unittest.skipUnless(sys.platform == "darwin" and os.uname().machine == "arm64", "Requires native Apple Silicon utilities")
+    def test_real_macos_plutil_extracts_the_release_array_and_package(self):
+        for command in ["uname", "sw_vers", "plutil"]:
+            self.script = self.script.replace(str(self.root / command), f"/usr/bin/{command}")
+        output = self.root / "native download"
+        result = self.run_installer("--download", str(output))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((output / self.metadata["downloads"]["all"]["name"]).read_bytes(), b"fixture package")
         self.assertFalse(any(name == "sudo" for name, _ in self.calls()))
 
     def test_corrupt_or_injected_metadata_never_reaches_installer(self):

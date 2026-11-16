@@ -147,4 +147,4 @@ jobs:
           gh release create "$RELEASE_TAG" --verify-tag --prerelease \
             --title "Plait $RELEASE_TAG — local preview" --notes-file notes.md \
             release/*.dmg release/*.pkg release/*.zip release/*.sha256 \
-            release/install.sh release/release.json
+            release/install.sh release/release.json release/Plait-Release-*.json
