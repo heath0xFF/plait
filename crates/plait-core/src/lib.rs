@@ -2,6 +2,7 @@
 //!
 //! Blocking Git and host operations must run on the caller's background executor.
 
+pub mod fuzzy;
 pub mod git;
 pub mod host;
 pub mod host_state;

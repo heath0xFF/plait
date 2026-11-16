@@ -538,6 +538,7 @@ fn walk(output: Option<&Path>) {
         streaming_walk(&mut harness, &repository, suffix);
         tool_states_walk(&mut harness, &repository, suffix);
         draft_walk(&mut harness, &repository, suffix);
+        composer_walk(&mut harness, &repository, suffix);
         harness.update(|plait, _, _| plait.settings_open = true);
         harness.capture(&format!("settings-{suffix}"));
         harness.update(|plait, _, _| {
@@ -673,6 +674,153 @@ fn draft_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         plait.live_scroll.scroll_to_end();
     });
     harness.capture(&format!("live-draft-{suffix}"));
+    harness.connect(repository, false);
+}
+
+/// Sample checkout paths for the file-suggestion scenes. Not read from disk.
+fn sample_files() -> Arc<plait_core::git::FileList> {
+    let paths = [
+        "Cargo.toml",
+        "README.md",
+        "crates/plait-core/src/git.rs",
+        "crates/plait-core/src/git/tests.rs",
+        "crates/plait-core/src/host_state.rs",
+        "crates/plait-core/src/state.rs",
+        "crates/plait/src/ui/changes.rs",
+        "crates/plait/src/ui/composer/mod.rs",
+        "crates/plait/src/ui/host.rs",
+        "crates/plait/src/ui/session.rs",
+        "crates/plait/src/ui/settings.rs",
+        "docs/ARCHITECTURE.md",
+        "docs/HOST.md",
+        "scripts/snapshots.sh",
+    ];
+    Arc::new(plait_core::git::FileList {
+        paths: paths.map(String::from).to_vec(),
+        ..Default::default()
+    })
+}
+
+impl Harness {
+    /// A ready-to-send composer with nothing typed, on a finished turn.
+    fn fresh_composer(&mut self, repository: &Path) {
+        self.connect(repository, false);
+        self.change_snapshot(finished_turn);
+        self.update(|plait, _, cx| {
+            plait.host.threads[0].status = ThreadStatus::Idle;
+            plait.sync_composer(cx);
+            plait.live_scroll.scroll_to_end();
+        });
+    }
+
+    fn composer<R>(
+        &mut self,
+        change: impl FnOnce(&mut Composer, &mut Window, &mut Context<Composer>) -> R,
+    ) -> R {
+        let result = self
+            .window
+            .update(&mut self.cx, |plait, window, cx| {
+                plait.composers[THREAD].update(cx, |composer, cx| change(composer, window, cx))
+            })
+            .expect("window update");
+        self.settle();
+        result
+    }
+
+    /// Wait for the file read and the background ranking behind a suggestion list.
+    fn suggestions(&mut self) -> Vec<String> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let names = self.composer(|composer, _, _| composer.suggestion_names());
+            if !names.is_empty() {
+                return names;
+            }
+            assert!(Instant::now() < deadline, "suggestions did not arrive");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+}
+
+/// The composer at each height, and its two suggestion lists.
+fn composer_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
+    harness.fresh_composer(repository);
+    harness.capture(&format!("composer-empty-{suffix}"));
+
+    // Up walks the thread's own user messages; Down returns the empty draft.
+    harness.composer(|composer, window, cx| {
+        composer.press_arrow(false, window, cx);
+        assert_eq!(composer.text(), "Go ahead.");
+        assert_eq!(composer.saved_draft().0, "");
+        composer.press_arrow(false, window, cx);
+        assert!(composer.text().starts_with("Queue the status refresh"));
+        composer.press_arrow(true, window, cx);
+        composer.press_arrow(true, window, cx);
+        assert_eq!(composer.text(), "");
+    });
+    // A chosen command reaches the window, which performs it.
+    harness.update(|plait, window, cx| {
+        let event =
+            super::composer::ComposerEvent::Command(super::composer::CommandId::ShowChanges);
+        plait.composer_event(&event, window, cx);
+        assert!(plait.show_changes);
+        let event =
+            super::composer::ComposerEvent::Command(super::composer::CommandId::ShowConversation);
+        plait.composer_event(&event, window, cx);
+        assert!(!plait.show_changes);
+    });
+
+    let lines = |count: usize| {
+        (1..=count)
+            .map(|line| format!("Sample draft line {line}: keep the public signature as it is."))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    harness.composer(|composer, _, cx| composer.restore_draft(lines(6), 1, None, cx));
+    harness.capture(&format!("composer-lines-{suffix}"));
+    // Far more lines than fit: the input stops growing and scrolls to its cursor.
+    harness.composer(|composer, _, cx| composer.restore_draft(lines(60), 2, None, cx));
+    harness.capture(&format!("composer-tall-{suffix}"));
+
+    // A real mention: the list comes from the fixture repository through Git.
+    harness.composer(|composer, window, cx| {
+        composer.restore_draft(String::new(), 3, None, cx);
+        composer.type_text("Compare @rev", window, cx);
+    });
+    harness.update(|plait, _, cx| plait.supply_files(cx));
+    assert_eq!(harness.suggestions(), ["src/review.rs"]);
+    harness.composer(|composer, window, cx| {
+        assert!(composer.accept_suggestion(window, cx));
+        assert_eq!(composer.text(), "Compare src/review.rs ");
+        assert!(composer.suggestion_names().is_empty());
+    });
+
+    // A fuller sample list, to see eight rows, emphasis, and the list's edges.
+    harness.composer(|composer, window, cx| {
+        composer.restore_draft(String::new(), 4, None, cx);
+        composer.set_files(super::composer::MentionFiles::Ready(sample_files()), cx);
+        composer.type_text("Why does @s", window, cx);
+    });
+    assert!(harness.suggestions().len() > 8);
+    harness.capture(&format!("composer-mention-{suffix}"));
+    harness.composer(|composer, window, cx| {
+        composer.restore_draft(String::new(), 5, None, cx);
+        composer.type_text("@ui/se", window, cx);
+    });
+    assert_eq!(harness.suggestions()[0], "crates/plait/src/ui/session.rs");
+    harness.capture(&format!("composer-mention-filtered-{suffix}"));
+
+    harness.composer(|composer, window, cx| {
+        composer.restore_draft(String::new(), 6, None, cx);
+        composer.type_text("/", window, cx);
+    });
+    assert_eq!(harness.suggestions().len(), 5);
+    harness.capture(&format!("composer-command-{suffix}"));
+    harness.composer(|composer, window, cx| {
+        composer.type_text("set", window, cx);
+        assert_eq!(composer.suggestion_names()[0], "/settings: Open settings");
+    });
+    harness.capture(&format!("composer-command-filtered-{suffix}"));
+    harness.update(|plait, window, cx| window.focus(&plait.focus, cx));
     harness.connect(repository, false);
 }
 

@@ -149,6 +149,7 @@ impl Plait {
                 match event {
                     ComposerEvent::Submit(text) => this.submit_message(text.clone(), window, cx),
                     ComposerEvent::Stop => this.control_thread(None, window, cx),
+                    other => this.composer_event(other, window, cx),
                 }
             })
             .detach();
@@ -604,5 +605,6 @@ impl Plait {
             composer.set_enabled(reason.is_none() && !self.host.controlling, reason, cx);
             composer.set_busy(busy, cx);
         });
+        self.sync_prompt_history(cx);
     }
 }

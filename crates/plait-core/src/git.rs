@@ -325,6 +325,92 @@ fn untracked(root: &Path, change: &Change, start: Instant) -> Result<Diff> {
     Ok(diff)
 }
 
+/// More paths than this are clipped; a picker cannot usefully show them anyway.
+pub const FILE_LIST_LIMIT: usize = 200_000;
+
+/// Files a prompt can name: tracked, plus untracked files that are not ignored.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct FileList {
+    /// Checkout-relative paths with `/` separators, sorted and unique.
+    pub paths: Vec<String>,
+    /// The checkout has more files than the output or count limit allows.
+    pub truncated: bool,
+    /// Paths left out because they cannot be written into a prompt:
+    /// non-UTF-8 names and names with control characters.
+    pub skipped: usize,
+    pub elapsed: Duration,
+}
+
+/// List the files in the checkout at `root` without reading their contents.
+///
+/// Files deleted from the worktree, sparse-checkout entries, and nested
+/// repositories are left out. Submodules appear as their gitlink path.
+pub fn files(root: &Path) -> Result<FileList> {
+    let start = Instant::now();
+    let args = [
+        "ls-files",
+        "-z",
+        "-t",
+        "--cached",
+        "--others",
+        "--deleted",
+        "--exclude-standard",
+        "--full-name",
+    ]
+    .map(OsStr::new);
+    let output = command(root, &args, STATUS_LIMIT)?;
+    let mut list = parse_files(&output.bytes, output.truncated, FILE_LIST_LIMIT)?;
+    list.elapsed = start.elapsed();
+    Ok(list)
+}
+
+/// Parse `git ls-files -z -t` records: a status tag, a space, and a path.
+fn parse_files(bytes: &[u8], clipped: bool, limit: usize) -> Result<FileList> {
+    let mut records: Vec<&[u8]> = bytes.split(|b| *b == 0).collect();
+    // The final piece is empty after a complete record and partial after a clipped one.
+    records.pop();
+    let mut list = FileList {
+        truncated: clipped,
+        ..FileList::default()
+    };
+    let mut deleted = std::collections::HashSet::new();
+    for record in records {
+        let [tag, b' ', path @ ..] = record else {
+            return Err("Malformed Git file record".into());
+        };
+        validate_relative(&path_from_bytes(path))?;
+        // An untracked nested repository is reported as a directory.
+        if *tag == b'S' || path.ends_with(b"/") {
+            continue;
+        }
+        let Some(text) = prompt_path(path) else {
+            list.skipped += 1;
+            continue;
+        };
+        if *tag == b'R' {
+            deleted.insert(text);
+        } else {
+            list.paths.push(text.to_owned());
+        }
+    }
+    list.paths.retain(|path| !deleted.contains(path.as_str()));
+    list.paths.sort_unstable();
+    // An unmerged path has one record per stage.
+    list.paths.dedup();
+    if list.paths.len() > limit {
+        list.paths.truncate(limit);
+        list.truncated = true;
+    }
+    Ok(list)
+}
+
+/// A path is offered only if it survives being typed into a message unchanged.
+fn prompt_path(bytes: &[u8]) -> Option<&str> {
+    std::str::from_utf8(bytes)
+        .ok()
+        .filter(|text| !text.chars().any(char::is_control))
+}
+
 fn open_regular_file(root: &Path, relative: &Path) -> Result<std::fs::File> {
     use std::{
         ffi::CString,

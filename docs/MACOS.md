@@ -218,6 +218,13 @@ For a prepared development checkout and a first source-change task, see
 | Cmd-Shift-D | Show or hide render timing diagnostics |
 | Cmd-comma | Open local host settings |
 | Enter / Shift-Enter | Submit the draft / insert a line break |
+| Cmd-Enter | Submit the draft, even with a suggestion list open |
+| Up / Down in the draft | On the first line, Up recalls earlier messages sent in this thread; Down returns toward the draft |
+| @ | List checkout files at the start of a word; type to filter |
+| / | List local commands when it is the first character of an empty draft |
+| Up / Down, Enter or Tab, Escape | With a suggestion list open: choose, accept, dismiss |
+| Escape | Close the suggestion list, then leave message recall |
+| Escape twice | Stop the running agent, when pressed twice within 1.5 seconds |
 | Option-Delete / Option-Fn-Delete | Delete the previous / next word in the draft |
 | Cmd-Delete / Cmd-Fn-Delete | Delete to the start / end of the visible draft line |
 | Cmd-Option-Up / Down | Previous / next thread |

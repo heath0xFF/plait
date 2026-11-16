@@ -21,7 +21,15 @@ ui/                     GPUI layout, actions, focus, lists, theme
   navigation.rs         Project → Machine → Thread
   conversation.rs       no-thread state and the Git inspector
   live_conversation.rs  real host messages, ordered tools, and approvals
-  composer.rs           native input, IME, clipboard, undo, submit/stop events
+  composer/             native input, IME, clipboard, undo, and its events
+    draft.rs            text, selection, undo, acceptance guard, prompt recall
+    history.rs          prompts already sent in the thread
+    input.rs            wrapped layout, auto-growing height, painting
+    trigger.rs          `@` and `/` detection and the inserted mention text
+    completion.rs       reusable suggestion list: state and rendering
+    mentions.rs         background file ranking and its stale-result guard
+    commands.rs         the local command table
+    parent.rs           what the window supplies and performs for a composer
   host.rs               background host requests and event subscriptions
   session.rs            desktop restore/save coordination and submission guards
   markdown.rs           native conversation blocks and copy controls
@@ -43,6 +51,7 @@ preferences.rs          desktop-only preferences and Cmd-number order
 session.rs              private desktop journal, identity checks, writer lock
 markdown.rs             plain text blocks and style ranges, parsed off render
 git.rs                  synchronous, read-only Git adapter; background only
+fuzzy.rs                case-insensitive subsequence matching for pickers
 ```
 
 The desktop imports `plait_core`; the core has no GPUI dependencies. Core and
@@ -173,13 +182,19 @@ current snapshot's cache, but cannot replace another selected file.
 
 Diffs are loaded on demand. Up to eight diffs are cached per status snapshot.
 Refresh clears that cache. Threads within a checkout share its Git state.
+
+The checkout's file list is a third job, started only when a composer asks for
+it. It has its own queue slot, so it cannot displace a diff, and it runs after
+status because it needs the root that status reports. The list is kept until
+the epoch changes; a failed read is not cached, so the next request retries.
 Git reads do not start SSH or network connections. Remote transport is not
 implemented.
 
 ## Git boundary
 
-Public operations are `status(path)` and `diff(root, change, mode)`. Both return
-data or a user-facing error. There are no write operations.
+Public operations are `status(path)`, `diff(root, change, mode)`, and
+`files(root)`. Each returns data or a user-facing error. There are no write
+operations.
 
 - Git CLI, not libgit2. Use porcelain v1 with NUL-delimited paths.
 - Keep paths as `PathBuf`/OS bytes. Lossy text is for display only.
@@ -197,6 +212,13 @@ data or a user-facing error. There are no write operations.
   concurrently. A job includes multiple subprocesses, so its total deadline can
   be longer than 10 seconds.
 - Reject oversized status rather than showing an incomplete file list.
+- `files` lists tracked files plus untracked files that are not ignored, with
+  one `ls-files` call under the same hardening and limits. It reads names, not
+  contents. Files deleted from the worktree, sparse-checkout entries, and
+  nested repositories are left out. A list over 8 MiB or 200,000 paths is
+  clipped and marked, because a picker can still use part of it. Names that are
+  not UTF-8 or contain control characters are counted and skipped: they cannot
+  be typed into a message unchanged.
 - Limit displayed patches to 10,000 lines and 2,000 characters per line.
   A clipped preview is labeled. Unified source line numbers are parsed in the
   background, as is the widest-line index used for horizontal scrolling.
@@ -294,6 +316,56 @@ Reopening never submits automatically. Explicit retry uses that same ID, and a
 matching accepted-input event can resolve it. The composer revision guard survives
 restart, so an acknowledgement cannot erase a subsequently edited draft. The host
 protocol and durable conversation schema are unchanged.
+
+### Composer
+
+The composer owns editable text and reports intent as events: Submit, Stop, a
+chosen local command, and a request for the checkout's files. The window owns
+host requests and Git reads and performs the commands. `Draft` holds every
+editing rule without GPUI, so the rules are unit-tested.
+
+The input is one line when empty and grows with the wrapped draft to about a
+third of the window height, with a floor of four lines, then scrolls. Its
+height comes from a measured layout at the final width. The conversation list
+is bottom-aligned, so it stays pinned to its newest row as the input grows.
+Wrapped rows are kept between frames. Moving the cursor shapes nothing, and an
+edit reshapes only the lines whose text changed, so a large paste stays
+responsive. Undo keeps at most 100 steps and 4 MiB of draft text.
+
+Up on the first visual line recalls prompts sent in the thread, newest first.
+Down walks forward and finally returns the draft, its selection, and its undo
+history unchanged. Recall adds no undo step; editing a recalled prompt makes
+the previous draft one undo step. Every recall step advances the edit
+revision, so an acknowledgement for an earlier submission cannot clear recalled
+text. The saved draft is the one being written, not the prompt on screen.
+Sending a recalled prompt unchanged returns to that draft. History comes from
+the host snapshot's user messages. The host keeps only the tail of a long
+prompt, so prompts sent from this composer are also remembered exactly, for
+the life of the window.
+
+Typing `@` at the start of a word lists checkout files; `/` as the first
+character of an otherwise empty draft lists local commands. Both use one
+suggestion list, `composer::Completion`: plain state and a render function
+that never takes focus. The file list comes from `git::files` through the
+repository state. Ranking runs on the background executor with
+`plait_core::fuzzy`; a result is applied only if it belongs to the newest
+query and the list is still open. Accepting a file replaces `@query` with the
+checkout-relative path and a space, such as `src/main.rs `. A path with spaces
+or other word-ending punctuation is wrapped in backticks. Nothing is attached
+and no file is read: the agent receives the text a person would have typed.
+Commands are a table in `composer/commands.rs`; each maps to an action the app
+already has.
+
+Escape closes the suggestion list, then leaves recall. While the agent works,
+two Escape presses within 1.5 seconds stop the run; one press only arms the
+gesture, and any edit or cursor movement cancels it.
+
+The scene walk draws the composer empty, with several lines, past its height
+limit, and with each suggestion list open, at both window sizes. One scene
+types a mention, lists the fixture repository through Git, and accepts the
+result. The scenes do **not** exercise key events, IME, pointer selection,
+wheel scrolling, or the accessibility tree; those have had no check in a
+native window. The editing rules behind them are unit-tested.
 
 ### Native conversation text
 
