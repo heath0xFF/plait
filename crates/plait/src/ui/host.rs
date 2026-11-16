@@ -169,8 +169,7 @@ impl Plait {
         let epoch = self.host.epoch;
         let watch_epoch = self.host.watch_epoch;
         let watch_id = id.clone();
-        // Version 3 snapshots add reasoning-only messages this view does not render yet.
-        let protocol = self.host.protocol().min(2);
+        let protocol = self.host.protocol();
         let executor = cx.background_executor().clone();
         let task = cx.background_executor().spawn(async move {
             let snapshots = Client::from_environment()?.subscribe(watch_id, protocol)?;

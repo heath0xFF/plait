@@ -156,6 +156,9 @@ impl Plait {
         // Top padding leaves room for a reply's copy control; a reply sits
         // closer to the tool calls that follow it than to what came before.
         let (content, top, bottom) = match row {
+            // A version 3 reply that only reasoned before its tool calls has no
+            // text to show yet: the row stays, with no height.
+            Row::Message(message) if message.text.is_empty() => return div().into_any_element(),
             Row::Message(message) if message.role == MessageRole::User => {
                 (self.live_message(message, index, cx), 10., 4.)
             }
