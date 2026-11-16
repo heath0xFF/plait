@@ -48,6 +48,39 @@ restore on reopening; no task is sent automatically. See
 [keyboard controls](docs/MACOS.md#keyboard-controls) and
 [Build Plait with Plait](docs/SELF-HOSTING.md) for the edit → test → review loop.
 
+## How it works
+
+The desktop and execution host run on your Mac. The desktop is a client;
+the independent host owns accepted work and its history.
+
+```mermaid
+flowchart TB
+    accTitle: How Plait works today
+    accDescr: The native desktop connects to an independent local host. The host calls the configured model provider, saves run history, and runs approved file edits and sandboxed commands. Desktop drafts are saved separately.
+    desktop["Native desktop<br/>Rust + GPUI"]
+    drafts[("Drafts and<br/>recovery state")]
+    host["Independent local host<br/>Rust daemon + Pi runtime"]
+    history[("Threads and<br/>run history")]
+    provider["Configured<br/>model provider"]
+    sandbox["macOS command<br/>sandbox"]
+    checkout["Your repository"]
+    cache[("Private scratch<br/>and build cache")]
+    desktop <-->|Save / restore| drafts
+    desktop <-->|"Tasks, approvals, updates<br/>Local socket"| host
+    host <-->|Model API| provider
+    host <-->|Save / recover| history
+    desktop -->|Read-only Git| checkout
+    host -->|File reads / approved edits| checkout
+    host -->|Approved commands| sandbox
+    sandbox -->|Read only| checkout
+    sandbox -->|Write output| cache
+```
+
+Each file change and command needs **Allow once**. Sandboxed commands cannot
+write the checkout or use external networking. The desktop never receives
+provider credentials. Closing it does not stop accepted work; pending approvals
+still wait for you.
+
 ## Current limits
 
 This is the **M2 local preview**, not a complete IDE.
