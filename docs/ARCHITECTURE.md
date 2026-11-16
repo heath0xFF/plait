@@ -2,17 +2,16 @@
 
 ## Scope
 
-M2 adds an independent local host to the M1 native desktop. The Cargo workspace
+The M2 local preview uses a native desktop and an independent host. The workspace
 contains `crates/plait` (native desktop), `crates/plait-core` (headless models,
 client state, local host client, and read-only Git), and `crates/plait-host`
 (local daemon and filesystem/process helpers). `runtime/` contains the pinned
 Pi Durable TypeScript sidecar. There is no remote execution,
 embedded terminal, editor, Git-write interface, or worktree manager.
 
-The native client, local host safety checks, edit/command/Stop loop, and
-window-close/reopen checks pass on macOS. Full sandboxed workspace tests pass.
-This remains an early local preview; Linux execution and remote transport are
-not implemented. See VERIFICATION.md and HANDOFF.md for the remaining work.
+This remains an early local preview. Linux command execution and remote
+transport are not implemented. [Verification](VERIFICATION.md) records versioned
+Mac installation, sandbox, and recovery evidence, with the remaining gaps.
 
 ```text
 crates/plait/src/
@@ -24,6 +23,8 @@ ui/                     GPUI layout, actions, focus, lists, theme
   live_conversation.rs  real host messages, tools, and exact-call approvals
   composer.rs           native input, IME, clipboard, undo, submit/stop events
   host.rs               background host requests and event subscriptions
+  session.rs            desktop restore/save coordination and submission guards
+  markdown.rs           native conversation blocks and copy controls
   settings.rs           model choice, auth status, defaults, and reconnect
   changes.rs            real local status and diff views
   theme.rs              tokens, original controls, embedded glyphs
@@ -39,6 +40,8 @@ state.rs                selection, collapse state, request queue, cache
 model.rs                plain Rust data, no GPUI
 machine.rs              this machine's display name
 preferences.rs          desktop-only preferences and Cmd-number order
+session.rs              private desktop journal, identity checks, writer lock
+markdown.rs             plain text blocks and style ranges, parsed off render
 git.rs                  synchronous, read-only Git adapter; background only
 ```
 
@@ -49,15 +52,15 @@ all crates, including the native composer. See CONTRIBUTING.md for both commands
 The core uses Unix filesystem and socket APIs; it is not a Windows port.
 Filesystem, socket, and Git operations run on the background executor.
 
-This crate split does not enable Linux agent execution. The runtime still rejects
+A Linux build does not enable agent command execution. The runtime still rejects
 non-macOS commands, and the Rust command guardian still requires Seatbelt. Linux
 containment and cancellation need a separate safety review. Local peer identity
 is checked with `getpeereid` on macOS and `SO_PEERCRED` on Linux.
-There are no changes to the local host protocol or ownership boundaries.
+Both platforms use local protocol version 1 and the same ownership boundaries.
 
-The Linux sandbox mechanism is an open decision. Arthur's namespace probe works,
-but a read-only bind mount still permits access to an outside pathname Unix
-socket. See [the evidence, alternatives, and enablement gates](LINUX-SANDBOX.md).
+The Linux sandbox mechanism is an open decision. An unprivileged namespace
+probe succeeded, but a read-only bind mount still permitted access to an outside
+pathname Unix socket. See [the evidence, alternatives, and enablement gates](LINUX-SANDBOX.md).
 Landlock ABI 9 is one option, not a fixed product requirement.
 
 ## Local agent boundary
@@ -162,8 +165,9 @@ result cannot overwrite the new repository. A stale file result can enter the
 current snapshot's cache, but cannot replace another selected file.
 
 Diffs are loaded on demand. Up to eight diffs are cached per status snapshot.
-Refresh clears that cache. All threads on Zaphod share the same local checkout.
-There are no remote machines yet, so nothing starts SSH or a network connection.
+Refresh clears that cache. Threads within a checkout share its Git state.
+Git reads do not start SSH or network connections. Remote transport is not
+implemented.
 
 ## Git boundary
 
@@ -243,8 +247,9 @@ place; defaults apply. Saves replace the file atomically, and Settings says
 "Saved" only after the write succeeds. Only the newest save reports a result.
 Unknown fields are ignored so a newer client's file still loads.
 
-Cmd-N counts real host threads in sidebar order on the local machine. A machine or project selects its first thread; a row with
-no thread does nothing. Jumping expands collapsed parents.
+Cmd-1 to Cmd-9 count real host threads in sidebar order on the local machine.
+A machine or project selects its first thread; a row with no thread does nothing.
+Jumping expands collapsed parents.
 
 ### Desktop recovery
 
@@ -345,15 +350,13 @@ GPUI and `gpui_platform` are pinned together at:
 
 `596dfdcf32d85d4d8d17a8887b4d0979ec7c5e14`
 
-This was upstream HEAD when researched. It was compiled and run on Zaphod.
-The toolchain is pinned to upstream's Rust 1.98.1. Cargo.lock pins the full
+The toolchain is pinned to Rust 1.98.1. `Cargo.lock` pins the full
 resolved graph. Only macOS features are enabled; `font-kit` is required for text.
 
-The live gpui.rs landing-page snippet still uses `Application::new()`. The pinned
-source's working examples use `gpui_platform::application()`. Source and builds,
-not the landing-page snippet, define this implementation.
+Use the APIs at the pinned revision, not examples from a different release.
+The app entry point uses `gpui_platform::application()`.
 
-Reviewed upstream:
+Upstream references:
 - [GPUI site](https://gpui.rs/)
 - [README](https://github.com/zed-industries/zed/blob/596dfdcf32d85d4d8d17a8887b4d0979ec7c5e14/crates/gpui/README.md)
 - [Contexts](https://github.com/zed-industries/zed/blob/596dfdcf32d85d4d8d17a8887b4d0979ec7c5e14/crates/gpui/docs/contexts.md)
@@ -361,9 +364,7 @@ Reviewed upstream:
 - [Examples](https://github.com/zed-industries/zed/tree/596dfdcf32d85d4d8d17a8887b4d0979ec7c5e14/crates/gpui/examples):
   hello_world, list_example, uniform_list, set_menus, a11y, tab_stop,
   focus_visible, and svg.
-- [Zed UI crate](https://github.com/zed-industries/zed/tree/596dfdcf32d85d4d8d17a8887b4d0979ec7c5e14/crates/ui):
-  inspected its manifest and Button implementation. It is GPL-3.0-or-later and
-  depends on Zed's theme, menu, component, and macro layers. It is not imported
-  or copied. Small original controls use GPUI's existing focus and action APIs.
 
-Research scrape files are kept locally under ignored `.firecrawl/`.
+Plait uses the Apache-2.0 GPUI libraries, not the GPL-licensed Zed application UI
+crate. Its controls use GPUI's focus and action APIs. Dependency notices are
+included in release packages; see the [originality policy](ORIGINALITY.md).

@@ -2,8 +2,8 @@
 
 Plait is an early local preview for **Apple Silicon and macOS 15 or later**.
 The client and host are separate programs. Closing or updating the client does
-not stop accepted host work. Model requests still need provider connectivity;
-a flight without working internet is not an offline agent environment.
+not stop accepted host work. Model requests require access to the configured
+provider; installing Plait does not include a model or offline inference engine.
 The bundle declares macOS 15, but packaging CI uses macOS 26. Older-system
 runtime acceptance is not yet complete.
 
@@ -148,6 +148,28 @@ For development with a different `PLAIT_HOST_STORE`, use a separate absolute
 For a prepared development checkout and a first source-change task, see
 [Build Plait with Plait](SELF-HOSTING.md).
 
+## Keyboard controls
+
+| Shortcut | Action |
+| --- | --- |
+| Cmd-O | Open a local repository |
+| Cmd-R | Refresh Git status and cached diffs |
+| Cmd-1 … Cmd-9 | Jump to the Nth thread; Settings can change this to machines or projects |
+| Cmd-Shift-1 / Cmd-Shift-2 | Conversation / Changes |
+| Cmd-B | Show or hide the sidebar |
+| Cmd-Shift-D | Show or hide render timing diagnostics |
+| Cmd-comma | Open local host settings |
+| Enter / Shift-Enter | Submit the draft / insert a line break |
+| Cmd-Option-Up / Down | Previous / next thread |
+| Option-Up / Down | Previous / next changed file |
+| Tab / Shift-Tab | Move keyboard focus |
+| Return / Space | Activate the focused control |
+| Cmd-M / Cmd-W / Cmd-Q | Minimize / close / quit |
+
+Scroll the conversation, navigation, file list, and diff with the trackpad or
+mouse. Long diff lines scroll horizontally. On narrow windows, use Changes to
+open Git; the optional conversation inspector is hidden.
+
 ## Independent updates
 
 - **Client:** quit only the client and run a client-only package. The host and
@@ -202,6 +224,10 @@ bash scripts/check.sh --require-command-sandbox
 bash scripts/build-macos.sh
 ```
 
+To inspect the built client without installing it, run
+`open dist/Plait.app --args /absolute/path/to/repository`. Agent work still needs
+a running [local host](HOST.md).
+
 The build compiles the locked workspace, generates client and host Rust notices
 with pinned `cargo-about` 0.9.3, verifies the pinned Node download checksum, and
 installs locked production npm dependencies without lifecycle scripts. It checks
@@ -216,7 +242,7 @@ during a scripted command, and checks saved state after host activation. Its
 upgrade payload is explicitly labeled a disposable fixture and is not published.
 The workflow launches the installed client and captures its window when the
 runner has a display. These are scripted checks, not live-model acceptance or
-personal-machine validation. See [verification](VERIFICATION.md) for results.
+validation on your Mac. See [verification](VERIFICATION.md) for results.
 
 Branch builds upload a `plait-macos-arm64-…` workflow artifact, which expires
 after 14 days. Version tags run the complete Mac checks again, then a separate

@@ -1,7 +1,8 @@
 # Local host contract (M2)
 
-Frozen contract, approved by the coordinator. All values below are JSON.
-The desktop has no dependency on the host crate and does not own its process.
+This is the frozen version 1 contract. Changes require compatibility review.
+All values below are JSON. The desktop has no dependency on the host crate and
+does not own its process.
 
 ## Launch and recovery
 
@@ -148,9 +149,9 @@ authorization inactive; Stop and shutdown revoke it. Answers after cancellation
 or consumption return `not_found`, as before.
 
 Authorization and tool execution are separate. File checks and the command
-sandbox still apply after permission is granted. No wire operation, snapshot
-field, durable schema, unattended permission, or scheduler is added by this
-refactor. Future automation grants require a separate contract review.
+sandbox still apply after permission is granted. There is no unattended
+permission or scheduler in this contract. Future automation grants require
+separate protocol, persistence, and permission review.
 
 ## Safety boundary
 
@@ -241,39 +242,11 @@ Use `bash scripts/check.sh` for the shared macOS/Linux development checks.
 `bash scripts/check.sh --require-command-sandbox` requires full command-sandbox
 coverage and currently fails on Linux. Runtime `npm test` labels its platform
 coverage; Linux runs common daemon/file tests and explicit execution-denial tests.
-See VERIFICATION.md for current results and LINUX-SANDBOX.md for the open backend
-decision. A Linux development pass is not full host-execution acceptance.
+See [Verification](VERIFICATION.md) for versioned results and
+[Linux containment](LINUX-SANDBOX.md) for the open backend decision. A Linux
+development pass is not full host-execution acceptance.
 
-The following records the earlier M2 Mac checkpoint, before the portable runtime
-refactor. Verified on Apple Silicon macOS with Node 26 and the pinned Rust 1.98.1 toolchain:
-
-```sh
-cargo fmt --all -- --check
-cargo clippy --locked --workspace --all-targets -- -D warnings
-cargo test --locked --workspace
-cargo build --locked --release --workspace
-cd runtime
-npm ci --ignore-scripts
-npm run check
-npm test
-```
-
-Result: 45 workspace Rust tests and 39 runtime tests passed. The runtime suite includes a
-real sandboxed Cargo build/test in a disposable repository, continuous watch
-and reconnect, independent start, malformed/oversized/stalled frames, model and
-settings persistence, provider error redaction, Stop and approval revocation,
-both host and Node SIGKILL, interrupted file effects, deduplication, inode locks
-across stores/TMPDIR, protected dirty/ignored paths and aliases, atomic file mode
-and root checks, exact postimage follow-up ownership, accepted-input recovery,
-and immediate next submission after cleanup. Added checks cover readonly
-original descriptors, `/tmp` store aliases for both run/start, stable cached
-artifacts, cache isolation and symlink rejection, Metal compile/link, Stop under
-the 15-minute cap, scratch Git/IPC, denied outside signals, and denied host/cache
-sibling sockets. These are scripted provider tests, not live model acceptance.
-
-The real Plait checkout also passed all 45 tests with
-`cargo test --offline --locked --workspace` inside the command sandbox, without
-skips: cold execution took 33.3 seconds, and the next command took 1.03 seconds
-with the same thread cache. Compilation was 31.38 seconds cold and 0.30 seconds
-warm. Checkout and source caches remained read-only. Native UI and real-provider
-acceptance are separate coordinator/desktop checks.
+Use [Contributing](../CONTRIBUTING.md#required-checks) for focused commands and
+[manual release acceptance](VERIFICATION.md#manual-release-acceptance) for native
+and live-model checks. Do not substitute scripted lifecycle fixtures for the
+actual platform containment tests.

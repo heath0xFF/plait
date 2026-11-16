@@ -2,8 +2,8 @@
 
 The first useful loop is **edit → test → review → continue**. The native client
 is independent of the host, so closing it does not stop accepted work. The app's
-Git view remains read-only. Use Rex for commits, dependency changes, packaging,
-and native app inspection.
+Git view remains read-only. Use an external terminal for commits, dependency
+changes, packaging, and native app inspection.
 
 ## Prepare once on the Mac
 
@@ -22,8 +22,8 @@ git status --short
 bash scripts/prepare-self-host.sh
 ```
 
-Run this trusted development command in a named Rex pane, not in an agent tool.
-It fetches the locked Cargo sources, installs locked runtime dependencies without
+Run this trusted development command in an external terminal, not in an agent
+tool. If you use Rex, keep long jobs in named panes. It fetches the locked Cargo sources, installs locked runtime dependencies without
 npm lifecycle scripts, builds the workspace, and runs its Rust tests. It does not
 change source files, reset Git, install the app, or use model credentials. A new
 dependency or toolchain version needs preparation again.
@@ -65,7 +65,7 @@ Only approved file tools write project files.
 - Close and reopen the client. The last checkout/thread and drafts restore.
   If acceptance was uncertain, **Retry safely** reuses the saved request ID.
   Reopening does not submit or replay a task automatically.
-- Stage and commit reviewed work in Rex. Run `bash scripts/check.sh` there for
+- Stage and commit reviewed work in your terminal. Run `bash scripts/check.sh` for
   the full runtime and platform checks, then build/install the next package.
 
 The full runtime suite intentionally tests network and process boundaries. It is
