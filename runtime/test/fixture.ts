@@ -1,5 +1,5 @@
 import { createModels } from '@earendil-works/pi-ai/models';
-import { fauxProvider, fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
+import { fauxProvider, fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import type { FauxResponseStep } from '@earendil-works/pi-ai/providers/faux';
 import { Runtime } from '../src/runtime.ts';
 import { defineExtension, hook, ToolTask } from '@earendil-works/pi-durable';
@@ -12,15 +12,32 @@ import { serve } from '../src/stdio.ts';
 
 writeFileSync(join(process.argv[2], 'fixture-processes.json'), JSON.stringify({ node: process.pid, host: process.ppid, store: process.argv[2] }));
 const models = createModels();
-const faux = fauxProvider({ tokensPerSecond: 120, tokenSize: { min: 1, max: 1 } });
-const call = (name: string, args: Record<string, string>, id: string) => fauxAssistantMessage([fauxToolCall(name, args, { id })], { stopReason: 'toolUse' });
 const mode = process.env.PLAIT_TEST_SCENARIO;
 // Records what the model is told (instructions and tool declarations) for one request.
 const recordContext = (context: { messages: unknown }) => {
   appendFileSync(join(process.argv[2], 'model-contexts.jsonl'), JSON.stringify(context.messages) + '\n');
   return fauxAssistantMessage([fauxText('Recorded the scripted model context.')]);
 };
-const responses: FauxResponseStep[] = mode === 'unicode-read' ? [
+// Version 3 scenarios add a reasoning model; the long one streams fast enough for a large reply.
+const faux = fauxProvider({
+  tokensPerSecond: mode === 'v3-long' ? 1e8 : 120, tokenSize: mode === 'v3-long' ? { min: 2048, max: 2048 } : { min: 1, max: 1 },
+  ...(mode?.startsWith('v3') ? { models: [{ id: 'faux-1', name: 'Faux Model' }, { id: 'faux-think', name: 'Faux Thinking', reasoning: true, contextWindow: 64000 }] } : {}),
+});
+const call = (name: string, args: Record<string, string>, id: string) => fauxAssistantMessage([fauxToolCall(name, args, { id })], { stopReason: 'toolUse' });
+const overloaded = () => fauxAssistantMessage([], { stopReason: 'error', errorMessage: 'overloaded_error: SECRET_PROVIDER_TOKEN_DO_NOT_LEAK' });
+const responses: FauxResponseStep[] = mode === 'v3-thinking' ? [
+  fauxAssistantMessage([fauxThinking('Plan: read the notes first. '.repeat(20).trim()), fauxToolCall('read', { path: 'notes.txt' }, { id: 'think-read' })], { stopReason: 'toolUse' }),
+  fauxAssistantMessage([fauxThinking('The file says before.'), fauxText('The notes say before.')]),
+] : mode === 'v3-long' ? [
+  fauxAssistantMessage([fauxText('BEGIN ' + '0123456789'.repeat(20000) + ' END')]),
+] : mode === 'v3-retry' ? [
+  call('edit', { path: 'notes.txt', old_text: 'before', new_text: 'after' }, 'retry-edit'),
+  overloaded(),
+  fauxAssistantMessage([fauxText('Recovered after a transient provider error.')]),
+] : mode === 'v3-retry-exhausted' ? [overloaded(), overloaded(), overloaded(), overloaded()]
+  : mode === 'v3-retry-slow' ? [overloaded()]
+  : mode === 'v3-turns' ? Array.from({ length: 6 }, (_, index) => call('read', { path: 'notes.txt' }, `turn-${index}`))
+  : mode === 'unicode-read' ? [
   call('read', { path: 'unicode.txt' }, 'unicode-read-1'),
 ] : mode === 'edit' ? [
   call('read', { path: 'notes.txt' }, 'read-1'),
@@ -108,9 +125,19 @@ class FixtureRuntime extends Runtime {
         return result;
       },
     })] }));
+    // Counts completed edits outside the checkout, so a retried model request cannot hide a repeated effect.
+    if (mode === 'v3-retry') result.install(defineExtension({ name: 'effect-counter', hooks: [hook(ToolTask, {
+      async afterTool(call, result) {
+        if (call.name === 'edit' && !result.isError) await appendFile(join(process.argv[2], 'attempts.txt'), 'effect\n');
+        return result;
+      },
+    })] }));
     return result;
   }
 }
 const runtime = new FixtureRuntime(process.argv[2], models, new Set(['faux']));
+// Short backoff and a small turn limit keep these scenarios fast; the policies are the production ones.
+if (mode?.startsWith('v3-retry')) runtime.retry = { enabled: true, maxRetries: 2, baseDelayMs: mode === 'v3-retry-slow' ? 20000 : 40 };
+if (mode === 'v3-turns') runtime.maxTurns = 2;
 try { await serve(runtime); }
 finally { await runtime.close(); }

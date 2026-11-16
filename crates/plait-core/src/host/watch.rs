@@ -6,26 +6,33 @@ use std::{
     task::{Poll, Waker},
 };
 
-use super::{Client, Error, Snapshot};
+use super::{Client, Error, Snapshot, ThreadSummary};
 
-#[derive(Default)]
-struct Inbox {
-    latest: Option<Result<Snapshot, Error>>,
+struct Inbox<T> {
+    latest: Option<Result<T, Error>>,
     closed: bool,
     waker: Option<Waker>,
 }
 
-#[derive(Default)]
-struct Delivery(Mutex<Inbox>);
-impl Delivery {
-    fn publish(&self, value: Result<Snapshot, Error>) -> bool {
+struct Delivery<T>(Mutex<Inbox<T>>);
+impl<T> Default for Delivery<T> {
+    fn default() -> Self {
+        Self(Mutex::new(Inbox {
+            latest: None,
+            closed: false,
+            waker: None,
+        }))
+    }
+}
+impl<T> Delivery<T> {
+    fn publish(&self, value: Result<T, Error>) -> bool {
         let mut inbox = self.0.lock().unwrap();
         if inbox.closed {
             return false;
         }
         inbox.closed = value.is_err();
         let keep = !inbox.closed;
-        // Snapshots replace state. A slow UI needs the latest one, not an event backlog.
+        // Each value replaces state. A slow UI needs the latest one, not an event backlog.
         inbox.latest = Some(value);
         let waker = inbox.waker.take();
         drop(inbox);
@@ -45,16 +52,22 @@ impl Drop for CancelWatch {
     }
 }
 
-pub struct Snapshots {
-    delivery: Arc<Delivery>,
+/// The latest state of one subscription, read on a dedicated thread.
+pub struct Updates<T> {
+    delivery: Arc<Delivery<T>>,
     cancel: CancelWatch,
 }
-impl Snapshots {
+/// One thread's snapshots.
+pub type Snapshots = Updates<Snapshot>;
+/// The whole thread list, already merged from the host's change events.
+pub type ThreadLists = Updates<Vec<ThreadSummary>>;
+
+impl<T> Updates<T> {
     pub fn cancel_handle(&self) -> CancelWatch {
         self.cancel.clone()
     }
 
-    pub async fn next(&mut self) -> Option<Result<Snapshot, Error>> {
+    pub async fn next(&mut self) -> Option<Result<T, Error>> {
         poll_fn(|cx| {
             let mut inbox = self.delivery.0.lock().unwrap();
             if let Some(value) = inbox.latest.take() {
@@ -69,7 +82,7 @@ impl Snapshots {
         .await
     }
 }
-impl Drop for Snapshots {
+impl<T> Drop for Updates<T> {
     fn drop(&mut self) {
         let mut inbox = self.delivery.0.lock().unwrap();
         inbox.closed = true;
@@ -83,21 +96,35 @@ impl Client {
     pub fn subscribe(&self, thread_id: String, protocol: u32) -> Result<Snapshots, Error> {
         Snapshots::start(self.watch(thread_id, protocol)?)
     }
+
+    /// Live summaries of every thread. Needs a host that negotiated version 3.
+    pub fn subscribe_threads(&self, archived: bool) -> Result<ThreadLists, Error> {
+        let mut watch = self.watch_threads(archived)?;
+        let socket = watch.socket()?;
+        Updates::spawn(socket, move || watch.next_list())
+    }
 }
 
-impl Snapshots {
-    fn start(watch: super::Watch) -> Result<Self, Error> {
-        let cancel = CancelWatch(Arc::new(watch.frames.reader.get_ref().try_clone()?));
+impl<T: Send + 'static> Updates<T> {
+    pub(super) fn spawn(
+        socket: UnixStream,
+        mut next: impl FnMut() -> Result<T, Error> + Send + 'static,
+    ) -> Result<Self, Error> {
+        let cancel = CancelWatch(Arc::new(socket));
         let delivery = Arc::new(Delivery::default());
         let writer = Arc::clone(&delivery);
         // An idle blocking read must not occupy GPUI's shared background worker pool.
         std::thread::Builder::new()
             .name("plait-host-watch".into())
-            .spawn(move || {
-                let mut watch = watch;
-                while writer.publish(watch.next_snapshot()) {}
-            })?;
-        Ok(Snapshots { delivery, cancel })
+            .spawn(move || while writer.publish(next()) {})?;
+        Ok(Updates { delivery, cancel })
+    }
+}
+
+impl Snapshots {
+    fn start(mut watch: super::Watch) -> Result<Self, Error> {
+        let socket = watch.frames.reader.get_ref().try_clone()?;
+        Self::spawn(socket, move || watch.next_snapshot())
     }
 }
 
@@ -254,7 +281,7 @@ mod tests {
     #[test]
     fn identity_violations_are_rejected_before_async_coalescing() {
         use std::io::Write;
-        for field in ["id", "checkout", "model"] {
+        for field in ["id", "checkout"] {
             let (mut watch, _cancel, mut peer) = reader();
             watch.first = true;
             let snapshot = serde_json::json!({
@@ -264,11 +291,7 @@ mod tests {
             });
             let first = serde_json::json!({"ok":true,"result":{"thread":snapshot.clone()}});
             let mut changed = snapshot.clone();
-            changed[field] = if field == "model" {
-                serde_json::json!({"provider":"p","model_id":"wrong"})
-            } else {
-                "/wrong".into()
-            };
+            changed[field] = "/wrong".into();
             let bad = serde_json::json!({"event":"snapshot","thread":changed});
             let good = serde_json::json!({"event":"snapshot","thread":snapshot});
             peer.write_all(format!("{first}\n{bad}\n{good}\n").as_bytes())
@@ -276,6 +299,67 @@ mod tests {
             assert!(watch.next_snapshot().is_ok());
             assert!(matches!(watch.next_snapshot(), Err(Error::Protocol(_))));
         }
+    }
+
+    #[test]
+    fn a_thread_may_change_model_between_runs_and_carry_version_three_fields() {
+        use std::io::Write;
+        let (mut watch, _cancel, mut peer) = reader();
+        watch.first = true;
+        let first = serde_json::json!({"ok":true,"result":{"thread":{
+            "id":"thread", "checkout":"/repo", "model":{"provider":"p", "model_id":"m"},
+            "status":"idle", "messages":[], "live_text":"", "tools":[],
+            "pending_approval":null, "error":null, "truncated":false, "approval_mode":"ask",
+            "title":"", "created_at":1, "updated_at":1, "archived":false, "thinking_level":"off",
+            "queued":[], "usage":null, "live_reasoning":"", "retry":null
+        }}});
+        let next = serde_json::json!({"event":"snapshot","thread":{
+            "id":"thread", "checkout":"/repo", "model":{"provider":"p", "model_id":"other"},
+            "status":"running",
+            "messages":[
+                {"id":"request-a","role":"user","text":"Hi","reasoning":""},
+                {"id":"2-0","role":"assistant","text":"","reasoning":"Plan"}],
+            "live_text":"", "tools":[{"id":"t","name":"read","status":"running","input":"{}","output":"","after":"2-0"}],
+            "pending_approval":null, "error":{"code":"turn_limit","message":"Paused"}, "truncated":false,
+            "approval_mode":"auto", "title":"Hi", "created_at":1, "updated_at":2, "archived":true,
+            "thinking_level":"xhigh",
+            "queued":[{"id":"request-q","request_id":"q","text":"Next","mode":"follow_up","approval":"auto"},
+                      {"id":"request-s","request_id":"s","text":"Now","mode":"steer","approval":"ask"}],
+            "usage":{"input":1,"output":2,"cache_read":3,"cache_write":4,"reasoning":null,"total":10,
+                     "context_used":10,"context_window":null},
+            "live_reasoning":"Thinking", "retry":{"attempt":2,"at":99}
+        }});
+        peer.write_all(format!("{first}\n{next}\n").as_bytes())
+            .unwrap();
+        let initial = watch.next_snapshot().unwrap();
+        assert_eq!(
+            initial.thinking_level,
+            Some(crate::host::ThinkingLevel::Off)
+        );
+        assert!(initial.queued.is_empty() && initial.usage.is_none() && initial.retry.is_none());
+        let changed = watch.next_snapshot().unwrap();
+        assert_eq!(changed.model.model_id, "other");
+        assert_eq!(changed.title.as_deref(), Some("Hi"));
+        assert_eq!(changed.archived, Some(true));
+        assert_eq!(
+            changed.thinking_level,
+            Some(crate::host::ThinkingLevel::Xhigh)
+        );
+        assert_eq!(changed.messages[1].reasoning, "Plan");
+        assert_eq!(changed.queued[1].mode, crate::host::QueueMode::Steer);
+        assert_eq!(changed.queued[0].approval, crate::host::ApprovalMode::Auto);
+        let usage = changed.usage.unwrap();
+        assert_eq!(
+            (usage.total, usage.reasoning, usage.context_window),
+            (10, None, None)
+        );
+        assert_eq!(changed.retry.unwrap().attempt, 2);
+        assert_eq!(changed.live_reasoning, "Thinking");
+        let summary = crate::host::ThreadSummary::from(&initial);
+        assert_eq!(
+            (summary.title.as_deref(), summary.pending_approval),
+            (Some(""), Some(false))
+        );
     }
 
     #[test]

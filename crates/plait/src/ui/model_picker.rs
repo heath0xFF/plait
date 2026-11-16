@@ -457,6 +457,7 @@ mod tests {
             model_id: model_id.into(),
             name: model_id.to_uppercase(),
             authenticated,
+            ..Default::default()
         }
     }
 

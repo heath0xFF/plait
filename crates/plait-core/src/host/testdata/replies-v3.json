@@ -1,0 +1,692 @@
+{
+ "history_long": {
+  "ok": true,
+  "result": {
+   "before": null,
+   "items": [
+    {
+     "id": "request-long",
+     "reasoning": "",
+     "role": "user",
+     "text": "Write the long answer.",
+     "type": "message"
+    },
+    {
+     "id": "11-0",
+     "more": [
+      {
+       "field": "text",
+       "length": 200010,
+       "offset": 65536,
+       "ref": "e11.0.text"
+      }
+     ],
+     "reasoning": "",
+     "role": "assistant",
+     "text": "BEGIN 01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123",
+     "type": "message"
+    }
+   ]
+  }
+ },
+ "history_text": {
+  "ok": true,
+  "result": {
+   "length": 200010,
+   "next_offset": 131072,
+   "offset": 65536,
+   "text": "01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789"
+  }
+ },
+ "history_text_last": {
+  "ok": true,
+  "result": {
+   "length": 200010,
+   "next_offset": null,
+   "offset": 196608,
+   "text": "23456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901"
+  }
+ },
+ "status": {
+  "ok": true,
+  "result": {
+   "default_model": null,
+   "models": [
+    {
+     "authenticated": true,
+     "context_window": 128000,
+     "input": [
+      "text",
+      "image"
+     ],
+     "model_id": "faux-1",
+     "name": "Faux Model",
+     "provider": "faux",
+     "reasoning": false,
+     "thinking_levels": [
+      "off"
+     ]
+    },
+    {
+     "authenticated": true,
+     "context_window": 64000,
+     "input": [
+      "text",
+      "image"
+     ],
+     "model_id": "faux-think",
+     "name": "Faux Thinking",
+     "provider": "faux",
+     "reasoning": true,
+     "thinking_levels": [
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high"
+     ]
+    }
+   ],
+   "protocol_version": 3
+  }
+ },
+ "create": {
+  "ok": true,
+  "result": {
+   "thread": {
+    "approval_mode": "ask",
+    "archived": false,
+    "checkout": "/repo",
+    "created_at": 1794857634964,
+    "error": null,
+    "id": "32749e0b-a883-4597-a5d5-c5d429bcf068",
+    "live_reasoning": "",
+    "live_text": "",
+    "messages": [],
+    "model": {
+     "model_id": "faux-think",
+     "provider": "faux"
+    },
+    "pending_approval": null,
+    "queued": [],
+    "retry": null,
+    "status": "idle",
+    "thinking_level": "off",
+    "title": "",
+    "tools": [],
+    "truncated": false,
+    "updated_at": 1794857634964,
+    "usage": null
+   }
+  }
+ },
+ "configure": {
+  "ok": true,
+  "result": {
+   "thread": {
+    "approval_mode": "ask",
+    "archived": false,
+    "checkout": "/repo",
+    "created_at": 1794857634964,
+    "error": null,
+    "id": "32749e0b-a883-4597-a5d5-c5d429bcf068",
+    "live_reasoning": "",
+    "live_text": "",
+    "messages": [],
+    "model": {
+     "model_id": "faux-think",
+     "provider": "faux"
+    },
+    "pending_approval": null,
+    "queued": [],
+    "retry": null,
+    "status": "idle",
+    "thinking_level": "high",
+    "title": "",
+    "tools": [],
+    "truncated": false,
+    "updated_at": 1794857634964,
+    "usage": null
+   }
+  }
+ },
+ "submit": {
+  "ok": true,
+  "result": {
+   "accepted": true,
+   "request_id": "s1",
+   "thread_id": "32749e0b-a883-4597-a5d5-c5d429bcf068"
+  }
+ },
+ "submit_queued": {
+  "ok": true,
+  "result": {
+   "accepted": true,
+   "request_id": "f1",
+   "thread_id": "32749e0b-a883-4597-a5d5-c5d429bcf068"
+  }
+ },
+ "watch_busy": {
+  "ok": true,
+  "result": {
+   "thread": {
+    "approval_mode": "auto",
+    "archived": false,
+    "checkout": "/repo",
+    "created_at": 1794857634964,
+    "error": null,
+    "id": "32749e0b-a883-4597-a5d5-c5d429bcf068",
+    "live_reasoning": "",
+    "live_text": "",
+    "messages": [
+     {
+      "id": "request-s1",
+      "reasoning": "",
+      "role": "user",
+      "text": "Read the notes."
+     }
+    ],
+    "model": {
+     "model_id": "faux-think",
+     "provider": "faux"
+    },
+    "pending_approval": null,
+    "queued": [
+     {
+      "approval": "ask",
+      "id": "request-f1",
+      "mode": "follow_up",
+      "request_id": "f1",
+      "text": "Queued follow-up."
+     },
+     {
+      "approval": "ask",
+      "id": "request-f2",
+      "mode": "steer",
+      "request_id": "f2",
+      "text": "Queued steer."
+     }
+    ],
+    "retry": null,
+    "status": "running",
+    "thinking_level": "high",
+    "title": "Read the notes.",
+    "tools": [],
+    "truncated": false,
+    "updated_at": 1794857634968,
+    "usage": null
+   }
+  }
+ },
+ "cancel": {
+  "ok": true,
+  "result": {
+   "thread": {
+    "approval_mode": "auto",
+    "archived": false,
+    "checkout": "/repo",
+    "created_at": 1794857634964,
+    "error": null,
+    "id": "32749e0b-a883-4597-a5d5-c5d429bcf068",
+    "live_reasoning": "",
+    "live_text": "",
+    "messages": [
+     {
+      "id": "request-s1",
+      "reasoning": "",
+      "role": "user",
+      "text": "Read the notes."
+     }
+    ],
+    "model": {
+     "model_id": "faux-think",
+     "provider": "faux"
+    },
+    "pending_approval": null,
+    "queued": [
+     {
+      "approval": "ask",
+      "id": "request-f2",
+      "mode": "steer",
+      "request_id": "f2",
+      "text": "Queued steer."
+     }
+    ],
+    "retry": null,
+    "status": "running",
+    "thinking_level": "high",
+    "title": "Read the notes.",
+    "tools": [],
+    "truncated": false,
+    "updated_at": 1794857634968,
+    "usage": null
+   }
+  }
+ },
+ "watch_idle": {
+  "ok": true,
+  "result": {
+   "thread": {
+    "approval_mode": "auto",
+    "archived": false,
+    "checkout": "/repo",
+    "created_at": 1794857634964,
+    "error": null,
+    "id": "32749e0b-a883-4597-a5d5-c5d429bcf068",
+    "live_reasoning": "",
+    "live_text": "",
+    "messages": [
+     {
+      "id": "request-s1",
+      "reasoning": "",
+      "role": "user",
+      "text": "Read the notes."
+     },
+     {
+      "id": "12-0",
+      "reasoning": "Plan: read the notes first. Plan: read the notes first. Plan: read the notes first. Plan: read the notes first. Plan: read the notes first. Plan: read the notes first. Plan: read the notes first. Plan",
+      "role": "assistant",
+      "text": ""
+     },
+     {
+      "id": "request-f2",
+      "reasoning": "",
+      "role": "user",
+      "text": "Queued steer."
+     },
+     {
+      "id": "17-0",
+      "reasoning": "The file says before.",
+      "role": "assistant",
+      "text": "The notes say before."
+     }
+    ],
+    "model": {
+     "model_id": "faux-think",
+     "provider": "faux"
+    },
+    "pending_approval": null,
+    "queued": [],
+    "retry": null,
+    "status": "idle",
+    "thinking_level": "high",
+    "title": "Read the notes.",
+    "tools": [
+     {
+      "after": "12-0",
+      "id": "think-read",
+      "input": "{\"path\":\"notes.txt\"}",
+      "name": "read",
+      "output": "before\n",
+      "status": "done"
+     }
+    ],
+    "truncated": false,
+    "updated_at": 1794857636547,
+    "usage": {
+     "cache_read": 497,
+     "cache_write": 161,
+     "context_used": 669,
+     "context_window": 64000,
+     "input": 0,
+     "output": 11,
+     "reasoning": null,
+     "total": 669
+    }
+   }
+  }
+ },
+ "history": {
+  "ok": true,
+  "result": {
+   "before": "14:0:0",
+   "items": [
+    {
+     "id": "request-f2",
+     "reasoning": "",
+     "role": "user",
+     "text": "Queued steer.",
+     "type": "message"
+    },
+    {
+     "id": "17-0",
+     "reasoning": "The file says before.",
+     "role": "assistant",
+     "text": "The notes say before.",
+     "type": "message"
+    }
+   ]
+  }
+ },
+ "rename": {
+  "ok": true,
+  "result": {
+   "thread": {
+    "approval_mode": "auto",
+    "archived": false,
+    "checkout": "/repo",
+    "created_at": 1794857634964,
+    "error": null,
+    "id": "32749e0b-a883-4597-a5d5-c5d429bcf068",
+    "live_reasoning": "",
+    "live_text": "",
+    "messages": [
+     {
+      "id": "request-s1",
+      "reasoning": "",
+      "role": "user",
+      "text": "Read the notes."
+     },
+     {
+      "id": "12-0",
+      "reasoning": "Plan: read the notes first. Plan: read the notes first. Plan: read the notes first. Plan: read the notes first. Plan: read the notes first. Plan: read the notes first. Plan: read the notes first. Plan",
+      "role": "assistant",
+      "text": ""
+     },
+     {
+      "id": "request-f2",
+      "reasoning": "",
+      "role": "user",
+      "text": "Queued steer."
+     },
+     {
+      "id": "17-0",
+      "reasoning": "The file says before.",
+      "role": "assistant",
+      "text": "The notes say before."
+     }
+    ],
+    "model": {
+     "model_id": "faux-think",
+     "provider": "faux"
+    },
+    "pending_approval": null,
+    "queued": [],
+    "retry": null,
+    "status": "idle",
+    "thinking_level": "high",
+    "title": "Recorded thread",
+    "tools": [
+     {
+      "after": "12-0",
+      "id": "think-read",
+      "input": "{\"path\":\"notes.txt\"}",
+      "name": "read",
+      "output": "before\n",
+      "status": "done"
+     }
+    ],
+    "truncated": false,
+    "updated_at": 1794857636547,
+    "usage": {
+     "cache_read": 497,
+     "cache_write": 161,
+     "context_used": 669,
+     "context_window": 64000,
+     "input": 0,
+     "output": 11,
+     "reasoning": null,
+     "total": 669
+    }
+   }
+  }
+ },
+ "archive": {
+  "ok": true,
+  "result": {
+   "thread": {
+    "approval_mode": "auto",
+    "archived": true,
+    "checkout": "/repo",
+    "created_at": 1794857634964,
+    "error": null,
+    "id": "32749e0b-a883-4597-a5d5-c5d429bcf068",
+    "live_reasoning": "",
+    "live_text": "",
+    "messages": [
+     {
+      "id": "request-s1",
+      "reasoning": "",
+      "role": "user",
+      "text": "Read the notes."
+     },
+     {
+      "id": "12-0",
+      "reasoning": "Plan: read the notes first. Plan: read the notes first. Plan: read the notes first. Plan: read the notes first. Plan: read the notes first. Plan: read the notes first. Plan: read the notes first. Plan",
+      "role": "assistant",
+      "text": ""
+     },
+     {
+      "id": "request-f2",
+      "reasoning": "",
+      "role": "user",
+      "text": "Queued steer."
+     },
+     {
+      "id": "17-0",
+      "reasoning": "The file says before.",
+      "role": "assistant",
+      "text": "The notes say before."
+     }
+    ],
+    "model": {
+     "model_id": "faux-think",
+     "provider": "faux"
+    },
+    "pending_approval": null,
+    "queued": [],
+    "retry": null,
+    "status": "idle",
+    "thinking_level": "high",
+    "title": "Recorded thread",
+    "tools": [
+     {
+      "after": "12-0",
+      "id": "think-read",
+      "input": "{\"path\":\"notes.txt\"}",
+      "name": "read",
+      "output": "before\n",
+      "status": "done"
+     }
+    ],
+    "truncated": false,
+    "updated_at": 1794857636547,
+    "usage": {
+     "cache_read": 497,
+     "cache_write": 161,
+     "context_used": 669,
+     "context_window": 64000,
+     "input": 0,
+     "output": 11,
+     "reasoning": null,
+     "total": 669
+    }
+   }
+  }
+ },
+ "list": {
+  "ok": true,
+  "result": {
+   "next_cursor": null,
+   "threads": [
+    {
+     "archived": true,
+     "checkout": "/repo",
+     "created_at": 1794857634964,
+     "id": "32749e0b-a883-4597-a5d5-c5d429bcf068",
+     "model": {
+      "model_id": "faux-think",
+      "provider": "faux"
+     },
+     "pending_approval": false,
+     "status": "idle",
+     "title": "Recorded thread",
+     "updated_at": 1794857636547
+    }
+   ]
+  }
+ },
+ "stop": {
+  "ok": true,
+  "result": {
+   "thread": {
+    "approval_mode": "auto",
+    "archived": true,
+    "checkout": "/repo",
+    "created_at": 1794857634964,
+    "error": null,
+    "id": "32749e0b-a883-4597-a5d5-c5d429bcf068",
+    "live_reasoning": "",
+    "live_text": "",
+    "messages": [
+     {
+      "id": "request-s1",
+      "reasoning": "",
+      "role": "user",
+      "text": "Read the notes."
+     },
+     {
+      "id": "12-0",
+      "reasoning": "Plan: read the notes first. Plan: read the notes first. Plan: read the notes first. Plan: read the notes first. Plan: read the notes first. Plan: read the notes first. Plan: read the notes first. Plan",
+      "role": "assistant",
+      "text": ""
+     },
+     {
+      "id": "request-f2",
+      "reasoning": "",
+      "role": "user",
+      "text": "Queued steer."
+     },
+     {
+      "id": "17-0",
+      "reasoning": "The file says before.",
+      "role": "assistant",
+      "text": "The notes say before."
+     }
+    ],
+    "model": {
+     "model_id": "faux-think",
+     "provider": "faux"
+    },
+    "pending_approval": null,
+    "queued": [],
+    "retry": null,
+    "status": "stopped",
+    "thinking_level": "high",
+    "title": "Recorded thread",
+    "tools": [
+     {
+      "after": "12-0",
+      "id": "think-read",
+      "input": "{\"path\":\"notes.txt\"}",
+      "name": "read",
+      "output": "before\n",
+      "status": "done"
+     }
+    ],
+    "truncated": false,
+    "updated_at": 1794857636595,
+    "usage": {
+     "cache_read": 497,
+     "cache_write": 161,
+     "context_used": 669,
+     "context_window": 64000,
+     "input": 0,
+     "output": 11,
+     "reasoning": null,
+     "total": 669
+    }
+   }
+  }
+ },
+ "thread_frames": [
+  {
+   "ok": true,
+   "result": {
+    "threads": [
+     {
+      "archived": false,
+      "checkout": "/repo",
+      "created_at": 1794857634964,
+      "id": "32749e0b-a883-4597-a5d5-c5d429bcf068",
+      "model": {
+       "model_id": "faux-think",
+       "provider": "faux"
+      },
+      "pending_approval": false,
+      "status": "idle",
+      "title": "",
+      "updated_at": 1794857634964
+     }
+    ]
+   }
+  },
+  {
+   "event": "threads",
+   "removed": [],
+   "threads": [
+    {
+     "archived": false,
+     "checkout": "/repo",
+     "created_at": 1794857634964,
+     "id": "32749e0b-a883-4597-a5d5-c5d429bcf068",
+     "model": {
+      "model_id": "faux-think",
+      "provider": "faux"
+     },
+     "pending_approval": false,
+     "status": "running",
+     "title": "Read the notes.",
+     "updated_at": 1794857634968
+    }
+   ]
+  },
+  {
+   "event": "threads",
+   "removed": [],
+   "threads": [
+    {
+     "archived": false,
+     "checkout": "/repo",
+     "created_at": 1794857634964,
+     "id": "32749e0b-a883-4597-a5d5-c5d429bcf068",
+     "model": {
+      "model_id": "faux-think",
+      "provider": "faux"
+     },
+     "pending_approval": false,
+     "status": "idle",
+     "title": "Read the notes.",
+     "updated_at": 1794857636547
+    }
+   ]
+  },
+  {
+   "event": "threads",
+   "removed": [],
+   "threads": [
+    {
+     "archived": false,
+     "checkout": "/repo",
+     "created_at": 1794857634964,
+     "id": "32749e0b-a883-4597-a5d5-c5d429bcf068",
+     "model": {
+      "model_id": "faux-think",
+      "provider": "faux"
+     },
+     "pending_approval": false,
+     "status": "idle",
+     "title": "Recorded thread",
+     "updated_at": 1794857636547
+    }
+   ]
+  },
+  {
+   "event": "threads",
+   "removed": [
+    "32749e0b-a883-4597-a5d5-c5d429bcf068"
+   ],
+   "threads": []
+  }
+ ]
+}

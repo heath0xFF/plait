@@ -22,3 +22,19 @@ export function clipTail(text: string, limit: number): string {
   if (splitsPair(text, start)) start++;
   return text.slice(start);
 }
+
+/** Whether a UTF-16 offset falls between the two halves of one character. */
+export function splitsCharacter(text: string, offset: number): boolean {
+  return offset > 0 && offset < text.length && splitsPair(text, offset);
+}
+
+// Rust's `char::is_whitespace` set, so host and desktop titles agree.
+const WHITE_SPACE = /[\u0009-\u000D\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028-\u2029\u202F\u205F\u3000]+/u;
+function plain(text: string, limit: number): string {
+  // Collapse whitespace, drop control characters, and count whole code points.
+  return Array.from(text.split(WHITE_SPACE).filter(Boolean).join(' ').replace(/\p{Cc}/gu, '')).slice(0, limit).join('');
+}
+/** A thread title derived from its first message, by the desktop's existing rule. */
+export const title = (text: string) => plain(text, 72);
+/** A title the user chose: longer than a derived one, still one plain line. */
+export const customTitle = (text: string) => plain(text, 200);

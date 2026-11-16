@@ -169,7 +169,8 @@ impl Plait {
         let epoch = self.host.epoch;
         let watch_epoch = self.host.watch_epoch;
         let watch_id = id.clone();
-        let protocol = self.host.protocol();
+        // Version 3 snapshots add reasoning-only messages this view does not render yet.
+        let protocol = self.host.protocol().min(2);
         let executor = cx.background_executor().clone();
         let task = cx.background_executor().spawn(async move {
             let snapshots = Client::from_environment()?.subscribe(watch_id, protocol)?;
@@ -354,10 +355,7 @@ impl Plait {
                 Ok(reply) if reply.thread.model == choice => {
                     this.host.pending_create = None;
                     if !this.host.threads.iter().any(|thread| thread.id == reply.thread.id) {
-                        this.host.threads.insert(0, host::ThreadSummary {
-                            id: reply.thread.id.clone(), checkout: reply.thread.checkout.clone(),
-                            model: reply.thread.model.clone(), status: reply.thread.status,
-                        });
+                        this.host.threads.insert(0, host::ThreadSummary::from(&reply.thread));
                     }
                     if this.new_thread_open && this.host.watch_epoch == selection_epoch {
                         this.select_host_thread(reply.thread.id, window, cx);

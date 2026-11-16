@@ -31,6 +31,30 @@ It does not establish compatibility with unknown future protocols or storage
 migrations. Checksums detect corruption, not publisher identity. The preview is
 **unsigned and not notarized**; see [Mac installation](MACOS.md).
 
+## Protocol version 3
+
+[Protocol version 3](HOST.md#protocol-version-3) is implemented in the host,
+runtime, and desktop core, after the release baseline above. Its evidence is
+development tests only:
+
+- Runtime tests drive the real host binary and sidecar with a scripted provider
+  in disposable stores and repositories. They cover history paging and
+  oversized text, thread titles, listing and archive, the thread-list
+  subscription, model and thinking changes, queued and steering inputs across
+  Stop and restart, usage and reasoning, the turn limit, and retry without a
+  repeated tool effect.
+- Recorded version 1 and 2 replies are compared byte for byte with the current
+  host, including for a thread that used version 3 features and a store saved
+  before version 3.
+- Rust tests cover negotiation from 3 to 2 to 1, request shapes, and the
+  thread-list reader, and decode replies recorded from the real host with the
+  client's strict types.
+
+Not verified: a live model, a real provider's reasoning or usage figures, the
+installed package, and any desktop view, since no view uses these operations
+yet. Thread-list backpressure relies on the code path shared with `watch` and
+has no test of its own.
+
 ## Recovery and startup regressions
 
 The desktop journal releases its writer lock when its final owner is dropped.

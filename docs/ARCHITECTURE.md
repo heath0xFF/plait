@@ -72,8 +72,8 @@ non-macOS commands under either command policy, and the Rust command guardian
 rejects both its sandboxed and trusted entries there. Linux
 containment and cancellation need a separate safety review. Local peer identity
 is checked with `getpeereid` on macOS and `SO_PEERCRED` on Linux.
-Both platforms use the same local protocol (version 1, with opt-in version 2)
-and the same ownership boundaries.
+Both platforms use the same local protocol (version 1, with opt-in versions 2
+and 3) and the same ownership boundaries.
 
 The Linux sandbox mechanism is an open decision. An unprivileged namespace
 probe succeeded, but a read-only bind mount still permitted access to an outside
@@ -92,8 +92,16 @@ default model. The desktop receives availability, not credentials. The host's
 [provider sign-in operations](HOST.md#provider-sign-in) take a pasted key or
 sign-in code from a client once and store it in Pi's files; the Settings UI for
 them is planned.
-Each thread keeps its exact provider/model pair. Saving a default does not
-change an existing thread.
+Each thread keeps its exact provider/model pair and thinking level until a
+client changes them between runs ([protocol version 3](HOST.md#model-and-thinking-level)).
+Saving a default does not change an existing thread.
+
+The host also owns each thread's title, timestamps, archive flag, and the queue
+of inputs waiting behind a run. A snapshot is the bounded live tail of a thread.
+The complete conversation is read on demand, in pages, from the thread's saved
+conversation store; an idle thread's store is opened read-only for that, so a
+history read cannot recover or run anything. The desktop core can speak these
+operations; the desktop views do not use them yet.
 
 The desktop uses bounded snapshot subscriptions. Runtime state changes signal
 the host through a private inherited Unix socket, separate from request/reply
@@ -104,13 +112,19 @@ wait on both the wakeup and client disconnect. Channel EOF replaces the host's
 periodic child-process check. Client protocol version 1 and durable schemas are
 unchanged; the internal channel ships with the host/runtime update unit.
 
+A thread-list subscription uses the same wakeup path with one reserved
+notification name, sent only when a thread's summary changes. The host repeats
+the bounded listing and sends the summaries that differ, so streamed text costs
+list watchers nothing.
+
 The desktop owns a cancellation lease for its selected subscription. Selection,
 reconnect, and view release drop that lease; socket shutdown runs on the background
 executor and does not send Stop. A dedicated reader keeps idle socket waits off
 GPUI's shared worker pool. A one-slot async inbox delivers the newest snapshot
-without periodic UI wakeups or an unbounded event queue. Thread ID, model, and
+without periodic UI wakeups or an unbounded event queue. Thread ID and
 checkout are checked before coalescing, so an invalid frame cannot be hidden by
-a later valid one. Initial replies and
+a later valid one. The model is not pinned: it can change between runs. The
+thread-list reader shares this machinery and delivers the merged list. Initial replies and
 partial frames retain absolute deadlines; an idle established watch has no timer.
 
 A repository epoch, watch epoch, and thread ID guard each async result. An uncertain submission keeps its request
@@ -147,8 +161,13 @@ approval mode: a run reads the policy once at admission, and only a trusted
 project takes the separate uncontained path. File-tool checks apply to both.
 
 The submitting desktop chooses the mode for one run (see
-[protocol version 2](HOST.md#protocol-version-2)). There is no persisted grant,
-scheduling, or new storage table. Tests include a clearly
+[protocol version 2](HOST.md#protocol-version-2)). There is no persisted grant.
+A version 3 input [queued behind a run](HOST.md#messages-during-a-run) keeps the
+mode it was submitted with and, when it starts, is admitted like any submission
+with a fresh authorization object. A steering input joins the active run and
+uses that run's authorization. Stop clears the queue; a failed run or a restart
+holds it. A model request that fails transiently is retried with backoff; tool
+calls are marked unsafe to replay and are never repeated. Tests include a clearly
 labeled permissive policy fixture to check that authorization cannot bypass file
 protection or command containment. On Linux, the command check proves denial,
 not a working sandbox. The automation requirement remains tracked in
@@ -282,7 +301,7 @@ waiting run. Releases other than the active one are then removed.
 `plait-host update` applies the same steps on machines without the app.
 
 This changes launch configuration, not the frozen protocol or durable thread
-schema. The client accepts protocol versions 1 and 2. Future protocol
+schema. The client accepts protocol versions 1 through 3. Future protocol
 and storage changes need a separate compatibility review. Developer ID signing
 and notarization are not implemented. See [Mac installation](MACOS.md) for
 paths and operational limits.

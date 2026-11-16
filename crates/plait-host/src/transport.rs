@@ -315,11 +315,14 @@ fn connection(
         }
     };
     // Register before reading state so a concurrent change cannot be missed.
+    let threads = request["op"] == "watch_threads";
     let mut subscription = if request["op"] == "watch" {
         request["thread_id"]
             .as_str()
             .map(|id| notifications.subscribe(id.to_owned()))
             .transpose()?
+    } else if threads {
+        Some(notifications.subscribe(notifications::THREADS.to_owned())?)
     } else {
         None
     };
@@ -334,6 +337,9 @@ fn connection(
     let Some(subscription) = subscription.as_mut() else {
         return Ok(());
     };
+    if threads {
+        return watch_threads(socket, sidecar, &request, subscription, &reply);
+    }
     let mut previous = reply["result"]["thread"].clone();
     while subscription.wait(&socket)? {
         let reply = sidecar
@@ -352,9 +358,84 @@ fn connection(
     Ok(())
 }
 
+/// Sends only the summaries that changed since the last frame this client received.
+fn watch_threads(
+    mut socket: UnixStream,
+    sidecar: &Mutex<Sidecar>,
+    request: &Value,
+    subscription: &mut notifications::Subscription,
+    initial: &Value,
+) -> io::Result<()> {
+    let mut previous = initial["result"]["threads"].clone();
+    while subscription.wait(&socket)? {
+        let reply = sidecar
+            .lock()
+            .map_err(|_| io::Error::other("sidecar failed"))?
+            .request(request)?;
+        if reply["ok"] != true {
+            return send(&mut socket, &reply);
+        }
+        let current = &reply["result"]["threads"];
+        if let Some(event) = thread_changes(&previous, current) {
+            send(&mut socket, &event)?;
+        }
+        previous = current.clone();
+    }
+    Ok(())
+}
+
+/// The summaries that are new or different, in the runtime's order, and the IDs that left the list.
+fn thread_changes(previous: &Value, current: &Value) -> Option<Value> {
+    let list = |value: &Value| value.as_array().cloned().unwrap_or_default();
+    let (before, after) = (list(previous), list(current));
+    let changed: Vec<&Value> = after
+        .iter()
+        .filter(|thread| !before.iter().any(|old| old == *thread))
+        .collect();
+    let removed: Vec<&Value> = before
+        .iter()
+        .map(|thread| &thread["id"])
+        .filter(|id| !after.iter().any(|thread| thread["id"] == **id))
+        .collect();
+    (!changed.is_empty() || !removed.is_empty())
+        .then(|| json!({"event":"threads","threads":changed,"removed":removed}))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thread_events_carry_only_changes_and_removals() {
+        let thread = |id: &str, status: &str| json!({"id":id,"status":status});
+        let before = json!([
+            thread("a", "idle"),
+            thread("b", "idle"),
+            thread("c", "idle")
+        ]);
+        assert_eq!(thread_changes(&before, &before), None);
+        let after = json!([
+            thread("d", "idle"),
+            thread("b", "running"),
+            thread("a", "idle")
+        ]);
+        assert_eq!(
+            thread_changes(&before, &after),
+            Some(json!({
+                "event":"threads",
+                "threads":[thread("d", "idle"), thread("b", "running")],
+                "removed":["c"],
+            }))
+        );
+        // Order alone is not a change: clients sort by `updated_at`.
+        let reordered = json!([
+            thread("c", "idle"),
+            thread("b", "idle"),
+            thread("a", "idle")
+        ]);
+        assert_eq!(thread_changes(&before, &reordered), None);
+    }
+
     #[test]
     fn drip_input_cannot_extend_absolute_deadline() {
         let (mut input, mut output) = UnixStream::pair().unwrap();

@@ -379,7 +379,8 @@ The published Installer packages predate in-app updates and install system-wide:
   before activating the installed agent. A store lock rejects duplicate writers.
 
 The v0.1.0-preview.2 client and host use protocol version **1**. Later source
-builds negotiate opt-in [version 2](HOST.md#protocol-version-2) and fall back to
+builds negotiate opt-in [version 3](HOST.md#protocol-version-3), then
+[version 2](HOST.md#protocol-version-2), and fall back to
 version 1, so either side can be updated first. The client rejects other versions. Future protocol or storage changes need an explicit compatibility and
 migration review; arbitrary future versions are not promised to interoperate.
 Package installs have no automatic rollback or release-directory eviction. Do

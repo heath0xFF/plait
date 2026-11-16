@@ -1,10 +1,31 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import type { ModelChoice, Snapshot, InputRecord } from './protocol.ts';
-import { fail, inputMessage } from './protocol.ts';
-import { boundSnapshot } from './transcript.ts';
+import type { ModelChoice, Snapshot, InputRecord, Summary } from './protocol.ts';
+import { fail, inputMessage, queuedView } from './protocol.ts';
+import { boundSnapshot, pushMessage } from './transcript.ts';
+import { title } from './text.ts';
 import type { FileIdentity, Postimage } from './safety.ts';
+
+type Row = Record<string, unknown>;
+export type PendingInput = { rowid: number; request_id: string; text: string; anchor: number };
+// Additive columns. Summary columns mirror the snapshot so listing never parses transcripts.
+const columns = [
+  ['threads', 'head', 'INTEGER NOT NULL DEFAULT 0'], ['requests', 'input', 'TEXT'], ['requests', 'entry', 'INTEGER'], ['requests', 'anchor', 'INTEGER'],
+  ['threads', 'checkout', 'TEXT'], ['threads', 'status', 'TEXT'], ['threads', 'model', 'TEXT'], ['threads', 'title', 'TEXT'],
+  ['threads', 'archived', 'INTEGER NOT NULL DEFAULT 0'], ['threads', 'pending', 'INTEGER NOT NULL DEFAULT 0'],
+  ['threads', 'created_at', 'INTEGER'], ['threads', 'updated_at', 'INTEGER'],
+  ['requests', 'state', 'TEXT'], ['requests', 'queue', 'TEXT'],
+];
+const summary = (row: Row): Summary => ({
+  id: String(row.id), checkout: String(row.checkout), model: JSON.parse(String(row.model)), status: String(row.status),
+  title: String(row.title ?? ''), created_at: Number(row.created_at ?? 0), updated_at: Number(row.updated_at ?? 0),
+  archived: row.archived === 1, pending_approval: row.pending === 1,
+});
+const input = (row: Row): InputRecord => ({
+  request_id: String(row.id), text: JSON.parse(String(row.input)), entry: row.entry === null ? null : Number(row.entry), anchor: Number(row.anchor ?? 0),
+  ...(row.state === 'queued' ? { queued: JSON.parse(String(row.queue)) } : {}),
+});
 
 export class Store {
   db: DatabaseSync;
@@ -16,18 +37,31 @@ export class Store {
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS roots(id TEXT PRIMARY KEY, identity TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS postimages(thread_id TEXT NOT NULL, path TEXT NOT NULL, image TEXT NOT NULL, PRIMARY KEY(thread_id,path));`);
-    for (const [table, column, type] of [['threads', 'head', 'INTEGER NOT NULL DEFAULT 0'], ['requests', 'input', 'TEXT'], ['requests', 'entry', 'INTEGER'], ['requests', 'anchor', 'INTEGER']]) {
+    for (const [table, column, type] of columns) {
       if (!this.db.prepare(`PRAGMA table_info(${table})`).all().some(row => row.name === column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
     }
+    this.db.exec('CREATE INDEX IF NOT EXISTS threads_recent ON threads(updated_at DESC)');
+    this.backfill();
     for (const snapshot of this.recoverable()) {
       if (snapshot.status === 'running' || snapshot.status === 'awaiting_approval') {
         snapshot.status = 'interrupted';
         snapshot.pending_approval = null;
         snapshot.live_text = '';
+        snapshot.live_reasoning = ''; snapshot.retry = null;
         snapshot.error = { code: 'interrupted', message: 'Host stopped. Effects may have completed; inspect the checkout before a new submission.' };
         for (const tool of snapshot.tools) if (tool.status === 'running') tool.status = 'interrupted';
         this.save(snapshot);
       }
+    }
+  }
+  /** Threads saved before version 3 gain summary columns, timestamps, and a derived title once. */
+  private backfill() {
+    for (const row of this.db.prepare('SELECT snapshot FROM threads WHERE checkout IS NULL').all()) {
+      const snapshot = JSON.parse(String(row.snapshot)) as Snapshot;
+      const first = this.db.prepare('SELECT input FROM requests WHERE scope=? AND input IS NOT NULL ORDER BY rowid LIMIT 1').get(snapshot.id);
+      const text = first ? JSON.parse(String(first.input)) : undefined;
+      if (!snapshot.title && typeof text === 'string') snapshot.title = title(text);
+      this.save(snapshot);
     }
   }
   recoverable(): Snapshot[] {
@@ -35,24 +69,105 @@ export class Store {
       .map(row => JSON.parse(String(row.snapshot)) as Snapshot);
   }
   list(checkout: string) {
-    return this.db.prepare("SELECT id,json_extract(snapshot,'$.checkout') AS checkout,json_extract(snapshot,'$.model') AS model,json_extract(snapshot,'$.status') AS status FROM threads WHERE json_extract(snapshot,'$.checkout')=? ORDER BY rowid DESC LIMIT 100").all(checkout)
+    return this.db.prepare('SELECT id,checkout,model,status FROM threads WHERE checkout=? ORDER BY rowid DESC LIMIT 100').all(checkout)
       .map(row => ({ id: String(row.id), checkout: String(row.checkout), model: JSON.parse(String(row.model)), status: String(row.status) }));
+  }
+  /** Version 3 listing: most recently updated first, across checkouts unless one is given. */
+  summaries(options: { checkout?: string; limit: number; cursor?: string; archived: boolean }) {
+    const where = ['1=1']; const values: (string | number)[] = [];
+    if (options.checkout !== undefined) { where.push('checkout=?'); values.push(options.checkout); }
+    if (!options.archived) where.push('archived=0');
+    if (options.cursor !== undefined) {
+      const [updated, rowid] = options.cursor.split(':').map(Number);
+      where.push('(updated_at<? OR (updated_at=? AND rowid<?))'); values.push(updated, updated, rowid);
+    }
+    const rows = this.db.prepare(`SELECT rowid,id,checkout,model,status,title,archived,pending,created_at,updated_at FROM threads WHERE ${where.join(' AND ')} ORDER BY updated_at DESC, rowid DESC LIMIT ?`)
+      .all(...values, options.limit + 1);
+    const page = rows.slice(0, options.limit); const last = page.at(-1);
+    return { threads: page.map(summary), next_cursor: rows.length > options.limit && last ? `${last.updated_at}:${last.rowid}` : null };
   }
   get(id: string): Snapshot {
     const row = this.db.prepare('SELECT snapshot FROM threads WHERE id=?').get(id);
     if (!row) fail('not_found', 'Thread not found.');
     return JSON.parse(String(row.snapshot));
   }
-  save(snapshot: Snapshot, head = 0) {
-    this.db.prepare('INSERT INTO threads (id,snapshot,head) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET snapshot=excluded.snapshot,head=MAX(threads.head,excluded.head)')
-      .run(snapshot.id, JSON.stringify(boundSnapshot(snapshot)), head);
+  /** Saves the snapshot and its summary columns; reports whether the summary changed. */
+  save(snapshot: Snapshot, head = 0): boolean {
+    const previous = this.db.prepare('SELECT status,title,archived,pending,model,updated_at FROM threads WHERE id=?').get(snapshot.id);
+    const now = Date.now();
+    snapshot.created_at ??= now;
+    // A status change is activity; streaming text within one status is not.
+    if (snapshot.updated_at === undefined || (previous && previous.status !== null && previous.status !== snapshot.status)) snapshot.updated_at = now;
+    const next = {
+      status: snapshot.status, title: snapshot.title ?? '', archived: snapshot.archived ? 1 : 0, pending: snapshot.pending_approval ? 1 : 0,
+      model: JSON.stringify(snapshot.model), updated_at: snapshot.updated_at,
+    };
+    this.db.prepare(`INSERT INTO threads (id,snapshot,head,checkout,status,model,title,archived,pending,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET snapshot=excluded.snapshot,head=MAX(threads.head,excluded.head),checkout=excluded.checkout,status=excluded.status,
+      model=excluded.model,title=excluded.title,archived=excluded.archived,pending=excluded.pending,created_at=excluded.created_at,updated_at=excluded.updated_at`)
+      .run(snapshot.id, JSON.stringify(boundSnapshot(snapshot)), head, snapshot.checkout, next.status, next.model, next.title, next.archived, next.pending, snapshot.created_at, next.updated_at);
+    return !previous || (Object.keys(next) as (keyof typeof next)[]).some(key => previous[key] !== next[key]);
   }
   inputs(id: string): InputRecord[] {
-    return this.db.prepare('SELECT id,input,entry,anchor FROM requests WHERE scope=? AND input IS NOT NULL ORDER BY rowid DESC LIMIT 100').all(id).reverse()
-      .map(row => ({ request_id: String(row.id), text: JSON.parse(String(row.input)), entry: row.entry === null ? null : Number(row.entry), anchor: Number(row.anchor ?? 0) }));
+    return this.db.prepare("SELECT id,input,entry,anchor,state,queue FROM requests WHERE scope=? AND input IS NOT NULL AND (state IS NULL OR state='queued') ORDER BY rowid DESC LIMIT 100").all(id).reverse().map(input);
   }
   place(id: string, requestId: string, entry: number) {
-    this.db.prepare('UPDATE requests SET entry=? WHERE scope=? AND id=?').run(entry, id, requestId);
+    // A steering input the run took leaves the queue in the same write.
+    this.db.prepare('UPDATE requests SET entry=?,state=NULL,queue=NULL WHERE scope=? AND id=?').run(entry, id, requestId);
+  }
+  /** Inputs waiting behind a run, oldest first. */
+  queue(id: string): InputRecord[] {
+    return this.db.prepare("SELECT id,input,entry,anchor,state,queue FROM requests WHERE scope=? AND state='queued' ORDER BY rowid").all(id).map(input);
+  }
+  private head(id: string) { return Number(this.db.prepare('SELECT head FROM threads WHERE id=?').get(id)?.head ?? 0); }
+  private transaction<T>(work: () => T): T {
+    this.db.exec('BEGIN IMMEDIATE');
+    try { const result = work(); this.db.exec('COMMIT'); return result; }
+    catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+  private refreshQueue(snapshot: Snapshot) { snapshot.queued = this.queue(snapshot.id).map(queuedView); }
+  /** Accepts an input behind the active run. It joins the conversation only when it starts. */
+  enqueue(id: string, text: string, result: unknown, queued: NonNullable<InputRecord['queued']>, snapshot: Snapshot) {
+    return this.transaction(() => {
+      this.db.prepare("INSERT INTO requests (scope,id,hash,result,input,anchor,state,queue) VALUES (?,?,?,?,?,?,'queued',?)")
+        .run(snapshot.id, id, digest(text), JSON.stringify(result), JSON.stringify(text), this.head(snapshot.id), JSON.stringify(queued));
+      this.refreshQueue(snapshot);
+      return this.save(snapshot);
+    });
+  }
+  /** Moves a queued input into the conversation at the current position, as its run starts. */
+  dequeue(input: InputRecord, snapshot: Snapshot) {
+    return this.transaction(() => {
+      const head = this.head(snapshot.id);
+      const changed = this.db.prepare("UPDATE requests SET state=NULL,queue=NULL,anchor=? WHERE scope=? AND id=? AND state='queued'").run(head, snapshot.id, input.request_id);
+      if (!changed.changes) fail('not_found', 'Queued message already started or was cancelled.');
+      pushMessage(snapshot, inputMessage(input));
+      if (input.text.length > 4096) snapshot.truncated = true;
+      this.refreshQueue(snapshot);
+      return this.save(snapshot);
+    });
+  }
+  /** Cancels one queued input, or all of them, and returns how many. The request IDs stay used. */
+  cancel(id: string, requestId?: string): number {
+    const changed = requestId === undefined
+      ? this.db.prepare("UPDATE requests SET state='cancelled',queue=NULL WHERE scope=? AND state='queued'").run(id)
+      : this.db.prepare("UPDATE requests SET state='cancelled',queue=NULL WHERE scope=? AND id=? AND state='queued'").run(id, requestId);
+    return Number(changed.changes);
+  }
+  /** Accepted inputs that never reached the conversation store, newest first, below a history position. */
+  pendingBefore(id: string, anchor: number, rowid: number, limit: number): PendingInput[] {
+    return this.db.prepare(`SELECT rowid,id,input,COALESCE(anchor,0) AS anchor FROM requests WHERE scope=? AND input IS NOT NULL AND entry IS NULL AND state IS NULL
+      AND (COALESCE(anchor,0)<? OR (COALESCE(anchor,0)=? AND rowid<?)) ORDER BY COALESCE(anchor,0) DESC, rowid DESC LIMIT ?`).all(id, anchor, anchor, rowid, limit)
+      .map(row => ({ rowid: Number(row.rowid), request_id: String(row.id), text: JSON.parse(String(row.input)), anchor: Number(row.anchor) }));
+  }
+  /** Request IDs of the inputs placed at the given conversation entries. */
+  placed(id: string, low: number, high: number): Map<number, string> {
+    return new Map(this.db.prepare('SELECT id,entry FROM requests WHERE scope=? AND entry BETWEEN ? AND ?').all(id, low, high)
+      .map(row => [Number(row.entry), String(row.id)]));
+  }
+  journal(id: string, rowid: number): string | undefined {
+    const row = this.db.prepare('SELECT input FROM requests WHERE scope=? AND rowid=? AND input IS NOT NULL AND entry IS NULL AND state IS NULL').get(id, rowid);
+    return row ? JSON.parse(String(row.input)) : undefined;
   }
   owned(id: string): Postimage[] {
     return this.db.prepare('SELECT image FROM postimages WHERE thread_id=? LIMIT 500').all(id).map(row => JSON.parse(String(row.image)));
@@ -93,19 +208,19 @@ export class Store {
   }
   admit(scope: string, id: string, input: unknown, result: unknown, snapshot: Snapshot, root?: FileIdentity) {
     // Acceptance and dedup commit before the harness can execute any effect.
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
-      const head = Number(this.db.prepare('SELECT head FROM threads WHERE id=?').get(snapshot.id)?.head ?? 0);
+    return this.transaction(() => {
+      const head = this.head(snapshot.id);
       if (scope === snapshot.id && typeof input === 'string') {
-        snapshot.messages.push(inputMessage({ request_id: id, text: input, entry: null, anchor: head }));
-        if (snapshot.messages.length > 100) { snapshot.messages = snapshot.messages.slice(-100); snapshot.truncated = true; }
+        pushMessage(snapshot, inputMessage({ request_id: id, text: input, entry: null, anchor: head }));
         if (input.length > 4096) snapshot.truncated = true;
+        // The first accepted message names the thread until the user renames it.
+        if (!snapshot.renamed && !snapshot.title) snapshot.title = title(input);
       }
-      this.save(snapshot);
+      const changed = this.save(snapshot);
       if (root) this.db.prepare('INSERT INTO roots VALUES (?,?)').run(snapshot.id, JSON.stringify(root));
       this.db.prepare('INSERT INTO requests (scope,id,hash,result,input,anchor) VALUES (?,?,?,?,?,?)').run(scope, id, digest(input), JSON.stringify(result), JSON.stringify(input), head);
-      this.db.exec('COMMIT');
-    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+      return changed;
+    });
   }
   close() { this.db.close(); }
 }

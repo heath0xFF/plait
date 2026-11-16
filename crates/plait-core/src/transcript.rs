@@ -215,6 +215,7 @@ mod tests {
                 id: id.to_string(),
                 role: MessageRole::Assistant,
                 text: format!("Message {id}"),
+                reasoning: String::new(),
             })
             .collect();
         snapshot
@@ -341,6 +342,7 @@ mod tests {
             id: "3".into(),
             role: MessageRole::Assistant,
             text: "Done.".into(),
+            reasoning: String::new(),
         });
         next.tools
             .push(tool("f", "3".into(), serde_json::json!({})));

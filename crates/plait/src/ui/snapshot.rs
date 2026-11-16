@@ -146,6 +146,7 @@ fn status() -> Status {
         model_id: model_id.into(),
         name: name.into(),
         authenticated,
+        ..Default::default()
     };
     Status {
         protocol_version: 2,
@@ -194,6 +195,7 @@ fn thread_snapshot(checkout: &Path, approval: bool) -> Snapshot {
         id: id.into(),
         role,
         text: text.into(),
+        ..Default::default()
     };
     Snapshot {
         id: THREAD.into(),
@@ -256,6 +258,7 @@ fn thread_snapshot(checkout: &Path, approval: bool) -> Snapshot {
         } else {
             ApprovalMode::Auto
         }),
+        ..Default::default()
     }
 }
 
@@ -322,6 +325,7 @@ fn finished_turn(snapshot: &mut Snapshot) {
         id: "m4".into(),
         role: MessageRole::Assistant,
         text: "Sample result. The refresh is queued and the tests pass.\n\n- `src/review.rs` queues the read\n- 24 tests passed".into(),
+        ..Default::default()
     });
 }
 
@@ -439,12 +443,14 @@ impl Harness {
                     checkout: checkout.clone(),
                     model: choice(),
                     status: ThreadStatus::Running,
+                    ..Default::default()
                 },
                 ThreadSummary {
                     id: "thr_0c44a9d1".into(),
                     checkout: checkout.clone(),
                     model: choice(),
                     status: ThreadStatus::Idle,
+                    ..Default::default()
                 },
             ];
             // Mirror select_host_thread without opening a socket.
@@ -497,6 +503,7 @@ fn desktop_recovery_does_not_rebind_saved_work_or_clear_a_newer_revision() {
             id: format!("request-{}", pending.request_id),
             role: MessageRole::User,
             text: "first".into(),
+            ..Default::default()
         });
         let composer = cx.new(|cx| Composer::new(window, cx));
         plait.restore_composer(THREAD, &composer, cx);
@@ -775,6 +782,7 @@ fn streaming_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
             text: format!(
                 "Sample history row {index}. This is a rendering fixture, not an agent run."
             ),
+            ..Default::default()
         }));
     });
     harness.update(|plait, _, cx| {
@@ -820,6 +828,7 @@ fn streaming_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
             id: "new-user".into(),
             role: MessageRole::User,
             text: "Sample follow-up".into(),
+            ..Default::default()
         });
         snapshot.live_text.clear();
         snapshot.tools[1].output = "Sample test output: 24 tests passed.".into();
