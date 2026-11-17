@@ -388,6 +388,17 @@ impl Plait {
     }
 
     pub(super) fn create_host_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.create_host_thread_at(None, window, cx);
+    }
+
+    /// Create a thread that starts at `thinking`, or at Settings' default when
+    /// `None`. Retrying an unconfirmed creation repeats the level it was made with.
+    pub(super) fn create_host_thread_at(
+        &mut self,
+        thinking: Option<host::ThinkingLevel>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.host.connected || self.host.creating {
             return;
         }
@@ -401,7 +412,8 @@ impl Plait {
             }
             let mode = self.new_thread_mode(&choice);
             self.host.pending_create = Some((request_id(), choice));
-            self.host.pending_thinking = Some(self.preferences.value.default_thinking());
+            self.host.pending_thinking =
+                Some(thinking.unwrap_or_else(|| self.preferences.value.default_thinking()));
             self.set_pending_harness(harness, mode);
         }
         let (id, choice) = self.host.pending_create.clone().unwrap();

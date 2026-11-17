@@ -971,6 +971,92 @@ fn a_draft_creates_its_thread_only_when_sent_and_keeps_its_request_id() {
     std::fs::remove_dir_all(scratch).unwrap();
 }
 
+/// The draft's thinking chip lists only its model's levels, starts at
+/// Settings' default moved to the nearest of them, carries a choice across
+/// model changes, and sends the chosen level, the same one on a retry.
+#[core::prelude::v1::test]
+fn a_draft_sends_its_thinking_level_and_repeats_it_on_retry() {
+    use plait_core::host::ThinkingLevel::*;
+    if !isolated("a_draft_sends_its_thinking_level_and_repeats_it_on_retry") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-draft-thinking-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.update(|plait, window, cx| {
+        let status = plait.host.status.as_mut().unwrap();
+        status.protocol_version = 4;
+        let model = status
+            .models
+            .iter_mut()
+            .find(|m| m.choice() == choice())
+            .unwrap();
+        model.reasoning = Some(true);
+        model.thinking_levels = Some(vec![Off, Low, High]);
+        plait.inject_harnesses(Some(claude_harnesses("ready", None)));
+        plait.open_draft(window, cx);
+        // Medium, the unset default, is as near Low as High: the lower one.
+        assert_eq!(plait.preferences.value.default_thinking(), Medium);
+        assert_eq!(plait.draft_thinking_levels(), &[Off, Low, High]);
+        assert_eq!(plait.draft_thinking(), Some(Low));
+        // A model without levels has no thinking chip.
+        plait.choose_draft_model(HarnessId::Pi, other_choice(), cx);
+        assert_eq!(plait.draft_thinking(), None);
+        // Unchosen, it follows the default on each model.
+        plait.choose_draft_harness(HarnessId::Claude, cx);
+        assert_eq!(plait.draft_thinking(), Some(Medium));
+        // Only the model's own levels can be chosen.
+        plait.choose_draft_thinking(Off, cx);
+        assert_eq!(plait.draft_thinking(), Some(Medium));
+        plait.choose_draft_thinking(Max, cx);
+        assert_eq!(plait.draft_thinking(), Some(Max));
+        // Codex stops at High, so Maximum moves there and stays there.
+        plait.choose_draft_harness(HarnessId::Codex, cx);
+        assert_eq!(plait.draft_thinking(), Some(High));
+        plait.choose_draft_harness(HarnessId::Claude, cx);
+        assert_eq!(plait.draft_thinking(), Some(High));
+        let mini = ModelChoice {
+            provider: "claude".into(),
+            model_id: "sample-claude-mini".into(),
+        };
+        plait.choose_draft_model(HarnessId::Claude, mini, cx);
+        assert_eq!(
+            plait.draft_model().map(|m| m.model_id),
+            Some("sample-claude-mini".into())
+        );
+        assert_eq!(plait.draft_thinking(), Some(High));
+        plait.choose_draft_thinking(Xhigh, cx);
+    });
+    harness.type_draft("Queue the status refresh");
+    harness.keystroke("enter");
+    harness.update(|plait, _, cx| {
+        assert!(plait.draft_pending(), "sending creates the thread");
+        assert_eq!(plait.host.pending_thinking, Some(Xhigh));
+        // The chip cannot change what is being created.
+        plait.choose_draft_thinking(Low, cx);
+        assert_eq!(plait.draft_thinking(), Some(Xhigh));
+        // A later default does not reach the unconfirmed creation.
+        plait.preferences.value.default_thinking = Some(Off);
+    });
+    // No host runs in this scratch home, so the request stays unconfirmed.
+    harness.creation_settles();
+    harness.update(|plait, window, cx| {
+        assert!(plait.draft_pending());
+        // A retry repeats the same request at the same level.
+        let request = plait.host.pending_create.clone();
+        plait.retry_draft(window, cx);
+        assert!(plait.host.creating);
+        assert_eq!(plait.host.pending_create, request);
+        assert_eq!(plait.host.pending_thinking, Some(Xhigh));
+    });
+    harness.creation_settles();
+    harness.update(|plait, _, _| assert_eq!(plait.host.pending_thinking, Some(Xhigh)));
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
 /// A creation reply reaches the draft that sent it, and no other view: a
 /// discarded draft's thread is only listed; one left for another thread
 /// gets its message without taking the screen.
@@ -2338,9 +2424,14 @@ fn draft_scenes_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     std::fs::create_dir_all(&other).unwrap();
     let other = other.canonicalize().unwrap();
     harness.update(move |plait, window, cx| {
+        use plait_core::host::ThinkingLevel::*;
         let status = plait.host.status.as_mut().unwrap();
         status.protocol_version = 4;
         status.models.truncate(6);
+        // A reasoning model, so the header shows its thinking chip.
+        let model = &mut status.models[0];
+        model.reasoning = Some(true);
+        model.thinking_levels = Some(vec![Off, Minimal, Low, Medium, High, Xhigh]);
         plait.inject_harnesses(Some(sample_harnesses("ready", Some(NEWER))));
         // In memory only: the scene does not write a preferences file.
         plait.preferences.value.navigation.open(&other);
@@ -2362,7 +2453,12 @@ fn draft_scenes_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     theme(harness, Some(true));
     harness.capture(&format!("light-draft-{suffix}"));
     theme(harness, forced);
-    harness.update(|plait, window, cx| plait.open_draft_projects(window, cx));
+    harness.update(|plait, window, cx| plait.open_draft_thinking(window, cx));
+    capture_both(harness, &format!("draft-thinking-{suffix}"));
+    harness.update(|plait, window, cx| {
+        plait.close_overlay(true, window, cx);
+        plait.open_draft_projects(window, cx);
+    });
     harness.capture(&format!("draft-projects-{suffix}"));
     harness.update(|plait, window, cx| {
         plait.close_overlay(true, window, cx);

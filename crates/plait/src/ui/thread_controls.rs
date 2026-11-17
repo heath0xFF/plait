@@ -203,18 +203,50 @@ impl Plait {
         if self.configure_reason().is_some() {
             return;
         }
-        let items = thinking_levels(self.thread_model())
+        let thread_id = self.host.selected.clone().unwrap_or_default();
+        let epoch = self.host.epoch;
+        // As the thread's chip shows it: no level is thinking off.
+        let current = self
+            .host
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.thinking_level.unwrap_or(ThinkingLevel::Off));
+        let levels = thinking_levels(self.thread_model()).to_vec();
+        self.present_thinking(
+            &levels,
+            current,
+            "Applies from the next run.",
+            move |level| Command::Thinking {
+                thread_id: thread_id.clone(),
+                epoch,
+                level,
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// The thinking-level menu, for an open thread or the new-thread draft.
+    /// `command` is what choosing each level runs.
+    pub(super) fn present_thinking(
+        &mut self,
+        levels: &[ThinkingLevel],
+        current: Option<ThinkingLevel>,
+        note: &'static str,
+        command: impl Fn(ThinkingLevel) -> Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = |level: ThinkingLevel| format!("thinking-{level:?}");
+        let items = levels
             .iter()
             .map(|level| {
-                Item::new(
-                    format!("thinking-{level:?}"),
-                    level.label(),
-                    Command::Thinking {
-                        thread_id: self.host.selected.clone().unwrap_or_default(),
-                        epoch: self.host.epoch,
-                        level: *level,
-                    },
-                )
+                let item = Item::new(key(*level), level.label(), command(*level));
+                if Some(*level) == current {
+                    item.badge("Current", colors().blue)
+                } else {
+                    item
+                }
             })
             .collect();
         let palette = cx.new(|cx| {
@@ -223,10 +255,11 @@ impl Plait {
                     name: "Thinking level".into(),
                     placeholder: "Choose thinking level…".into(),
                     empty: "This model has no thinking levels.".into(),
-                    initial: None,
+                    // Start on the current level, so Return keeps it.
+                    initial: current.map(|level| key(level).into()),
                     mark: None,
                     aside: None,
-                    note: Some("Applies from the next run.".into()),
+                    note: Some(note.into()),
                 },
                 items,
                 window,
@@ -279,19 +312,11 @@ impl Plait {
             );
         if !levels.is_empty() {
             controls = controls.child(
-                // Just the level; a bare "Off" beside the model would not say what is off.
-                button(
-                    "thread-thinking",
-                    if level == ThinkingLevel::Off {
-                        "No thinking"
-                    } else {
-                        level.label()
-                    },
-                )
-                .aria_label(format!("Thinking level: {}", level.label()))
-                .aria_description(reason.unwrap_or("Choose how much this model thinks."))
-                .disabled(reason.is_some())
-                .on_activate(cx, |this, window, cx| this.open_thinking(window, cx)),
+                button("thread-thinking", thinking_value(level))
+                    .aria_label(format!("Thinking level: {}", level.label()))
+                    .aria_description(reason.unwrap_or("Choose how much this model thinks."))
+                    .disabled(reason.is_some())
+                    .on_activate(cx, |this, window, cx| this.open_thinking(window, cx)),
             );
         }
         if let Some(usage) = &usage {
@@ -575,6 +600,16 @@ impl Plait {
 }
 
 /// What the run-settings button and menu call an approval mode.
+/// What a thinking control shows: just the level, since a bare "Off" beside
+/// the model would not say what is off.
+pub(super) fn thinking_value(level: ThinkingLevel) -> &'static str {
+    if level == ThinkingLevel::Off {
+        "No thinking"
+    } else {
+        level.label()
+    }
+}
+
 pub(super) fn approval_label(mode: ApprovalMode) -> &'static str {
     match mode {
         ApprovalMode::Ask => "Ask before actions",

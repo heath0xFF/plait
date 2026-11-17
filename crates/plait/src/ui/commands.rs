@@ -49,6 +49,8 @@ pub(super) enum Command {
     DraftProject(std::path::PathBuf),
     DraftHarness(HarnessId),
     DraftApproval(Option<plait_core::host::ApprovalMode>),
+    /// The thinking level the draft's thread starts at.
+    DraftThinking(plait_core::host::ThinkingLevel),
     /// The thinking level new threads start at.
     DefaultThinking(plait_core::host::ThinkingLevel),
     /// A checkout-relative path, from quick open.
@@ -88,6 +90,7 @@ impl Clone for Command {
             Self::DraftProject(path) => Self::DraftProject(path.clone()),
             Self::DraftHarness(id) => Self::DraftHarness(*id),
             Self::DraftApproval(mode) => Self::DraftApproval(*mode),
+            Self::DraftThinking(level) => Self::DraftThinking(*level),
             Self::DefaultThinking(level) => Self::DefaultThinking(*level),
         }
     }
@@ -437,6 +440,7 @@ impl Plait {
             Command::DraftProject(path) => self.choose_draft_project(path, window, cx),
             Command::DraftHarness(id) => self.choose_draft_harness(id, cx),
             Command::DraftApproval(mode) => self.choose_draft_approval(mode, cx),
+            Command::DraftThinking(level) => self.choose_draft_thinking(level, cx),
             Command::HarnessModel(id, choice) => match purpose {
                 Some(ModelPurpose::NewThread) => self.choose_draft_model(id, choice, cx),
                 Some(ModelPurpose::ThreadModel) => self.choose_thread_model(choice, window, cx),

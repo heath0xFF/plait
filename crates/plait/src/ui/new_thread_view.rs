@@ -1,5 +1,5 @@
 //! The new-thread draft on screen: a header row of choices above its composer
-//! (project, model, harness, permissions), and the menus those chips open.
+//! (project, model, thinking, harness, permissions), and the menus those chips open.
 //! Every value here is read from state that replies already filled in; the
 //! menus are built when opened, never per frame.
 
@@ -11,7 +11,7 @@ use super::{
     palette::{Item, Options, Palette},
     permissions::{Permissions, menu_chip},
     theme::*,
-    thread_controls::approval_label,
+    thread_controls::{approval_label, thinking_value},
 };
 use gpui::{prelude::*, *};
 use plait_core::host::{ApprovalMode, harness::HarnessId};
@@ -65,7 +65,7 @@ impl Plait {
             })
     }
 
-    /// Project | model | harness | permissions, then Discard.
+    /// Project | model | thinking | harness | permissions, then Discard.
     fn draft_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let locked = self.draft_locked();
         let project = self.active_project();
@@ -110,6 +110,7 @@ impl Plait {
                     this.open_model_picker(ModelPurpose::NewThread, window, cx)
                 }),
             )
+            .children(self.draft_thinking_chip(cx))
             .child(
                 menu_chip(
                     "draft-harness",
@@ -138,6 +139,49 @@ impl Plait {
                     .aria_description("Clear this new thread. Escape does the same.")
                     .on_activate(cx, |this, window, cx| this.discard_draft(window, cx)),
             )
+    }
+
+    /// The level the thread starts at; none for a model without thinking levels.
+    fn draft_thinking_chip(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        let level = self.draft_thinking()?;
+        let source = if self.draft.thinking.is_some() {
+            "Chosen for this thread"
+        } else {
+            "The default from Settings → Models"
+        };
+        Some(
+            menu_chip(
+                "draft-thinking",
+                None,
+                None,
+                thinking_value(level).into(),
+                format!(
+                    "Thinking: {}. {source}, at the nearest level this model has.",
+                    level.label()
+                )
+                .into(),
+                self.draft_locked(),
+            )
+            .aria_label(format!("Thinking level: {}", level.label()))
+            .on_activate(cx, |this, window, cx| this.open_draft_thinking(window, cx)),
+        )
+    }
+
+    /// The thread's thinking menu, listing the draft model's levels.
+    pub(super) fn open_draft_thinking(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.draft_locked().is_some() {
+            return;
+        }
+        let levels = self.draft_thinking_levels().to_vec();
+        let current = self.draft_thinking();
+        self.present_thinking(
+            &levels,
+            current,
+            "Applies from the thread's first turn. Change it any time after.",
+            Command::DraftThinking,
+            window,
+            cx,
+        );
     }
 
     /// The Permissions chip and menu of a draft in a harness with its own modes.

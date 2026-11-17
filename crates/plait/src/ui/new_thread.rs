@@ -2,17 +2,20 @@
 //! thread is created when its first message is sent, and that message is then
 //! submitted to it, so an abandoned New Thread leaves nothing behind.
 //!
-//! The draft lands in the active checkout. Its harness, model, and permissions
-//! are chosen in the row above its composer; until then each follows its
-//! default, and the harness follows Settings → Agent. Leaving the draft keeps
-//! its text; Escape or Discard clears it.
+//! The draft lands in the active checkout. Its harness, model, thinking level,
+//! and permissions are chosen in the row above its composer; until then each
+//! follows its default, and the harness follows Settings → Agent. Leaving the
+//! draft keeps its text; Escape or Discard clears it.
 
 use super::{
     Plait, Workspace,
     composer::{Composer, ComposerEvent},
 };
 use gpui::*;
-use plait_core::host::{ApprovalMode, ModelChoice, QueueMode, harness::HarnessId};
+use plait_core::{
+    compose::thinking_levels,
+    host::{ApprovalMode, Model, ModelChoice, QueueMode, ThinkingLevel, harness::HarnessId},
+};
 
 #[derive(Default)]
 pub(super) struct Draft {
@@ -27,6 +30,9 @@ pub(super) struct Draft {
     pub(super) model: Option<ModelChoice>,
     /// A harness's own mode; `None` follows its default. Pi has none.
     pub(super) mode: Option<String>,
+    /// Chosen in the header; `None` follows Settings' default. Either way the
+    /// thread starts at the nearest level its model has.
+    pub(super) thinking: Option<ThinkingLevel>,
     /// Pi only: Plait's approvals for the thread; `None` follows Settings.
     pub(super) approval: Option<ApprovalMode>,
     /// Bumped on discard and on delivery, so an earlier draft's reply cannot reach this one.
@@ -193,22 +199,60 @@ impl Plait {
             .unwrap_or_else(|| self.default_approval())
     }
 
+    /// The draft's model as its harness lists it: Pi's catalog, else the harness entry.
+    fn draft_model_entry(&self, choice: &ModelChoice) -> Option<&Model> {
+        let harness = self.draft_harness();
+        if harness != HarnessId::Pi {
+            return self.harness_model(harness, choice);
+        }
+        self.host
+            .status
+            .as_ref()?
+            .models
+            .iter()
+            .find(|model| model.choice() == *choice)
+    }
+
     /// The display name of the draft's model, from its harness's list.
     pub(super) fn draft_model_name(&self) -> Option<SharedString> {
         let choice = self.draft_model()?;
-        let harness = self.draft_harness();
-        let model = if harness == HarnessId::Pi {
-            self.host
-                .status
-                .as_ref()
-                .and_then(|status| status.models.iter().find(|model| model.choice() == choice))
-        } else {
-            self.harness_model(harness, &choice)
-        };
-        Some(model.map_or_else(
+        Some(self.draft_model_entry(&choice).map_or_else(
             || super::model_picker::model_label(&choice).into(),
             |model| model.name.clone().into(),
         ))
+    }
+
+    /// The levels the draft's model supports; empty when it has none or is unknown.
+    pub(super) fn draft_thinking_levels(&self) -> &[ThinkingLevel] {
+        let Some(choice) = self.draft_model() else {
+            return &[];
+        };
+        thinking_levels(self.draft_model_entry(&choice))
+    }
+
+    /// The level the thread starts at: the draft's choice, else Settings'
+    /// default, moved to the nearest level the model has. `None` when it has none.
+    pub(super) fn draft_thinking(&self) -> Option<ThinkingLevel> {
+        let wanted = self
+            .draft
+            .thinking
+            .unwrap_or_else(|| self.preferences.value.default_thinking());
+        nearest_level(self.draft_thinking_levels(), wanted)
+    }
+
+    /// After a model or harness change, a level chosen earlier stays when the
+    /// new model has it and otherwise moves to its nearest one. `shown` is the
+    /// level before the change. An unchosen level keeps following the default.
+    fn carry_draft_thinking(&mut self, shown: Option<ThinkingLevel>) {
+        if self.draft.thinking.is_none() {
+            return;
+        }
+        // A model without levels leaves the choice for the next one that has them.
+        if let Some(level) =
+            shown.and_then(|shown| nearest_level(self.draft_thinking_levels(), shown))
+        {
+            self.draft.thinking = Some(level);
+        }
     }
 
     /// The draft's first message is waiting on creation `request_id`.
@@ -322,9 +366,11 @@ impl Plait {
         let pi = self.draft_harness() == HarnessId::Pi;
         let approval = (pi && self.host.protocol() >= 2).then(|| self.draft_approval());
         let choice = self.draft.approval.filter(|_| pi);
+        let thinking = self.draft_thinking();
         self.draft.error = None;
         self.new_thread_open = false;
-        self.create_host_thread(window, cx);
+        // An unconfirmed creation keeps the level it was first sent with.
+        self.create_host_thread_at(thinking, window, cx);
         let Some((request_id, _)) = self.host.pending_create.clone() else {
             self.draft.sending = None;
             self.draft.error = self.host.error.take();
@@ -439,11 +485,13 @@ impl Plait {
         if !usable {
             return;
         }
+        let shown = self.draft_thinking();
         self.draft.harness = Some(id);
         self.draft.model = None;
         self.draft.mode = None;
         self.draft.approval = None;
         self.draft.error = None;
+        self.carry_draft_thinking(shown);
         self.sync_composer(cx);
         cx.notify();
     }
@@ -470,9 +518,11 @@ impl Plait {
             return;
         }
         // The model belongs to this harness, so the draft keeps both.
+        let shown = self.draft_thinking();
         self.draft.harness = Some(harness);
         self.draft.model = Some(choice);
         self.draft.error = None;
+        self.carry_draft_thinking(shown);
         self.sync_composer(cx);
         cx.notify();
     }
@@ -495,6 +545,15 @@ impl Plait {
         }
         self.draft.harness = Some(harness);
         self.draft.mode = Some(mode);
+        cx.notify();
+    }
+
+    /// A thinking level from the menu the draft's thinking chip opens.
+    pub(super) fn choose_draft_thinking(&mut self, level: ThinkingLevel, cx: &mut Context<Self>) {
+        if self.draft_locked().is_some() || !self.draft_thinking_levels().contains(&level) {
+            return;
+        }
+        self.draft.thinking = Some(level);
         cx.notify();
     }
 
@@ -534,5 +593,40 @@ impl Plait {
         self.tab = Workspace::Conversation;
         self.create_host_thread(window, cx);
         cx.notify();
+    }
+}
+
+/// The level in `levels` closest to `wanted`, the lower one on a tie, as the
+/// host chooses; `None` when there are none.
+pub(super) fn nearest_level(
+    levels: &[ThinkingLevel],
+    wanted: ThinkingLevel,
+) -> Option<ThinkingLevel> {
+    let rank = |level: ThinkingLevel| {
+        ThinkingLevel::ALL
+            .iter()
+            .position(|other| *other == level)
+            .unwrap_or_default()
+    };
+    levels
+        .iter()
+        .copied()
+        .min_by_key(|level| (rank(*level).abs_diff(rank(wanted)), rank(*level)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ThinkingLevel::*;
+
+    #[core::prelude::v1::test]
+    fn nearest_level_keeps_a_supported_level_and_breaks_ties_low() {
+        assert_eq!(nearest_level(&[Low, Medium, High], Medium), Some(Medium));
+        assert_eq!(nearest_level(&[Low, Medium, High], Max), Some(High));
+        assert_eq!(nearest_level(&[Low, Medium, High], Off), Some(Low));
+        // Medium is as far from Low as from High.
+        assert_eq!(nearest_level(&[Off, Low, High], Medium), Some(Low));
+        assert_eq!(nearest_level(&[High, Off], Xhigh), Some(High));
+        assert_eq!(nearest_level(&[], Medium), None);
     }
 }
