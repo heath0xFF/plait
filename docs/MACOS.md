@@ -37,7 +37,7 @@ attributes. Finish or Stop active tasks before installing. Threads, drafts, and
 credentials are preserved; the app reopens after installation.
 
 The script uses the newest published release, including previews.
-`--version v0.1.0-preview.5` pins a release. `--download ~/Downloads` verifies and
+`--version v0.1.0-preview.6` pins a release. `--download ~/Downloads` verifies and
 saves the app archive without installing it. Initial downloads are checked
 against the release's SHA-256 metadata over HTTPS; this detects corruption, not
 publisher identity. Later in-app updates verify signed release manifests.

@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     io::{BufRead, BufReader, Write},
-    os::unix::net::UnixStream,
+    os::{fd::AsRawFd, unix::net::UnixStream},
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -722,6 +722,26 @@ struct Frames {
     partial_since: Option<Instant>,
 }
 impl Frames {
+    fn readable(&self, timeout: Option<Duration>) -> std::io::Result<bool> {
+        let mut descriptor = libc::pollfd {
+            fd: self.reader.get_ref().as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let milliseconds = timeout.map_or(-1, |value| {
+            value.as_millis().clamp(1, i32::MAX as u128) as i32
+        });
+        let result = unsafe { libc::poll(&mut descriptor, 1, milliseconds) };
+        if result < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+        }
+        // HUP still permits reading a reply buffered before the peer closed.
+        Ok(result > 0)
+    }
+
     fn next(&mut self, deadline: Option<Instant>) -> Result<Vec<u8>, Error> {
         loop {
             let deadline = deadline.or_else(|| {
@@ -737,7 +757,11 @@ impl Frames {
             } else {
                 None
             };
-            self.reader.get_ref().set_read_timeout(timeout)?;
+            // macOS rejects SO_RCVTIMEO after a peer closes, even with unread
+            // reply bytes. Poll keeps the deadline without changing that socket.
+            if self.reader.buffer().is_empty() && !self.readable(timeout)? {
+                continue;
+            }
             let available = match self.reader.fill_buf() {
                 Ok(bytes) => bytes,
                 Err(error)
@@ -1265,6 +1289,27 @@ mod tests {
             decode::<DefaultReply>(br#"{"ok":false,"error":{"code":"busy","message":"Running"}}"#),
             Err(Error::Rejected(_))
         ));
+    }
+
+    #[test]
+    fn replies_remain_readable_after_the_peer_closes() {
+        let (reader, mut writer) = UnixStream::pair().unwrap();
+        writer.write_all(b"first\nsecond\npartial").unwrap();
+        drop(writer);
+        let mut frames = Frames {
+            reader: BufReader::new(reader),
+            pending: Vec::new(),
+            partial_since: None,
+        };
+        assert_eq!(
+            frames
+                .next(Some(Instant::now() + Duration::from_secs(1)))
+                .unwrap(),
+            b"first\n"
+        );
+        assert_eq!(frames.next(None).unwrap(), b"second\n");
+        assert!(matches!(frames.next(None), Err(Error::Transport(_))));
+        assert_eq!(frames.pending, b"partial");
     }
 
     #[test]
