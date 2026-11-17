@@ -15,6 +15,7 @@ import type { ApprovalMode, ModelChoice, Protocol, QueueMode, Snapshot, InputRec
 import { Store } from './store.ts';
 import { checkout, dirtyPaths, fileAction, identities, acquireCheckout, rootIdentity, checkRoot, pathKey } from './safety.ts';
 import { registry } from './tools.ts';
+import { discover, expandSkill, skillsPrompt } from './skills.ts';
 import type { ToolState } from './tools.ts';
 import { MAX_TURNS, update } from './transcript.ts';
 import { historyPage, historyText } from './history.ts';
@@ -244,6 +245,8 @@ export class Runtime {
     });
   }
   registry(state: ToolState) { return registry(state); }
+  /** The person's Pi skills and instructions; a test runtime overrides it to stay independent of the machine. */
+  resources(checkout: string, trusted: boolean) { return discover(checkout, trusted); }
   async syncInputs(session: Session, all = false) {
     for (const input of session.inputs) {
       const steered = session.steered.has(input.request_id);
@@ -355,7 +358,7 @@ export class Runtime {
       if (input.queued?.mode !== 'steer' || session.steered.has(input.request_id)) continue;
       try {
         session.steered.set(input.request_id, await session.root.submit(
-          { type: 'input', requestId: steerKey(input.request_id), content: input.text, whenBusy: 'steer', whenIdle: 'reject' }, context));
+          { type: 'input', requestId: steerKey(input.request_id), content: await expandSkill(input.text, session.skills ?? []), whenBusy: 'steer', whenIdle: 'reject' }, context));
       } catch { /* The run is ending. The input stays queued and starts a run of its own. */ }
     }
   }
@@ -381,7 +384,7 @@ export class Runtime {
   /** The run's own input, or a continuation when a crash hid that an earlier run already took it as steering. */
   private async draft(session: Session, requestId: string, text: string): Promise<SubmissionDraft> {
     const earlier = await session.harness!.commit(tx => tx.submissionByRequest(session.root!.id, steerKey(requestId)), context);
-    if (earlier?.type !== 'input' || earlier.entry === undefined) return { type: 'input', requestId, content: text };
+    if (earlier?.type !== 'input' || earlier.entry === undefined) return { type: 'input', requestId, content: await expandSkill(text, session.skills ?? []) };
     this.store.place(session.snapshot.id, requestId, Number(earlier.entry));
     session.inputs = this.store.inputs(session.snapshot.id);
     return { type: 'continue' };
@@ -405,12 +408,18 @@ export class Runtime {
       session.protected = await identities(snapshot.checkout, session.baseline);
       let instructions = 'You are Plait, a local coding assistant. File tools are the only checkout writers; edits and commands may require the user\'s approval. Commands read the checkout and write only private scratch (HOME/TMPDIR) and this thread\'s private build cache (CARGO_HOME/CARGO_TARGET_DIR), with no external network and a 15 minute limit. Tests may use scratch-local Git repositories and Unix sockets. Use offline locked builds. Unchanged files this thread previously wrote can be edited again. Never modify other dirty or ignored paths, bypass approval, or start daemons. Read project instructions below.\n';
       if (session.commandPolicy === 'trusted') instructions = TRUSTED_INSTRUCTIONS;
+      // The person's own Pi setup: user-level instructions, then the project's, then skills.
+      // Project skills need the trust that trusted command mode already expresses.
+      const resources = await this.resources(snapshot.checkout, session.commandPolicy === 'trusted');
+      session.skills = resources.skills;
+      if (resources.instructions) instructions += `\nUser instructions (${resources.instructions.path}):\n` + resources.instructions.text;
       try {
         await lstat(join(snapshot.checkout, 'AGENTS.md'));
         const { text: project } = await fileAction(snapshot.checkout, 'read', 'AGENTS.md', undefined, session.lease?.fd, session.rootIdentity);
         if (project.length > 32768) fail('permission_denied', 'AGENTS.md exceeds the instruction bound.');
         instructions += '\nAGENTS.md:\n' + project;
       } catch (error) { if ((error as { code?: string }).code !== 'ENOENT') throw error; }
+      instructions += skillsPrompt(session.skills);
       await this.open(session);
       // The thread's current model, thinking level, and turn limit apply from this run.
       await session.root!.configure({

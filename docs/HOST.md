@@ -850,6 +850,9 @@ These are model tools, independent of the client socket protocol version.
   fixed errors; raw helper diagnostics are never exposed. UTF-8 validation is
   page-local, not a scan of the entire file. Reads keep the descriptor, root,
   symlink, hard-link, and Git-metadata checks, without loading the whole file.
+  An absolute path inside a listed skill's folder (see
+  [Skills and user instructions](#skills-and-user-instructions)) is read the
+  same way, with that folder's resolved path as the root.
 - `edit`: `{path, old_text, new_text}` replaces exactly one occurrence in a file
   up to 8 MiB. Approval compares its complete fingerprint, including content
   hash, before atomic replacement. Tool arguments still have a 16384-byte bound.
@@ -872,6 +875,37 @@ captures are marked incomplete. Storage errors are reported without retrying the
 command. Deletions free database pages for reuse rather than shrinking the file.
 Logs may contain secrets a command prints; the host does not redact their contents.
 
+### Skills and user instructions
+
+At the start of each run, the runtime reads the person's Pi setup with Pi's own
+resolution (`DefaultPackageManager` and `loadSkills` from the pinned
+`@earendil-works/pi-coding-agent`), so a skill is offered exactly when Pi would
+load it, including Pi settings filters and installed packages. Discovery never
+installs or updates a package. Project skills (the checkout's `.pi/skills`,
+`.agents/skills`, and project settings) load only for a project set to
+`trusted`. A discovery failure leaves the run without skills rather than
+failing it.
+
+- The run's instructions gain, in order: the user-level context file from the
+  Pi agent directory (the first of `AGENTS.override.md`, `AGENTS.md`,
+  `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`, bounded at 32768 characters like the
+  project's `AGENTS.md`, which follows it), then each skill's name,
+  description, and `SKILL.md` location in Pi's `<available_skills>` format.
+  Full skill text costs context only when the model reads it.
+- `read` accepts an absolute path inside a skill's folder. Skills whose folder
+  is, or contains, the home directory or the Pi agent directory are skipped, so
+  credentials there are never readable this way.
+- Sandboxed commands may read, never write, the resolved skill folders, so a
+  skill's scripts and references work. Trusted commands already run as the user.
+- A message that starts with `/skill:name` is sent as Pi sends it: the skill's
+  `SKILL.md` (at most 65536 characters) in a `<skill name location>` block,
+  then the rest of the message. Unknown names are sent unchanged. The thread
+  keeps the typed text for its title; clients show a stored block as the
+  `/skill:` command that produced it.
+
+Not yet included: prompt templates, extensions, MCP servers, and skill
+discovery reported to the client. See the [roadmap](ROADMAP.md).
+
 Automatic model-context compaction keeps all original history entries. Its
 internal summary entries are omitted from displayed messages. If a required
 summary fails, version 3 reports `context_compaction`; older clients retain the
@@ -884,7 +918,9 @@ Command rules in this section describe the default `sandboxed` policy. A
 project set to `trusted` replaces them as described in
 [Command policy](#command-policy). File-tool rules apply to both.
 
-Load checkout `AGENTS.md` explicitly before execution. A thread's checkout is
+Load checkout `AGENTS.md` explicitly before execution, after the user-level
+context file and before the skills list described in
+[Skills and user instructions](#skills-and-user-instructions). A thread's checkout is
 immutable. Its model and thinking level change only through the version 3
 `configure_thread`, never during a run; changing the default affects only new threads.
 Edits and commands need explicit approval unless the run was submitted with

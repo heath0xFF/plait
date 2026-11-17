@@ -3,7 +3,8 @@
 These are planned milestones, not a list of shipped features. See the
 [README](../README.md) for the current preview and [Verification](VERIFICATION.md)
 for acceptance evidence and open checks. **M2.5 shipped in v0.1.0-preview.8.
-Current work is M4: Git (mostly shipped) and a read-only file viewer.**
+Current work is M8: the person's own Pi skills, instructions, and tools, then
+M7.**
 
 ## Milestones
 
@@ -17,7 +18,7 @@ Current work is M4: Git (mostly shipped) and a read-only file viewer.**
 | M5 — Previews | Live HTML, Markdown and MDX, automatic refresh, and selected-content feedback to the agent | Planned |
 | M6 — Multiple machines | Unified project navigation across independent hosts, including disconnected/reconnecting states | Planned |
 | M7 — Any agent harness | Threads run by other agent harnesses (Claude Code, Codex, Pi, omp, Antigravity, and others) beside Pi, with the same conversation, approval, Git, and navigation views | Direction agreed; does not depend on M3. Protocol details need agreement before implementation |
-| M8 — Skills, tools, and CLIs | Pi threads use the skills, prompt templates, global instructions, MCP servers, and command-line tools the person already set up for their agent, with each one visible in Settings and every call under Plait's approvals | Direction agreed; does not depend on M3 or M7. Protocol and sandbox details need agreement before implementation |
+| M8 — Skills, tools, and CLIs | Pi threads use the skills, prompt templates, global instructions, MCP servers, and command-line tools the person already set up for their agent, with each one visible in Settings and every call under Plait's approvals | Current work. Step 1 (skills and user instructions in the runtime) is in source; the Settings list, prompt templates, CLIs, and MCP follow |
 
 Do not build the whole roadmap at once. Each change must compile, run, and have
 its own checks. Protocol, storage, and shared-contract changes need agreement
@@ -185,10 +186,18 @@ weakening what protects the checkout.
 - **Shared with M7.** Other harnesses load their own skills and MCP servers
   natively; Plait shows what they report rather than injecting its own.
 
-Before implementation: agree the protocol additions (the discovered list, the
-skill read, project trust, the CLI allowance), the sandbox profile change that
-lets commands read skill directories, and the order (skills and instructions
-first, then CLIs, then MCP).
+**Agreed for M8 step 1, skills and user instructions:** runtime only, with no
+client protocol change. Discovery uses Pi's own package resolution and skill
+loader, never installs a package, and takes project skills only from projects
+set to trusted commands. Skill files are read through the existing bounded,
+no-symlink helper; sandboxed commands may read skill folders and never write
+them. `/skill:name` sends Pi's block. Recorded in the
+[host contract](HOST.md#skills-and-user-instructions).
+
+Next, each agreed before it starts: step 2 reports what was found (a version 3
+request listing skills, templates, and problems) for a Settings list and
+composer completion, and adds prompt templates; step 3 adds named CLIs for
+sandboxed projects; step 4 adds MCP servers.
 
 Use existing tools for interactive shells and debugging. A future Open in Rex
 integration and native mobile companion are possibilities, not current features.

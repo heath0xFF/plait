@@ -15,6 +15,8 @@ import { rangeArgs, rangeText, outputTail } from './tool-output.ts';
 import type { CommandOutputs, TextRange } from './tool-output.ts';
 import type { Snapshot } from './protocol.ts';
 import type { RunAuthorization } from './authorization.ts';
+import { skillFile } from './skills.ts';
+import type { SkillEntry } from './skills.ts';
 
 export type ToolState = {
   snapshot: Snapshot; baseline: string[]; protected: FileIdentity[];
@@ -27,6 +29,8 @@ export type ToolState = {
   record(image: Postimage): void;
   // Read once at admission. Absent means sandboxed, the default.
   commandPolicy?: CommandPolicy;
+  /** Skills discovered at run start; their folders are readable but never written. */
+  skills?: SkillEntry[];
   forget?(path: string): void;
   loginEnvironment?: Promise<LoginEnvironment>;
 };
@@ -41,7 +45,7 @@ export function registry(state: ToolState) {
   };
   const tools = (Object.keys(schemas) as (keyof typeof schemas)[]).map(name => defineTool({
     name,
-    description: name === 'read' ? 'Read a UTF-8 regular file inside the checkout. Optional offset is a zero-based byte offset, limit is bytes (default 8192, maximum 12000). Follow the returned continuation to read the rest.'
+    description: name === 'read' ? 'Read a UTF-8 regular file inside the checkout (a relative path) or inside a listed skill\'s directory (an absolute path). Optional offset is a zero-based byte offset, limit is bytes (default 8192, maximum 12000). Follow the returned continuation to read the rest.'
       : name === 'read_output' ? 'Read stored command output from this thread without rerunning the command. Use the id from its result, or the original command tool-call ID after an interruption (most recent match). Optional offset is a zero-based byte offset and limit is bytes (default 8192, maximum 12000).'
       : name === 'edit' ? 'Replace one unique exact old_text with new_text. May require approval; dirty paths are protected.'
       : name === 'write' ? 'Create a new file only; never overwrite. May require approval.'
@@ -58,7 +62,11 @@ export function registry(state: ToolState) {
       if (Buffer.byteLength(JSON.stringify(args)) > 16384) fail('permission_denied', 'Tool arguments exceed the bound.');
       let text: string;
       if (name === 'read') {
-        const page = await fileAction<TextRange>(state.snapshot.checkout, 'read_range', args.path, rangeArgs(args), state.lease?.fd, state.rootIdentity);
+        const skill = skillFile(state.skills ?? [], args.path);
+        // A skill's folder is its own root; the checkout lease and identity do not apply to it.
+        const page = skill
+          ? await fileAction<TextRange>(skill.root, 'read_range', skill.path, rangeArgs(args))
+          : await fileAction<TextRange>(state.snapshot.checkout, 'read_range', args.path, rangeArgs(args), state.lease?.fd, state.rootIdentity);
         text = rangeText(page, offset => `read(${JSON.stringify({ path: args.path, offset })})`);
       } else if (name === 'read_output') {
         const { offset, limit } = rangeArgs(args);
@@ -94,7 +102,8 @@ export function registry(state: ToolState) {
             text = state.commandPolicy === 'trusted'
               ? await trustedCommand(state, args.command, signal, output, { capture: log.append })
               : await command(state.snapshot.checkout, args.command, state.baseline,
-                signal, output, state.lease?.fd, state.rootIdentity, state.buildCache, log.append);
+                signal, output, state.lease?.fd, state.rootIdentity, state.buildCache, log.append,
+                (state.skills ?? []).map(entry => entry.root));
           } catch (error) { failure = error; text = ''; }
           const reference = log.finish();
           if (failure instanceof HostError) throw new HostError(failure.code, outputTail(failure.message) + reference);

@@ -26,7 +26,7 @@ export function sandboxPolicy(root: string, scratch: string, readOnly: string[] 
     ${cacheRoots.length ? `(deny file-write-unlink file-write-mode file-write-owner ${cacheRoots.map(path => `(literal ${quote(path)})`).join(' ')})` : ''}
     (deny file-write* (require-all (regex #"(^|/)[.][gG][iI][tT](/|$)") (require-not (subpath ${quote(scratch)}))))`;
 }
-async function buildEnvironment(root: string, scratch: string, signal: AbortSignal, cache?: BuildCache) {
+async function buildEnvironment(root: string, scratch: string, signal: AbortSignal, cache?: BuildCache, readable: string[] = []) {
   const home = process.env.HOME ?? '/nonexistent';
   if (cache && (cache.store === root || cache.store.startsWith(root + '/'))) fail('permission_denied', 'Build cache store must be outside the checkout.');
   const paths = cache ? await prepareBuildCache(cache) : { cargo: join(scratch, 'cargo'), target: join(scratch, 'target') };
@@ -34,7 +34,8 @@ async function buildEnvironment(root: string, scratch: string, signal: AbortSign
   if (cacheRoots.some(path => root === path || root.startsWith(path + '/'))) fail('permission_denied', 'Checkout must be outside the build cache.');
   const cargoHome = paths.cargo;
   if (!cache) await mkdir(cargoHome);
-  const readOnly: string[] = [];
+  // Skill folders, already resolved: their scripts and references can be read and run, never written.
+  const readOnly: string[] = [...readable];
   // Git in a worktree reads the main repository's objects; the sandbox still denies writes under .git.
   const shared = await sharedGitDir(root);
   if (shared) readOnly.push(shared);
@@ -77,7 +78,7 @@ async function buildEnvironment(root: string, scratch: string, signal: AbortSign
   } };
 }
 
-export async function prepareCommand(root: string, scratch: string, signal: AbortSignal, cache?: BuildCache) {
-  const environment = await buildEnvironment(root, scratch, signal, cache);
+export async function prepareCommand(root: string, scratch: string, signal: AbortSignal, cache?: BuildCache, readable: string[] = []) {
+  const environment = await buildEnvironment(root, scratch, signal, cache, readable);
   return { env: environment.env, policy: sandboxPolicy(root, scratch, environment.readOnly, environment.cacheRoots) };
 }

@@ -175,8 +175,9 @@ The latest release is **v0.1.0-preview.8**.
   [planned](docs/ROADMAP.md).
 - **One agent harness.** Threads run on Pi today. Claude Code, Codex, and other
   harnesses are planned (M7).
-- **Plait's own tools only.** Threads do not yet load your Pi skills, prompt
-  templates, MCP servers, or user-level instructions; that is planned (M8).
+- **Your Pi setup, partly.** Builds after preview.8 give threads your Pi
+  skills (including `/skill:name`) and user-level `AGENTS.md`. Prompt
+  templates, MCP servers, and extensions are planned (M8).
 - **Not an IDE.** There is no file editor, embedded terminal, merge, rebase, or
   branch switching. The Files tab is read-only.
 - **Verification is public.** What CI and installed-app checks cover, and what

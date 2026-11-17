@@ -323,6 +323,19 @@ project-development loop; it does not certify every provider, native input
 method, or long-running task. Automatic compaction remains covered by the
 scripted tests above rather than this live run.
 
+## Skills and user instructions
+
+Runtime tests discover a user skill, add a project skill only for a trusted
+project, follow Pi's precedence and size bound for the user-level context file,
+map reads into a skill folder (refusing relative paths, prefix siblings, `..`,
+and the agent directory), read a skill file through the host helper, and send
+`/skill:name` in Pi's block. A real-sandbox test reads a skill folder only when
+it is passed, and cannot write it. Test runtimes ignore the machine's own skills.
+A core test reads a stored skill block back as the typed command. Discovery on
+a real Pi setup with 66 skills (29 turned off in settings) took 7–20 ms per run.
+A live model choosing and following a skill in the installed app has not been
+checked.
+
 ## Files
 
 Core tests read text, binary, non-UTF-8, and oversized files; refuse symlinks,

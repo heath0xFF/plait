@@ -39,10 +39,11 @@ fn same_prompt(listed: &str, sent: &str) -> bool {
 impl PromptHistory {
     /// Replace the host's list, oldest first. Returns whether anything changed;
     /// an unchanged list costs comparisons only, so every snapshot can call this.
-    pub fn set_host<'a>(&mut self, prompts: impl IntoIterator<Item = &'a str>) -> bool {
+    pub fn set_host(&mut self, prompts: impl IntoIterator<Item = impl AsRef<str>>) -> bool {
         let mut changed = false;
         let mut count = 0;
         for prompt in prompts {
+            let prompt = prompt.as_ref();
             match self.host.get_mut(count) {
                 Some(existing) if existing == prompt => {}
                 Some(existing) => {
@@ -141,7 +142,7 @@ mod tests {
         assert!(!history.set_host(["one", " \n", "two", "two", "one"]));
         assert!(history.set_host(["one"]));
         assert_eq!(entries(&history), ["one"]);
-        assert!(history.set_host([]));
+        assert!(history.set_host([""; 0]));
         assert!(history.entries().is_empty());
     }
 
@@ -168,7 +169,7 @@ mod tests {
         history.set_host(["one", "two", "three"]);
         assert_eq!(entries(&history), ["one", "rejected", "two", "three"]);
         // A shorter host preview cannot push it out of range.
-        history.set_host([]);
+        history.set_host([""; 0]);
         assert_eq!(entries(&history), ["rejected"]);
     }
 

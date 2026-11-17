@@ -172,3 +172,16 @@ test('a sandboxed command in a linked worktree reads, but cannot write, the main
   await assert.rejects(run('git branch escaped'));
   await assert.rejects(git(root, 'rev-parse', '--verify', '-q', 'refs/heads/escaped'));
 });
+
+test('skill folders passed to the sandbox are readable and never writable', { timeout: 30000 }, async t => {
+  const { root, base } = await setup(t);
+  const skill = join(base, 'skills', 'notes');
+  await mkdir(skill, { recursive: true });
+  await writeFile(join(skill, 'SKILL.md'), 'skill body');
+  const run = (text: string, readable: string[] = []) =>
+    command(root, text, [], new AbortController().signal, () => {}, undefined, undefined, undefined, undefined, readable);
+  await assert.rejects(run(`cat '${join(skill, 'SKILL.md')}'`), 'not readable unless passed');
+  assert.match(await run(`cat '${join(skill, 'SKILL.md')}'`, [skill]), /skill body/);
+  await assert.rejects(run(`echo x > '${join(skill, 'SKILL.md')}'`, [skill]));
+  assert.equal(await readFile(join(skill, 'SKILL.md'), 'utf8'), 'skill body');
+});

@@ -103,6 +103,8 @@ responses.push(...Array.from({ length: 8 }, () => fauxAssistantMessage([fauxText
 faux.setResponses(responses);
 models.setProvider(faux.provider);
 class FixtureRuntime extends Runtime {
+  // Scenarios must not depend on the skills or instructions of the machine running them.
+  override async resources() { return { skills: [] }; }
   override async open(...args: Parameters<Runtime['open']>) {
     await super.open(...args);
     if (mode === 'cleanup') {

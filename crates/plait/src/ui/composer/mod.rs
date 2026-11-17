@@ -314,7 +314,7 @@ impl Composer {
 
     /// Supply the prompts already sent in this thread, oldest first, for
     /// recall with Up and Down. Cheap when nothing changed.
-    pub fn set_history<'a>(&mut self, prompts: impl IntoIterator<Item = &'a str>) {
+    pub fn set_history(&mut self, prompts: impl IntoIterator<Item = impl AsRef<str>>) {
         self.draft.history.set_host(prompts);
     }
 
