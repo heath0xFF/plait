@@ -320,3 +320,11 @@ heavy scene drew in under 3 ms per frame, tab and cached file or thread
 switches took under 5 ms at the median (12 ms p95 for a 1,500-message thread),
 and selecting a file whose diff is not cached took about 34 ms, almost all of
 it the background Git read. Warm launch was not measured.
+
+The streaming row draws frames 8 ms apart, as a 120 Hz display asks for them,
+while a burst of about 10 KB in short paragraphs is revealed. Each frame took
+1.6 ms on average and 3.4 ms at p95, inside the 8.3 ms a 120 Hz frame allows.
+A scripted test checks that streamed text trails, catches up within a bounded
+number of frames, and then stops requesting frames. How smooth it looks on a
+real display, against a live provider, has not been checked in the installed
+app.

@@ -113,6 +113,19 @@ impl Harness {
         row(name, samples, renders)
     }
 
+    /// Frames 8 ms apart, as a 120 Hz display asks for them, while streamed
+    /// text is still being revealed; the wait is not counted.
+    fn revealing(&mut self, name: &str) -> Row {
+        let (mut samples, mut renders) = (Vec::new(), Vec::new());
+        for _ in 0..frames() {
+            std::thread::sleep(Duration::from_millis(8));
+            let (frame, render) = self.frame();
+            samples.push(frame);
+            renders.push(render);
+        }
+        row(name, samples, renders)
+    }
+
     /// Each sample scrolls, then draws, so new rows are built every frame.
     fn scrolling(&mut self, name: &str, at: Point<Pixels>, dy: f32) -> Row {
         for _ in 0..WARMUP {
@@ -370,6 +383,18 @@ fn baseline(scratch: &Path, rows: &mut Vec<Row>) {
     rows.push(harness.steady("e1 idle redraw, default view (disconnected home)"));
     harness.connect(&small, false);
     rows.push(harness.steady("e2 idle redraw, small live conversation (3 msgs, 2 tools)"));
+    // A burst has landed and the reveal is drawing it in, one display frame at a time.
+    harness.change_snapshot(|snapshot| {
+        snapshot
+            .live_text
+            // Paragraphs of about 400 bytes, as replies are usually written.
+            .push_str(
+                &"\n\nThe streamed reply keeps arriving in bursts. "
+                    .repeat(8)
+                    .repeat(25),
+            )
+    });
+    rows.push(harness.revealing("e3 streaming reveal frame, 120 Hz pacing (small conversation)"));
 }
 
 pub fn run() -> Vec<Row> {

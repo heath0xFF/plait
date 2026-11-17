@@ -84,6 +84,7 @@ fuzzy.rs                subsequence matching and scoring for pickers
 navigation.rs           project grouping, activity tracking, filtering, and jump order
 session.rs              private desktop journal, identity checks, writer lock
 markdown.rs             plain text blocks and style ranges, parsed off render
+reveal.rs               frame-paced reveal of streaming text and cut blocks
 highlight.rs            lexical syntax classes for fenced and tool code
 diff.rs                 line diff of an edit's old and new text
 review.rs               quoting picked diff lines into a message

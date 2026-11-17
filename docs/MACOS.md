@@ -373,6 +373,13 @@ it for exact token counts. At 75% it says high; at 90% it says nearly full. It
 stays hidden when context usage or the window size is unknown. Older hosts keep
 their existing send-when-idle behavior and have no per-thread model controls.
 
+Providers send replies in uneven bursts. Rather than drawing each burst as it
+lands, the conversation shows streamed text and thinking flowing in at the
+display's own frame rate, trailing what has arrived by about a tenth of a
+second; a larger burst drains faster. It redraws every display frame only while
+text is catching up, and stops when it has. Opening a thread shows what has
+already arrived at once.
+
 ### Text and controls
 
 | Key | Action |

@@ -4,9 +4,29 @@ use super::{
     theme::*,
 };
 use gpui::{prelude::*, *};
+use std::time::Instant;
+
+/// Smooth reveal of the streaming reply and reasoning. Advanced once per
+/// frame by `advance_reveals`; rows read how much to show.
+#[derive(Default)]
+pub(super) struct Reveals {
+    text: Reveal,
+    reasoning: Reveal,
+    text_shown: usize,
+    reasoning_shown: usize,
+}
+
+#[cfg(test)]
+impl Reveals {
+    pub fn pending_text(&self, total: usize) -> bool {
+        self.text.pending(total)
+    }
+}
 use plait_core::{
     history::{self, Key},
     host::{Approval, ApprovalMode, HistoryField, Message, MessageRole, Snapshot},
+    markdown::Block,
+    reveal::Reveal,
     transcript::{self, Row},
 };
 
@@ -170,6 +190,30 @@ impl Plait {
     }
 
     /// The answer being written, with a still mark that it is not finished.
+    /// Move the streaming reveals one frame on, and ask for the next frame
+    /// while either trails what has arrived. Once per frame, from `render`.
+    pub(super) fn advance_reveals(&mut self, window: &mut Window) {
+        let key = self.host.selected.as_deref().unwrap_or_default();
+        let now = Instant::now();
+        let total = |parsed: Option<&std::sync::Arc<plait_core::markdown::Message>>| {
+            parsed.map_or(0, |parsed| plait_core::reveal::total(&parsed.blocks))
+        };
+        let text = total(self.formatted.live.as_ref());
+        let reasoning = total(self.formatted.live_reasoning.as_ref());
+        let reveal = &mut self.reveal;
+        reveal.text_shown = reveal.text.advance(key, text, now);
+        reveal.reasoning_shown = reveal.reasoning.advance(key, reasoning, now);
+        if reveal.text.pending(text) || reveal.reasoning.pending(reasoning) {
+            window.request_animation_frame();
+        }
+    }
+
+    /// The part of live `blocks` on screen this frame: whole blocks and a cut last one.
+    fn revealed<'a>(&self, shown: usize, blocks: &'a [Block]) -> (&'a [Block], Option<Block>) {
+        let (whole, tail) = plait_core::reveal::visible(blocks, shown);
+        (&blocks[..whole], tail)
+    }
+
     fn live_stream(&self, text: &str, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let site = Site {
             owner: Owner::Stream,
@@ -177,7 +221,10 @@ impl Plait {
             block: 0,
         };
         let body = match self.formatted.live.as_ref() {
-            Some(parsed) => self.markdown(&site, &parsed.blocks, "stream", cx),
+            Some(parsed) => {
+                let (whole, tail) = self.revealed(self.reveal.text_shown, &parsed.blocks);
+                self.markdown_with(&site, whole, tail.as_ref(), "stream", cx)
+            }
             None => prose().child(text.to_owned()).into_any_element(),
         };
         column()
@@ -266,9 +313,15 @@ impl Plait {
                         .border_color(rgb(BORDER))
                         .when(live, |el| el.max_h(px(180.)).overflow_y_scroll())
                         .when_some(parsed, |el, parsed| {
-                            el.child(self.markdown(
+                            let (whole, tail) = if live {
+                                self.revealed(self.reveal.reasoning_shown, &parsed.blocks)
+                            } else {
+                                (&parsed.blocks[..], None)
+                            };
+                            el.child(self.markdown_with(
                                 &site,
-                                &parsed.blocks,
+                                whole,
+                                tail.as_ref(),
                                 &format!("reasoning-{id}"),
                                 cx,
                             ))

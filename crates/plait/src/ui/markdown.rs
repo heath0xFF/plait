@@ -386,8 +386,20 @@ impl Plait {
         key: &str,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        self.markdown_with(site, blocks, None, key, cx)
+    }
+
+    /// `blocks`, then `tail` as the next block: a streaming reply's revealed part.
+    pub(super) fn markdown_with(
+        &self,
+        site: &Site,
+        blocks: &[Block],
+        tail: Option<&Block>,
+        key: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let mut previous: Option<&Kind> = None;
-        let blocks = blocks.iter().enumerate().map(|(index, block)| {
+        let blocks = blocks.iter().chain(tail).enumerate().map(|(index, block)| {
             let site = Site {
                 block: index,
                 ..site.clone()

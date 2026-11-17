@@ -915,6 +915,61 @@ fn changed_files_count_with_git_hide_on_request_and_open_in_changes() {
     std::fs::remove_dir_all(scratch).unwrap();
 }
 
+#[core::prelude::v1::test]
+fn streaming_text_flows_in_over_display_frames_and_catches_up() {
+    let scratch = std::env::temp_dir().join(format!("plait-reveal-ui-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 1380., 860.);
+    harness.connect(&repository, false);
+    let trailing = |harness: &mut Harness| {
+        harness
+            .window
+            .update(&mut harness.cx, |plait, _, _| {
+                let blocks = &plait.formatted.live.as_ref().unwrap().blocks;
+                plait.reveal.pending_text(plait_core::reveal::total(blocks))
+            })
+            .unwrap()
+    };
+    // Text already there when the thread is shown appears at once.
+    harness.draw();
+    assert!(!trailing(&mut harness));
+    // A burst spreads over the following frames.
+    harness.change_snapshot(|snapshot| snapshot.live_text.push_str(&" and more words".repeat(60)));
+    harness.draw();
+    assert!(trailing(&mut harness), "a burst does not land in one frame");
+    // The reveal asks for each next frame itself, until it has caught up.
+    let window = harness.window.into();
+    let mut frames = 0;
+    while trailing(&mut harness) {
+        std::thread::sleep(Duration::from_millis(8));
+        let ran = harness
+            .cx
+            .update_window(window, |_, window, cx| window.simulate_next_frame(cx))
+            .unwrap();
+        // The test window also redraws when the callback notifies.
+        assert!(ran >= 1, "each frame asks for the next");
+        harness.draw();
+        frames += 1;
+        assert!(frames < 200, "the reveal did not catch up");
+    }
+    assert!(frames > 3, "{frames}");
+    // Caught up, it stops asking: an idle conversation draws no frames. The
+    // test window's own redraw may have left one request from the last frame.
+    harness
+        .cx
+        .update_window(window, |_, window, cx| window.simulate_next_frame(cx))
+        .unwrap();
+    harness.draw();
+    let ran = harness
+        .cx
+        .update_window(window, |_, window, cx| window.simulate_next_frame(cx))
+        .unwrap();
+    assert_eq!(ran, 0);
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
 /// The index of the shown diff's first added line.
 fn first_added(plait: &Plait) -> usize {
     let Load::Ready(diff) = &plait.state.repository.diff else {

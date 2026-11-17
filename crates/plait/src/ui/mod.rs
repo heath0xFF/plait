@@ -125,6 +125,7 @@ pub struct Plait {
     line_pick: Option<changes::LinePick>,
     /// Files the selected thread changed, above its composer.
     thread_files: thread_files::ThreadFiles,
+    reveal: live_conversation::Reveals,
     /// The command palette or model picker, above the workspace.
     overlay: Option<commands::Overlay>,
     /// The inspector toggle was used on a window too narrow to show it.
@@ -192,6 +193,7 @@ impl Plait {
             worktree_busy: false,
             line_pick: None,
             thread_files: Default::default(),
+            reveal: Default::default(),
             overlay: None,
             inspector_note: false,
             panels: Default::default(),
@@ -692,6 +694,7 @@ impl Render for Plait {
         }
         let wide = Self::wide(window);
         self.panels.viewport = f32::from(window.viewport_size().width);
+        self.advance_reveals(window);
         let project = self.active_project();
         let machine = &project.machines[0];
         let real = self.host.selected.is_some();
