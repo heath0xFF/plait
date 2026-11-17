@@ -658,9 +658,10 @@ transcript runs per frame. An earlier turn's record is part of its last
 answer's row. The latest
 turn's record is drawn with the run state below the list, where the line ends.
 When a new request arrives, the answer before it takes its record into its own
-row; that row is measured again, since its text has not changed. While older
-history is being read the rows stop short of the latest turn, so the line is
-broken above the state and no record is drawn there.
+row; that row is measured again, since its text has not changed. While the
+list is scrolled back from its newest row, or older history is being read, the
+rows on screen stop short of the latest turn, so the line is broken above the
+state. Reading older history, no record is drawn there either.
 Tool details start collapsed. Disclosure state belongs to the UI and clears on thread selection.
 A call folded into a closed group keeps its list row and draws nothing, so row
 identity and the scroll anchor do not depend on grouping; rows whose folding

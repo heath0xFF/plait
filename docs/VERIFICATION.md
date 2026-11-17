@@ -195,9 +195,10 @@ turn and counts only the paths its finished edits changed, a turn with no tool
 calls has a record with nothing to count, a running turn and a turn whose
 request is outside the loaded rows have none, and a record moves into its
 answer's row when a later message ends the rows. Scenes draw the turn line,
-the closing nodes, and the state line in both themes and at both window sizes.
-Three things are not exercised by a test or a scene: the row being measured
-again when its record moves, the broken line while older history is being
+the closing nodes, and the state line in both themes and at both window sizes,
+and the scrolled-back scenes show the line broken above the state. Three
+things are not exercised by a test or a scene: the row being measured again
+when its record moves, the broken line while older history pages are being
 read, and a failure message long enough to wrap in the state line.
 
 ## Known gaps

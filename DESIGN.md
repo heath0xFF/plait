@@ -54,12 +54,13 @@ conversation keeps a readable minimum width.
   tool calls are open text beside the line; headings inside a reply stay
   smaller than or equal to the request. Every earlier turn that ended in an
   answer closes at a filled node. One that called tools carries its record
-  there: the step count and the files its edits changed, each opening in
-  Changes. The line ends at one node, in the state's color, that names the
-  latest turn's state and, once that turn has finished, its record. The state
-  is said there once, not repeated in the answer above. While older history is
-  being read, the line stops short of that node, because the rows do not reach
-  the latest turn. Messages carry no visible author label;
+  there: the step count and the files its edits changed. Each file opens in
+  Changes and is drawn as a link, blue and underlined. The line ends at one
+  node, in the state's color, that names the latest turn's state and, once
+  that turn has finished, its record. The state is said there once, not
+  repeated in the answer above. While the rows on screen stop short of the
+  latest turn (scrolled back from the newest row, or reading older history),
+  the line stops short of that node. Messages carry no visible author label;
   give each row a full author/context label for assistive technology. Copy
   controls stay out of sight until the pointer is over their row or they take
   keyboard focus. Away from the newest row, one control at the bottom of the
@@ -90,8 +91,8 @@ conversation keeps a readable minimum width.
   the call did not simply finish. A long command wraps (up to four lines
   closed, in full when opened) rather than running past the column. Opened in place, `edit` shows a line diff,
   `write` the new file, `command` a `$` prompt line and its output, and `read`
-  the first lines of the file. A failed command says "Failed" above output
-  outlined in rose. A long run of calls folds under one line that names their
+  the first lines of the file. A failed call says "Failed" on its line, and
+  its output is outlined in rose; the word is said once. A long run of calls folds under one line that names their
   count and kinds and any failures; a turn in progress keeps its latest calls
   in view.
 - **Composer.** One raised, rounded box holds the draft, a short key hint, and

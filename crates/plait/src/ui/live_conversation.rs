@@ -344,11 +344,14 @@ impl Plait {
             .h(px(RECORD_LINE))
             .px_1()
             .aria_label(format!("Show {} in Changes", target.display()))
-            // Main text among the muted words, so a name reads as something to open.
+            // A name opens the file in Changes, so it is drawn as links are:
+            // blue, and underlined so it does not depend on the color.
             .child(
                 div()
                     .font_family(mono())
-                    .text_color(rgb(colors().text))
+                    .text_color(rgb(colors().blue))
+                    .underline()
+                    .text_decoration_color(rgb(colors().blue))
                     .child(name),
             )
             .on_activate(cx, move |this, window, cx| {
@@ -570,11 +573,12 @@ impl Plait {
                 None => return div().into_any_element(),
             },
         };
-        // A request that opens the conversation starts the line at its ring.
-        let from = if request && index == 0 {
-            top + REQUEST_LINE / 2.
-        } else {
-            0.
+        // The line starts with the first row: at the ring of a request, and
+        // otherwise where the row's content begins, not in the space above it.
+        let from = match (index, request) {
+            (0, true) => top + REQUEST_LINE / 2.,
+            (0, false) => top,
+            _ => 0.,
         };
         // The padding is inside the column, so the line spans the whole row.
         div()
@@ -597,10 +601,15 @@ impl Plait {
 
     /// The list of rows with what floats over it: pointer handling for text
     /// selection, the way back to the newest row, and a hovered link's address.
+    /// Whether the list is scrolled away from its newest row.
+    fn reading_back(&self) -> bool {
+        self.live_scroll.logical_scroll_top().item_ix < self.live_count
+    }
+
     fn live_rows(&self, snapshot: &Snapshot, cx: &mut Context<Self>) -> AnyElement {
         self.reconcile_tool_rows();
         self.resolve_selection();
-        let away = self.live_scroll.logical_scroll_top().item_ix < self.live_count;
+        let away = self.reading_back();
         let size = (
             snapshot.messages.len() + snapshot.tools.len(),
             snapshot.live_text.len() + snapshot.live_reasoning.len(),
@@ -1008,9 +1017,12 @@ Tone::Filled,
         if let Some(snapshot) = &snapshot {
             let state = history::run_state(snapshot, self.history.now);
             // The turn line runs from the rows to the state's node. It is
-            // broken while older history is being read, where the rows stop
-            // short of the latest turn.
-            let joined = self.live_count > 0 && state.is_some() && !self.history.cache.detached;
+            // broken while the rows on screen stop short of the latest turn:
+            // scrolled back from the newest row, or reading older history.
+            let joined = self.live_count > 0
+                && state.is_some()
+                && !self.history.cache.detached
+                && !self.reading_back();
             if snapshot.truncated && !self.history.enabled {
                 main = main.child(
                     div().px_6().child(

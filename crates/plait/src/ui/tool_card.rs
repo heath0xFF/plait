@@ -355,11 +355,10 @@ impl Plait {
             self.code_text(site, block, SharedString::from(key.clone()).into())
                 .text_color(rgb(color))
         };
-        // The state of a failed call is written out, not only tinted.
+        // A failed call says so in words on its own line, which stays in view
+        // above this; its output is outlined, and the word is not repeated.
         let (caption, edge) = match (section.part, tool.status) {
-            (Part::Output, ToolStatus::Error) => {
-                (Some(("Failed", colors().red)), Some(colors().failed_edge))
-            }
+            (Part::Output, ToolStatus::Error) => (None, Some(colors().failed_edge)),
             (Part::Output, ToolStatus::Interrupted) => (
                 Some(("Interrupted before it finished", colors().amber)),
                 None,
