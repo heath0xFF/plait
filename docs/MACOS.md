@@ -233,15 +233,16 @@ unread activity, pending approvals, failures, and interrupted runs. **Archived**
 includes archived conversations. Thread actions and the **Thread** menu offer
 rename and archive/unarchive. Archiving keeps the conversation and does not stop
 an active run. Removing a project from the sidebar keeps its host threads;
-**Show hidden projects** or a project entry in the command palette brings it back.
+the eye button (**Show hidden projects**) beside the filters, or a project entry
+in the command palette, brings it back.
 
 The host keeps its newest 200 threads live. When more are loaded, the sidebar
-states the limit; use **Refresh all threads and folders** for older threads and
+states the limit; use the refresh button (**Refresh threads and folders**) for older threads and
 folder availability. A disconnected thread-list watch reports that updates are
 paused. Hosts using protocol 1 or 2 retain their one-checkout thread listing and
 journal titles; rename and archive require version 3.
 
-**Alerts on/off** controls system notifications and window attention requests.
+The bell button beside the filters (struck through when off) controls system notifications and window attention requests.
 Unread markers remain when alerts are off. Alerts occur for a thread you are not
 viewing, or while Plait is inactive, when it finishes, fails, stops, is interrupted,
 or needs approval. Opening a notification selects its thread. A bundled Mac app

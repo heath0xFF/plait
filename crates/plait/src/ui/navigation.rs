@@ -1,6 +1,6 @@
 use super::{
     OpenRepository, Plait, host::WatchLease, jump::PreferenceGroup, model_picker::ModelPurpose,
-    text_field::TextField, theme::*,
+    text_field::TextField, theme::*, thread_controls::TextTooltip,
 };
 use gpui::{prelude::*, *};
 use plait_core::{
@@ -410,15 +410,15 @@ impl Plait {
                 row()
                     .gap_1()
                     .child(
-                        segment("filter-attention", "Needs me", self.navigation.attention)
-                            .aria_label("Filter threads needing attention")
+                        chip("filter-attention", "Needs me", self.navigation.attention)
+                            .aria_label("Show only threads needing attention")
                             .on_activate(cx, |this, _, cx| {
                                 this.navigation.attention = !this.navigation.attention;
                                 cx.notify();
                             }),
                     )
                     .child(
-                        segment("filter-archived", "Archived", self.navigation.archived)
+                        chip("filter-archived", "Archived", self.navigation.archived)
                             .aria_label("Include archived threads")
                             .on_activate(cx, |this, _, cx| {
                                 this.navigation.archived = !this.navigation.archived;
@@ -426,42 +426,9 @@ impl Plait {
                             }),
                     )
                     .child(div().flex_1())
-                    .child(
-                        icon_button(
-                            "thread-list-refresh",
-                            "refresh",
-                            "Refresh all threads and folders",
-                        )
-                        .on_activate(cx, |this, window, cx| {
-                            this.navigation.available.clear();
-                            this.load_threads(window, cx);
-                        }),
-                    ),
-            )
-            .child(
-                row()
-                    .gap_1()
-                    .child(
-                        button(
-                            "thread-alerts",
-                            if self.preferences.value.navigation.mute_notifications {
-                                "Alerts off"
-                            } else {
-                                "Alerts on"
-                            },
-                        )
-                        .aria_label("Toggle thread notifications and attention requests")
-                        .on_activate(cx, |this, _, cx| {
-                            let mut preferences = this.preferences.value.clone();
-                            preferences.navigation.mute_notifications =
-                                !preferences.navigation.mute_notifications;
-                            this.set_preferences(preferences, PreferenceGroup::View, cx);
-                        }),
-                    )
                     .when(!self.preferences.value.navigation.hidden.is_empty(), |el| {
                         el.child(
-                            button("show-hidden-projects", "Show hidden")
-                                .aria_label("Show hidden projects")
+                            tool("show-hidden-projects", "eye", "Show hidden projects")
                                 .on_activate(cx, |this, _, cx| {
                                     let mut preferences = this.preferences.value.clone();
                                     preferences.navigation.hidden.clear();
@@ -469,7 +436,36 @@ impl Plait {
                                     this.rebuild_projects(cx);
                                 }),
                         )
-                    }),
+                    })
+                    .child({
+                        let muted = self.preferences.value.navigation.mute_notifications;
+                        tool(
+                            "thread-alerts",
+                            if muted { "bell-off" } else { "bell" },
+                            if muted {
+                                "Alerts off: turn on notifications and attention requests"
+                            } else {
+                                "Alerts on: mute notifications and attention requests"
+                            },
+                        )
+                        .on_activate(cx, |this, _, cx| {
+                            let mut preferences = this.preferences.value.clone();
+                            preferences.navigation.mute_notifications =
+                                !preferences.navigation.mute_notifications;
+                            this.set_preferences(preferences, PreferenceGroup::View, cx);
+                        })
+                    })
+                    .child(
+                        tool(
+                            "thread-list-refresh",
+                            "refresh",
+                            "Refresh threads and folders",
+                        )
+                        .on_activate(cx, |this, window, cx| {
+                            this.navigation.available.clear();
+                            this.load_threads(window, cx);
+                        }),
+                    ),
             )
             .when(self.navigation.managing.is_some(), |el| {
                 el.child(tag("Saving thread…", SUBTLE))
@@ -839,4 +835,11 @@ impl Plait {
             .child(self.host_footer(cx))
             .child(self.resize_handle(super::panels::Panel::Sidebar, cx))
     }
+}
+
+/// A small icon control for the filter row, named on hover.
+fn tool(id: &'static str, glyph: &'static str, name: &'static str) -> Stateful<Div> {
+    icon_button(id, glyph, name)
+        .size(px(24.))
+        .tooltip(move |_, cx| cx.new(|_| TextTooltip(name.into())).into())
 }

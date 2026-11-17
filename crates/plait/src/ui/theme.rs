@@ -281,6 +281,21 @@ pub fn segment(id: impl Into<ElementId>, label: &'static str, selected: bool) ->
         .aria_selected(selected)
 }
 
+/// Compact on/off filter: outlined when off, filled when on.
+pub fn chip(id: impl Into<ElementId>, label: &'static str, on: bool) -> Stateful<Div> {
+    let tone = if on { Tone::Selected } else { Tone::Ghost };
+    control(id, label.into(), tone)
+        .h(px(22.))
+        .px(px(9.))
+        .flex_shrink_0()
+        .rounded_full()
+        .text_size(px(11.))
+        .when(!on, |el| el.border_color(rgb(BORDER)))
+        .when(on, |el| el.border_color(rgb(EDGE)))
+        .aria_toggled(if on { Toggled::True } else { Toggled::False })
+        .child(label)
+}
+
 /// Open assistant text on the conversation surface.
 pub fn prose() -> Div {
     div().text_size(px(13.)).line_height(px(21.))
@@ -411,6 +426,16 @@ impl AssetSource for Assets {
             "refresh" => {
                 r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><g fill="none" stroke="black" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8a5 5 0 1 1-1.6-3.7"/><path d="M13 2.8v3.4H9.6"/></g></svg>"#
             }
+            // A bell, and the same bell struck through, for alerts on and off.
+            "bell" => {
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><g fill="none" stroke="black" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 10.8V7.4a3.5 3.5 0 0 1 7 0v3.4l1 1.2h-9Z"/><path d="M6.8 13.6a1.3 1.3 0 0 0 2.4 0"/></g></svg>"#
+            }
+            "bell-off" => {
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><g fill="none" stroke="black" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 10.8V7.4a3.5 3.5 0 0 1 7 0v3.4l1 1.2h-9Z"/><path d="M6.8 13.6a1.3 1.3 0 0 0 2.4 0"/><path d="m2.5 2.5 11 11"/></g></svg>"#
+            }
+            "eye" => {
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><g fill="none" stroke="black" stroke-width="1.4" stroke-linejoin="round"><path d="M1.8 8S4.1 4 8 4s6.2 4 6.2 4-2.3 4-6.2 4S1.8 8 1.8 8Z"/><circle cx="8" cy="8" r="1.8"/></g></svg>"#
+            }
             "folder" => include_str!("../../../../assets/branding/icons/plait-projects.svg"),
             "machine" => include_str!("../../../../assets/branding/icons/plait-machines.svg"),
             "thread" => include_str!("../../../../assets/branding/icons/plait-threads.svg"),
@@ -451,6 +476,9 @@ mod tests {
             "send",
             "stop",
             "refresh",
+            "bell",
+            "bell-off",
+            "eye",
         ] {
             let bytes = Assets.load(name).unwrap().expect("embedded icon");
             let image = renderer.render_single_frame(&bytes, 1.0).unwrap();

@@ -28,7 +28,7 @@ pub(super) struct ThreadControls {
 }
 
 /// Plain text shown on hover, for controls whose label is a summary.
-struct TextTooltip(String);
+pub(super) struct TextTooltip(pub String);
 impl Render for TextTooltip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
