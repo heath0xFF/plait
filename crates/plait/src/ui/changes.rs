@@ -2,10 +2,11 @@ use super::{OpenRepository, Plait, Refresh, theme::*};
 use gpui::{prelude::*, *};
 use plait_core::{
     git::WriteOp,
-    model::{Change, DiffKind, DiffMode},
+    model::{Change, DiffKind, DiffLine, DiffMode},
+    patch::PatchRow,
     state::Load,
 };
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 const DIFF_LINE_HEIGHT: f32 = 21.;
 
@@ -121,6 +122,60 @@ fn discard_hunk_button(
                 cx,
             )
         })
+}
+
+/// A patch line's text. A hunk header's ranges are quieter than the context
+/// Git adds after them, which usually names the enclosing function.
+fn line_text(line: &DiffLine) -> AnyElement {
+    let text = SharedString::from(line.text.clone());
+    if line.kind != DiffKind::Hunk {
+        return text.into_any_element();
+    }
+    let ranges = HighlightStyle {
+        color: Some(rgb(colors().subtle).into()),
+        ..Default::default()
+    };
+    let end = plait_core::patch::hunk_ranges_end(&text);
+    StyledText::new(text)
+        .with_highlights([(0..end, ranges)])
+        .into_any_element()
+}
+
+/// Where one file of a commit's patch begins: its name, then its directory,
+/// as the changed-file list shows them. It stands for the file's `diff` line.
+fn file_heading(line: usize, name: &Arc<str>, directory: &Arc<str>) -> AnyElement {
+    let path = if directory.is_empty() {
+        name.to_string()
+    } else {
+        format!("{directory}/{name}")
+    };
+    row()
+        .id(("diff-file", line))
+        .role(Role::Heading)
+        .aria_label(path)
+        .w_full()
+        .h(px(DIFF_LINE_HEIGHT))
+        .px_4()
+        .bg(rgb(colors().rail))
+        .border_t_1()
+        .border_color(rgb(colors().border))
+        .text_size(px(12.))
+        .child(
+            div()
+                .flex_shrink_0()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(rgb(colors().text))
+                .child(SharedString::from(name.clone())),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(px(11.))
+                .text_color(rgb(colors().subtle))
+                .child(SharedString::from(directory.clone())),
+        )
+        .into_any_element()
 }
 
 fn split_path(change: &Change) -> (String, String) {
@@ -373,89 +428,109 @@ impl Plait {
                 cx.listener(move |this, _, window, cx| this.select_file(index, mode, window, cx)),
             )
         };
+        /// Room the path and the side switch need before the actions wrap.
+        const LEAD: f32 = 260.;
+        // The file and the side being shown come first, then what can be
+        // done to that side.
+        let lead = row()
+            .flex_1()
+            .min_w(px(LEAD))
+            .gap_2()
+            .child(
+                column()
+                    .flex_1()
+                    // The path stays readable when the header is crowded.
+                    .min_w(px(96.))
+                    .child(
+                        div()
+                            .truncate()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(change.display_path()),
+                    )
+                    .when_some(change.original.as_ref(), |el, original| {
+                        el.child(
+                            tag(
+                                format!("Renamed from {}", original.to_string_lossy()),
+                                colors().subtle,
+                            )
+                            .truncate(),
+                        )
+                    }),
+            )
+            .child(
+                segmented()
+                    .flex_shrink_0()
+                    .child(mode("unstaged", "Unstaged", DiffMode::Unstaged))
+                    .child(mode("staged", "Staged", DiffMode::Staged)),
+            );
+        let actions = row()
+            .flex_shrink_0()
+            .ml_auto()
+            .gap_2()
+            // A deleted file has nothing left to open.
+            .when(change.worktree != b'D', |el| {
+                let path = change.path.clone();
+                el.child(
+                    button("diff-open-file", "Open")
+                        .aria_label(format!("Open {} in Files", change.display_path()))
+                        .on_activate(cx, move |this, _, cx| {
+                            this.open_file(path.clone(), None, cx)
+                        }),
+                )
+            })
+            .child({
+                let stage = key.mode == DiffMode::Unstaged;
+                let possible = if stage {
+                    change.unstaged()
+                } else {
+                    change.staged()
+                };
+                button(
+                    "diff-stage",
+                    match stage_verb(change, stage) {
+                        "Stage" => "Stage file",
+                        "Unstage" => "Unstage file",
+                        verb => verb,
+                    },
+                )
+                .disabled(!possible || repo.write.busy())
+                .on_activate(cx, move |this, _, cx| this.stage_change(index, stage, cx))
+            })
+            // Only the unstaged side can be thrown away; staged work is kept.
+            .when(
+                key.mode == DiffMode::Unstaged && change.unstaged() && !change.conflicted(),
+                |el| {
+                    el.child(
+                        button(
+                            "diff-discard",
+                            if change.index == b'?' {
+                                "Delete…"
+                            } else {
+                                "Discard…"
+                            },
+                        )
+                        .disabled(repo.write.busy())
+                        .on_activate(cx, move |this, window, cx| {
+                            this.discard_file(index, window, cx)
+                        }),
+                    )
+                },
+            );
         Some(
+            // One 44-point line where there is room. In a narrow window the
+            // actions wrap beneath, so no control runs off the edge.
             row()
-                .h(px(44.))
+                .min_h(px(44.))
                 .px_4()
-                .gap_2()
+                .py(px(6.))
+                .gap_x_2()
+                .gap_y(px(2.))
+                .flex_wrap()
                 .flex_shrink_0()
                 .border_b_1()
                 .border_color(rgb(colors().border))
-                .child(
-                    column()
-                        .flex_1()
-                        // The path stays readable when the header is crowded.
-                        .min_w(px(96.))
-                        .child(
-                            div()
-                                .truncate()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(change.display_path()),
-                        )
-                        .when_some(change.original.as_ref(), |el, original| {
-                            el.child(
-                                tag(
-                                    format!("Renamed from {}", original.to_string_lossy()),
-                                    colors().subtle,
-                                )
-                                .truncate(),
-                            )
-                        }),
-                )
-                // A deleted file has nothing left to open.
-                .when(change.worktree != b'D', |el| {
-                    let path = change.path.clone();
-                    el.child(
-                        button("diff-open-file", "Open")
-                            .aria_label(format!("Open {} in Files", change.display_path()))
-                            .on_activate(cx, move |this, _, cx| {
-                                this.open_file(path.clone(), None, cx)
-                            }),
-                    )
-                })
-                .child({
-                    let stage = key.mode == DiffMode::Unstaged;
-                    let possible = if stage {
-                        change.unstaged()
-                    } else {
-                        change.staged()
-                    };
-                    button(
-                        "diff-stage",
-                        match stage_verb(change, stage) {
-                            "Stage" => "Stage file",
-                            "Unstage" => "Unstage file",
-                            verb => verb,
-                        },
-                    )
-                    .disabled(!possible || repo.write.busy())
-                    .on_activate(cx, move |this, _, cx| this.stage_change(index, stage, cx))
-                })
-                // Only the unstaged side can be thrown away; staged work is kept.
-                .when(
-                    key.mode == DiffMode::Unstaged && change.unstaged() && !change.conflicted(),
-                    |el| {
-                        el.child(
-                            button(
-                                "diff-discard",
-                                if change.index == b'?' {
-                                    "Delete…"
-                                } else {
-                                    "Discard…"
-                                },
-                            )
-                            .disabled(repo.write.busy())
-                            .on_activate(cx, move |this, window, cx| {
-                                this.discard_file(index, window, cx)
-                            }),
-                        )
-                    },
-                )
-                .child(
-                    segmented()
-                        .child(mode("unstaged", "Unstaged", DiffMode::Unstaged))
-                        .child(mode("staged", "Staged", DiffMode::Staged)),
-                ),
+                .child(lead)
+                .child(actions),
         )
     }
 
@@ -637,8 +712,10 @@ impl Plait {
         let DiffControls { hunks, pick, bar } = controls;
         {
             {
+                // The footer counts the real patch; the list draws its rows.
                 let count = diff.lines.len();
-                let widest = Some(diff.widest_line);
+                let rows = diff.rows.len();
+                let widest = Some(diff.widest_row);
                 let elapsed = diff.elapsed;
                 let truncated = diff.truncated;
                 let gutter = || {
@@ -667,10 +744,21 @@ impl Plait {
                     .child(
                         uniform_list(
                             id,
-                            count,
+                            rows,
                             cx.processor(move |_, range: std::ops::Range<usize>, _, cx| {
                                 range
-                                    .map(|index| {
+                                    .map(|drawn| {
+                                        // Clicks, hunks, and ids use the patch line.
+                                        let index = match &diff.rows[drawn] {
+                                            PatchRow::Line(line) => *line,
+                                            PatchRow::File {
+                                                line,
+                                                name,
+                                                directory,
+                                            } => {
+                                                return file_heading(*line, name, directory);
+                                            }
+                                        };
                                         let line = &diff.lines[index];
                                         let c = colors();
                                         // Line tints are the accent faintly over the background.
@@ -678,9 +766,10 @@ impl Plait {
                                         let (fg, bg) = match line.kind {
                                             DiffKind::Added => (c.mint, tint(c.mint)),
                                             DiffKind::Removed => (c.red, tint(c.red)),
-                                            DiffKind::Hunk => (c.blue, tint(c.blue)),
-                                            DiffKind::Header => (colors().muted, colors().rail),
-                                            DiffKind::Context => (colors().text, colors().bg),
+                                            // Neutral: blue is kept for links and focus.
+                                            DiffKind::Hunk => (c.muted, c.rail),
+                                            DiffKind::Header => (c.muted, c.rail),
+                                            DiffKind::Context => (c.text, c.bg),
                                         };
                                         let pickable = pick.is_some()
                                             && matches!(
@@ -734,7 +823,7 @@ impl Plait {
                                                     .pr_3()
                                                     .whitespace_nowrap()
                                                     .text_color(rgb(fg))
-                                                    .child(SharedString::from(line.text.clone())),
+                                                    .child(line_text(line)),
                                             )
                                             .when_some(
                                                 hunks.as_ref().and_then(|target| {
@@ -759,6 +848,7 @@ impl Plait {
                                                         )
                                                 },
                                             )
+                                            .into_any_element()
                                     })
                                     .collect::<Vec<_>>()
                             }),

@@ -249,6 +249,17 @@ read, and a failure message long enough to wrap in the state line.
   run, long picks summarized) and a desktop test that picks lines in a real
   diff and quotes them into a composer. Native pointer clicks on line numbers
   have not been exercised in the installed app.
+- Diffs that start at the change are covered by unit tests of the row mapping
+  in `plait-core::patch` (a modified, new, deleted, renamed, mode-changed, and
+  binary file, a quoted path, a commit with several files, a file with no
+  hunks, and a removed line that reads like a header), by a test against a
+  real repository whose commit holds each of those changes, and by scene
+  snapshots of Changes, a picked range, a hovered hunk, and a commit with two
+  files. The hunk header's context text in secondary color is covered only by
+  a unit test of where its ranges end: the fixture's hunks start at line 1,
+  so no scene shows a function name after `@@`. Paths written with
+  `diff.noprefix` or mnemonic prefixes are named from the `diff` line only in
+  part, and none of this has been checked in the installed app.
 - Hunk staging is covered against real repositories (staging and unstaging
   one of two hunks, refusing a hunk that moved, refusing filtered files, and
   byte-exact patches with tabs, CRLF, and missing final newlines).

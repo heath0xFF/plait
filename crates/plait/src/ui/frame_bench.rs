@@ -211,18 +211,16 @@ fn big_diff(count: usize) -> Arc<Diff> {
             }
         })
         .collect();
-    // An index into `lines`, as the parser reports it, not a length.
-    let widest = lines
-        .iter()
-        .enumerate()
-        .max_by_key(|(_, line)| line.text.len())
-        .map_or(0, |(index, _)| index);
+    // Drawn rows and the widest of them, as the parser reports them.
+    let plait_core::patch::Rows { rows, widest } =
+        plait_core::patch::rows(&lines, plait_core::patch::FileHeaders::Omit);
     let hunks = (0..lines.len())
         .filter(|&index| matches!(lines[index].kind, DiffKind::Hunk))
         .collect();
     Arc::new(Diff {
         lines,
-        widest_line: widest,
+        rows,
+        widest_row: widest,
         hunks,
         truncated: false,
         elapsed: Duration::ZERO,

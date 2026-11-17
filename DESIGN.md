@@ -137,10 +137,19 @@ conversation keeps a readable minimum width.
 - **Git.** Changed files are 28-point rows: a one-letter state, file name first,
   then its directory, then index/worktree. The accessible name carries the full
   path and state. Diffs keep separate Unstaged and Staged views. Stage or
-  Unstage appears on a row on hover and in the diff header; the commit box
+  Unstage appears on a row on hover and in the diff header. The header reads
+  in order: the file, the side being shown, then what can be done to that
+  side. It is one 44-point line where there is room; in a narrow window the
+  actions wrap beneath, so no control runs off the edge. The commit box
   sits under the file list with one message line, Commit, and the last result
   in words. History lists commits (subject, short ID, author, age) beside the
-  selected commit's message and patch.
+  selected commit's message and patch. A diff starts at the change: header
+  lines that only repeat the path are not drawn, and in a commit's patch each
+  file begins under a quiet heading row, name first and then its directory.
+  Header lines that say something else (mode, rename, similarity, binary)
+  stay. Hunk headers sit on a neutral fill with their ranges in hint color and
+  Git's context, usually the function, in secondary text; Stage hunk and
+  Discard hunk appear on hover.
 
 ## Tokens
 Colors are roles in one palette (`plait_core::theme::Palette`), so every theme
@@ -149,8 +158,8 @@ keeps the same meaning. The default dark theme is Stillwater:
 - Border: #313547. Control outline: #464d66. Selected row: #2e3243.
 - Main text: #dfe3ed. Secondary text: #b0b7cb. Labels and hints: #9da5bf.
 - Mint #70d689: local/read-only state, additions, the chosen option.
-- Frost #74cde2 (the blue role): running work, modifications, hunk headers,
-  links, keyboard focus.
+- Frost #74cde2 (the blue role): running work, modifications, links,
+  keyboard focus.
 - Orchid #ec8ac7 (the violet role): thread identity and keywords.
 - Sand #eec96e: attention/limits. Coral #ec7368: errors/deletions.
 

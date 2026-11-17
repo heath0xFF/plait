@@ -10,6 +10,7 @@ use std::{
 };
 
 use crate::model::{BranchHeader, Change, Diff, DiffKind, DiffLine, DiffMode, Snapshot, Tracking};
+use crate::patch::{self, FileHeaders};
 
 const STATUS_LIMIT: usize = 8 * 1024 * 1024;
 const DIFF_LIMIT: usize = 512 * 1024;
@@ -422,7 +423,13 @@ pub fn diff(root: &Path, change: &Change, mode: DiffMode) -> Result<Diff> {
         args.push(original.as_os_str());
     }
     let output = command(root, &args, DIFF_LIMIT)?;
-    let mut diff = format_diff(&output.bytes, output.truncated, start.elapsed());
+    // One file, named in the bar above its diff.
+    let mut diff = format_diff(
+        &output.bytes,
+        output.truncated,
+        start.elapsed(),
+        FileHeaders::Omit,
+    );
     diff.elapsed = start.elapsed();
     Ok(diff)
 }
@@ -479,7 +486,7 @@ fn untracked(root: &Path, change: &Change, start: Instant) -> Result<Diff> {
         patch.extend_from_slice(line);
         patch.push(b'\n');
     }
-    let mut diff = format_diff(&patch, truncated, start.elapsed());
+    let mut diff = format_diff(&patch, truncated, start.elapsed(), FileHeaders::Omit);
     diff.elapsed = start.elapsed();
     Ok(diff)
 }
@@ -629,7 +636,7 @@ fn display_line(line: &str) -> String {
     text.replace('\t', "    ")
 }
 
-fn format_diff(bytes: &[u8], mut truncated: bool, elapsed: Duration) -> Diff {
+fn format_diff(bytes: &[u8], mut truncated: bool, elapsed: Duration, headers: FileHeaders) -> Diff {
     let mut lines = Vec::new();
     let mut hunks = Vec::new();
     let (mut old, mut new) = (None, None);
@@ -698,14 +705,11 @@ fn format_diff(bytes: &[u8], mut truncated: bool, elapsed: Duration) -> Diff {
             elapsed,
         );
     }
-    let widest_line = lines
-        .iter()
-        .enumerate()
-        .max_by_key(|(_, line)| line.text.len())
-        .map_or(0, |(i, _)| i);
+    let patch::Rows { rows, widest } = patch::rows(&lines, headers);
     Diff {
         lines,
-        widest_line,
+        rows,
+        widest_row: widest,
         hunks,
         truncated,
         elapsed,

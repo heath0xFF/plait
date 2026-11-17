@@ -97,6 +97,7 @@ theme.rs                palettes, Base16 scheme parsing, contrast floors
 file_view.rs            bounded no-symlink file reads, line index, find, change stamps
 highlight.rs            lexical syntax classes for fenced and tool code
 diff.rs                 line diff of an edit's old and new text
+patch.rs                which rows a Git patch draws, each mapped to its patch line
 review.rs               quoting picked diff lines into a message
 tool_view.rs            what each tool call shows, and grouping of long runs
 selection.rs            selection order, ranges, word bounds, and copied text
@@ -329,7 +330,17 @@ selected. `show` validates a full object ID and passes it after
   be typed into a message unchanged.
 - Limit displayed patches to 10,000 lines and 2,000 characters per line.
   A clipped preview is labeled. Unified source line numbers are parsed in the
-  background, as is the widest-line index used for horizontal scrolling.
+  background, as is the widest-row index used for horizontal scrolling.
+- A diff keeps every patch line but draws rows (`plait-core::patch`), worked
+  out with the parse. A file's diff in Changes leaves out the header lines
+  that only repeat its path (`diff`, `index`, `---`, `+++`), since the bar
+  above names it; a commit's patch replaces them with one heading row per
+  file, named from `+++`, `rename to`, `---`, or the `diff` line in that
+  order. Lines before the first `diff` line, and header lines about modes,
+  renames, similarity, or binary content, are always drawn. Each row holds
+  the index of the patch line it stands for, so picking lines, hunk buttons,
+  and the patch-line count use the patch, and staging still rebuilds its
+  patch from Git's own output.
 - Untracked regular files get a bounded text preview. Binary/non-UTF-8 content,
   symlinks, directories, and special files are not followed as text.
 - Untracked file opens walk directory descriptors with `openat`, `O_NOFOLLOW`,

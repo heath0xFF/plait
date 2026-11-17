@@ -120,8 +120,12 @@ pub struct DiffLine {
 
 #[derive(Debug)]
 pub struct Diff {
+    /// The patch as Git wrote it, clipped for display.
     pub lines: Vec<DiffLine>,
-    pub widest_line: usize,
+    /// What is drawn, each row pointing into `lines` (see `crate::patch`).
+    pub rows: Vec<crate::patch::PatchRow>,
+    /// The widest drawn row, as an index into `rows`.
+    pub widest_row: usize,
     /// Indexes into `lines` of each `@@` hunk header, in order, so a row
     /// finds its hunk by binary search instead of scanning.
     pub hunks: Vec<usize>,
@@ -138,7 +142,8 @@ impl Diff {
                 old_line: None,
                 new_line: None,
             }],
-            widest_line: 0,
+            rows: vec![crate::patch::PatchRow::Line(0)],
+            widest_row: 0,
             hunks: Vec::new(),
             truncated: false,
             elapsed,

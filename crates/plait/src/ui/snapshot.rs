@@ -1886,7 +1886,13 @@ fn walk(output: Option<&Path>) {
         });
         harness.capture(&format!("changes-commit-{suffix}"));
         // Resting on the hunk header reveals its Stage hunk control.
-        let hunk_row = point(px(if width > 1000. { 700. } else { 600. }), px(182.));
+        // It is the diff's first row: the path-only header lines are not drawn.
+        // In the narrow window the diff header's actions wrap to a second line.
+        let hunk_row = if width > 1000. {
+            point(px(700.), px(98.))
+        } else {
+            point(px(600.), px(127.))
+        };
         harness.pointer(PlatformInput::MouseMove(MouseMoveEvent {
             position: hunk_row,
             pressed_button: None,
@@ -1942,6 +1948,22 @@ fn walk(output: Option<&Path>) {
             plait.pump(cx);
         });
         harness.capture(&format!("history-commit-{suffix}"));
+        // The root commit adds two files: each patch begins under its heading.
+        harness.update(|plait, _, cx| {
+            let id = plait
+                .state
+                .repository
+                .commits
+                .list
+                .ready()
+                .and_then(|history| history.commits.last())
+                .map(|commit| commit.id.clone())
+                .expect("the fixture has a root commit");
+            plait.state.repository.select_commit(id);
+            plait.commit_scroll = UniformListScrollHandle::new();
+            plait.pump(cx);
+        });
+        harness.capture(&format!("history-files-{suffix}"));
         harness.update(|plait, _, _| {
             plait.tab = super::Workspace::Conversation;
             plait.host.connecting = false;

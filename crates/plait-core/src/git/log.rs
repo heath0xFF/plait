@@ -1,7 +1,7 @@
 //! Commit history, read-only, with the same hardening as status and diff.
 
 use super::{DIFF_LIMIT, Result, STATUS_LIMIT, command, format_diff, head_exists};
-use crate::model::Diff;
+use crate::{model::Diff, patch::FileHeaders};
 use std::{ffi::OsStr, path::Path, time::Instant};
 
 /// A page larger than this is a UI bug, and bounds the output Git must produce.
@@ -144,7 +144,13 @@ pub fn show(root: &Path, id: &str) -> Result<Diff> {
     ]
     .map(OsStr::new);
     let output = command(root, &args, DIFF_LIMIT)?;
-    let mut diff = format_diff(&output.bytes, output.truncated, start.elapsed());
+    // A commit can touch several files; each gets a heading.
+    let mut diff = format_diff(
+        &output.bytes,
+        output.truncated,
+        start.elapsed(),
+        FileHeaders::Heading,
+    );
     diff.elapsed = start.elapsed();
     Ok(diff)
 }

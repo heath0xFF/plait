@@ -284,6 +284,7 @@ fn patch_line_numbers_and_empty_untracked_files() {
         b"diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -5,2 +8,2 @@\n old\n-gone\n+++literal pluses\n",
         false,
         Duration::ZERO,
+        FileHeaders::Omit,
     );
     assert_eq!(patch.lines[4].old_line, Some(5));
     assert_eq!(patch.lines[4].new_line, Some(8));
@@ -291,7 +292,12 @@ fn patch_line_numbers_and_empty_untracked_files() {
     assert_eq!(patch.lines[5].new_line, None);
     assert_eq!(patch.lines[6].new_line, Some(9));
     assert_eq!(patch.lines[6].kind, DiffKind::Added);
-    assert_eq!(patch.widest_line, 0);
+    // An index into the drawn rows, not a length; the path-only header lines
+    // are not drawn, so the widest drawn line is the literal pluses.
+    let widest = patch.rows[patch.widest_row].line();
+    assert_eq!(&*patch.lines[widest].text, "+++literal pluses");
+    assert_eq!(patch.lines.len(), 7);
+    assert_eq!(patch.rows.len(), 4);
     let repo = Repo::new();
     repo.write("empty", "");
     let snapshot = status(&repo.0).unwrap();
@@ -378,7 +384,12 @@ fn large_previews_and_long_lines_are_bounded() {
     let preview = diff(&snapshot.root, &snapshot.changes[0], DiffMode::Unstaged).unwrap();
     assert!(preview.truncated);
     assert_eq!(preview.lines.len(), 10_000);
-    let preview = format_diff("x".repeat(9000).as_bytes(), false, Duration::ZERO);
+    let preview = format_diff(
+        "x".repeat(9000).as_bytes(),
+        false,
+        Duration::ZERO,
+        FileHeaders::Omit,
+    );
     assert!(preview.lines[0].text.ends_with("[line clipped]"));
     assert!(preview.lines[0].text.len() < 2100);
 }
@@ -951,6 +962,81 @@ fn show_returns_message_then_patch() {
     // The root commit shows its files as additions.
     let root_id = log(&repo.0, None, 1, 1).unwrap().commits[0].id.clone();
     assert!(text(&show(&repo.0, &root_id).unwrap()).contains("+one"));
+}
+
+/// The rows each patch draws, as Git really writes the headers.
+fn drawn(diff: &Diff) -> Vec<String> {
+    diff.rows
+        .iter()
+        .map(|row| match row {
+            crate::patch::PatchRow::Line(line) => diff.lines[*line].text.to_string(),
+            crate::patch::PatchRow::File {
+                name, directory, ..
+            } => format!("# {directory} | {name}"),
+        })
+        .collect()
+}
+
+#[test]
+fn diffs_start_at_the_change_and_commits_head_each_file() {
+    let repo = Repo::new();
+    fs::create_dir(repo.0.join("src")).unwrap();
+    repo.write("src/a.rs", "fn a() {}\n");
+    repo.write("old.txt", "kept\nkept\nkept\nkept\n");
+    repo.write("run.sh", "echo\n");
+    repo.write("gone.txt", "bye\n");
+    repo.commit();
+    repo.write("src/a.rs", "fn a() { b() }\n");
+    repo.git(&["mv", "old.txt", "new.txt"]);
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(repo.0.join("run.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    repo.git(&["rm", "-q", "gone.txt"]);
+    repo.write("pic.bin", [0u8, 1, 2, 255]);
+    repo.write("café.md", "hi\n");
+    repo.commit();
+
+    // One file in Changes: the first drawn row is its hunk.
+    repo.write("src/a.rs", "fn a() { c() }\n");
+    let snapshot = status(&repo.0).unwrap();
+    let change = snapshot.changes.iter().find(|c| c.path.ends_with("a.rs"));
+    let unstaged = diff(&snapshot.root, change.unwrap(), DiffMode::Unstaged).unwrap();
+    assert!(
+        drawn(&unstaged)[0].starts_with("@@ -1 +1 @@"),
+        "{unstaged:?}"
+    );
+    assert_eq!(unstaged.lines.len(), unstaged.rows.len() + 4);
+
+    let id = log(&repo.0, None, 0, 1).unwrap().commits[0].id.clone();
+    let rows = drawn(&show(&repo.0, &id).unwrap());
+    for heading in [
+        "#  | café.md",
+        "#  | gone.txt",
+        "#  | new.txt",
+        "#  | pic.bin",
+        "#  | run.sh",
+        "# src | a.rs",
+    ] {
+        assert!(
+            rows.iter().any(|row| row == heading),
+            "{heading}: {rows:#?}"
+        );
+    }
+    for kept in [
+        "deleted file mode 100644",
+        "rename from old.txt",
+        "rename to new.txt",
+        "old mode 100644",
+        "new mode 100755",
+    ] {
+        assert!(rows.iter().any(|row| row == kept), "{kept}: {rows:#?}");
+    }
+    assert!(rows.iter().any(|row| row.starts_with("Binary files")));
+    assert!(!rows.iter().any(|row| row.starts_with("diff --git")
+        || row.starts_with("index ")
+        || row.starts_with("--- ")
+        || row.starts_with("+++ ")));
 }
 
 #[test]
