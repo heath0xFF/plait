@@ -19,7 +19,7 @@ progress. M8 steps 3 and 4 follow M7.**
 | M4 — Development tools | Git staging, commits and history; file browser/editor; review feedback; process and log views | Git shipped ahead of M3 (staging, hunks, commits, history, push, fetch, fast-forward pull); a read-only file viewer shipped in v0.1.0-preview.8; the rest planned |
 | M5 — Previews | Live HTML, Markdown and MDX, automatic refresh, and selected-content feedback to the agent | Planned |
 | M6 — Multiple machines | Unified project navigation across independent hosts, including disconnected/reconnecting states | Planned |
-| M7 — Any agent harness | Threads run by other agent harnesses (Claude Code, Codex, Pi, omp, Antigravity, and others) beside Pi, with the same conversation, approval, Git, and navigation views | Current work. Step 1 (harness choice and Codex, protocol version 4) is on `main`, not yet released; Claude Code and an ACP client follow, each agreed first |
+| M7 — Any agent harness | Threads run by other agent harnesses (Claude Code, Codex, Pi, omp, Antigravity, and others) beside Pi, with the same conversation, approval, Git, and navigation views | Current work. Steps 1 and 2 (harness choice, Codex, each harness's own permissions, and Claude Code; protocol version 4) are on `main`, not yet released; an ACP client follows, agreed first |
 | M8 — Skills, tools, and CLIs | Pi threads use the skills, prompt templates, global instructions, MCP servers, and command-line tools the person already set up for their agent, with each one visible in Settings and every call under Plait's approvals | Steps 1 (skills and user instructions) and 2 (prompt templates, Settings → Agent, and `/` completion) shipped in v0.1.0-preview.9; steps 3 (named CLIs) and 4 (MCP) follow M7 |
 
 Do not build the whole roadmap at once. Each change must compile, run, and have
@@ -273,6 +273,47 @@ integration and native mobile companion are possibilities, not current features.
 
 Build original application code and design. Compare other products by outcomes,
 not as source or layout templates. See [the originality policy](ORIGINALITY.md).
+
+## Proposed, not yet agreed
+
+**Per-turn undo.** Any turn, in any harness and any permission mode, can be
+undone, so the person's work is recoverable even when an agent ran with full
+access. Plait's guard on files that had changes protects them only in Pi
+threads; Codex and Claude Code write wherever their own permissions allow. This
+is the same promise for every harness, made by the host rather than the
+harness.
+
+- **Before each turn,** the host records the checkout's working tree as a Git
+  tree object, without touching the person's index, `HEAD`, branches, or files:
+  a private copy of the index takes every tracked and untracked file that Git
+  does not ignore, and a commit object for that tree, whose parent is `HEAD`,
+  is kept under a private ref (`refs/plait/turns/…`) so Git does not discard it.
+  The turn starts only after the record is made, and a turn whose record fails
+  says so before it starts rather than running unrecorded.
+- **After the turn,** the host records the tree again and keeps the list of
+  paths that differ: what that turn changed, whichever tool or command changed
+  it.
+- **Undo this turn** puts those paths back as they were before the turn: changed
+  files restored, created files removed, deleted files returned. A path the
+  person or a later turn has changed since is not overwritten: the undo lists
+  it and stops until the person chooses. An undo is recorded first, so it can
+  itself be undone.
+- **Shown** on each finished turn with its file list and size, beside changed
+  files, for every harness.
+- **Not covered, and said so in the app:** files Git ignores (such as `.env`
+  files and build output), anything outside the checkout, commits, branch
+  changes, and pushes the agent made, and effects beyond the machine. A turn
+  that moved `HEAD` says so; undo restores files, not history.
+- **Cost:** the record reuses Git's index stat cache, so an unchanged checkout
+  costs one pass over its file metadata. It is measured against a target (to be
+  agreed) on a large checkout before shipping, and runs on the host's
+  background work, never in a frame. Records are pruned with the thread and
+  after an age to be agreed; their objects live in the repository's own Git
+  store.
+
+Agreement needed: this adds a Git write that AGENTS.md does not yet list
+(private refs and objects, and the undo's restore of working-tree files), a
+host protocol operation for undo, and stored turn records.
 
 ## Performance goals
 
