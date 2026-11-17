@@ -137,7 +137,8 @@ impl Plait {
         let serial = self.thread_controls.serial;
         self.thread_controls.pending = Some((id.clone(), serial));
         self.thread_controls.pending_epoch = self.host.epoch;
-        self.thread_controls.note = Some((id.clone(), "Saving thread settings…".into(), false));
+        // The controls show the new choice; only a failure needs words.
+        self.thread_controls.note = None;
         self.sync_composer(cx);
         self.host_request::<host::ThreadReply>(
             Request::configure_thread(id.clone(), model.clone(), thinking),
@@ -165,14 +166,9 @@ impl Plait {
                     }
                     Err(error) => Err(error.to_string()),
                 };
-                this.thread_controls.note = Some((
-                    id,
-                    match &result {
-                        Ok(()) => "Thread settings saved.".into(),
-                        Err(error) => format!("Not saved: {error}"),
-                    },
-                    result.is_err(),
-                ));
+                this.thread_controls.note = result
+                    .err()
+                    .map(|error| (id, format!("Not saved: {error}"), true));
                 this.capture_session(cx);
             },
         );
