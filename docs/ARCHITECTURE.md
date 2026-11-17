@@ -25,10 +25,25 @@ ui/                     GPUI layout, actions, focus, lists, theme
   text_field.rs         single-line input: IME, selection, clipboard, undo
   navigation.rs         virtualized projects and threads, filtering and management
   navigation_host.rs    cross-checkout listing, live summaries, and notifications
+  host.rs               host connection, thread watch, creation, and request guards
   conversation.rs       no-thread state and the Git inspector
   live_conversation.rs  real host messages, ordered tools, and approvals
+  history.rs            paged history reads off the UI thread, and their parts
+  markdown.rs           drawing precomputed conversation blocks and code
   selection.rs          text selection, copy, and link clicks in the conversation
   tool_card.rs          one line per tool call, its details, and grouped runs
+  thread_controls.rs    model, thinking, context, run settings, and queued inputs
+  changes.rs            changed-file list and diff view (read-only Git)
+  panels.rs             sidebar and inspector widths and their drag handles
+  jump.rs               Cmd-1 to Cmd-9 and the desktop preferences file
+  session.rs            draft and submission recovery, and save scheduling
+  settings.rs           the Settings page and its sections
+  settings_keyboard.rs  the shortcut editor
+  settings_policy.rs    the checkout's command policy, read from the host
+  settings_providers.rs provider sign-in, API keys, and custom endpoints
+  update.rs             release checks and in-app update installation
+  theme.rs              tokens and the small original controls
+  snapshot.rs           headless scene snapshots of the root view (tests only)
   composer/             native input, IME, clipboard, undo, and its events
     draft.rs            text, selection, undo, acceptance guard, prompt recall
     history.rs          prompts already sent in the thread
@@ -662,8 +677,8 @@ the failure. Nothing is shown as saved before the host answers.
 ### Provider settings and command policy
 
 `ui/settings_providers.rs` renders the host's catalog, subscription flow state,
-API-key form, and custom endpoint editor. `host/providers.rs` defines typed
-requests and tolerant replies; `host/sign_in.rs` projects each flow into its
+API-key form, and custom endpoint editor. plait-core's `host/providers.rs` defines typed
+requests and tolerant replies; its `host/sign_in.rs` projects each flow into its
 available controls. Status polling runs only while its form is open and pending.
 Host epochs and form generations reject stale replies. Closing an in-flight
 start cancels the returned flow instead of reopening the form.
