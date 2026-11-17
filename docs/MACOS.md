@@ -105,15 +105,15 @@ The host owns provider accounts. Sign-ins and API keys are kept in Pi's
 credential file, `~/.pi/agent/auth.json`, readable only by your account. Custom
 OpenAI-compatible servers are entries in `~/.pi/agent/models.json`. A login or
 API key set only in an interactive shell is not automatically available to a
-LaunchAgent. Do not put credentials into the system LaunchAgent property list or
+LaunchAgent. Do not put credentials into the LaunchAgent property list or
 the package.
 
 Locate the installed host with native macOS tools:
 
 ```sh
 build_id=$(/usr/bin/plutil -extract build_id raw -o - \
-  '/Library/Application Support/Plait/Host/installed.json')
-host="/Library/Application Support/Plait/Host/releases/$build_id"
+  "$HOME/Library/Application Support/Plait/Host/installed.json")
+host="$HOME/Library/Application Support/Plait/Host/releases/$build_id"
 "$host/bin/plait-host" version
 "$host/bin/plait-host" status
 ```
@@ -531,5 +531,7 @@ Branch builds upload a `plait-macos-arm64-…` workflow artifact, which expires
 after 14 days. Version tags run the complete Mac checks again, then a separate
 publish job creates an immutable GitHub prerelease with the DMG, packages,
 installer script, and checksums. A failed build or installer test publishes
-nothing. The job does not use signing secrets. [Issue #6](https://github.com/heath0xFF/plait/issues/6)
-tracks Developer ID signing, notarization, and verified automatic update delivery.
+nothing. The job's only secret is the update signing key, which signs
+`update.json` for in-app updates (see [Releasing](RELEASING.md)); the app and
+packages are not Developer ID signed. [Issue #6](https://github.com/heath0xFF/plait/issues/6)
+tracks Developer ID signing and notarization.
