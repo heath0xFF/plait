@@ -214,6 +214,10 @@ these tests.
   unborn branch, hooks, filters, a held `index.lock`, paging) and by scene
   snapshots of Changes and History. They have not been exercised with a native
   pointer in the installed app, with Git LFS, or with signed commits.
+- Push, publish, and fetch are covered against a local bare repository
+  (publish, push, fetch revealing a remote commit, and a refused diverged
+  push). Pushing to GitHub over SSH or HTTPS with `gh` sign-in has been checked
+  only by asking Git for credentials, not by a push from the installed app.
 
 ## Manual release acceptance
 

@@ -63,6 +63,41 @@ fn text(diff: &Diff) -> String {
 }
 
 #[test]
+fn branch_lines_report_upstream_and_counts() {
+    let tracking = |upstream: &str, ahead, behind, gone| {
+        Some(Tracking {
+            upstream: upstream.into(),
+            ahead,
+            behind,
+            gone,
+        })
+    };
+    let line = parse_branch("main...origin/main [ahead 2, behind 13]");
+    assert_eq!(line.branch, "main");
+    assert!(line.named);
+    assert_eq!(line.tracking, tracking("origin/main", 2, 13, false));
+    assert_eq!(
+        parse_branch("fix/a.b...up/fix/a.b [behind 1]").tracking,
+        tracking("up/fix/a.b", 0, 1, false)
+    );
+    assert_eq!(
+        parse_branch("main...origin/main").tracking,
+        tracking("origin/main", 0, 0, false)
+    );
+    assert_eq!(
+        parse_branch("main...origin/main [gone]").tracking,
+        tracking("origin/main", 0, 0, true)
+    );
+    let local = parse_branch("topic");
+    assert!(local.named && local.tracking.is_none());
+    let unborn = parse_branch("No commits yet on main");
+    assert_eq!(unborn.branch, "main");
+    assert!(!unborn.named && unborn.tracking.is_none());
+    let detached = parse_branch("HEAD (no branch)");
+    assert!(!detached.named && detached.tracking.is_none());
+}
+
+#[test]
 fn porcelain_preserves_nul_delimited_names_and_rename_order() {
     let (_, changes) = parse_status(
         b"## main\0 M spaces and\nnewlines.rs\0R  destination\0source name\0?? -odd\0",
@@ -954,4 +989,115 @@ fn show_of_a_merge_uses_the_first_parent_and_truncates_large_commits() {
     repo.commit();
     let id = log(&repo.0, None, 0, 1).unwrap().commits[0].id.clone();
     assert!(show(&repo.0, &id).unwrap().truncated);
+}
+
+/// Run Git in `dir` with the test's isolated configuration.
+fn git_in(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args([
+            "-c",
+            "user.name=Other",
+            "-c",
+            "user.email=o@example.invalid",
+        ])
+        .args(args)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+fn tracking(repo: &Repo) -> Option<Tracking> {
+    status(&repo.0).unwrap().tracking
+}
+
+#[test]
+fn publish_push_and_fetch_move_commits_through_a_remote() {
+    let work = Repo::new();
+    work.write("a.txt", "a\n");
+    work.commit();
+    // A bare repository on disk stands in for the network remote.
+    let holder = Repo::new();
+    let hub = holder.0.join("hub.git");
+    git_in(&holder.0, &["init", "--bare", "-b", "main", "hub.git"]);
+    let url = hub.to_str().unwrap();
+
+    // No remote: publishing says so instead of guessing.
+    assert!(
+        write(&work.0, &WriteOp::Publish)
+            .unwrap_err()
+            .contains("no remote")
+    );
+    work.git(&["remote", "add", "origin", url]);
+    let before = status(&work.0).unwrap();
+    assert!(before.named && before.tracking.is_none());
+
+    let published = write(&work.0, &WriteOp::Publish).unwrap();
+    assert_eq!(published.summary, "Published to origin");
+    let mut expected = Tracking {
+        upstream: "origin/main".into(),
+        ..Tracking::default()
+    };
+    assert_eq!(tracking(&work), Some(expected.clone()));
+
+    work.write("a.txt", "b\n");
+    work.commit();
+    expected.ahead = 1;
+    assert_eq!(tracking(&work), Some(expected.clone()));
+    assert_eq!(
+        write(&work.0, &WriteOp::Push).unwrap().summary,
+        "Pushed to origin/main"
+    );
+    expected.ahead = 0;
+    assert_eq!(tracking(&work), Some(expected.clone()));
+
+    // Someone else pushes; a fetch reveals it.
+    git_in(&holder.0, &["clone", "-q", url, "other"]);
+    let other = holder.0.join("other");
+    fs::write(other.join("b.txt"), "theirs\n").unwrap();
+    git_in(&other, &["add", "."]);
+    git_in(&other, &["commit", "-q", "-m", "theirs"]);
+    git_in(&other, &["push", "-q"]);
+    assert_eq!(tracking(&work), Some(expected.clone()));
+    assert_eq!(write(&work.0, &WriteOp::Fetch).unwrap().summary, "Fetched");
+    expected.behind = 1;
+    assert_eq!(tracking(&work), Some(expected.clone()));
+
+    // Diverged: the push is refused and the reason says what to do.
+    work.write("a.txt", "c\n");
+    work.commit();
+    let error = write(&work.0, &WriteOp::Push).unwrap_err();
+    assert!(error.contains("Pull them"), "{error}");
+}
+
+#[test]
+fn network_failures_are_explained() {
+    assert!(
+        network_hint("fatal: could not read Username for 'https://github.com'")
+            .unwrap()
+            .contains("gh auth login")
+    );
+    assert!(
+        network_hint("git@github.com: Permission denied (publickey).")
+            .unwrap()
+            .contains("SSH key")
+    );
+    assert!(
+        network_hint(" ! [rejected]        main -> main (fetch first)")
+            .unwrap()
+            .contains("Pull")
+    );
+    assert!(
+        network_hint("ssh: Could not resolve host: github.com")
+            .unwrap()
+            .contains("network")
+    );
+    assert!(network_hint("something else").is_none());
 }

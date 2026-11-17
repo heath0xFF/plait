@@ -1,4 +1,5 @@
-//! Explicit Git writes the user asks for: staging, unstaging, and committing.
+//! Explicit Git writes the user asks for: staging, unstaging, committing,
+//! and exchanging commits with the branch's remote (push, publish, fetch).
 //!
 //! Reads elsewhere in `git` neutralize filters and never run hooks. A write the
 //! user chose must produce what their own `git add` or `git commit` would, so
@@ -12,6 +13,7 @@ use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
     process::Command,
+    sync::OnceLock,
     time::Duration,
 };
 
@@ -19,6 +21,8 @@ use std::{
 const STAGE_TIMEOUT: Duration = Duration::from_secs(60);
 /// Pre-commit hooks may run formatters or tests.
 const COMMIT_TIMEOUT: Duration = Duration::from_secs(120);
+/// Push and fetch may run hooks and cross a slow network.
+const NETWORK_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_PATHS: usize = 100_000;
 /// Hook output shown to the user is clipped to this many characters.
 const ERROR_TEXT_LIMIT: usize = 2000;
@@ -37,6 +41,12 @@ pub enum WriteOp {
     Commit {
         message: String,
     },
+    /// Push as the user's own `git push` would, to the configured destination.
+    Push,
+    /// Push a branch with no upstream to its remote and make that its upstream.
+    Publish,
+    /// Fetch from the current branch's remote, or `origin`.
+    Fetch,
 }
 
 /// What a write did, in words for the user.
@@ -77,6 +87,158 @@ pub fn write(root: &Path, op: &WriteOp) -> Result<WriteOutcome> {
             Ok(done("Unstaged all changes".into()))
         }
         WriteOp::Commit { message } => commit(root, message),
+        WriteOp::Push => {
+            remote_git(root, &["push", "-q"])?;
+            Ok(done(match destination(root) {
+                Some(to) => format!("Pushed to {to}"),
+                None => "Pushed".into(),
+            }))
+        }
+        WriteOp::Publish => {
+            let remote = publish_remote(root)?;
+            remote_git(
+                root,
+                &["push", "-q", "-u", "--end-of-options", &remote, "HEAD"],
+            )?;
+            Ok(done(format!("Published to {remote}")))
+        }
+        WriteOp::Fetch => {
+            remote_git(root, &["fetch", "-q"])?;
+            Ok(done("Fetched".into()))
+        }
+    }
+}
+
+/// The ref a plain push updates, such as `origin/main`, for the summary.
+fn destination(root: &Path) -> Option<String> {
+    let mut command = write_command(root);
+    command.args([
+        "rev-parse",
+        "--abbrev-ref",
+        "--symbolic-full-name",
+        "@{push}",
+    ]);
+    let raw = run(&mut command, None, STATUS_LIMIT, TIMEOUT).ok()?;
+    let text = String::from_utf8_lossy(&raw.out.bytes).trim().to_owned();
+    (raw.status.success() && !text.is_empty()).then_some(text)
+}
+
+/// `remote.pushDefault`, else `origin`, else the only remote.
+fn publish_remote(root: &Path) -> Result<String> {
+    let read = |args: &[&str]| -> Result<String> {
+        let mut command = write_command(root);
+        let raw = run(command.args(args), None, STATUS_LIMIT, TIMEOUT)?;
+        Ok(String::from_utf8_lossy(&raw.out.bytes).into_owned())
+    };
+    let preferred = read(&["config", "--get", "remote.pushDefault"])?;
+    let remotes = read(&["remote"])?;
+    let remotes: Vec<&str> = remotes
+        .lines()
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .collect();
+    let chosen = match preferred.trim() {
+        name if !name.is_empty() => name,
+        _ if remotes.contains(&"origin") => "origin",
+        _ if remotes.len() == 1 => remotes[0],
+        _ if remotes.is_empty() => {
+            return Err("This repository has no remote to publish to.".into());
+        }
+        _ => {
+            return Err(
+                "There are several remotes and none is named origin. Publish this branch once from Terminal."
+                    .into(),
+            );
+        }
+    };
+    Ok(chosen.to_owned())
+}
+
+/// A push or fetch. The user's credential helpers are asked first; the GitHub
+/// CLI's helper, when installed, is tried after them, so a `gh auth login` is
+/// enough for HTTPS remotes. Git hands the token to itself; Plait never sees it.
+fn remote_git(root: &Path, args: &[&str]) -> Result<()> {
+    let mut command = write_command(root);
+    if let Some(helper) = gh_helper() {
+        command.args(["-c", helper]);
+    }
+    let raw = run(command.args(args), None, STATUS_LIMIT, NETWORK_TIMEOUT)?;
+    if raw.status.success() {
+        return Ok(());
+    }
+    let text = failure_text(&raw);
+    Err(network_hint(&text).map_or(text.clone(), |hint| format!("{hint}\n{text}")))
+}
+
+/// `credential.helper=!'/path/to/gh' auth git-credential`, found once.
+fn gh_helper() -> Option<&'static str> {
+    static HELPER: OnceLock<Option<String>> = OnceLock::new();
+    HELPER
+        .get_or_init(|| {
+            let gh = find_program("gh")?;
+            let gh = gh.to_str()?;
+            // Quoted for the shell Git runs `!` helpers in.
+            let quoted = format!("'{}'", gh.replace('\'', r"'\''"));
+            Some(format!("credential.helper=!{quoted} auth git-credential"))
+        })
+        .as_deref()
+}
+
+/// An app started from Finder has a minimal PATH, so also look where
+/// package managers install command-line tools.
+fn find_program(name: &str) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path)
+        .chain(
+            [
+                "/opt/homebrew/bin",
+                "/usr/local/bin",
+                "/run/current-system/sw/bin",
+            ]
+            .map(PathBuf::from),
+        )
+        .chain(
+            home.iter()
+                .flat_map(|home| [home.join(".nix-profile/bin"), home.join(".local/bin")]),
+        )
+        .map(|dir| dir.join(name))
+        .find(|candidate| {
+            std::fs::metadata(candidate)
+                .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        })
+}
+
+/// What to do about the common push and fetch failures, in words.
+pub(super) fn network_hint(text: &str) -> Option<&'static str> {
+    let has = |needle: &str| text.contains(needle);
+    if has("could not read Username")
+        || has("terminal prompts disabled")
+        || has("Authentication failed")
+    {
+        Some(
+            "The remote needs a sign-in. For GitHub over HTTPS, run `gh auth login`; otherwise set up a credential helper or an SSH key.",
+        )
+    } else if has("Permission denied (publickey)") {
+        Some(
+            "The remote refused your SSH key. Check that ssh-agent holds a key the remote accepts.",
+        )
+    } else if has("Host key verification failed") {
+        Some(
+            "SSH does not know this remote's host key yet. Connect once from Terminal to confirm it.",
+        )
+    } else if has("[rejected]") || has("non-fast-forward") || has("fetch first") {
+        Some(
+            "The remote has commits this branch does not. Pull them from Terminal, then push again.",
+        )
+    } else if has("Could not resolve host")
+        || has("Network is unreachable")
+        || has("Connection timed out")
+    {
+        Some("Cannot reach the remote. Check the network connection.")
+    } else {
+        None
     }
 }
 

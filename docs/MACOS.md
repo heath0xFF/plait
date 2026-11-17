@@ -405,9 +405,19 @@ stays unavailable until every conflict is marked resolved. If a hook or filter
 takes longer than its limit (60 seconds for staging, 120 for a commit), Plait
 stops it and says so.
 
+Above Stage all, Changes shows how the branch stands against its upstream (for
+example "2 to push") as of the last fetch, with **Fetch** and **Push**. A branch
+with no upstream offers **Publish** instead, which pushes it to `origin` (or
+`remote.pushDefault`, or the only remote) and tracks it there. Push is
+unavailable when the remote has commits the branch does not; pull those from
+Terminal first. Sign-in uses your existing Git setup: SSH keys, credential
+helpers, and, for HTTPS GitHub remotes, `gh auth login` if the GitHub CLI is
+installed. Plait never stores or reads the token. Push and fetch are also in
+the **Git** menu.
+
 **History** (Cmd-Shift-3) lists commits on the current branch, newest first, 100
 at a time. Select one to see its message and patch against its first parent.
-There is no push, discard, amend, or branch switching yet; use your own Git
+There is no pull, discard, amend, or branch switching yet; use your own Git
 tools for those.
 
 ## Updates

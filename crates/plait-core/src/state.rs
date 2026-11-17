@@ -599,6 +599,8 @@ mod tests {
             Snapshot {
                 root: self.root.clone(),
                 branch: self.branch.clone(),
+                named: self.named,
+                tracking: self.tracking.clone(),
                 changes: self.changes.clone(),
                 elapsed: self.elapsed,
             }
@@ -609,6 +611,8 @@ mod tests {
         Arc::new(Snapshot {
             root: "/repo".into(),
             branch: "main".into(),
+            named: true,
+            tracking: None,
             changes: vec![
                 Change {
                     path: "a".into(),

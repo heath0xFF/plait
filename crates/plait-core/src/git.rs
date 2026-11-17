@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::model::{Change, Diff, DiffKind, DiffLine, DiffMode, Snapshot};
+use crate::model::{BranchHeader, Change, Diff, DiffKind, DiffLine, DiffMode, Snapshot, Tracking};
 
 const STATUS_LIMIT: usize = 8 * 1024 * 1024;
 const DIFF_LIMIT: usize = 512 * 1024;
@@ -264,16 +264,18 @@ pub fn status(path: &Path) -> Result<Snapshot> {
     if output.truncated {
         return Err("Status exceeds 8 MiB. Reduce the untracked-file set and Refresh.".into());
     }
-    let (branch, changes) = parse_status(&output.bytes)?;
+    let (header, changes) = parse_status(&output.bytes)?;
     Ok(Snapshot {
         root,
-        branch,
+        branch: header.branch,
+        named: header.named,
+        tracking: header.tracking,
         changes,
         elapsed: start.elapsed(),
     })
 }
 
-pub fn parse_status(bytes: &[u8]) -> Result<(String, Vec<Change>)> {
+pub fn parse_status(bytes: &[u8]) -> Result<(BranchHeader, Vec<Change>)> {
     let mut records = bytes.split(|b| *b == 0).filter(|s| !s.is_empty());
     let header = records.next().ok_or("Git returned an empty status")?;
     let branch = header
@@ -302,7 +304,55 @@ pub fn parse_status(bytes: &[u8]) -> Result<(String, Vec<Change>)> {
             worktree,
         });
     }
-    Ok((String::from_utf8_lossy(branch).into_owned(), changes))
+    Ok((parse_branch(&String::from_utf8_lossy(branch)), changes))
+}
+
+/// Read Git's porcelain v1 branch line, without the leading `## `:
+/// `main`, `main...origin/main [ahead 2, behind 1]`, `main...origin/main [gone]`,
+/// `No commits yet on main`, or `HEAD (no branch)`. Ref names cannot contain
+/// spaces or `..`, so the first space and the first `...` are delimiters.
+pub fn parse_branch(line: &str) -> BranchHeader {
+    for unborn in ["No commits yet on ", "Initial commit on "] {
+        if let Some(name) = line.strip_prefix(unborn) {
+            return BranchHeader {
+                branch: name.to_owned(),
+                ..BranchHeader::default()
+            };
+        }
+    }
+    if line.starts_with("HEAD (no branch)") {
+        return BranchHeader {
+            branch: "Detached HEAD".into(),
+            ..BranchHeader::default()
+        };
+    }
+    let (refs, counts) = line.split_once(' ').unwrap_or((line, ""));
+    let Some((branch, upstream)) = refs.split_once("...") else {
+        return BranchHeader {
+            branch: refs.to_owned(),
+            named: true,
+            tracking: None,
+        };
+    };
+    let mut tracking = Tracking {
+        upstream: upstream.to_owned(),
+        ..Tracking::default()
+    };
+    let counts = counts.trim_start_matches('[').trim_end_matches(']');
+    for part in counts.split(", ") {
+        if let Some(n) = part.strip_prefix("ahead ") {
+            tracking.ahead = n.parse().unwrap_or(0);
+        } else if let Some(n) = part.strip_prefix("behind ") {
+            tracking.behind = n.parse().unwrap_or(0);
+        } else if part == "gone" {
+            tracking.gone = true;
+        }
+    }
+    BranchHeader {
+        branch: branch.to_owned(),
+        named: true,
+        tracking: Some(tracking),
+    }
 }
 
 fn path_from_bytes(bytes: &[u8]) -> PathBuf {
@@ -631,6 +681,8 @@ fn format_diff(bytes: &[u8], mut truncated: bool, elapsed: Duration) -> Diff {
 mod log;
 mod write;
 pub use log::{Commit, History, log, show};
+#[cfg(test)]
+use write::network_hint;
 pub use write::{WriteOp, WriteOutcome, write};
 
 #[cfg(test)]

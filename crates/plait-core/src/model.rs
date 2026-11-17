@@ -68,8 +68,31 @@ impl Change {
 pub struct Snapshot {
     pub root: PathBuf,
     pub branch: String,
+    /// On a branch with at least one commit, so there is something to push.
+    pub named: bool,
+    /// The branch's upstream, if it has one.
+    pub tracking: Option<Tracking>,
     pub changes: Vec<Change>,
     pub elapsed: Duration,
+}
+
+/// Where the current branch stands against its upstream, as of the last fetch.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Tracking {
+    /// Such as `origin/main`.
+    pub upstream: String,
+    pub ahead: usize,
+    pub behind: usize,
+    /// The upstream branch no longer exists on the remote.
+    pub gone: bool,
+}
+
+/// The current branch, from the first line of `git status --branch`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BranchHeader {
+    pub branch: String,
+    pub named: bool,
+    pub tracking: Option<Tracking>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

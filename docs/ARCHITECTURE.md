@@ -8,7 +8,7 @@ client state, local host client, and Git), and `crates/plait-host`
 (local daemon and filesystem/process helpers). `runtime/` contains the pinned
 Pi Durable TypeScript sidecar. There is no remote execution,
 embedded terminal, editor, or worktree manager. Git writes are limited to
-staging, unstaging, and committing.
+staging, unstaging, committing, pushing (or publishing a branch), and fetching.
 
 This remains an early local preview. Linux command execution and remote
 transport are not implemented. [Verification](VERIFICATION.md) records versioned
@@ -85,7 +85,7 @@ diff.rs                 line diff of an edit's old and new text
 tool_view.rs            what each tool call shows, and grouping of long runs
 selection.rs            selection order, ranges, word bounds, and copied text
 git.rs                  synchronous Git adapter: hardened reads; background only
-  git/write.rs          staging, unstaging, and committing
+  git/write.rs          staging, unstaging, committing, push, publish, fetch
   git/log.rs            commit history and one commit's patch (read-only)
 fuzzy.rs                case-insensitive subsequence matching for pickers
 ```

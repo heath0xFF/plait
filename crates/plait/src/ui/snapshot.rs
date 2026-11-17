@@ -122,6 +122,20 @@ fn fixture_repository(root: &Path) -> PathBuf {
     std::fs::write(repository.join("README.md"), "# Fixture\n").unwrap();
     git(&repository, &["add", "."]);
     git(&repository, &["commit", "-qm", "fixture"]);
+    // A local bare remote, so the branch has an upstream and one commit to push.
+    git(root, &["init", "-q", "--bare", "-b", "main", "remote.git"]);
+    let remote = root.join("remote.git");
+    git(
+        &repository,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    git(&repository, &["push", "-q", "-u", "origin", "main"]);
+    std::fs::write(
+        repository.join("README.md"),
+        "# Fixture\n\nRead in the background.\n",
+    )
+    .unwrap();
+    git(&repository, &["commit", "-qam", "Describe the fixture"]);
     std::fs::write(&review, "pub fn refresh() {\n    queue_status();\n}\n").unwrap();
     git(&repository, &["add", "src/review.rs"]);
     std::fs::write(

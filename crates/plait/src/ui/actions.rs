@@ -114,6 +114,8 @@ pub(super) const ACTIONS: &[AppAction] = &[
     entry("git.stage_all", "Stage All Changes", "Git", None, Item, || Box::new(StageAll)),
     entry("git.unstage_all", "Unstage All Changes", "Git", None, Item, || Box::new(UnstageAll)),
     entry("git.commit", "Commit Staged Changes…", "Git", Some("cmd-shift-c"), Group, || Box::new(CommitStaged)),
+    entry("git.push", "Push", "Git", None, Group, || Box::new(Push)),
+    entry("git.fetch", "Fetch", "Git", None, Item, || Box::new(Fetch)),
     entry("window.minimize", "Minimize", "Window", Some("cmd-m"), Item, || Box::new(Minimize)),
     entry("jump.1", "Jump to Sidebar Item 1", "Navigation", Some("cmd-1"), Hidden, || Box::new(Jump1)),
     entry("jump.2", "Jump to Sidebar Item 2", "Navigation", Some("cmd-2"), Hidden, || Box::new(Jump2)),

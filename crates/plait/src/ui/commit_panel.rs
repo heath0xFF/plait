@@ -6,8 +6,79 @@
 
 use super::{Plait, theme::*};
 use gpui::{prelude::*, *};
-use plait_core::{git::WriteOp, model::Change};
+use plait_core::{
+    git::WriteOp,
+    model::{Change, Snapshot, Tracking},
+};
 use std::path::PathBuf;
+
+/// What sending commits to the remote means for this branch right now.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct Sync {
+    pub label: String,
+    /// The write the Push button runs, if the branch can push at all.
+    pub op: Option<WriteOp>,
+    /// Why that write is unavailable now, in words.
+    pub blocker: Option<&'static str>,
+    /// There is an upstream to fetch from.
+    pub fetch: bool,
+    /// Such as `origin/main`, for the accessible description.
+    pub upstream: Option<String>,
+}
+
+/// Counts come from the status read; nothing here runs Git.
+pub(super) fn sync(named: bool, tracking: Option<&Tracking>) -> Sync {
+    let publish = |label: String| Sync {
+        label,
+        op: Some(WriteOp::Publish),
+        blocker: None,
+        fetch: false,
+        upstream: None,
+    };
+    let Some(tracking) = tracking.filter(|_| named) else {
+        return if named {
+            publish("Not on the remote yet".into())
+        } else {
+            Sync {
+                label: "No branch to push".into(),
+                op: None,
+                blocker: None,
+                fetch: false,
+                upstream: None,
+            }
+        };
+    };
+    let up = &tracking.upstream;
+    if tracking.gone {
+        return publish(format!("{up} was deleted"));
+    }
+    let upstream = Some(up.clone());
+    let (ahead, behind) = (tracking.ahead, tracking.behind);
+    let label = match (ahead, behind) {
+        (0, 0) => "Up to date".to_owned(),
+        (a, 0) => format!("{a} to push"),
+        (0, b) => format!("{b} to pull"),
+        (a, b) => format!("{a} to push, {b} to pull"),
+    };
+    let blocker = if ahead == 0 {
+        Some("Nothing to push.")
+    } else if behind > 0 {
+        Some("The remote has commits this branch does not. Pull them from Terminal first.")
+    } else {
+        None
+    };
+    Sync {
+        label,
+        op: Some(WriteOp::Push),
+        blocker,
+        fetch: true,
+        upstream,
+    }
+}
+
+fn sync_of(snapshot: &Snapshot) -> Sync {
+    sync(snapshot.named, snapshot.tracking.as_ref())
+}
 
 /// A change's paths for staging. A rename also names where it came from, so
 /// both sides of it move together.
@@ -96,6 +167,59 @@ impl Plait {
         }
     }
 
+    /// Push, or publish a branch the remote does not have yet.
+    pub(super) fn push(&mut self, cx: &mut Context<Self>) {
+        let Some(sync) = self.state.repository.snapshot.ready().map(|s| sync_of(s)) else {
+            return;
+        };
+        if let (Some(op), None) = (sync.op, sync.blocker) {
+            self.git_write(op, cx);
+        }
+    }
+
+    /// The branch against its upstream, with Fetch and Push or Publish.
+    fn sync_row(&self, busy: bool, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let sync = sync_of(self.state.repository.snapshot.ready()?);
+        let publish = sync.op == Some(WriteOp::Publish);
+        Some(
+            row()
+                .gap_1()
+                .child(
+                    div()
+                        .id("sync-state")
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(12.))
+                        .text_color(rgb(MUTED))
+                        .when_some(sync.upstream, |el, up| {
+                            el.aria_description(format!("Upstream {up}"))
+                        })
+                        .child(sync.label),
+                )
+                .when(sync.fetch, |el| {
+                    el.child(
+                        button("fetch", "Fetch")
+                            .aria_description("Fetch from the remote. Nothing local changes.")
+                            .disabled(busy)
+                            .on_activate(cx, |this, _, cx| this.git_write(WriteOp::Fetch, cx)),
+                    )
+                })
+                .when(sync.op.is_some(), |el| {
+                    el.child(
+                        button("push", if publish { "Publish" } else { "Push" })
+                            .aria_description(sync.blocker.unwrap_or(if publish {
+                                "Push this branch to its remote and track it there."
+                            } else {
+                                "Push commits to the remote. Hooks run."
+                            }))
+                            .disabled(busy || sync.blocker.is_some())
+                            .on_activate(cx, |this, _, cx| this.push(cx)),
+                    )
+                }),
+        )
+    }
+
     /// Put the cursor in the commit message, on the Changes tab.
     pub(super) fn focus_commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.tab = super::Workspace::Changes;
@@ -137,21 +261,10 @@ impl Plait {
             .gap_2()
             .border_t_1()
             .border_color(rgb(BORDER))
+            .children(self.sync_row(busy, cx))
             .child(
                 row()
                     .gap_1()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(12.))
-                            .text_color(rgb(MUTED))
-                            .child(match staged {
-                                0 => "Nothing staged".to_owned(),
-                                n => format!("{n} staged"),
-                            }),
-                    )
                     .child(
                         button("stage-all", "Stage all")
                             .disabled(busy || changed == staged)
@@ -178,12 +291,21 @@ impl Plait {
                     .child(self.commit_message.clone()),
             )
             .child(
-                toned_button("commit", "Commit", Tone::Primary)
-                    .w_full()
-                    .justify_center()
-                    .aria_description(blocker.unwrap_or("Commit the staged changes. Hooks run."))
-                    .disabled(blocker.is_some())
-                    .on_activate(cx, |this, _, cx| this.commit_staged(cx)),
+                // The count lives on the button, where it fits at any width.
+                toned_button(
+                    "commit",
+                    match staged {
+                        0 => "Commit".to_owned(),
+                        1 => "Commit 1 file".to_owned(),
+                        n => format!("Commit {n} files"),
+                    },
+                    Tone::Primary,
+                )
+                .w_full()
+                .justify_center()
+                .aria_description(blocker.unwrap_or("Commit the staged changes. Hooks run."))
+                .disabled(blocker.is_some())
+                .on_activate(cx, |this, _, cx| this.commit_staged(cx)),
             )
             .when(self.running_here(), |el| {
                 el.child(tag(
@@ -205,8 +327,11 @@ impl Plait {
 
 #[cfg(test)]
 mod tests {
-    use super::change_paths;
-    use plait_core::model::Change;
+    use super::{change_paths, sync};
+    use plait_core::{
+        git::WriteOp,
+        model::{Change, Tracking},
+    };
     use std::path::PathBuf;
 
     #[test]
@@ -223,5 +348,30 @@ mod tests {
             change_paths(&change),
             [PathBuf::from("new.rs"), PathBuf::from("old.rs")]
         );
+    }
+
+    #[test]
+    fn push_follows_the_branch_and_its_upstream() {
+        let up = |ahead, behind, gone| Tracking {
+            upstream: "origin/main".into(),
+            ahead,
+            behind,
+            gone,
+        };
+        let none = sync(false, None);
+        assert_eq!((none.op, none.fetch), (None, false));
+        let local = sync(true, None);
+        assert_eq!(local.op, Some(WriteOp::Publish));
+        assert_eq!(sync(true, Some(&up(0, 0, true))).op, Some(WriteOp::Publish));
+        let even = sync(true, Some(&up(0, 0, false)));
+        assert_eq!(even.label, "Up to date");
+        assert_eq!(even.upstream.as_deref(), Some("origin/main"));
+        assert!(even.blocker.is_some() && even.fetch);
+        let ahead = sync(true, Some(&up(2, 0, false)));
+        assert_eq!(ahead.label, "2 to push");
+        assert_eq!((ahead.op, ahead.blocker), (Some(WriteOp::Push), None));
+        let diverged = sync(true, Some(&up(1, 3, false)));
+        assert_eq!(diverged.label, "1 to push, 3 to pull");
+        assert!(diverged.blocker.unwrap().contains("Pull"));
     }
 }

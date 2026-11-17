@@ -63,6 +63,16 @@ write runs with the repository's own configuration, so staging runs clean
 filters and committing runs hooks, exactly as the person's own Git would. One
 write runs at a time. Push, fetch, discard, branch switching, amend, rebase,
 and other history rewriting are not part of this step.
+
+**Agreed next for M4 Git:** push, publish, and fetch, then hunk staging and
+discard. Push runs as the person's own `git push` would; there is no force push.
+Publish pushes a branch with no upstream to `remote.pushDefault`, `origin`, or
+the only remote, and sets that as its upstream. Fetch is explicit, never on a
+timer. Ahead and behind counts come from the status read Plait already makes.
+Credentials stay with Git: the person's helpers and SSH keys apply, and the
+GitHub CLI's credential helper is offered after them for that command only,
+so Plait never reads a token or changes Git configuration. Discard always asks
+for confirmation first. Pull, merge, and rebase are not part of this step.
 Use existing tools for interactive shells and debugging. A future Open in Rex
 integration and native mobile companion are possibilities, not current features.
 

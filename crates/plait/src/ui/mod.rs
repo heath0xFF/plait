@@ -61,6 +61,8 @@ actions!(
         StageAll,
         UnstageAll,
         CommitStaged,
+        Push,
+        Fetch,
         NextThread,
         PreviousThread,
         Tab,
@@ -784,6 +786,14 @@ impl Render for Plait {
             .on_action(
                 cx.listener(|this, _: &CommitStaged, window, cx| this.focus_commit(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &Push, _, cx| {
+                this.show_tab(Workspace::Changes, cx);
+                this.push(cx)
+            }))
+            .on_action(cx.listener(|this, _: &Fetch, _, cx| {
+                this.show_tab(Workspace::Changes, cx);
+                this.git_write(plait_core::git::WriteOp::Fetch, cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &NextThread, window, cx| this.step_thread(true, window, cx)),
             )
