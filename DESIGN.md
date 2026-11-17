@@ -41,13 +41,20 @@ conversation keeps a readable minimum width.
   nothing selected) and offers the one useful action.
 - **Pills** are for metadata (machine, state), not for every label, so they
   stay meaningful.
-- **Conversation.** Right-aligned, neutral user bubbles. Agent replies remain
-  open text on the conversation surface. Position says who is speaking, so
-  messages carry no visible author label; give each row a full author/context
-  label for assistive technology. Copy controls stay out of sight until the
-  pointer is over their row or they take keyboard focus. The answer being
-  written ends with a still dot and the word "Writing…". Away from the newest
-  row, one control at the bottom of the conversation jumps back to it.
+- **Conversation.** A log of turns, not a chat. A turn is one request and
+  everything up to the next request. A one-point turn line runs down the
+  conversation's left margin, outside the text column, so text keeps the
+  composer's edges. A request heads its turn: left-aligned and semibold, with
+  a ring on the line. Replies, reasoning, and tool calls are open text beside
+  the line. An earlier turn closes at a filled node with its record: the step
+  count and the files its edits changed, each opening in Changes. The line
+  ends at one node, in the state's color, that names the latest turn's state
+  and, once that turn has finished, its record. The state is said there once,
+  not repeated in the answer above. Messages carry no visible author label;
+  give each row a full author/context label for assistive technology. Copy
+  controls stay out of sight until the pointer is over their row or they take
+  keyboard focus. Away from the newest row, one control at the bottom of the
+  conversation jumps back to it.
 - **Conversation text.** All message text is selectable; the selection is a
   neutral fill. Links are blue and underlined, and their address appears at the
   bottom edge of the conversation before a click. Lists hang their wrapped
@@ -59,13 +66,15 @@ conversation keeps a readable minimum width.
   loaded beginning; End/Cmd-Down and Jump to latest return to the live end.
   Reasoning is a separate, muted disclosure, initially closed after a response
   finishes. Live reasoning opens in a bounded-height region. Both use the same
-  text selection and copy behavior as answers. Finished answers may carry a
-  small summary of observed tool steps and changed files. Do not invent durations
-  or identify who stopped a run when the host does not report that.
-- **Run state.** One text line above the composer names waiting, thinking, tool
-  execution, retry, completion, stop, interruption, or failure. Retries show the
-  attempt and remaining seconds. The status and any recovery action align to
-  the conversation column; raw protocol codes are not presentation.
+  text selection and copy behavior as answers. A turn's record holds only what
+  the host reported: tool steps and the files its edits changed. Do not invent
+  durations or identify who stopped a run when the host does not report that,
+  and draw no control for an action that does not exist yet.
+- **Run state.** One text line above the composer, on the turn line's last
+  node, names waiting, thinking, tool execution, retry, completion, stop,
+  interruption, or failure. Retries show the attempt and remaining seconds.
+  The status and any recovery action align to the conversation column; raw
+  protocol codes are not presentation.
 - **Tool calls.** One compact line each: disclosure chevron, tool name, the
   path or command, a short fact such as `+2 −1`, and a state label only when
   the call did not simply finish. A long command wraps (up to four lines
@@ -121,7 +130,7 @@ conversation keeps a readable minimum width.
 ## Tokens
 Colors are roles in one palette (`plait_core::theme::Palette`), so every theme
 keeps the same meaning. The default dark theme is Stillwater:
-- Background: #1f222e. Navigation: #242835. Panel / user bubble: #2b303f.
+- Background: #1f222e. Navigation: #242835. Panel: #2b303f.
 - Border: #313547. Control outline: #464d66. Selected row: #2e3243.
 - Main text: #dfe3ed. Secondary text: #b0b7cb. Labels and hints: #9da5bf.
 - Mint #70d689: local/read-only state, additions, the chosen option.
@@ -154,8 +163,8 @@ code is main text on the panel color.
 
 System sans-serif at 11–15 points, with 13 points for body and navigation; Menlo
 at 12 points for code. Conversation content, the composer, and settings pages
-are capped at 760 points; user bubbles use at most 80% of that width. Spacing
-follows a 4-point base. Preserve gradients inside the supplied brand artwork
+are capped at 760 points; the turn line hangs 15 points left of that column.
+Spacing follows a 4-point base. Preserve gradients inside the supplied brand artwork
 only. Avoid new chrome gradients, shadows, animation, and decorative dashboard
 cards.
 

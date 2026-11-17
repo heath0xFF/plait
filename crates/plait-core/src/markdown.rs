@@ -557,7 +557,7 @@ pub struct Transcript {
     pub live: Option<Arc<Message>>,
     pub reasoning: HashMap<String, Arc<Message>>,
     pub live_reasoning: Option<Arc<Message>>,
-    pub turn_summaries: HashMap<String, String>,
+    pub turn_summaries: HashMap<String, crate::history::TurnSummary>,
     pub tools: HashMap<String, Arc<ToolView>>,
     pub runs: Runs,
 }

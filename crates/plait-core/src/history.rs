@@ -509,8 +509,34 @@ pub fn run_state(snapshot: &Snapshot, now: u64) -> Option<(String, bool)> {
     })
 }
 
+/// What a finished turn did, from the tool calls the host reported.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TurnSummary {
+    /// Tool calls in the turn.
+    pub steps: usize,
+    /// Paths its finished edit and write calls changed, in the order first changed.
+    pub files: Vec<String>,
+}
+
+impl TurnSummary {
+    /// "5 steps", or "1 step".
+    pub fn steps_label(&self) -> String {
+        let steps = self.steps;
+        format!("{steps} {}", if steps == 1 { "step" } else { "steps" })
+    }
+
+    /// The whole record in one line, for assistive technology.
+    pub fn label(&self) -> String {
+        if self.files.is_empty() {
+            self.steps_label()
+        } else {
+            format!("{} · edited {}", self.steps_label(), self.files.join(", "))
+        }
+    }
+}
+
 /// Summaries describe observed steps, without inventing per-turn timing.
-pub fn turn_summaries(snapshot: &Snapshot) -> std::collections::HashMap<String, String> {
+pub fn turn_summaries(snapshot: &Snapshot) -> std::collections::HashMap<String, TurnSummary> {
     let mut summaries = std::collections::HashMap::new();
     let mut answer: Option<String> = None;
     let mut steps = 0usize;
@@ -518,15 +544,12 @@ pub fn turn_summaries(snapshot: &Snapshot) -> std::collections::HashMap<String, 
     let finish = |answer: &mut Option<String>,
                   steps: usize,
                   files: &mut Vec<String>,
-                  summaries: &mut std::collections::HashMap<String, String>| {
+                  summaries: &mut std::collections::HashMap<String, TurnSummary>| {
         if let Some(id) = answer.take()
             && steps > 0
         {
-            let mut summary = format!("{steps} {}", if steps == 1 { "step" } else { "steps" });
-            if !files.is_empty() {
-                summary.push_str(&format!(" · changed {}", files.join(", ")));
-            }
-            summaries.insert(id, summary);
+            let files = std::mem::take(files);
+            summaries.insert(id, TurnSummary { steps, files });
         }
         files.clear();
     };
@@ -947,10 +970,19 @@ mod tests {
             output: "ok".into(),
             after: Some(Some("plan".into())),
         }];
+        let summaries = turn_summaries(&snapshot);
+        let summary = summaries.get("answer").expect("the answer closes the turn");
         assert_eq!(
-            turn_summaries(&snapshot).get("answer").map(String::as_str),
-            Some("1 step · changed src/file.rs")
+            (summary.steps, summary.files.as_slice()),
+            (1, &["src/file.rs".to_owned()][..])
         );
+        assert_eq!(summary.label(), "1 step · edited src/file.rs");
+        // Without changed files the record is the step count alone.
+        let reads = TurnSummary {
+            steps: 3,
+            files: Vec::new(),
+        };
+        assert_eq!(reads.label(), "3 steps");
         snapshot.messages.pop();
         assert!(turn_summaries(&snapshot).is_empty());
     }

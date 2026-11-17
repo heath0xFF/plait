@@ -299,16 +299,6 @@ pub fn prose() -> Div {
     div().text_size(px(13.)).line_height(px(21.))
 }
 
-/// Quiet, right-aligned user message.
-pub fn bubble() -> Div {
-    prose()
-        .max_w(relative(0.8))
-        .px(px(14.))
-        .py_2()
-        .rounded_xl()
-        .bg(rgb(colors().panel))
-}
-
 /// Pulls a disclosure row left so its chevron sits on the text edge.
 pub const TOOL_INSET: f32 = 5.;
 

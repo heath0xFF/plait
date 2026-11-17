@@ -25,7 +25,8 @@ impl Reveals {
 use plait_core::{
     history::{self, Key},
     host::{
-        Approval, ApprovalMode, HistoryField, Message, MessageRole, Snapshot, harness::HarnessId,
+        Approval, ApprovalMode, HistoryField, Message, MessageRole, Snapshot, ThreadStatus,
+        harness::HarnessId,
     },
     markdown::Block,
     reveal::Reveal,
@@ -48,9 +49,86 @@ fn banner(tint: u32) -> Div {
         .border_color(rgb(colors().border))
 }
 
-/// How far the copy control of an agent reply sits above its first line. It
+/// How far the copy control of a message sits above its first line. It
 /// stays inside the row's top padding, so reaching it keeps the row hovered.
 const COPY_LIFT: f32 = 18.;
+
+/// The turn line hangs in the conversation's left margin, this far left of
+/// the text column, so text keeps the composer's edges.
+const STRAND_LEFT: f32 = 15.;
+/// The ring that marks a request, and the filled node that closes a turn or
+/// shows its live state.
+const RING: f32 = 9.;
+const NODE: f32 = 7.;
+/// Clear space around a mark, so the line does not touch it.
+const MARK_GAP: f32 = 2.;
+/// Line height of conversation prose, which centers a request's ring.
+const PROSE_LINE: f32 = 21.;
+/// Height of a turn's record line and of the state line, which centers
+/// their nodes.
+const RECORD_LINE: f32 = 22.;
+
+/// One row's piece of the turn line, from `from` points below the row's top
+/// to its bottom. Rows are drawn edge to edge, so the pieces read as one line.
+fn strand_line(from: f32) -> Div {
+    div()
+        .absolute()
+        .left(px(-STRAND_LEFT))
+        .top(px(from))
+        .bottom_0()
+        .w(px(1.))
+        .bg(rgb(colors().border))
+}
+
+/// The line's last piece, down to the live state's node.
+fn strand_end(to: f32) -> Div {
+    div()
+        .absolute()
+        .left(px(-STRAND_LEFT))
+        .top_0()
+        .h(px(to))
+        .w(px(1.))
+        .bg(rgb(colors().border))
+}
+
+/// A round mark centered on the turn line, `center` points below its
+/// parent's top edge, on a little clear ground.
+fn strand_mark(center: f32, size: f32, color: u32, hollow: bool) -> Div {
+    let ground = size + MARK_GAP * 2.;
+    div()
+        .absolute()
+        .left(px(-STRAND_LEFT + 0.5 - ground / 2.))
+        .top(px(center - ground / 2.))
+        .size(px(ground))
+        .rounded_full()
+        .bg(rgb(colors().bg))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .size(px(size))
+                .rounded_full()
+                .bg(rgb(color))
+                .flex()
+                .items_center()
+                .justify_center()
+                .when(hollow, |el| {
+                    el.child(
+                        div()
+                            .size(px(size - 3.))
+                            .rounded_full()
+                            .bg(rgb(colors().bg)),
+                    )
+                }),
+        )
+}
+
+/// A tool's path as Changes lists it: relative to the checkout.
+fn checkout_relative(checkout: &std::path::Path, path: &str) -> std::path::PathBuf {
+    let path = std::path::Path::new(path);
+    path.strip_prefix(checkout).unwrap_or(path).to_path_buf()
+}
 
 /// Whether an approval shows enough to decide on. Pi's details are the call's
 /// full arguments, so without them nothing is shown to approve. Another
@@ -118,17 +196,13 @@ impl Plait {
                 cx,
             ))
             .child(body)
+            // The latest turn's record sits with its state, where the line ends.
             .when_some(
-                self.formatted.turn_summaries.get(&message.id),
-                |el, summary| {
-                    el.child(
-                        div()
-                            .pt_1()
-                            .text_size(px(11.))
-                            .text_color(rgb(colors().muted))
-                            .child(summary.clone()),
-                    )
-                },
+                self.formatted
+                    .turn_summaries
+                    .get(&message.id)
+                    .filter(|_| !self.closes_latest_turn(&message.id)),
+                |el, summary| el.child(self.turn_record(&message.id, summary, cx)),
             );
         let part = self
             .history
@@ -158,7 +232,8 @@ impl Plait {
             let text = message.text.clone();
             move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
         });
-        // Position says who is speaking; the label is for assistive technology.
+        // A request heads its turn on the turn line; the label is for
+        // assistive technology.
         let id = (
             ElementId::from("live-message"),
             SharedString::from(message.id.clone()),
@@ -168,39 +243,133 @@ impl Plait {
             if user { "Your" } else { "Assistant" },
             message.text
         );
-        if user {
-            div()
-                .flex()
-                .justify_end()
-                .items_start()
-                .gap_1()
-                .child(copy.mt(px(6.)))
-                .child(
-                    bubble()
-                        .id(id)
-                        .role(Role::Group)
-                        .aria_label(label)
-                        .min_w_0()
-                        .child(body),
-                )
-                .into_any_element()
-        } else {
-            // A block, not a flex row, so long replies wrap at the column width.
-            div()
-                .id(id)
-                .role(Role::Group)
-                .aria_label(label)
-                .relative()
-                .child(body)
-                .child(
-                    div()
-                        .absolute()
-                        .top(px(-COPY_LIFT))
-                        .right_0()
-                        .child(copy.h(px(COPY_LIFT)).bg(rgb(colors().bg))),
-                )
-                .into_any_element()
+        // A block, not a flex row, so long text wraps at the column width.
+        div()
+            .id(id)
+            .role(Role::Group)
+            .aria_label(label)
+            .relative()
+            .when(user, |el| {
+                el.font_weight(FontWeight::SEMIBOLD).child(strand_mark(
+                    PROSE_LINE / 2.,
+                    RING,
+                    colors().muted,
+                    true,
+                ))
+            })
+            .child(body)
+            .child(
+                div()
+                    .absolute()
+                    .top(px(-COPY_LIFT))
+                    .right_0()
+                    .child(copy.h(px(COPY_LIFT)).bg(rgb(colors().bg))),
+            )
+            .into_any_element()
+    }
+
+    /// The record of the latest turn, once that turn has finished. It is
+    /// drawn with the turn's state where the line ends, not in the list.
+    fn latest_record<'a>(
+        &'a self,
+        snapshot: &'a Snapshot,
+    ) -> Option<(&'a str, &'a history::TurnSummary)> {
+        if snapshot.status.busy() {
+            return None;
         }
+        let last = snapshot.messages.last()?;
+        let summary = self.formatted.turn_summaries.get(&last.id)?;
+        Some((&last.id, summary))
+    }
+
+    /// Whether the message `id` is the answer that closes the latest turn.
+    fn closes_latest_turn(&self, id: &str) -> bool {
+        self.conversation_snapshot()
+            .and_then(|snapshot| self.latest_record(snapshot))
+            .is_some_and(|(last, _)| last == id)
+    }
+
+    /// What a finished turn did, in the words and controls of one line: its
+    /// steps and the files its edits changed, each opening in Changes.
+    fn record_parts(
+        &self,
+        id: &str,
+        summary: &history::TurnSummary,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        /// Files named before the rest are counted.
+        const NAMED: usize = 3;
+        let word = |text: String, color: u32| {
+            div()
+                .h(px(RECORD_LINE))
+                .flex()
+                .items_center()
+                .text_color(rgb(color))
+                .child(text)
+                .into_any_element()
+        };
+        let checkout = self
+            .conversation_snapshot()
+            .map(|snapshot| snapshot.checkout.clone())
+            .unwrap_or_default();
+        let mut parts = vec![word(summary.steps_label(), colors().muted)];
+        if summary.files.is_empty() {
+            return parts;
+        }
+        parts.push(word("·".into(), colors().subtle));
+        parts.push(word("edited".into(), colors().subtle));
+        parts.extend(summary.files.iter().take(NAMED).map(|path| {
+            let target = checkout_relative(&checkout, path);
+            let name = target
+                .file_name()
+                .map_or_else(|| path.clone(), |name| name.to_string_lossy().into_owned());
+            button(
+                (
+                    ElementId::from("turn-file"),
+                    SharedString::from(format!("{id}:{path}")),
+                ),
+                "",
+            )
+            .h(px(RECORD_LINE))
+            .px_1()
+            .aria_label(format!("Show {} in Changes", target.display()))
+            .child(div().font_family(MONO).child(name))
+            .on_activate(cx, move |this, window, cx| {
+                this.open_thread_file(target.clone(), window, cx)
+            })
+            .into_any_element()
+        }));
+        let more = summary.files.len().saturating_sub(NAMED);
+        if more > 0 {
+            parts.push(word(format!("and {more} more"), colors().subtle));
+        }
+        parts
+    }
+
+    /// Where an earlier turn closes on the turn line: a node and its record.
+    fn turn_record(
+        &self,
+        id: &str,
+        summary: &history::TurnSummary,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        row()
+            .id(SharedString::from(format!("turn-record-{id}")))
+            .role(Role::Group)
+            .aria_label(format!("This turn: {}", summary.label()))
+            .relative()
+            .flex_wrap()
+            .gap_x(px(6.))
+            .pt(px(2.))
+            .text_size(px(12.))
+            .child(strand_mark(
+                2. + RECORD_LINE / 2.,
+                NODE,
+                colors().subtle,
+                false,
+            ))
+            .children(self.record_parts(id, summary, cx))
+            .into_any_element()
     }
 
     /// The answer being written, with a still mark that it is not finished.
@@ -241,18 +410,12 @@ impl Plait {
             }
             None => prose().child(text.to_owned()).into_any_element(),
         };
+        // The live state is named once, where the turn line ends.
         column()
             .id("live-stream")
             .role(Role::Group)
             .aria_label(format!("Assistant is writing: {text}"))
-            .gap_2()
             .child(body)
-            .child(
-                row()
-                    .gap(px(6.))
-                    .child(dot(colors().blue))
-                    .child(tag("Writing…", colors().muted)),
-            )
             .into_any_element()
     }
 
@@ -363,12 +526,12 @@ impl Plait {
         else {
             return div().into_any_element();
         };
-        // Top padding leaves room for a reply's copy control; a reply sits
-        // closer to the tool calls that follow it than to what came before.
+        // Top padding leaves room for a message's copy control; a reply sits
+        // closer to the tool calls that follow it than to what came before,
+        // and a request stands clear of the turn above it.
+        let request = matches!(row, Row::Message(message) if message.role == MessageRole::User);
         let (content, top, bottom) = match row {
-            Row::Message(message) if message.role == MessageRole::User => {
-                (self.live_message(message, index, cx), 10., 4.)
-            }
+            Row::Message(message) if request => (self.live_message(message, index, cx), 22., 2.),
             Row::Message(message) => (self.live_message(message, index, cx), COPY_LIFT, 6.),
             Row::Streaming(text) => (self.live_stream(text, index, cx), 14., 8.),
             Row::Reasoning(message) => (
@@ -383,17 +546,26 @@ impl Plait {
                 None => return div().into_any_element(),
             },
         };
+        // A request that opens the conversation starts the line at its ring.
+        let from = if request && index == 0 {
+            top + PROSE_LINE / 2.
+        } else {
+            0.
+        };
+        // The padding is inside the column, so the line spans the whole row.
         div()
             .group(row_group(index))
             .w_full()
             .px_6()
-            .pt(px(top))
-            .pb(px(bottom))
             .child(
                 div()
+                    .relative()
                     .w_full()
                     .max_w(px(CONTENT_WIDTH))
                     .mx_auto()
+                    .pt(px(top))
+                    .pb(px(bottom))
+                    .child(strand_line(from))
                     .child(content),
             )
             .into_any_element()
@@ -424,7 +596,8 @@ impl Plait {
                     cx.processor(|this, index, _, cx| this.live_event(index, cx)),
                 )
                 .size_full()
-                .py_2(),
+                // No space below: the turn line runs on into the state line.
+                .pt_2(),
             )
             .when(away, |el| {
                 el.child(
@@ -702,22 +875,69 @@ Tone::Filled,
                 )));
             }
             if let Some((state, failed)) = history::run_state(snapshot, self.history.now) {
+                /// Space above the state's line.
+                const LEAD: f32 = 8.;
+                // The node takes the thread's state color, as the rail does;
+                // a finished turn is quiet.
+                let tint = match snapshot.status {
+                    ThreadStatus::Idle => colors().muted,
+                    status => host_status_color(status),
+                };
+                // The turn line ends here, at the state of its latest turn
+                // and, once that turn has finished, its record.
+                let center = LEAD + RECORD_LINE / 2.;
+                // Read from the snapshot the rows draw, so the record that a
+                // row leaves out is the one drawn here.
+                let record = self
+                    .conversation_snapshot()
+                    .and_then(|shown| self.latest_record(shown))
+                    .map(|(id, summary)| {
+                        (
+                            format!("{state} · {}", summary.label()),
+                            self.record_parts(id, summary, cx),
+                        )
+                    });
+                let (name, parts) = record.unwrap_or_else(|| (state.clone(), Vec::new()));
                 main = main.child(
-                    div().px_6().py_2().child(
+                    div().px_6().child(
                         row()
+                            .id("turn-state")
+                            .role(Role::Group)
+                            .aria_label(name)
+                            .relative()
+                            .flex_wrap()
+                            .gap_x(px(6.))
                             .w_full()
                             .max_w(px(CONTENT_WIDTH))
                             .mx_auto()
+                            .pt(px(LEAD))
+                            .pb(px(6.))
                             .text_size(px(12.))
-                            .text_color(rgb(if failed { colors().red } else { colors().muted }))
-                            .child(dot(if failed {
-                                colors().red
-                            } else if snapshot.status.busy() {
-                                colors().blue
-                            } else {
-                                colors().muted
-                            }))
-                            .child(state),
+                            .when(self.live_count > 0, |el| el.child(strand_end(center)))
+                            .child(strand_mark(center, NODE, tint, false))
+                            .child(
+                                div()
+                                    .h(px(RECORD_LINE))
+                                    .flex()
+                                    .items_center()
+                                    .text_color(rgb(if failed {
+                                        colors().red
+                                    } else {
+                                        colors().muted
+                                    }))
+                                    .child(state),
+                            )
+                            .when(!parts.is_empty(), |el| {
+                                el.child(
+                                    div()
+                                        .h(px(RECORD_LINE))
+                                        .flex()
+                                        .items_center()
+                                        .text_color(rgb(colors().subtle))
+                                        .child("·"),
+                                )
+                                .children(parts)
+                            }),
                     ),
                 );
             }

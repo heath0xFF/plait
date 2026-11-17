@@ -605,8 +605,9 @@ Reasoning has its own stable row identity and parsed blocks. Completed reasoning
 starts collapsed; live reasoning has a compact, scrollable body. Disclosure and
 selection survive ordinary snapshot updates. Replacing an oversized text part
 clears selection because its offsets now refer to another part. Run-state copy
-uses only host facts: no invented stop actor or per-turn duration. Completed
-answers summarize observed tool steps and successfully edited or written paths.
+uses only host facts: no invented stop actor or per-turn duration. A finished
+turn's record counts observed tool steps and names successfully edited or
+written paths (`plait-core::history::TurnSummary`).
 A response still streaming can only show the host's bounded live tail; its full
 stored text loads after the host saves it.
 
@@ -626,9 +627,15 @@ one step for each pointer movement; it does not keep scrolling while the
 pointer rests. Rows between the two ends are copied whether or not they are on
 screen; a tool's details are copied only while they are open.
 
-Conversation events use GPUI's variable-height `list`. User messages render as
-right-aligned bubbles; agent replies remain open text. Tool details start
-collapsed. Disclosure state belongs to the UI and clears on thread selection.
+Conversation events use GPUI's variable-height `list`. The conversation is
+drawn as a log of turns: a request heads its turn at a ring on the turn line,
+and replies and tool calls are open text beside it. Each row draws its own
+piece of that line across its full height, padding included, so the pieces
+meet; a row needs only its own kind and position, so no pass over the
+transcript runs per frame. An earlier turn's record is part of its last
+answer's row. The latest
+turn's record is drawn with the run state below the list, where the line ends.
+Tool details start collapsed. Disclosure state belongs to the UI and clears on thread selection.
 A call folded into a closed group keeps its list row and draws nothing, so row
 identity and the scroll anchor do not depend on grouping; rows whose folding
 changes are remeasured. A control to jump to the newest row appears while the
