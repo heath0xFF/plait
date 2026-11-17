@@ -10,10 +10,9 @@ runtime acceptance is not yet complete.
 ## Download and install
 
 Published previews live on the [GitHub releases page](https://github.com/heath0xFF/plait/releases).
-Download the **DMG**, open it, then run **Install Plait.pkg**. The disk image also
-has **Update Client.pkg** for an already-installed host build. This is an
-installer-based app and host, not a drag-to-Applications client that silently
-omits the execution runtime.
+Download the **DMG**, open it, then run **Install Plait.command**. It installs
+the prebuilt app and bundled host in the per-user layout used by in-app updates.
+No source checkout, Xcode, Rust, or separately installed Node is required.
 
 For a command-line installation or update, download and inspect the installer:
 
@@ -31,18 +30,21 @@ The short form is:
 curl --proto '=https' -fsSL https://raw.githubusercontent.com/heath0xFF/plait/main/scripts/install.sh | bash -s -- --allow-unsigned
 ```
 
-Run it as your normal user, not under `sudo`. It requests
-administrator access only for the package installation. The flag explicitly
-accepts the unsigned preview; the script does not change Gatekeeper or remove
-quarantine attributes.
+Run it as your normal user, not under `sudo`. Only migrating an older
+system-wide installation requires administrator access, once. The flag accepts
+the unsigned preview; the script does not change Gatekeeper or remove quarantine
+attributes. Finish or Stop active tasks before installing. Threads, drafts, and
+credentials are preserved; the app reopens after installation.
 
 The script uses the newest published release, including previews.
-`--version v0.1.0-preview.2` pins a release; `--component client` updates only the app.
-`--download ~/Downloads` checks and saves the package without installing it.
-It verifies the package against the release's SHA-256 metadata over HTTPS.
-This detects corruption, not publisher identity; it is not a signed updater.
-An already-installed identical host is left alone and the default installation
-selects only the client. No active process is stopped.
+`--version v0.1.0-preview.4` pins a release. `--download ~/Downloads` verifies and
+saves the app archive without installing it. Initial downloads are checked
+against the release's SHA-256 metadata over HTTPS; this detects corruption, not
+publisher identity. Later in-app updates verify signed release manifests.
+
+`--component all`, `client`, and `host` retain the older system-wide package
+installation paths for manual component management. Those packages do not
+create an installation eligible for in-app updates.
 
 ## Packages
 
@@ -50,11 +52,11 @@ selects only the client. No active process is stopped.
 
 | Artifact | Purpose |
 | --- | --- |
-| `Plait-…-macos-arm64.dmg` | Finder download containing the combined installer, client update, and instructions |
+| `Plait-…-macos-arm64.dmg` | Prebuilt app archive, Install Plait.command, and instructions |
 | `Plait-Installer-…-macos-arm64.pkg` | Install both components; Customize can select either one |
 | `Plait-Client-…-macos-arm64.pkg` | Install or update only `/Applications/Plait.app` |
 | `Plait-Host-…-macos-arm64.pkg` | Install or stage only the host, Node, and pinned runtime |
-| `Plait-…-macos-arm64.zip` | Portable client bundle; no host installation |
+| `Plait-…-macos-arm64.zip` | App bundle with its host archive and prebuilt-install script |
 | `Plait-Release-….json` and `.sha256` files | Component metadata and artifact checksums |
 
 **These are unsigned preview installers, not notarized releases.** The client
@@ -70,14 +72,16 @@ stop; this preview provides no security-policy bypass.
 ## First installation
 
 1. Finish work in any manually started development host. Do not start two hosts
-   against the same store. The installer never kills an existing host.
-2. Quit the Plait client, then open the combined `.pkg`. Installer needs an
-   administrator account to install shared program files.
+   against the same store. The installer refuses while a managed run is active or awaiting approval.
+2. Open **Install Plait.command** from the DMG. It closes the client, installs
+   the app and host, and reopens Plait. An older system-wide install needs an
+   administrator password once; subsequent updates do not.
 3. Open **Plait** from Applications. Use **Open repository…** (Cmd-O), then
    **Settings** (Cmd-comma) to check the local host and choose an authenticated
    model. Reconnect if the client opened before the host was ready.
-4. Start a new real thread. Review each exact edit or command before approval.
-   The app shows only real threads; there is no sample conversation.
+4. Start a real thread. Settings → Approvals selects automatic approval or
+   asking for each action. Trusted commands require a separate explicit choice
+   for each project. The app shows only real threads.
 
 The host is a **per-user LaunchAgent**, not a root daemon. It starts for the
 current graphical user when possible and at later graphical logins. If no
@@ -398,9 +402,9 @@ signature remains ad hoc; downloads are not notarized.
 
 In-app updates need a per-user install: an app bundle you own and a host under
 `~/Library/Application Support/Plait/Host`. An install made by the published
-Installer packages is root-owned. Move it once with
-`scripts/update-installed-macos.sh` from a checkout (it asks for administrator
-access once). Release builds compare versions; a source build is offered the
+Installer packages is root-owned. Run **Install Plait.command** from the
+latest DMG, or use the command-line installer above, to migrate once. It asks
+for administrator access only for that migration; no source build is needed. Release builds compare versions; a source build is offered the
 newest release.
 
 ### Headless hosts

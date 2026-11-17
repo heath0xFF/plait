@@ -6,7 +6,7 @@ Open a repository, start a conversation, approve edits and commands, and review
 what changed. An independent host runs the agent, so closing the desktop does
 not stop accepted work. Reopen it to return to the same thread and saved draft.
 
-[Download preview](https://github.com/heath0xFF/plait/releases/tag/v0.1.0-preview.2) · [Documentation](docs/README.md) · [Contribute](CONTRIBUTING.md)
+[Download preview](https://github.com/heath0xFF/plait/releases) · [Documentation](docs/README.md) · [Contribute](CONTRIBUTING.md)
 
 ![Plait showing a completed coding task, native code block, tool results, and saved draft](https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.2/installed-client-coding.png)
 
@@ -20,32 +20,35 @@ your own model-provider account. The installer includes the host and Node runtim
 **This preview is unsigned and not notarized.** Review the
 [Mac setup guide](docs/MACOS.md) before installing. Do not disable Gatekeeper.
 
-[Download the DMG](https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.2/Plait-0.1.0-5316950cf690-macos-arm64.dmg),
-open it, and run **Install Plait.pkg**. Or install from Terminal:
+Download the **DMG** from the [releases page](https://github.com/heath0xFF/plait/releases),
+open it, and run **Install Plait.command**. Or install from Terminal:
 
 ```sh
 curl --proto '=https' -fsSL \
-  https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.2/install.sh |
-  bash -s -- --version v0.1.0-preview.2 --allow-unsigned
+  https://raw.githubusercontent.com/heath0xFF/plait/main/scripts/install.sh |
+  bash -s -- --allow-unsigned
 ```
 
-Run as your normal user. The script requests administrator access for package
-installation and verifies SHA-256 checksums, not publisher signatures.
-Later releases install from **Plait → Check for Updates…** once Plait is a
-per-user install. See [updates](docs/MACOS.md#updates); package installs move
-over once with `scripts/update-installed-macos.sh`.
+This installs the prebuilt app and bundled host. You do not need a source
+checkout, Xcode, Rust, or Node. Finish active tasks first; threads, drafts, and
+credentials are preserved. An older system-wide install needs administrator
+access once to move to the per-user layout. Initial downloads are checked
+against SHA-256 metadata over HTTPS; the flag accepts the unsigned preview.
+
+Future updates install from **Plait → Check for Updates…**, using signed release
+manifests. See [Mac setup and updates](docs/MACOS.md).
 
 ## Start working
 
 1. Open **Plait** and choose **Open repository…** (Cmd-O).
-2. Open **Settings** (Cmd-comma) and select an authenticated model. Source builds
+2. Open **Settings** (Cmd-comma) and select an authenticated model. Current builds
    offer **Providers** for sign-in, API keys, and custom servers; see
    [authentication setup](docs/MACOS.md#authentication-and-status) for the preview.
 3. Start a thread. Review each edit and command before **Allow once**.
 4. Read the results, inspect **Changes**, and continue in the same conversation.
    Use **Stop** to cancel work; closing the desktop is not Stop.
 
-Source builds after v0.1.0-preview.2 also show projects across checkouts, live
+Current builds show projects across checkouts, live
 thread status, unread activity, search, rename, and archive. Opening another
 project keeps each thread's draft. See [project navigation](docs/MACOS.md#projects-and-threads)
 for live-list limits and notifications.
@@ -55,7 +58,7 @@ restore on reopening; no task is sent automatically. See
 [keyboard controls](docs/MACOS.md#keyboard-controls) and
 [Build Plait with Plait](docs/SELF-HOSTING.md) for the edit → test → review loop.
 
-Source builds with a version 3 host also queue follow-ups and steering while an
+Current builds with a version 3 host queue follow-ups and steering while an
 agent works, and let you change a thread's model and thinking level between
 runs. The composer shows waiting inputs and the latest context usage. See
 [working during a run](docs/MACOS.md#working-during-a-run).
@@ -102,7 +105,8 @@ This is the **M2 local preview**, not a complete IDE.
 
 - Local macOS execution only. Remote hosts and Linux execution are not available.
 - Git views are read-only. Use your own tools for staging and commits. There is
-  no file editor, embedded terminal, mandatory worktree, or automatic updater.
+  no file editor, embedded terminal, or mandatory worktree. Updates are
+  installed explicitly; they never restart active work automatically.
 - Commands cannot use external networking or write the checkout. Approved file
   tools make edits; build output goes to private caches. Model requests need
   access to your configured provider. Source builds of the host after
@@ -116,7 +120,8 @@ This is the **M2 local preview**, not a complete IDE.
   text-part controls.
 
 Mac CI verifies the installed app, sandbox, and recovery with scripted providers.
-Installed live-model and accessibility acceptance remain open. CI runs on macOS 26;
+A live-model self-development cycle has also been exercised; broader provider
+and accessibility acceptance remain open. CI runs on macOS 26;
 older-system runtime coverage and other open checks are in
 [Verification](docs/VERIFICATION.md). Planned features are in the [roadmap](docs/ROADMAP.md).
 

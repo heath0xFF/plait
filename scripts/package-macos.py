@@ -68,6 +68,7 @@ def main():
         shutil.copy2(ROOT / "target/release/plait", contents / "MacOS/plait")
         shutil.copy2(ROOT / "LICENSE", resources / "LICENSE")
         shutil.copy2(ROOT / "Cargo.lock", resources / "Cargo.lock")
+        shutil.copy2(ROOT / "scripts/update-installed-macos.sh", resources / "install-user.sh")
         shutil.copy2(ROOT / "target/THIRD_PARTY_NOTICES.txt", resources / "THIRD_PARTY_NOTICES.txt")
         iconset = work / "Plait.iconset"
         iconset.mkdir()
@@ -115,7 +116,7 @@ def main():
         host_archive = work / f"Plait-Host-{host_version}-{revision}-macos-arm64.tar.gz"
         shutil.copy2(resources / "Host.tar.gz", host_archive)
         installers.append(host_archive)
-        installers += build_distribution(installers, version, revision, work)
+        installers += build_distribution(installers, version, revision, work, archive)
         # Only replace generated output after both the bundle and its archive pass verification.
         destination = dist / "Plait.app"
         if destination.exists():

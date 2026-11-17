@@ -19,7 +19,7 @@ pub const LABEL: &str = "dev.plait.host";
 pub const BUNDLE_ID: &str = "dev.plait.desktop";
 const LEGACY_AGENT: &str = "/Library/LaunchAgents/dev.plait.host.plist";
 const MIGRATE: &str = "This Plait was installed system-wide by an Installer package. \
-    Run scripts/update-installed-macos.sh once from a checkout to move it to a per-user install; \
+    Download the latest release and run Install Plait.command once to move it to a per-user install; \
     later updates install from here.";
 
 /// Where one user's host releases, service definition, and store live.

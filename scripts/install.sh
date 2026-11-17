@@ -9,13 +9,15 @@ host_base='/Library/Application Support/Plait/Host'
 
 usage() {
     printf '%s\n' \
-        'Usage: install.sh [--version TAG] [--component all|client|host]' \
+        'Usage: install.sh [--version TAG] [--component app|all|client|host]' \
         '                  [--allow-unsigned] [--download DIRECTORY]' \
         '' \
         'Without --version, use the newest published release, including previews.' \
+        'The default app install needs no build tools and supports in-app updates.' \
+        'all, client, and host select the older system-wide Installer packages.' \
         'Preview packages are unsigned. --allow-unsigned explicitly accepts that limit.' \
         'The script checks SHA-256, but this is not publisher signature verification.' \
-        'Client updates leave host work running. Host updates are staged, never forced.'
+        'App installation refuses active runs. Manual host packages stage their update.'
 }
 
 fail() { printf 'Plait: %s\n' "$*" >&2; exit 1; }
@@ -27,7 +29,7 @@ fetch() {
 field() { /usr/bin/plutil -extract "$1" raw -o - "$2"; }
 
 main() {
-    local version='' component='all' unsigned=false destination=''
+    local version='' component='app' unsigned=false destination=''
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --version|--component|--download)
@@ -43,7 +45,7 @@ main() {
             *) usage >&2; fail "Unknown option: $1" ;;
         esac
     done
-    [[ $component == all || $component == client || $component == host ]] || fail 'Unknown component.'
+    [[ $component == app || $component == all || $component == client || $component == host ]] || fail 'Unknown component.'
     [[ $(/usr/bin/uname -s) == Darwin && $(/usr/bin/uname -m) == arm64 ]] || fail 'This installer requires an Apple Silicon Mac.'
     local os
     os=$(/usr/bin/sw_vers -productVersion)
@@ -80,9 +82,13 @@ main() {
         fi
     fi
     local name expected actual package
-    name=$(field "downloads.$component.name" "$work/release.json")
+    name=$(field "downloads.$component.name" "$work/release.json") || fail 'This release has no requested installer. Use a newer release or choose an explicit legacy component.'
     expected=$(field "downloads.$component.sha256" "$work/release.json")
-    [[ $name =~ ^Plait-(Installer|Client|Host)-[0-9a-fA-Z.-]+-macos-arm64\.pkg$ ]] || fail 'Invalid package filename.'
+    if [[ $component == app ]]; then
+        [[ $name =~ ^Plait-[0-9a-fA-Z.-]+-macos-arm64\.zip$ ]] || fail 'Invalid app archive filename.'
+    else
+        [[ $name =~ ^Plait-(Installer|Client|Host)-[0-9a-fA-Z.-]+-macos-arm64\.pkg$ ]] || fail 'Invalid package filename.'
+    fi
     [[ $expected =~ ^[0-9a-f]{64}$ ]] || fail 'Invalid package checksum.'
     package="$work/$name"
     printf 'Downloading Plait %s (%s)…\n' "$version" "$component"
@@ -94,6 +100,16 @@ main() {
         [[ ! -e "$destination/$name" && ! -L "$destination/$name" ]] || fail 'The download destination already contains this filename.'
         /bin/cp -n "$package" "$destination/$name"
         printf 'Verified download: %s/%s\nUnsigned preview; see https://github.com/%s/releases/tag/%s\n' "$destination" "$name" "$repository" "$version"
+        return
+    fi
+    if [[ $component == app ]]; then
+        /usr/bin/ditto -x -k "$package" "$work/unpacked"
+        local bundle="$work/unpacked/Plait.app"
+        /usr/bin/codesign --verify --deep --strict "$bundle" || fail 'The app failed its signature check.'
+        [[ $(field CFBundleIdentifier "$bundle/Contents/Info.plist") == dev.plait.desktop ]] || fail 'The archive is not Plait.'
+        [[ $(field build_id "$bundle/Contents/Resources/host.json") == "$build_id" ]] || fail 'The bundled host does not match the release.'
+        /bin/bash "$bundle/Contents/Resources/install-user.sh" --app "$bundle"
+        printf '\nInstalled Plait %s. Future updates: Plait → Check for Updates…\n' "$version"
         return
     fi
     printf '\nUnsigned preview. No macOS security setting will be changed.\nQuit Plait before installing the client. Active host work will not be stopped.\n\n'

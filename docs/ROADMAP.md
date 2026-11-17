@@ -32,6 +32,11 @@ the complete development/install/continue workflow. Additive runtime tool
 schemas and private output storage are in scope; existing client protocol
 versions and the default sandbox policy remain compatible.
 
+The release installer must install the prebuilt app and host without development
+tools, preserve user data, and produce a per-user installation eligible for
+normal in-app updates. Existing package installs migrate with one administrator
+confirmation; active work must finish before migration or host replacement.
+
 ## Product structure
 
 **Project → Machine → Thread.** A project can have a checkout on more than one

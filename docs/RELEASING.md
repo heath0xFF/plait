@@ -12,12 +12,12 @@ manifest, and publishes.
 3. Tag the merged commit and push the tag:
 
    ```sh
-   git tag v0.1.0-preview.3
-   git push origin v0.1.0-preview.3
+   git tag v0.1.0-preview.4
+   git push origin v0.1.0-preview.4
    ```
 
 4. The **macOS build** workflow builds from that tag and runs the installer
-   smoke test. Its publish job writes `update.json`, signs it, and publishes the
+   smoke test, including migration to the prebuilt per-user install. Its publish job writes `update.json`, signs it, and publishes the
    release with the app archive, host archive, packages, DMG, and checksums.
 
 Installed apps see the release on their next launch or **Check for Updates…**.

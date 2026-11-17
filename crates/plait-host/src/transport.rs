@@ -283,7 +283,11 @@ pub fn serve(
 }
 
 fn send(socket: &mut UnixStream, value: &Value) -> io::Result<()> {
-    let mut bytes = serde_json::to_vec(value)?;
+    // Workspace builds can enable serde_json's preserve_order through GPUI.
+    // Keep the established wire order independent of Cargo feature unification.
+    let mut value = value.clone();
+    value.sort_all_objects();
+    let mut bytes = serde_json::to_vec(&value)?;
     bytes.push(b'\n');
     if bytes.len() > OUTPUT_LIMIT {
         return Err(io::Error::other("response exceeds bound"));
@@ -404,6 +408,17 @@ fn thread_changes(previous: &Value, current: &Value) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wire_objects_keep_sorted_keys_in_every_build() {
+        let (mut input, mut output) = UnixStream::pair().unwrap();
+        let value: Value = serde_json::from_str(r#"{"z":[{"z":0,"a":1}],"a":true}"#).unwrap();
+        send(&mut output, &value).unwrap();
+        assert_eq!(
+            timed_frame(&mut input, 100, Instant::now() + Duration::from_secs(1)).unwrap(),
+            b"{\"a\":true,\"z\":[{\"a\":1,\"z\":0}]}\n"
+        );
+    }
 
     #[test]
     fn thread_events_carry_only_changes_and_removals() {

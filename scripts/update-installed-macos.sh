@@ -1,6 +1,6 @@
 #!/bin/bash
-# Build this checkout and install it as this user's Plait: the development
-# update channel. Everything installs into locations the user owns, so updates
+# Install this checkout or an already-built app as this user's Plait.
+# Everything installs into locations the user owns, so updates
 # need no administrator access. The one exception is a one-time removal of an
 # earlier system-wide (package) installation.
 set -euo pipefail
@@ -19,7 +19,8 @@ uid=$(/usr/bin/id -u)
 
 usage() {
     printf '%s\n' \
-        'Usage: scripts/update-installed-macos.sh [--no-build] [--stage-host | --activate-host]' \
+        'Usage: update-installed-macos.sh [--app /path/to/Plait.app | --no-build]' \
+        '                                 [--stage-host | --activate-host]' \
         '' \
         'Builds Plait from this checkout, including uncommitted changes, and installs' \
         "it as $app with its host in your Library folder. The host is unpacked only" \
@@ -27,6 +28,7 @@ usage() {
         'run is active; otherwise it is staged and the script says how to finish.' \
         '' \
         '  --no-build       install the app already built in dist/' \
+        '  --app PATH       install a prebuilt app; no source checkout or build tools needed' \
         '  --stage-host     install a new host but leave the running host alone' \
         '  --activate-host  only switch the running host to the installed build'
 }
@@ -89,6 +91,7 @@ migrate_legacy() {
     require_idle 'Finish or Stop them before the one-time move to a per-user install.' || exit 1
     printf 'Moving Plait from the system-wide install to your user folders (one time).\n'
     printf 'Administrator access is needed once to remove the old program files.\n'
+    /usr/bin/sudo -v
     stop_agent
     /usr/bin/sudo /bin/rm -f "$legacy_agent"
     /usr/bin/sudo /bin/rm -rf "$legacy_host"
@@ -197,10 +200,13 @@ activate_host() {
 }
 
 main() {
-    local build=true host_mode=activate
+    local build=true prebuilt=false host_mode=activate source="$root/dist/Plait.app"
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --no-build) build=false ;;
+            --app)
+                [[ $# -ge 2 && $2 == /* ]] || fail '--app requires an absolute bundle path.'
+                source=$2; build=false; prebuilt=true; shift ;;
             --stage-host) host_mode=stage ;;
             --activate-host) activate_host; return ;;
             --help|-h) usage; return ;;
@@ -210,18 +216,26 @@ main() {
     done
     [[ $(/usr/bin/uname -s) == Darwin && $(/usr/bin/uname -m) == arm64 ]] || fail 'This requires an Apple Silicon Mac.'
     [[ $EUID -ne 0 ]] || fail 'Run as your normal user, not with sudo.'
+    local os
+    os=$(/usr/bin/sw_vers -productVersion)
+    [[ ${os%%.*} -ge 15 ]] || fail 'macOS 15 or later is required.'
 
     if "$build"; then
         PLAIT_BUILD_TIME=$(/bin/date -u '+%Y-%m-%d %H:%M UTC')
         export PLAIT_BUILD_TIME
         bash scripts/build-macos.sh
     fi
-    [[ -f dist/Plait.app/Contents/Resources/host.json ]] || fail 'dist/Plait.app has no embedded host. Run without --no-build.'
+    [[ -f "$source/Contents/Resources/host.json" ]] || fail 'The app has no embedded host.'
+    /usr/bin/codesign --verify --deep --strict "$source" || fail 'The app failed its signature check.'
+    [[ $(field CFBundleIdentifier "$source/Contents/Info.plist") == "$bundle_id" ]] || fail 'The bundle is not Plait.'
+    if "$prebuilt" && [[ $host_mode == activate ]]; then
+        require_idle 'Finish or Stop them, then run the installer again.' || exit 1
+    fi
 
     quit_client || true
     migrate_legacy
     printf 'Installing %s…\n' "$app"
-    install_app dist/Plait.app
+    install_app "$source"
     install_host
     if [[ $host_mode == activate ]]; then
         activate_host

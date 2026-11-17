@@ -70,3 +70,21 @@ if ! /usr/sbin/screencapture -x dist/installed-client.png; then
     echo 'The installed client stayed running, but this runner could not capture its display.' >&2
 fi
 printf 'Installed client launch and packaged host/runtime checks passed.\n'
+
+# Exercise the same prebuilt installer shipped in the app, including migration
+# from the system-wide packages tested above. Never compile during this step.
+kill -TERM "$pid"
+wait "$pid" 2>/dev/null || true
+pid=''
+before_threads=$(/usr/bin/sqlite3 "$HOME/.local/share/plait/host.sqlite" 'SELECT count(*) FROM threads')
+before_draft=$(shasum -a 256 "$fixture/desktop/desktop.json")
+bash dist/Plait.app/Contents/Resources/install-user.sh --app "$root/dist/Plait.app"
+[[ $(/usr/bin/stat -f %u /Applications/Plait.app) == "$(id -u)" ]]
+[[ -w /Applications && ! -e /Library/LaunchAgents/dev.plait.host.plist ]]
+user_host="$HOME/Library/Application Support/Plait/Host"
+installed_id=$(/usr/bin/plutil -extract build_id raw -o - "$user_host/installed.json")
+[[ $installed_id == "$build_id" ]]
+"$user_host/releases/$installed_id/bin/plait-host" status
+[[ $(/usr/bin/sqlite3 "$HOME/.local/share/plait/host.sqlite" 'SELECT count(*) FROM threads') == "$before_threads" ]]
+[[ $(shasum -a 256 "$fixture/desktop/desktop.json") == "$before_draft" ]]
+printf 'Prebuilt per-user install preserved threads and drafts; in-app update ownership requirements passed.\n'
