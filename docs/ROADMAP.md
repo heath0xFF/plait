@@ -53,8 +53,9 @@ private-network transport; the planned Tailscale integration does not exist yet.
 Do not expose the current local socket protocol over a public TCP listener.
 
 Multiple threads do not imply isolated files. Worktrees stay optional, and
-writers must coordinate around existing dirty work. There is no embedded terminal,
-mandatory agent orchestration, automatic swarm, or built-in cloud compute service.
+writers must coordinate around existing dirty work. Each thread is one agent
+the person directs; Plait does not orchestrate agents or run swarms. There is
+no embedded terminal or built-in cloud compute service.
 Existing checkouts can be opened as projects.
 
 **Agreed for M4 Git, ahead of M3:** Plait builds Plait, so committing reviewed
@@ -139,7 +140,7 @@ place), so the agent itself should be the person's choice.
 
 Before implementation: agree the protocol additions (harness choice when a
 thread starts, capability flags, increments), the order of harnesses, and how
-installs are found and pinned. Compare other multi-agent workspaces by outcomes
+installs are found and pinned. Compare other agent workspaces by outcomes
 only, per the originality policy.
 
 **Direction for M8, skills, tools, and CLIs:** today a Pi thread in Plait sees

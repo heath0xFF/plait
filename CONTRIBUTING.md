@@ -64,8 +64,8 @@ exact-call approval and sandbox checks. Models and Git must remain independent
 of GPUI; filesystem and Git work must stay off the render thread.
 
 Remote execution, Git writes beyond staging and committing (push, discard,
-history rewriting), unattended orchestration, and an embedded terminal are
-outside the current work. See the [host contract](docs/HOST.md) for
+history rewriting) and an embedded terminal are outside the current work, and
+agent orchestration is not part of Plait. See the [host contract](docs/HOST.md) for
 the complete safety boundary and the [roadmap](docs/ROADMAP.md) for later work.
 
 ## Required checks

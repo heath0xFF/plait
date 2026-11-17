@@ -30,7 +30,7 @@ and attribute the desktop, Rust host, Node sidecar, LaunchAgent, and child proce
 | Long conversations | The UI receives a bounded transcript tail, not 2,000 accessible history items |
 | Tokens and repository rules | Capture real requests, model/effort settings, side calls, and instruction handling |
 | Permissions | Exact-call approvals and offline, read-only command access are not equivalent to full-access benchmark settings |
-| Orchestration | Not supported; do not add swarms or mandatory worktrees for a ranking |
+| Orchestration | Not part of Plait; do not add swarms or mandatory worktrees for a ranking |
 
 The runtime permits at most eight active checkouts and 20 turns per run. Separate
 checkouts can support an internal load probe, but do not claim equivalence to a

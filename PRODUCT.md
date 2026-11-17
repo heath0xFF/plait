@@ -25,7 +25,7 @@ animation. See [DESIGN.md](DESIGN.md) for layout and tokens.
 
 ## Principles
 Responsiveness, explicit effects, and user control. No blocking I/O in render,
-mandatory worktrees, hidden execution, or speculative orchestration. Build small,
+mandatory worktrees, hidden execution, or agent orchestration. Build small,
 testable changes with clear state, presentation, and execution boundaries.
 
 ## Decisions

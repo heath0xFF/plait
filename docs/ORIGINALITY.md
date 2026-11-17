@@ -28,7 +28,7 @@ retain its provenance and editing notes.
 - Native Rust + GPUI, not a web desktop shell.
 - Project → Machine → Thread, with execution location visible.
 - Independent hosts and recoverable conversations.
-- No mandatory worktrees, embedded terminal, or hidden orchestration.
+- No mandatory worktrees, embedded terminal, or agent orchestration.
 - Read-only desktop Git through M2.
 - Exact approvals, safe Stop, protected existing work, and honest state labels.
 - Measured responsiveness and independent client/host updates.

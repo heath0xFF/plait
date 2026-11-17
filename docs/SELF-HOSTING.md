@@ -127,6 +127,6 @@ The self-hosting acceptance bar is a real multi-file feature with diagnosed
 failures, follow-up revisions, diff review, an installed resulting build, and
 continued work afterward. It is not established by a single small edit. See
 [Verification](VERIFICATION.md) for the recorded coverage and remaining limits.
-Plait has no embedded terminal, native visual-testing agent, or agent-team
+Plait has no embedded terminal, native visual-testing agent, or agent
 orchestration; external tools still handle native inspection and interactive
 debugging.

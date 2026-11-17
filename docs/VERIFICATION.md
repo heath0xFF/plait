@@ -303,8 +303,8 @@ Real-host tests trigger the pinned runtime's automatic compaction policy with
 a scripted provider. They verify that the model keeps the task goal, original
 history remains available, internal summaries do not become user messages,
 restart during summarization makes no new requests until submission, and a
-failed required summary can recover. They establish orchestration and storage
-behavior, not the quality of summaries produced by a live model.
+failed required summary can recover. They establish request sequencing and
+storage behavior, not the quality of summaries produced by a live model.
 
 An installed source build was also exercised with a live provider on Plait's
 actual Rust and TypeScript code. The run made a cross-language change, added
