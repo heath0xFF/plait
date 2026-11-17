@@ -16,6 +16,8 @@ pub enum HarnessId {
     #[default]
     Pi,
     Codex,
+    /// Claude Code, run through Anthropic's Agent SDK once the person sets it up.
+    Claude,
     /// A harness from a newer host. It can be shown, never chosen.
     #[serde(other, skip_serializing)]
     Other,
@@ -26,6 +28,7 @@ impl HarnessId {
         match self {
             Self::Pi => "Pi",
             Self::Codex => "Codex",
+            Self::Claude => "Claude Code",
             Self::Other => "Another harness",
         }
     }
@@ -75,6 +78,13 @@ pub enum Request {
         mode: String,
         protocol_version: u32,
     },
+    /// Download what a `SetupRequired` harness needs; only Claude Code has
+    /// setup. The reply is the whole list, that harness checked again, and a
+    /// failed setup stays `SetupRequired` with a note saying why.
+    SetUpHarness {
+        harness: HarnessId,
+        protocol_version: u32,
+    },
 }
 
 impl Request {
@@ -99,6 +109,13 @@ impl Request {
             protocol_version: 4,
         }
     }
+
+    pub fn set_up_harness(harness: HarnessId) -> Self {
+        Self::SetUpHarness {
+            harness,
+            protocol_version: 4,
+        }
+    }
 }
 
 /// Whether a harness can start a thread now.
@@ -112,6 +129,8 @@ pub enum HarnessState {
     SignedOut,
     /// Installed, but it could not be started or asked; `fix` says why.
     Unavailable,
+    /// The harness needs a download the person starts with `set_up_harness`.
+    SetupRequired,
     #[serde(other)]
     Other,
 }
@@ -124,6 +143,7 @@ impl HarnessState {
             Self::UnsupportedVersion => "Version not supported",
             Self::SignedOut => "Signed out",
             Self::Unavailable => "Unavailable",
+            Self::SetupRequired => "Needs setup",
             Self::Other => "Unknown",
         }
     }
@@ -212,6 +232,10 @@ mod tests {
                 .unwrap(),
             serde_json::json!({"op": "set_harness_mode", "harness": "codex", "mode": "ask", "protocol_version": 4})
         );
+        assert_eq!(
+            serde_json::to_value(Request::set_up_harness(HarnessId::Claude)).unwrap(),
+            serde_json::json!({"op": "set_up_harness", "harness": "claude", "protocol_version": 4})
+        );
     }
 
     #[test]
@@ -225,6 +249,79 @@ mod tests {
         .unwrap();
         assert_eq!(current.mode.as_deref(), Some("ask"));
         assert_eq!(current.reported.as_deref(), Some("read_only"));
+        let claude: ThreadHarness = serde_json::from_str(
+            r#"{"id":"claude","version":"2.1.326","mode":"auto","reported":null}"#,
+        )
+        .unwrap();
+        assert_eq!(claude.id, HarnessId::Claude);
+        assert_eq!(claude.id.label(), "Claude Code");
+        assert_eq!(
+            (claude.mode.as_deref(), claude.reported),
+            (Some("auto"), None)
+        );
+    }
+
+    /// The Claude Code entry as the host sends it before setup, and after.
+    const CLAUDE_MODES: &str = r#"[
+        {"id":"ask","label":"Ask","detail":"Claude Code asks before each edit and command your Claude Code settings do not already allow."},
+        {"id":"accept_edits","label":"Accept edits","detail":"Claude Code edits files in this checkout without asking, and asks before other commands."},
+        {"id":"plan","label":"Plan","detail":"Claude Code reads and plans without changing anything, and asks before it starts on the plan."},
+        {"id":"auto","label":"Auto","detail":"Claude Code's own safety check approves or blocks each request, and asks only when it cannot decide."},
+        {"id":"bypass","label":"Bypass","detail":"Claude Code never asks and has no sandbox: it can change any file and run any command."}]"#;
+
+    fn claude_entry(state: &str, note: &str, version: &str, path: &str, models: &str) -> String {
+        format!(
+            r#"{{"id":"claude","name":"Claude Code","state":"{state}","note":{note},"version":{version},
+               "supported":{{"min":"2.1.290","tested":"2.1.326"}},"path":{path},
+               "capabilities":{{"steer":true,"approvals":true,"thinking":true,"usage":true}},
+               "protection":"The thread's Claude Code mode and your Claude Code settings.",
+               "modes":{CLAUDE_MODES},"default_mode":"auto","models":{models}}}"#
+        )
+    }
+
+    #[test]
+    fn claude_code_decodes_before_and_after_setup() {
+        let before: Harness = serde_json::from_str(&claude_entry(
+            "setup_required",
+            r#""Set up Claude Code threads to download Anthropic's Agent SDK 0.3.326 from the npm registry to this Mac.""#,
+            "null",
+            "null",
+            "[]",
+        ))
+        .unwrap();
+        assert_eq!(
+            (before.id, before.state),
+            (HarnessId::Claude, HarnessState::SetupRequired)
+        );
+        assert_eq!(before.state.label(), "Needs setup");
+        assert!(
+            before
+                .note
+                .unwrap()
+                .starts_with("Set up Claude Code threads")
+        );
+        assert!(before.version.is_none() && before.path.is_none());
+        assert_eq!(before.modes.len(), 5);
+        assert_eq!(before.default_mode.as_deref(), Some("auto"));
+        assert!(before.models.unwrap().is_empty());
+
+        let after: Harness = serde_json::from_str(&claude_entry(
+            "ready",
+            "null",
+            r#""2.1.326""#,
+            r#""/opt/sample/bin/claude""#,
+            r#"[{"provider":"claude","model_id":"default","name":"Default","authenticated":true,
+                 "reasoning":true,"thinking_levels":["low","medium","high"],"context_window":null,"input":["text"]}]"#,
+        ))
+        .unwrap();
+        assert_eq!(after.state, HarnessState::Ready);
+        assert_eq!(after.version.as_deref(), Some("2.1.326"));
+        let models = after.models.as_ref().unwrap();
+        assert_eq!(
+            (models[0].provider.as_str(), models[0].model_id.as_str()),
+            ("claude", "default")
+        );
+        assert_eq!(after.mode("bypass").unwrap().label, "Bypass");
     }
 
     #[test]

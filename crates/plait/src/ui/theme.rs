@@ -355,6 +355,7 @@ pub fn harness_glyph(id: plait_core::host::harness::HarnessId) -> Option<&'stati
     match id {
         HarnessId::Pi => Some("harness-pi"),
         HarnessId::Codex => Some("harness-openai"),
+        HarnessId::Claude => Some("harness-claude"),
         HarnessId::Other => None,
     }
 }
@@ -400,6 +401,7 @@ impl AssetSource for Assets {
                 include_str!("../../../../assets/branding/wordmarks/plait-wordmark-light.svg")
             }
             // Harness makers' marks, only to name the harness; see assets/harnesses/README.md.
+            "harness-claude" => include_str!("../../../../assets/harnesses/claude.svg"),
             "harness-openai" => include_str!("../../../../assets/harnesses/openai.svg"),
             "harness-pi" => include_str!("../../../../assets/harnesses/pi.svg"),
             "more" => {
@@ -522,6 +524,7 @@ mod tests {
             "bell-off",
             "up",
             "eye",
+            "harness-claude",
             "harness-openai",
             "harness-pi",
         ] {

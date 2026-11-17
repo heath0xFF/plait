@@ -29,6 +29,8 @@ pub(super) struct HarnessesState {
     /// Bumped whenever the list changes, so an open picker and the composer line rebuild.
     pub(super) generation: u64,
     busy: bool,
+    /// The harness a running `set_up_harness` request is for.
+    setting_up: Option<HarnessId>,
     /// The latest request; an earlier reply that lands after it is dropped.
     serial: u64,
     note: Option<SharedString>,
@@ -99,10 +101,19 @@ pub(super) struct HarnessRow {
     pub(super) default_detail: SharedString,
     /// Settings → Agent: why the harness cannot be the default now, as hover text.
     pub(super) unstartable: Option<SharedString>,
+    /// The harness needs a download the person starts from Settings → Agent.
+    pub(super) setup: bool,
 }
 
 pub(super) struct HarnessesView {
     pub(super) rows: Vec<HarnessRow>,
+}
+
+/// One harness request in flight. Its reply lands only while both still match.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct HarnessesRequest {
+    epoch: u64,
+    serial: u64,
 }
 
 fn version_line(harness: &Harness) -> String {
@@ -182,6 +193,7 @@ impl HarnessRow {
             default_mode: harness.default_mode,
             default_detail,
             unstartable: unstartable.map(Into::into),
+            setup: harness.state == HarnessState::SetupRequired,
         }
     }
 
@@ -195,9 +207,10 @@ impl HarnessRow {
         self.modes.iter().find(|mode| mode.id == id)
     }
 
-    /// Only an installed harness can be pointed at another executable; Pi ships with the host.
+    /// Only an installed harness can be pointed at another executable; Pi ships
+    /// with the host. One that needs setup offers that first.
     pub(super) fn has_path(&self) -> bool {
-        self.id == HarnessId::Codex
+        !matches!(self.id, HarnessId::Pi | HarnessId::Other) && !self.setup
     }
 }
 
@@ -307,6 +320,7 @@ pub(super) fn mode_line(row: &HarnessRow, key: &ThreadHarness) -> Option<ModeLin
     let chosen = row.mode(&id);
     let label = chosen.map_or_else(|| SharedString::from(id.clone()), |mode| mode.label.clone());
     let name = &row.name;
+    let (own, sets) = own_settings(row.id);
     let reported = key.reported.as_deref().filter(|reported| *reported != id);
     let (note, overridden) = match reported.map(|reported| (reported, row.mode(reported))) {
         None => (
@@ -315,7 +329,7 @@ pub(super) fn mode_line(row: &HarnessRow, key: &ThreadHarness) -> Option<ModeLin
         ),
         Some((_, Some(used))) => (
             format!(
-                "{name} is using {} instead of {label}, set by your {name} configuration. {}",
+                "{name} is using {} instead of {label}, set by your {name} {own}. {}",
                 used.label, used.detail
             )
             .into(),
@@ -323,13 +337,21 @@ pub(super) fn mode_line(row: &HarnessRow, key: &ThreadHarness) -> Option<ModeLin
         ),
         // `custom`, or a mode this list does not name.
         Some((_, None)) => (
-            format!("{name} is using permissions its own configuration sets, not {label}.").into(),
+            format!("{name} is using permissions its own {own} {sets}, not {label}.").into(),
             true,
         ),
     };
     let protection = row.protection.trim();
+    let (when, applies) = if applies_at_once(row.id) {
+        ("at once".to_owned(), "Applies at once".to_owned())
+    } else {
+        (
+            format!("from {name}'s next turn"),
+            format!("Applies from {name}'s next turn"),
+        )
+    };
     let tip = format!(
-        "{protection}{}Choose what {name} may do in this thread. A change applies from its next turn, even during a run.",
+        "{protection}{}Choose what {name} may do in this thread. A change applies {when}, even during a run.",
         if protection.is_empty() { "" } else { " " }
     );
     Some(ModeLine {
@@ -338,12 +360,24 @@ pub(super) fn mode_line(row: &HarnessRow, key: &ThreadHarness) -> Option<ModeLin
         note,
         overridden,
         tip: tip.into(),
-        applies: format!("Applies from {name}'s next turn, even during a run.").into(),
-        busy: format!(
-            "Model locked during run · a permissions change applies from {name}'s next turn"
-        )
-        .into(),
+        applies: format!("{applies}, even during a run.").into(),
+        busy: format!("Model locked during run · a permissions change applies {when}").into(),
     })
+}
+
+/// Whether a permissions change reaches a running thread at once. The host
+/// lists no capability for it; docs/HOST.md says Claude Code takes a change
+/// at once, and Codex and others from their next turn.
+fn applies_at_once(id: HarnessId) -> bool {
+    id == HarnessId::Claude
+}
+
+/// What a harness calls the person's own setup of it, and the verb that agrees with it.
+fn own_settings(id: HarnessId) -> (&'static str, &'static str) {
+    match id {
+        HarnessId::Claude => ("settings", "set"),
+        _ => ("configuration", "sets"),
+    }
 }
 
 /// What a refused or failed harness request says. Host messages are shown as sent.
@@ -480,6 +514,13 @@ impl Plait {
         if self.harnesses.epoch == Some(self.host.epoch) {
             return;
         }
+        self.reset_harnesses();
+        self.refresh_harnesses(cx);
+    }
+
+    /// Forget the list read from an earlier connection. A request still in
+    /// flight for it can no longer land, since its epoch no longer matches.
+    pub(super) fn reset_harnesses(&mut self) {
         self.harnesses = HarnessesState {
             epoch: Some(self.host.epoch),
             generation: self.harnesses.generation + 1,
@@ -489,7 +530,6 @@ impl Plait {
             pending_mode: self.harnesses.pending_mode.take(),
             ..Default::default()
         };
-        self.refresh_harnesses(cx);
     }
 
     /// Check every harness again: an install, sign-in, or update can change while the app is open.
@@ -512,41 +552,82 @@ impl Plait {
         self.send_harnesses(Request::set_harness_mode(id, mode), cx);
     }
 
-    /// Every request answers with the whole list, checked again.
-    fn send_harnesses(&mut self, request: Request, cx: &mut Context<Self>) {
-        if self.harnesses.busy || !self.host.connected || self.host.protocol() < 4 || cfg!(test) {
-            return;
+    /// Download what harness `id` needs before it can run threads. The host
+    /// replies with the whole list, `id` checked again: ready, another state,
+    /// or still needing setup with a note saying what went wrong.
+    pub(super) fn set_up_harness(&mut self, id: HarnessId, cx: &mut Context<Self>) {
+        self.send_harnesses(Request::set_up_harness(id), cx);
+    }
+
+    /// Whether harness `id` is being set up now, for Settings → Agent.
+    pub(super) fn harness_setting_up(&self, id: HarnessId) -> bool {
+        self.harnesses.busy && self.harnesses.setting_up == Some(id)
+    }
+
+    /// Mark a request as sent, one at a time; `None` when it cannot be sent now.
+    /// `setup` names the harness a `set_up_harness` request is for.
+    pub(super) fn begin_harnesses(&mut self, setup: Option<HarnessId>) -> Option<HarnessesRequest> {
+        if self.harnesses.busy || !self.host.connected || self.host.protocol() < 4 {
+            return None;
         }
         self.harnesses.busy = true;
+        self.harnesses.setting_up = setup;
         self.harnesses.serial += 1;
-        let key = (self.host.epoch, self.harnesses.serial);
+        Some(HarnessesRequest {
+            epoch: self.host.epoch,
+            serial: self.harnesses.serial,
+        })
+    }
+
+    /// Every request answers with the whole list, checked again.
+    fn send_harnesses(&mut self, request: Request, cx: &mut Context<Self>) {
+        if cfg!(test) {
+            return;
+        }
+        let setup = match &request {
+            Request::SetUpHarness { harness, .. } => Some(*harness),
+            _ => None,
+        };
+        let Some(key) = self.begin_harnesses(setup) else {
+            return;
+        };
+        cx.notify();
         let task = cx.background_executor().spawn(async move {
             let reply: Harnesses = host::Client::from_environment()?.send(&request)?;
             Ok::<_, host::Error>(HarnessesView::new(reply))
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
-            let _ = this.update(cx, |this, cx| {
-                if this.host.epoch != key.0
-                    || this.harnesses.epoch != Some(key.0)
-                    || this.harnesses.serial != key.1
-                {
-                    return;
-                }
-                this.harnesses.busy = false;
-                match result {
-                    Ok(view) => {
-                        this.harnesses.note = None;
-                        this.harnesses.view = Some(Arc::new(view));
-                        this.harnesses.generation += 1;
-                    }
-                    Err(error) => this.harnesses.note = Some(failure(&error).into()),
-                }
-                this.sync_composer(cx);
-                cx.notify();
-            });
+            let _ = this.update(cx, |this, cx| this.finish_harnesses(key, result, cx));
         })
         .detach();
+    }
+
+    /// Apply a reply, unless the connection or a later request has replaced the one it answers.
+    pub(super) fn finish_harnesses(
+        &mut self,
+        key: HarnessesRequest,
+        result: Result<HarnessesView, host::Error>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.host.epoch != key.epoch
+            || self.harnesses.epoch != Some(key.epoch)
+            || self.harnesses.serial != key.serial
+        {
+            return;
+        }
+        self.harnesses.busy = false;
+        self.harnesses.setting_up = None;
+        match result {
+            Ok(view) => {
+                self.harnesses.note = None;
+                self.harnesses.view = Some(Arc::new(view));
+                self.harnesses.generation += 1;
+            }
+            Err(error) => self.harnesses.note = Some(failure(&error).into()),
+        }
+        self.sync_composer(cx);
+        cx.notify();
     }
 
     /// Ask for an executable with the system file picker, then send it to the host.
@@ -641,9 +722,11 @@ impl Plait {
     pub(super) fn harness_settings(&self, cx: &mut Context<Self>) -> Div {
         let usable = self.host.connected && self.host.protocol() >= 4;
         let busy = self.harnesses.busy;
+        // A setup says so on its own row; Refresh just waits.
+        let checking = busy && self.harnesses.setting_up.is_none();
         let refresh = toned_button(
             "harness-refresh",
-            if busy { "Checking…" } else { "Refresh" },
+            if checking { "Checking…" } else { "Refresh" },
             Tone::Filled,
         )
         .disabled(busy || !usable)
@@ -653,7 +736,7 @@ impl Plait {
         let mut page = settings::section("Agent harnesses")
             .child(settings::setting(
                 "What can run a thread",
-                "Pi is built in. Codex runs through your own install, with its own sign-in and settings. A new thread starts in the default below; choose another above its message box, and the thread stays in it.",
+                "Pi is built in. Codex and Claude Code run through your own installs, with their own sign-in and settings. A new thread starts in the default below; choose another above its message box, and the thread stays in it.",
                 refresh,
             ))
             .child(self.default_harness_setting(cx))
@@ -748,7 +831,30 @@ impl Plait {
                 text.child(tag(harness.protection.clone(), colors().subtle).line_height(px(16.)));
         }
         let mut entry = row().items_start().gap_3().child(text);
-        let modes = self.default_mode_setting(index, harness, busy, cx);
+        let modes = (!harness.setup)
+            .then(|| self.default_mode_setting(index, harness, busy, cx))
+            .flatten();
+        if harness.setup {
+            let id = harness.id;
+            let setting_up = self.harness_setting_up(id);
+            entry = entry.child(
+                toned_button(
+                    ("harness-setup", index),
+                    if setting_up {
+                        "Setting up…"
+                    } else {
+                        "Set up"
+                    },
+                    Tone::Primary,
+                )
+                .flex_shrink_0()
+                .aria_label(format!("Set up {} threads", harness.name))
+                .disabled(busy)
+                .when(!busy, |el| {
+                    el.on_activate(cx, move |this, _, cx| this.set_up_harness(id, cx))
+                }),
+            );
+        }
         if harness.has_path() {
             let (id, name) = (harness.id, harness.name.clone());
             entry = entry.child(
@@ -1022,6 +1128,109 @@ mod tests {
         assert!(thread_items(&view.rows[0]).is_empty());
     }
 
+    /// Pi and Claude Code as the host lists them, Claude Code in `state`.
+    fn claude_list(state: &str, note: Option<&str>) -> Harnesses {
+        let ready = state == "ready";
+        serde_json::from_value(serde_json::json!({"harnesses": [
+            {"id":"pi","name":"Pi","state":"ready","note":null,"version":null,"supported":null,"path":null,
+             "capabilities":{"steer":true,"approvals":true,"thinking":true,"usage":true},
+             "protection":"Plait's sandbox and approvals.","models":null},
+            {"id":"claude","name":"Claude Code","state":state,"note":note,
+             "version": ready.then_some("2.1.326"),
+             "supported":{"min":"2.1.290","tested":"2.1.326"},
+             "path": ready.then_some("/opt/sample/bin/claude"),
+             "capabilities":{"steer":true,"approvals":true,"thinking":true,"usage":true},
+             "protection":"Claude Code's mode.",
+             "models": if ready {
+                 serde_json::json!([{"provider":"claude","model_id":"default","name":"Default","authenticated":true}])
+             } else {
+                 serde_json::json!([])
+             },
+             "modes":[{"id":"ask","label":"Ask","detail":"Asks first."},
+                      {"id":"plan","label":"Plan","detail":"Plans first."},
+                      {"id":"auto","label":"Auto","detail":"Decides itself."}],
+             "default_mode":"auto"}]}))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_harness_that_needs_setup_offers_setup_and_nothing_else() {
+        let view = HarnessesView::new(claude_list("setup_required", Some("Set up first.")));
+        let claude = &view.rows[1];
+        assert!(claude.setup && !claude.ready && !claude.startable());
+        assert_eq!(claude.state.as_ref(), "Needs setup");
+        assert!(
+            !claude.has_path(),
+            "setup comes before choosing an executable"
+        );
+        assert_eq!(
+            claude.version.as_ref(),
+            "Needs 2.1.290 or newer · tested with 2.1.326"
+        );
+        assert_eq!(
+            claude.unstartable.as_deref(),
+            Some("Needs setup. Set up first.")
+        );
+        assert_eq!(
+            claude.blocked.as_deref(),
+            Some("Claude Code: needs setup. Set up first.")
+        );
+        let items = harness_items(&view.rows, HarnessId::Pi);
+        assert_eq!(items[1].title.as_ref(), "Claude Code");
+        assert!(!items[1].enabled);
+        assert_eq!(
+            items[1].glyph.map(|(glyph, _)| glyph),
+            Some("harness-claude")
+        );
+        assert_eq!(
+            items[1].badge.as_ref().map(|(badge, _)| badge.as_ref()),
+            Some("Needs setup")
+        );
+
+        let view = HarnessesView::new(claude_list("ready", None));
+        let claude = &view.rows[1];
+        assert!(claude.ready && !claude.setup && claude.startable() && claude.has_path());
+        assert_eq!(claude.default_detail.as_ref(), "Decides itself.");
+        assert_eq!(thread_items(claude).len(), 1);
+    }
+
+    #[test]
+    fn a_claude_code_mode_change_applies_at_once() {
+        let view = HarnessesView::new(claude_list("ready", None));
+        let row = &view.rows[1];
+        let key = |mode: &str, reported: Option<&str>| ThreadHarness {
+            id: HarnessId::Claude,
+            version: Some("2.1.326".into()),
+            mode: Some(mode.into()),
+            reported: reported.map(Into::into),
+        };
+        let line = mode_line(row, &key("auto", None)).unwrap();
+        assert_eq!(
+            (line.label.as_ref(), line.note.as_ref()),
+            ("Auto", "Decides itself.")
+        );
+        assert_eq!(
+            line.tip.as_ref(),
+            "Claude Code's mode. Choose what Claude Code may do in this thread. A change applies at once, even during a run."
+        );
+        assert_eq!(line.applies.as_ref(), "Applies at once, even during a run.");
+        assert_eq!(
+            line.busy.as_ref(),
+            "Model locked during run · a permissions change applies at once"
+        );
+        let line = mode_line(row, &key("auto", Some("plan"))).unwrap();
+        assert!(line.overridden);
+        assert_eq!(
+            line.note.as_ref(),
+            "Claude Code is using Plan instead of Auto, set by your Claude Code settings. Plans first."
+        );
+        let line = mode_line(row, &key("ask", Some("custom"))).unwrap();
+        assert_eq!(
+            line.note.as_ref(),
+            "Claude Code is using permissions its own settings set, not Ask."
+        );
+    }
+
     fn thread(mode: Option<&str>, reported: Option<&str>) -> ThreadHarness {
         ThreadHarness {
             id: HarnessId::Codex,
@@ -1061,6 +1270,10 @@ mod tests {
         assert_eq!(
             line.note.as_ref(),
             "Codex is using Read only instead of Ask, set by your Codex configuration. Only reads."
+        );
+        assert_eq!(
+            line.applies.as_ref(),
+            "Applies from Codex's next turn, even during a run."
         );
         let line = mode_line(codex, &thread(Some("full_access"), Some("custom"))).unwrap();
         assert_eq!(

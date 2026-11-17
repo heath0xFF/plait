@@ -27,6 +27,8 @@ ui/                     GPUI layout, actions, focus, lists, theme
   model_picker.rs       model catalog as a palette; default, favorites, new thread
   new_thread.rs         the new-thread draft: created on its first send, reply guards
   new_thread_view.rs    the draft's project, model, harness, permissions row, and menus
+  harnesses.rs          agent harnesses: the host's list, setup, Settings → Agent, mode lines
+  permissions.rs        the Permissions chip and menu of a harness's own modes
   text_field.rs         single-line input: IME, selection, clipboard, undo
   navigation.rs         virtualized projects and threads, filtering and management
   navigation_host.rs    cross-checkout listing, live summaries, and notifications

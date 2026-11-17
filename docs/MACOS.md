@@ -81,7 +81,8 @@ stop; this preview provides no security-policy bypass.
    model. Reconnect if the client opened before the host was ready.
 4. Start a real thread. Settings → Approvals selects automatic approval or
    asking for each action. Trusted commands require a separate explicit choice
-   for each project. A Codex thread uses Codex's own permissions instead,
+   for each project. A Codex or Claude Code thread uses that harness's own
+   permissions instead,
    chosen with **Permissions** above a new thread's message box or under an
    open thread's, with a default for new threads in Settings → Agent. The app
    shows only real threads.
@@ -257,6 +258,45 @@ requests notification authorization on first delivery; an unbundled build cannot
 post macOS notifications, and delivery depends on system permission and Focus
 settings. The initial listing never posts alerts. Native delivery and activation
 remain manual acceptance checks.
+
+### Codex and Claude Code threads
+
+Source builds from `main` with a matching host can run a thread in Codex or
+Claude Code instead of Pi. Neither is in a release yet. Each runs your own
+install with its own sign-in, settings, instructions, and tools; Plait never
+sees their credentials. **Settings → Agent** lists each harness with its state,
+version, path, and what protects your checkout. **Choose…** runs a particular
+executable, and **Use PATH** returns to the one your login shell finds.
+**Refresh** checks again after you install, update, or sign in.
+
+**Setting up Claude Code threads.** Install Claude Code and sign in with
+`claude` in a terminal as usual. A Claude subscription, an API key, or a cloud
+provider all work. Plait drives `claude` through Anthropic's Agent SDK, which
+Plait's downloads do not include, so the Claude Code entry first reads **Needs
+setup**. Choose **Set up**. The host downloads that one pinned SDK version from
+the npm registry, checks it against a pinned checksum before writing anything,
+and keeps it beside its own data. This is the only step that reaches the
+network for a harness, and it reads none of Claude Code's files. While it runs
+the button reads **Setting up…**. If it fails, the entry stays in **Needs
+setup** and says why; choose **Set up** again. Afterwards the entry reads like
+Codex's: ready, or what to fix (not installed, too old, or signed out).
+
+**Permissions.** These threads use the harness's own permission modes in place
+of Plait's Ask and Auto and the project's command policy. Claude Code offers
+Ask, Accept edits, Plan, Auto (the default), and Bypass. Codex offers Read only,
+Ask, Approve for me, and Full access (the default). Set each harness's default
+for new threads in Settings → Agent, or choose **Permissions** above a new
+thread's message box or under an open thread's. In Claude Code a change applies
+at once, even during a run; in Codex it applies from the next turn. If the
+harness's own settings run a different mode, the line under the message box
+says so. Each request the harness asks you about is an approval card, allowed or
+denied once. Plait's guard on files you had already changed does not apply
+here: the card names those files, but nothing stops the harness writing them.
+
+**Default harness for new threads** in Settings → Agent chooses where Cmd-N
+starts. A harness that is not ready is shown dimmed and cannot be chosen; a
+draft whose default is not ready starts in Pi. What has been checked against
+real installs is in [Verification](VERIFICATION.md#claude-code).
 
 ## Appearance and themes
 

@@ -1565,6 +1565,7 @@ fn walk(output: Option<&Path>) {
         picker_walk(&mut harness, &repository, suffix);
         new_thread_walk(&mut harness, &repository, suffix);
         harnesses_walk(&mut harness, &repository, suffix);
+        claude_walk(&mut harness, &repository, suffix);
         draft_scenes_walk(&mut harness, &repository, suffix);
         inspector_walk(&mut harness, &repository, suffix);
         navigation_walk(&mut harness, &repository, suffix);
@@ -2617,6 +2618,261 @@ fn harnesses_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         plait.settings_section = 0;
     });
     harness.connect(repository, false);
+}
+
+fn claude_choice() -> ModelChoice {
+    ModelChoice {
+        provider: "claude".into(),
+        model_id: "sample-claude-model".into(),
+    }
+}
+
+/// What the host says before Claude Code threads are set up. Labeled sample data only.
+const CLAUDE_SETUP: &str = "Sample: set up Claude Code threads to download Anthropic's Agent SDK from the npm registry to this Mac. Plait then runs your installed claude.";
+
+/// The sample list with Claude Code after Codex, in `state`. Labeled sample data only.
+fn claude_harnesses(state: &str, note: Option<&str>) -> plait_core::host::harness::Harnesses {
+    let ready = state == "ready";
+    let model = |id: &str, name: &str| {
+        serde_json::json!({
+            "provider": "claude", "model_id": id, "name": name, "authenticated": true,
+            "reasoning": true, "thinking_levels": ["low", "medium", "high", "xhigh", "max"],
+            "context_window": null, "input": ["text"],
+        })
+    };
+    let mut list = sample_harnesses("ready", None);
+    list.harnesses.push(
+        serde_json::from_value(serde_json::json!({
+            "id": "claude", "name": "Claude Code", "state": state, "note": note,
+            "version": ready.then_some("2.1.326"),
+            "supported": {"min": "2.1.290", "tested": "2.1.326"},
+            "path": ready.then_some("/opt/sample/bin/claude"),
+            "capabilities": {"steer": true, "approvals": true, "thinking": true, "usage": true},
+            "protection": "Sample: the thread's Claude Code mode and your Claude Code settings. Plait's command sandbox and its guard on files you had already changed do not apply.",
+            "models": if ready {
+                serde_json::json!([model("sample-claude-model", "Sample Claude Model"), model("sample-claude-mini", "Sample Claude Mini")])
+            } else {
+                serde_json::json!([])
+            },
+            "modes": [
+                {"id": "ask", "label": "Ask", "detail": "Sample: asks before each edit and command your settings do not already allow."},
+                {"id": "accept_edits", "label": "Accept edits", "detail": "Sample: edits files in this checkout without asking, and asks before other commands."},
+                {"id": "plan", "label": "Plan", "detail": "Sample: reads and plans without changing anything, and asks before it starts on the plan."},
+                {"id": "auto", "label": "Auto", "detail": "Sample: its own safety check approves or blocks each request, and asks only when it cannot decide."},
+                {"id": "bypass", "label": "Bypass", "detail": "Sample: never asks and has no sandbox; it can change any file and run any command."},
+            ],
+            "default_mode": "auto",
+        }))
+        .expect("sample Claude Code entry"),
+    );
+    list
+}
+
+/// Capture `name` in the current theme, then in Plait Light as `light-{name}`.
+fn capture_both(harness: &mut Harness, name: &str) {
+    harness.capture(name);
+    let forced = harness
+        .window
+        .update(&mut harness.cx, |plait, _, _| plait.themes.forced)
+        .expect("window update");
+    harness.update(|plait, _, cx| {
+        plait.themes.forced = Some(true);
+        plait.apply_theme(cx);
+    });
+    harness.capture(&format!("light-{name}"));
+    harness.update(move |plait, _, cx| {
+        plait.themes.forced = forced;
+        plait.apply_theme(cx);
+    });
+}
+
+/// Settings → Agent in both themes. In a narrow window the Claude Code entry
+/// sits below the window's height, so it is also captured scrolled to it.
+fn claude_settings(harness: &mut Harness, state: &str, suffix: &str) {
+    capture_both(
+        harness,
+        &format!("harness-settings-claude-{state}-{suffix}"),
+    );
+    if suffix == "narrow" {
+        harness.update(|plait, _, _| plait.settings_scroll.set_offset(point(px(0.), px(-400.))));
+        capture_both(
+            harness,
+            &format!("harness-settings-claude-{state}-scrolled-{suffix}"),
+        );
+        harness.update(|plait, _, _| plait.settings_scroll.set_offset(point(px(0.), px(0.))));
+    }
+}
+
+/// Claude Code: Settings → Agent before, during, and after setup, a Claude
+/// Code draft, and a Claude Code thread waiting for an approval.
+fn claude_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
+    use plait_core::host::{ThinkingLevel, harness::ThreadHarness};
+    harness.connect(repository, false);
+    harness.update(|plait, _, cx| {
+        let status = plait.host.status.as_mut().unwrap();
+        status.protocol_version = 4;
+        status.models.truncate(6);
+        plait.inject_harnesses(Some(claude_harnesses("setup_required", Some(CLAUDE_SETUP))));
+        plait.settings_open = true;
+        plait.settings_section = 3;
+        plait.sync_composer(cx);
+    });
+    claude_settings(harness, "setup", suffix);
+    // Setting up: marked as sent, no host contacted.
+    let request = harness
+        .window
+        .update(&mut harness.cx, |plait, _, cx| {
+            let request = plait.begin_harnesses(Some(HarnessId::Claude));
+            cx.notify();
+            request
+        })
+        .expect("window update")
+        .expect("a setup can start");
+    harness.update(|plait, _, _| assert!(plait.harness_setting_up(HarnessId::Claude)));
+    claude_settings(harness, "setting-up", suffix);
+    harness.update(move |plait, _, cx| {
+        let ready = super::harnesses::HarnessesView::new(claude_harnesses("ready", None));
+        plait.finish_harnesses(request, Ok(ready), cx);
+        assert!(!plait.harness_setting_up(HarnessId::Claude));
+        // In memory only: the scene does not write a preferences file.
+        plait.preferences.value.default_harness = HarnessId::Claude;
+    });
+    claude_settings(harness, "ready", suffix);
+    // A new thread opens on Claude Code, the default now, in its default mode.
+    harness.update(|plait, window, cx| {
+        plait.show_settings(false, window, cx);
+        plait.settings_section = 0;
+        plait.open_draft(window, cx);
+        assert_eq!(plait.draft_harness(), HarnessId::Claude);
+        assert_eq!(plait.draft_model(), Some(claude_choice()));
+        assert_eq!(plait.draft_mode().as_deref(), Some("auto"));
+        plait.focus_composer(window, cx);
+    });
+    harness.type_draft("Add retries with backoff to the status refresh");
+    capture_both(harness, &format!("draft-claude-{suffix}"));
+    harness.update(|plait, window, cx| plait.open_draft_permissions(window, cx));
+    capture_both(harness, &format!("draft-permissions-claude-{suffix}"));
+    harness.update(|plait, window, cx| {
+        plait.close_overlay(true, window, cx);
+        plait.discard_draft(window, cx);
+        plait.preferences.value.default_harness = HarnessId::Pi;
+    });
+    // An open Claude Code thread asks before a command.
+    harness.connect(repository, true);
+    harness.update(|plait, _, _| {
+        let status = plait.host.status.as_mut().unwrap();
+        status.protocol_version = 4;
+        status.models.truncate(6);
+        plait.inject_harnesses(Some(claude_harnesses("ready", None)));
+    });
+    harness.change_snapshot(|snapshot| {
+        snapshot.model = claude_choice();
+        snapshot.thinking_level = Some(ThinkingLevel::High);
+        snapshot.approval_mode = None;
+        snapshot.harness = Some(ThreadHarness {
+            id: HarnessId::Claude,
+            version: Some("2.1.326".into()),
+            mode: Some("ask".into()),
+            reported: Some("ask".into()),
+        });
+        let approval = snapshot.pending_approval.as_mut().unwrap();
+        approval.summary = "cargo test".into();
+        approval.details = "Sample: run the test suite.".into();
+        approval.risk = "Sample: Claude Code runs this command on your machine with your permissions, outside Plait's sandbox. Only this request is approved.".into();
+    });
+    harness.update(|plait, _, cx| {
+        plait.host.threads[0].model = claude_choice();
+        plait.host.threads[0].harness = Some(HarnessId::Claude);
+        plait.sync_composer(cx);
+        // Plait's approvals are Pi's: a Claude Code message asks for none.
+        assert_eq!(plait.next_approval_mode(), None);
+        let line = plait.thread_harness_line().unwrap();
+        assert_eq!(line.label.as_ref(), "Claude Code 2.1.326");
+        assert_eq!(line.mode.as_ref().unwrap().label.as_ref(), "Ask");
+    });
+    capture_both(harness, &format!("composer-claude-approval-{suffix}"));
+    harness.update(|plait, window, cx| plait.open_thread_permissions(window, cx));
+    capture_both(harness, &format!("thread-permissions-claude-{suffix}"));
+    harness.update(|plait, window, cx| {
+        plait.close_overlay(true, window, cx);
+        plait.inject_harnesses(None);
+    });
+    harness.connect(repository, false);
+}
+
+/// A setup reply lands only on the request and connection it answers, and a
+/// failed setup shows what the host said.
+#[core::prelude::v1::test]
+fn a_setup_reply_lands_only_on_the_request_it_answers() {
+    if !isolated("a_setup_reply_lands_only_on_the_request_it_answers") {
+        return;
+    }
+    use super::harnesses::HarnessesView;
+    use plait_core::host::Error;
+    let scratch = std::env::temp_dir().join(format!("plait-setup-ui-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    let view = |state: &str, note: Option<&str>| HarnessesView::new(claude_harnesses(state, note));
+    let claude = |plait: &Plait| {
+        let row = plait.harness_row(HarnessId::Claude).expect("listed");
+        (
+            row.ready,
+            row.setup,
+            row.note.as_ref().map(ToString::to_string),
+        )
+    };
+    harness.update(|plait, _, cx| {
+        plait.host.status.as_mut().unwrap().protocol_version = 4;
+        plait.inject_harnesses(Some(claude_harnesses("setup_required", Some(CLAUDE_SETUP))));
+        // An older host cannot be asked.
+        plait.host.status.as_mut().unwrap().protocol_version = 3;
+        assert!(plait.begin_harnesses(Some(HarnessId::Claude)).is_none());
+        plait.host.status.as_mut().unwrap().protocol_version = 4;
+
+        // One request at a time; the setup is shown on Claude Code's row only.
+        let request = plait.begin_harnesses(Some(HarnessId::Claude)).unwrap();
+        assert!(plait.harness_setting_up(HarnessId::Claude));
+        assert!(!plait.harness_setting_up(HarnessId::Codex));
+        assert!(plait.begin_harnesses(None).is_none());
+        plait.finish_harnesses(request, Ok(view("ready", None)), cx);
+        assert_eq!(claude(plait), (true, false, None));
+        assert!(!plait.harness_setting_up(HarnessId::Claude));
+
+        // A failed setup stays in setup with the host's note.
+        plait.inject_harnesses(Some(claude_harnesses("setup_required", Some(CLAUDE_SETUP))));
+        let request = plait.begin_harnesses(Some(HarnessId::Claude)).unwrap();
+        let failed = "Sample: the download did not match the pinned checksum.";
+        plait.finish_harnesses(request, Ok(view("setup_required", Some(failed))), cx);
+        assert_eq!(claude(plait), (false, true, Some(failed.into())));
+
+        // A request the host could not answer leaves the list and says why.
+        let request = plait.begin_harnesses(Some(HarnessId::Claude)).unwrap();
+        plait.finish_harnesses(request, Err(Error::Protocol("Sample failure.".into())), cx);
+        assert_eq!(claude(plait), (false, true, Some(failed.into())));
+        assert!(!plait.harness_setting_up(HarnessId::Claude));
+
+        // The host reconnected while setting up: the reply is for the old connection.
+        let request = plait.begin_harnesses(Some(HarnessId::Claude)).unwrap();
+        plait.host.epoch += 1;
+        plait.reset_harnesses();
+        plait.inject_harnesses(Some(claude_harnesses("setup_required", Some(CLAUDE_SETUP))));
+        assert!(!plait.harness_setting_up(HarnessId::Claude));
+        plait.finish_harnesses(request, Ok(view("ready", None)), cx);
+        assert_eq!(claude(plait), (false, true, Some(CLAUDE_SETUP.into())));
+
+        // A reply to an earlier request on this connection is dropped too.
+        let earlier = plait.begin_harnesses(Some(HarnessId::Claude)).unwrap();
+        plait.finish_harnesses(earlier, Err(Error::Protocol("Sample failure.".into())), cx);
+        let latest = plait.begin_harnesses(None).unwrap();
+        plait.finish_harnesses(earlier, Ok(view("ready", None)), cx);
+        assert!(!claude(plait).0);
+        plait.finish_harnesses(latest, Ok(view("ready", None)), cx);
+        assert_eq!(claude(plait), (true, false, None));
+    });
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
 }
 
 /// The draft's harness chooses its models and permissions; Pi stays the default.

@@ -4,9 +4,9 @@ These are planned milestones, not a list of shipped features. See the
 [README](../README.md) for the current preview and [Verification](VERIFICATION.md)
 for acceptance evidence and open checks. **M2.5 shipped in v0.1.0-preview.8.
 M8 steps 1 and 2 (skills, prompt templates, and user instructions) shipped in
-v0.1.0-preview.9. M7 step 1 (choosing a harness, and Codex) and step 2's
-Codex modes are on `main`, not yet released; Claude Code threads are in
-progress. M8 steps 3 and 4 follow M7.**
+v0.1.0-preview.9. M7 step 1 (choosing a harness, and Codex) and step 2 (each
+harness's own permissions, and Claude Code threads) are on `main`, not yet
+released. M8 steps 3 and 4 follow M7.**
 
 ## Milestones
 

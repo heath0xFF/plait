@@ -1361,6 +1361,20 @@ mod tests {
         assert!(decode::<ThreadsPage>(br#"{"ok":true,"result":{"threads":[{"id":"t","checkout":"/repo","model":{"provider":"p","model_id":"m"},"status":"idle","extra":1}],"next_cursor":null}}"#).is_err());
     }
 
+    #[test]
+    fn claude_code_threads_decode_in_summaries_and_snapshots() {
+        let page: ThreadsPage = decode(br#"{"ok":true,"result":{"threads":[{"id":"t","checkout":"/repo","model":{"provider":"claude","model_id":"default"},"status":"awaiting_approval","title":"Fix it","created_at":5,"updated_at":9,"archived":false,"pending_approval":true,"harness":"claude"}],"next_cursor":null}}"#).unwrap();
+        assert_eq!(page.threads[0].harness, Some(harness::HarnessId::Claude));
+        let reply: ThreadReply = decode(br#"{"ok":true,"result":{"thread":{"id":"t","checkout":"/repo","model":{"provider":"claude","model_id":"default"},"status":"idle","messages":[],"live_text":"","tools":[],"pending_approval":null,"error":null,"truncated":false,"approval_mode":"ask","title":"Fix it","created_at":5,"updated_at":9,"archived":false,"thinking_level":"high","queued":[],"usage":null,"live_reasoning":"","retry":null,"harness":{"id":"claude","version":"2.1.326","mode":"auto","reported":"custom"}}}}"#).unwrap();
+        let thread = reply.thread.harness.unwrap();
+        assert_eq!(thread.id, harness::HarnessId::Claude);
+        assert_eq!(thread.version.as_deref(), Some("2.1.326"));
+        assert_eq!(
+            (thread.mode.as_deref(), thread.reported.as_deref()),
+            (Some("auto"), Some("custom"))
+        );
+    }
+
     /// Replies recorded from the real host and runtime in a scripted session, so the
     /// strict decoders are checked against what the host sends, not a hand-written copy.
     /// Paths are replaced and strings over 200 characters are shortened.

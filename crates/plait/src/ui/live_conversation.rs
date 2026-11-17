@@ -24,7 +24,9 @@ impl Reveals {
 }
 use plait_core::{
     history::{self, Key},
-    host::{Approval, ApprovalMode, HistoryField, Message, MessageRole, Snapshot},
+    host::{
+        Approval, ApprovalMode, HistoryField, Message, MessageRole, Snapshot, harness::HarnessId,
+    },
     markdown::Block,
     reveal::Reveal,
     transcript::{self, Row},
@@ -50,6 +52,14 @@ fn banner(tint: u32) -> Div {
 /// stays inside the row's top padding, so reaching it keeps the row hovered.
 const COPY_LIFT: f32 = 18.;
 
+/// Whether an approval shows enough to decide on. Pi's details are the call's
+/// full arguments, so without them nothing is shown to approve. Another
+/// harness names the call in `summary`; its details only add context, such as
+/// a reason, and may be empty.
+pub(super) fn approvable(approval: &Approval, harness: HarnessId) -> bool {
+    approval.details.len() <= 16384 && (harness != HarnessId::Pi || !approval.details.is_empty())
+}
+
 impl Plait {
     /// The desktop default from Settings → Approvals.
     pub(super) fn default_approval(&self) -> ApprovalMode {
@@ -64,7 +74,7 @@ impl Plait {
     /// else the default. Version 1 hosts always ask. A harness thread asks for
     /// none: the harness's own mode governs it.
     pub(super) fn next_approval_mode(&self) -> Option<ApprovalMode> {
-        if self.thread_harness() != plait_core::host::harness::HarnessId::Pi {
+        if self.thread_harness() != HarnessId::Pi {
             return None;
         }
         let chosen = self
@@ -480,7 +490,7 @@ impl Plait {
 
     /// Exact arguments and a one-call decision. Nothing runs without it.
     fn approval(&self, approval: &Approval, cx: &mut Context<Self>) -> impl IntoElement {
-        let exact = approval.details.len() <= 16384 && !approval.details.is_empty();
+        let exact = approvable(approval, self.thread_harness());
         let enabled = exact
             && self.host.connected
             && !self.host.controlling
@@ -488,6 +498,17 @@ impl Plait {
         let allow_id = approval.id.clone();
         let deny_id = approval.id.clone();
         let dirty = approval.dirty_paths.join(", ");
+        // Pi refuses to write files that had changes before the run; another
+        // harness only lists them, and nothing stops it writing them.
+        let dirty_note = match self.thread_harness() {
+            _ if dirty.is_empty() => String::new(),
+            HarnessId::Pi => format!("Protected dirty paths: {dirty}"),
+            id => format!(
+                "Changed before this run: {dirty}. {} is not stopped from writing them.",
+                self.harness_row(id)
+                    .map_or_else(|| id.label().into(), |row| row.name.clone())
+            ),
+        };
         div().flex_shrink_0().px_6().pt_2().child(
             column()
                 .w_full()
@@ -508,26 +529,28 @@ impl Plait {
                             .child(format!("Approval required: {}", approval.summary)),
                     ),
                 )
-                .child(
-                    div()
-                        .id("approval-details")
-                        .role(Role::Group)
-                        .aria_label(format!(
-                            "Exact tool arguments: {}. Risk: {}. Protected dirty paths: {}",
-                            approval.details, approval.risk, dirty
-                        ))
-                        .max_h(px(140.))
-                        .overflow_y_scroll()
-                        .px_3()
-                        .py_2()
-                        .rounded_md()
-                        .bg(rgb(colors().bg))
-                        .border_1()
-                        .border_color(rgb(colors().border))
-                        .font_family(MONO)
-                        .line_height(px(19.))
-                        .child(approval.details.clone()),
-                )
+                .when(!approval.details.is_empty(), |el| {
+                    el.child(
+                        div()
+                            .id("approval-details")
+                            .role(Role::Group)
+                            .aria_label(format!(
+                                "Exact tool arguments: {}. Risk: {}. {}",
+                                approval.details, approval.risk, dirty_note
+                            ))
+                            .max_h(px(140.))
+                            .overflow_y_scroll()
+                            .px_3()
+                            .py_2()
+                            .rounded_md()
+                            .bg(rgb(colors().bg))
+                            .border_1()
+                            .border_color(rgb(colors().border))
+                            .font_family(MONO)
+                            .line_height(px(19.))
+                            .child(approval.details.clone()),
+                    )
+                })
                 .child(
                     div()
                         .text_color(rgb(colors().amber))
@@ -537,7 +560,7 @@ impl Plait {
                     el.child(
                         div()
                             .text_color(rgb(colors().muted))
-                            .child(format!("Protected dirty paths: {dirty}")),
+                            .child(dirty_note.clone()),
                     )
                 })
                 .when(!exact, |el| {
@@ -769,4 +792,32 @@ Tone::Filled,
 /// Hover group for one conversation row, so its quiet controls appear together.
 fn row_group(row: usize) -> SharedString {
     format!("conversation-row-{row}").into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Approval, HarnessId, approvable};
+
+    #[test]
+    fn only_pi_needs_the_full_arguments_to_approve() {
+        let approval = |details: &str| Approval {
+            details: details.into(),
+            id: "a1".into(),
+            tool_id: "t1".into(),
+            kind: plait_core::host::ApprovalKind::Command,
+            summary: "git status".into(),
+            dirty_paths: Vec::new(),
+            risk: String::new(),
+        };
+        assert!(approvable(
+            &approval("{\"command\":\"git\"}"),
+            HarnessId::Pi
+        ));
+        assert!(!approvable(&approval(""), HarnessId::Pi));
+        // Codex and Claude Code name the call in the summary.
+        assert!(approvable(&approval(""), HarnessId::Claude));
+        assert!(approvable(&approval(""), HarnessId::Codex));
+        let long = "x".repeat(16385);
+        assert!(!approvable(&approval(&long), HarnessId::Claude));
+    }
 }

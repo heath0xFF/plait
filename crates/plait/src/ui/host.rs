@@ -633,12 +633,12 @@ impl Plait {
             return;
         };
         let id = snapshot.id.clone();
+        let harness = super::harnesses::harness_of(snapshot);
         let request = if let Some((approval_id, allow)) = approval {
             if self.host.decided_approvals.contains(&approval_id)
                 || !snapshot.pending_approval.as_ref().is_some_and(|pending| {
                     pending.id == approval_id
-                        && !pending.details.is_empty()
-                        && pending.details.len() <= 16384
+                        && super::live_conversation::approvable(pending, harness)
                 })
             {
                 return;

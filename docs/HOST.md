@@ -517,7 +517,9 @@ A client that steps down from 4 to 3 sees only Pi.
   harness. It replies with the whole list, Claude Code checked again: a
   finished setup shows whatever the normal checks find, and a failed one stays
   `setup_required` with a `note` saying what went wrong. Setting up again
-  when the copy is already in place downloads nothing.
+  when the copy is already in place downloads nothing. The download gives up
+  after 15 seconds, inside the host's 20-second limit for any request, and
+  setup can simply be tried again.
 - **`create_thread`** takes an optional `harness`, `pi` when absent. A Codex
   thread's model has provider `codex` and a model ID from Codex's list, and a
   Claude Code thread's has provider `claude` and a model ID from Claude Code's

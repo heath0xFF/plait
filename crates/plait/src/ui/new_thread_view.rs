@@ -140,29 +140,41 @@ impl Plait {
             )
     }
 
+    /// The Permissions chip and menu of a draft in a harness with its own modes.
+    fn draft_harness_permissions(&self) -> Option<Permissions> {
+        let harness = self.draft_harness();
+        let row = self.harness_row(harness)?;
+        let current = self.draft_mode()?;
+        let protection = row.protection.trim();
+        let tip = format!(
+            "{protection}{}Choose what {} may do in the new thread.",
+            if protection.is_empty() { "" } else { " " },
+            row.name
+        );
+        Some(Permissions {
+            harness,
+            current,
+            blocked: self.draft_locked(),
+            tip: tip.into(),
+            note: "Applies from the thread's first turn. Change it any time after.".into(),
+            on_select: Rc::new(move |this, mode, _, cx| this.choose_draft_mode(harness, mode, cx)),
+        })
+    }
+
+    /// Opens the draft's harness Permissions menu, as its chip does. For scenes.
+    #[cfg(test)]
+    pub(super) fn open_draft_permissions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(permissions) = self.draft_harness_permissions() {
+            self.open_permissions(&permissions, window, cx);
+        }
+    }
+
     /// A harness's own modes, or Plait's Ask and Auto for Pi, in the same place.
     fn draft_permissions(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
         let harness = self.draft_harness();
         let locked = self.draft_locked();
         if harness != HarnessId::Pi {
-            let row = self.harness_row(harness)?;
-            let current = self.draft_mode()?;
-            let protection = row.protection.trim();
-            let tip = format!(
-                "{protection}{}Choose what {} may do in the new thread.",
-                if protection.is_empty() { "" } else { " " },
-                row.name
-            );
-            let permissions = Permissions {
-                harness,
-                current,
-                blocked: locked,
-                tip: tip.into(),
-                note: "Applies from the thread's first turn. Change it any time after.".into(),
-                on_select: Rc::new(move |this, mode, _, cx| {
-                    this.choose_draft_mode(harness, mode, cx)
-                }),
-            };
+            let permissions = self.draft_harness_permissions()?;
             return self.permissions_chip("draft-permissions", permissions, cx);
         }
         let mode = self.draft_approval();

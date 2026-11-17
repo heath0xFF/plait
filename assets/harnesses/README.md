@@ -7,6 +7,7 @@ Plait branding and imply no endorsement. Plait's own artwork is in
 
 | File | Shown for | Mark of |
 |---|---|---|
+| `claude.svg` | Claude Code threads | Anthropic (Claude) |
 | `openai.svg` | Codex threads | OpenAI |
 | `pi.svg` | Pi threads | Pi |
 
@@ -17,6 +18,7 @@ attributes were removed so the app can size and tint them.
 
 | File | SHA-256 of the package's file |
 |---|---|
+| `claude.svg` | `365a70a7eb3956d9b9a96086058ebe04e1dbd8e291a756ad964e8a283fbd6d38` |
 | `openai.svg` | `a595df6b423920c67a7f8f73c063e4bfb72d415948097b6cac063a2366bb5186` |
 | `pi.svg` | `d82978781b824273c55473822c1f243a6ed34fc6e8c2dbfe1a90dfc66ae43ee8` |
 

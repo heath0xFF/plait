@@ -28,7 +28,9 @@ const REQUIRED = ['sdk.mjs', 'LICENSE.md'];
 /** The tarball is about 1.6 MB, and 6 MB unpacked; these bounds leave room without trusting the server. */
 const MAX_DOWNLOAD = 16 * 1024 * 1024;
 const LIMITS = { maxArchive: 64 * 1024 * 1024, maxEntry: 16 * 1024 * 1024, maxEntries: 512 };
-const DOWNLOAD_TIMEOUT_MS = 120_000;
+// The host relays each request within 20 seconds and replaces a runtime that misses it, and the
+// desktop waits as long; the download must end, or give up, well inside that.
+const DOWNLOAD_TIMEOUT_MS = 15_000;
 
 /** Where the host keeps this version, beside `host.sqlite`. */
 export function sdkDirectory(dataDirectory: string): string {
