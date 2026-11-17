@@ -381,6 +381,8 @@ path alongside separate `PLAIT_HOST_STORE` and `PLAIT_DESKTOP_STATE_DIR` paths.
 | Cmd-Option-Up | Previous Thread | `thread.previous` |
 | Option-Down | Next Changed File | `git.next_file` |
 | Option-Up | Previous Changed File | `git.previous_file` |
+| Cmd-Option-period | Deny Once | `approval.deny_once` |
+| Cmd-Option-Y | Allow Once | `approval.allow_once` |
 | Cmd-Shift-C | Commit Staged Changes… | `git.commit` |
 | Cmd-M | Minimize | `window.minimize` |
 | Cmd-1 to Cmd-9 | Jump to Sidebar Item 1–9 | `jump.1` to `jump.9` |
@@ -421,6 +423,16 @@ move the window; double-clicking there does what **System Settings → Desktop &
 Dock → Double-click a window's title bar to** is set to. With the sidebar
 hidden, the header moves right to clear the buttons, except in full screen,
 where macOS hides them.
+
+Cmd-Option-period answers the open thread's approval card with **Deny once**
+and Cmd-Option-Y with **Allow once**. Each button shows its shortcut as the
+keymap binds it. The keys act only when the card is on screen and its buttons
+would: in the open thread's conversation, with no palette or picker open over
+it, the host connected, no other control request in flight, the approval not
+yet answered, and its exact arguments shown. Otherwise they do nothing. A held
+key answers one approval at most; release it before answering the next. Both
+are in the **Thread** menu and the command palette, and can be changed in
+Settings → Keyboard.
 
 Above the message box, a card lists the files the thread wrote that are not
 committed yet, with lines added and removed against HEAD. It updates as the

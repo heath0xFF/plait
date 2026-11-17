@@ -128,7 +128,12 @@ conversation keeps a readable minimum width.
   conflicts in place and lets the person cancel or reassign. A choice applies when
   made; its saved or failed state is a dot and a sentence beneath it.
 - **Approval.** A bordered card above the composer shows the exact arguments,
-  the risk, protected dirty paths, and Deny once / Allow once.
+  the risk, protected dirty paths, and Deny once / Allow once. The amber dot,
+  title, and edge carry the caution; the risk is secondary text, read rather
+  than signalled. Each button shows its shortcut from the keymap
+  (Cmd-Option-period and Cmd-Option-Y by default). The shortcuts pass the
+  buttons' own gate, act only while the card is on screen, and answer once
+  per press.
 - **Git.** Changed files are 28-point rows: a one-letter state, file name first,
   then its directory, then index/worktree. The accessible name carries the full
   path and state. Diffs keep separate Unstaged and Staged views. Stage or

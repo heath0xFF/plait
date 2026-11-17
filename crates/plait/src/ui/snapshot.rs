@@ -686,6 +686,190 @@ impl Harness {
     }
 }
 
+impl Harness {
+    /// Let go of every key, as the platform reports it.
+    fn release(&mut self) {
+        self.pointer(PlatformInput::ModifiersChanged(ModifiersChangedEvent {
+            modifiers: Modifiers::default(),
+            capslock: Capslock::default(),
+        }));
+    }
+
+    /// Give the pending approval a new ID, so an earlier answer does not cover it.
+    fn new_approval(&mut self, id: &'static str) {
+        self.change_snapshot(|snapshot| snapshot.pending_approval.as_mut().unwrap().id = id.into());
+        self.update(|plait, _, _| plait.host.error = None);
+    }
+
+    /// Press `keys` from a released keyboard and report whether an answer to
+    /// `id` was sent. No host runs here, so a sent answer fails and says so.
+    fn answers(&mut self, keys: &'static str, id: &str) -> bool {
+        self.release();
+        self.press(keys, id)
+    }
+
+    /// Press `keys` without releasing first, as a held key repeats.
+    fn press(&mut self, keys: &'static str, id: &str) -> bool {
+        self.draw();
+        self.keystroke(keys);
+        let id = id.to_owned();
+        self.window
+            .update(&mut self.cx, |plait, _, _| {
+                let sent = plait.host.decided_approvals.contains(&id);
+                assert_eq!(sent, plait.host.error.is_some(), "a sent answer fails here");
+                sent
+            })
+            .expect("window update")
+    }
+}
+
+/// Deny Once and Allow Once answer from the keyboard exactly when the
+/// approval card's buttons would, once per press.
+#[core::prelude::v1::test]
+fn approval_shortcuts_act_only_when_the_buttons_would() {
+    if !isolated("approval_shortcuts_act_only_when_the_buttons_would") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-approval-keys-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, true);
+    harness.update(|plait, _, cx| {
+        for key in ["cmd-alt-y", "cmd-alt-."] {
+            let key = Keystroke::parse(key).unwrap();
+            assert!(
+                !super::actions::editing_keys(cx).contains(&key),
+                "the composer does not take {key:?}"
+            );
+        }
+        // The buttons read the keymap.
+        assert_eq!(plait.shortcut_label("approval.allow_once"), "⌥⌘Y");
+        assert_eq!(plait.shortcut_label("approval.deny_once"), "⌥⌘.");
+        // One gate decides for the buttons and the keys.
+        let approval = plait
+            .host
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .pending_approval
+            .clone()
+            .unwrap();
+        assert!(plait.can_answer(&approval));
+        assert_eq!(plait.shortcut_answer(true), Some(("a1".into(), true)));
+        assert_eq!(plait.shortcut_answer(false), Some(("a1".into(), false)));
+    });
+    assert!(harness.answers("cmd-alt-y", "a1"), "Allow Once answers");
+    harness.new_approval("a2");
+    assert!(harness.answers("cmd-alt-.", "a2"), "Deny Once answers");
+
+    // A held key answers one approval, not the next.
+    harness.new_approval("a3");
+    assert!(!harness.press("cmd-alt-.", "a3"), "a repeat is ignored");
+    assert!(harness.answers("cmd-alt-.", "a3"), "a new press answers");
+    harness.new_approval("a4");
+    // A key coming up rearms the keys as a modifier change does.
+    let key_up = Keystroke::parse("cmd-alt-y").unwrap();
+    harness.pointer(PlatformInput::KeyUp(KeyUpEvent { keystroke: key_up }));
+    assert!(harness.press("cmd-alt-y", "a4"));
+
+    // A key held from before the approval arrived does not answer it.
+    harness.change_snapshot(|snapshot| snapshot.pending_approval = None);
+    harness.update(|plait, _, _| plait.host.error = None);
+    assert!(!harness.answers("cmd-alt-y", "a5"), "no approval waits");
+    harness.change_snapshot(|snapshot| {
+        let mut approval = thread_snapshot(Path::new("/"), true)
+            .pending_approval
+            .unwrap();
+        approval.id = "a5".into();
+        snapshot.pending_approval = Some(approval);
+    });
+    assert!(
+        !harness.press("cmd-alt-y", "a5"),
+        "the held key stays spent"
+    );
+
+    // Everything that disables the buttons stops the keys.
+    harness.update(|plait, _, _| plait.host.connected = false);
+    assert!(!harness.answers("cmd-alt-y", "a5"), "disconnected");
+    harness.update(|plait, _, _| {
+        plait.host.connected = true;
+        plait.host.controlling = true;
+    });
+    assert!(
+        !harness.answers("cmd-alt-y", "a5"),
+        "a control request is in flight"
+    );
+    harness.update(|plait, _, _| {
+        plait.host.controlling = false;
+        plait.host.decided_approvals.insert("a5".into());
+    });
+    harness.release();
+    harness.draw();
+    harness.keystroke("cmd-alt-y");
+    harness.update(|plait, _, _| {
+        assert!(
+            plait.host.error.is_none(),
+            "already decided: nothing is sent"
+        );
+        plait.host.decided_approvals.remove("a5");
+    });
+    // Pi's approval with no arguments shows nothing to approve.
+    harness.change_snapshot(|snapshot| snapshot.pending_approval.as_mut().unwrap().details.clear());
+    assert!(!harness.answers("cmd-alt-y", "a5"), "not approvable");
+    harness.new_approval("a6");
+    harness.change_snapshot(|snapshot| {
+        snapshot.pending_approval.as_mut().unwrap().details = "{\"command\":\"cargo\"}".into()
+    });
+
+    // Only the open thread's card, while it is on screen, can be answered.
+    harness.update(|plait, _, _| plait.settings_open = true);
+    assert!(
+        !harness.answers("cmd-alt-y", "a6"),
+        "Settings covers the card"
+    );
+    harness.update(|plait, _, _| {
+        plait.settings_open = false;
+        plait.tab = super::Workspace::Changes;
+    });
+    assert!(
+        !harness.answers("cmd-alt-y", "a6"),
+        "Changes covers the card"
+    );
+    harness.update(|plait, _, _| {
+        plait.tab = super::Workspace::Conversation;
+        plait.host.selected = Some("thr_0c44a9d1".into());
+    });
+    assert!(
+        !harness.answers("cmd-alt-y", "a6"),
+        "another thread is open"
+    );
+    harness.update(|plait, _, _| plait.host.selected = Some(THREAD.into()));
+    // The palette opens over the card, so the keys wait until it closes.
+    harness.update(|plait, window, cx| plait.toggle_command_palette(window, cx));
+    harness.update(|plait, _, _| {
+        assert!(plait.overlay.is_some(), "the palette is open");
+        assert_eq!(plait.shortcut_answer(true), None);
+    });
+    assert!(
+        !harness.answers("cmd-alt-y", "a6"),
+        "the palette covers the card"
+    );
+    harness.update(|plait, window, cx| plait.toggle_command_palette(window, cx));
+    harness.update(|plait, _, _| assert!(plait.overlay.is_none(), "the palette is closed"));
+
+    // A rebound key answers, and the button shows it.
+    harness.update(|plait, _, cx| {
+        let keymap = &mut plait.preferences.value.keymap;
+        keymap.insert("approval.allow_once".into(), "cmd-alt-u".into());
+        super::actions::install(cx, keymap);
+        assert_eq!(plait.shortcut_label("approval.allow_once"), "⌥⌘U");
+    });
+    assert!(!harness.answers("cmd-alt-y", "a6"), "the old key is free");
+    assert!(harness.answers("cmd-alt-u", "a6"), "the new key answers");
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
 #[core::prelude::v1::test]
 fn desktop_recovery_does_not_rebind_saved_work_or_clear_a_newer_revision() {
     if !isolated("desktop_recovery_does_not_rebind_saved_work_or_clear_a_newer_revision") {

@@ -1,10 +1,19 @@
 use super::{
-    Plait,
+    Plait, actions,
     selection::{Owner, Site},
     theme::*,
 };
 use gpui::{prelude::*, *};
 use std::time::Instant;
+
+/// Keeps a held Deny Once or Allow Once shortcut from answering again.
+#[derive(Default)]
+pub(super) struct ApprovalKeys {
+    /// The approval shortcut pressed last, until a key comes up or a
+    /// modifier changes. The same keystroke again before then is a repeat.
+    held: Option<Keystroke>,
+    interceptor: Option<Subscription>,
+}
 
 /// Smooth reveal of the streaming reply and reasoning. Advanced once per
 /// frame by `advance_reveals`; rows read how much to show.
@@ -676,13 +685,121 @@ impl Plait {
             .into_any_element()
     }
 
+    /// Whether `approval` can be answered now. Deny once, Allow once, and
+    /// their shortcuts all pass through this one gate.
+    pub(super) fn can_answer(&self, approval: &Approval) -> bool {
+        approvable(approval, self.thread_harness())
+            && self.host.connected
+            && !self.host.controlling
+            && !self.host.decided_approvals.contains(&approval.id)
+    }
+
+    /// What a Deny Once or Allow Once shortcut would send: the open thread's
+    /// pending approval, while its card is on screen and its buttons would act.
+    pub(super) fn shortcut_answer(&self, allow: bool) -> Option<(String, bool)> {
+        // The card is drawn only in the open thread's conversation, and a
+        // palette or picker opens over it, so an answer is never given to
+        // arguments the person cannot see. A command chosen in the palette
+        // runs after the palette has closed.
+        let shown = !self.settings_open
+            && self.tab == super::Workspace::Conversation
+            && self.overlay.is_none();
+        let snapshot = self.host.snapshot.as_ref().filter(|snapshot| {
+            shown && self.host.selected.as_deref() == Some(snapshot.id.as_str())
+        })?;
+        let approval = snapshot.pending_approval.as_ref()?;
+        self.can_answer(approval)
+            .then(|| (approval.id.clone(), allow))
+    }
+
+    /// Deny Once or Allow Once from the keyboard, the menu, or the palette.
+    fn answer_by_shortcut(&mut self, allow: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(answer) = self.shortcut_answer(allow) {
+            self.control_thread(Some(answer), window, cx);
+        }
+    }
+
+    /// Whether `pressed` is what Deny Once or Allow Once is bound to now.
+    fn approval_key(&self, pressed: &Keystroke) -> bool {
+        let keymap = &self.preferences.value.keymap;
+        actions::ACTIONS
+            .iter()
+            .filter(|action| action.id.starts_with("approval."))
+            .flat_map(|action| actions::bound(action, keymap))
+            .any(|key| key.modifiers == pressed.modifiers && key.key == pressed.key)
+    }
+
+    /// Whether to drop `pressed` before it reaches an action: an approval
+    /// shortcut pressed again with no key released in between.
+    ///
+    /// Actions do not carry the key event, so its repeat flag cannot be read
+    /// where the answer is sent. A press is told from a repeat by what comes
+    /// between them: a key coming up or a modifier changing. A press with no
+    /// approval waiting counts too, so a key held before a prompt arrives
+    /// cannot answer it.
+    fn approval_repeat(&mut self, pressed: &Keystroke) -> bool {
+        if !self.approval_key(pressed) {
+            self.approval_keys.held = None;
+            return false;
+        }
+        let held = self.approval_keys.held.as_ref();
+        let repeat =
+            held.is_some_and(|held| held.modifiers == pressed.modifiers && held.key == pressed.key);
+        self.approval_keys.held = Some(pressed.clone());
+        repeat
+    }
+
+    /// Watch keystrokes so a held approval shortcut answers at most once.
+    pub(super) fn watch_approval_keys(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let entity = cx.weak_entity();
+        let window_id = window.window_handle().window_id();
+        // Interceptors run before key bindings, so a repeat is dropped before
+        // it becomes an action.
+        let interceptor = cx.intercept_keystrokes(move |event, window, cx| {
+            if window.window_handle().window_id() != window_id {
+                return;
+            }
+            let repeat = entity
+                .update(cx, |this, _| this.approval_repeat(&event.keystroke))
+                .unwrap_or(false);
+            if repeat {
+                cx.stop_propagation();
+            }
+        });
+        self.approval_keys.interceptor = Some(interceptor);
+    }
+
+    /// Bind the approval actions, and rearm their keys whenever one is released.
+    pub(super) fn on_approval_actions(
+        &self,
+        root: Stateful<Div>,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        root.on_action(cx.listener(|this, _: &super::DenyOnce, window, cx| {
+            this.answer_by_shortcut(false, window, cx)
+        }))
+        .on_action(cx.listener(|this, _: &super::AllowOnce, window, cx| {
+            this.answer_by_shortcut(true, window, cx)
+        }))
+        // Capture, so no control below can keep a release from rearming.
+        .capture_key_up(cx.listener(|this, _: &KeyUpEvent, _, _| {
+            this.approval_keys.held = None;
+        }))
+        .on_modifiers_changed(cx.listener(|this, _: &ModifiersChangedEvent, _, _| {
+            this.approval_keys.held = None;
+        }))
+    }
+
+    /// A control's shortcut as the keymap binds it now. Nothing when unbound.
+    fn shortcut_hint(&self, id: &str) -> Option<Div> {
+        let label = self.shortcut_label(id);
+        (!label.is_empty()).then(|| tag(label, colors().subtle))
+    }
+
     /// Exact arguments and a one-call decision. Nothing runs without it.
     fn approval(&self, approval: &Approval, cx: &mut Context<Self>) -> impl IntoElement {
         let exact = approvable(approval, self.thread_harness());
-        let enabled = exact
-            && self.host.connected
-            && !self.host.controlling
-            && !self.host.decided_approvals.contains(&approval.id);
+        let enabled = self.can_answer(approval);
         let allow_id = approval.id.clone();
         let deny_id = approval.id.clone();
         let dirty = approval.dirty_paths.join(", ");
@@ -739,9 +856,11 @@ impl Plait {
                             .child(approval.details.clone()),
                     )
                 })
+                // The dot, title, and edge already ask for attention; the
+                // risk is read, so it is set as secondary text.
                 .child(
                     div()
-                        .text_color(rgb(colors().amber))
+                        .text_color(rgb(colors().muted))
                         .child(approval.risk.clone()),
                 )
                 .when(!approval.dirty_paths.is_empty(), |el| {
@@ -761,6 +880,8 @@ impl Plait {
                         .justify_end()
                         .child(
                             toned_button("deny-tool", "Deny once", Tone::Filled)
+                                .aria_keyshortcuts(self.shortcut_aria("approval.deny_once"))
+                                .children(self.shortcut_hint("approval.deny_once"))
                                 .disabled(!enabled)
                                 .when(enabled, |el| {
                                     el.on_activate(cx, move |this, window, cx| {
@@ -775,6 +896,8 @@ impl Plait {
                         .child(
                             toned_button("allow-tool", "Allow once", Tone::Filled)
                                 .text_color(rgb(colors().amber))
+                                .aria_keyshortcuts(self.shortcut_aria("approval.allow_once"))
+                                .children(self.shortcut_hint("approval.allow_once"))
                                 .disabled(!enabled)
                                 .when(enabled, |el| {
                                     el.on_activate(cx, move |this, window, cx| {

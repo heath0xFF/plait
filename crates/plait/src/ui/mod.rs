@@ -97,7 +97,9 @@ actions!(
         ArchiveThread,
         ToggleArchived,
         FilterThreads,
-        ToggleNotifications
+        ToggleNotifications,
+        DenyOnce,
+        AllowOnce
     ]
 );
 
@@ -146,6 +148,7 @@ pub struct Plait {
     /// Files the selected thread changed, above its composer.
     thread_files: thread_files::ThreadFiles,
     reveal: live_conversation::Reveals,
+    approval_keys: live_conversation::ApprovalKeys,
     /// The command palette or model picker, above the workspace.
     overlay: Option<commands::Overlay>,
     /// The inspector toggle was used on a window too narrow to show it.
@@ -222,6 +225,7 @@ impl Plait {
             line_pick: None,
             thread_files: Default::default(),
             reveal: Default::default(),
+            approval_keys: Default::default(),
             overlay: None,
             inspector_note: false,
             panels: Default::default(),
@@ -272,6 +276,7 @@ impl Plait {
             this.sync_provider_settings(cx);
         })
         .detach();
+        this.watch_approval_keys(window, cx);
         this.reconnect_host(window, cx);
         // Test scenes stay offline.
         if !cfg!(test) {
@@ -935,6 +940,7 @@ impl Render for Plait {
             }))
             .on_action(cx.listener(|_, _: &Minimize, window, _| window.minimize_window()))
             .map(|root| self.on_jump_actions(root, cx))
+            .map(|root| self.on_approval_actions(root, cx))
             .map(|root| self.on_selection_actions(root, cx))
             .map(|root| self.on_keyboard_controls(root, cx))
             .map(|root| self.on_panel_resize(root, cx))

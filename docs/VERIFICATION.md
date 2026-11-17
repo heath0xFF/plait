@@ -231,6 +231,19 @@ read, and a failure message long enough to wrap in the state line.
   without commits), and by a desktop test that counts real files, hides the
   card, and opens a file in Changes. It has not been watched live in the
   installed app.
+- The Deny once and Allow once shortcuts are covered by action-table tests
+  (both defaults need Command and Option, take no composer or other default
+  key, and match the table in [macOS](MACOS.md#application-shortcuts)) and by an
+  isolated desktop test that dispatches keys through GPUI. They answer when the
+  card's buttons would, and do nothing with no approval, while disconnected,
+  with a control request in flight, once answered, with arguments that cannot
+  be approved, behind Settings, Changes, or an open command palette, or for
+  another thread. A repeated keystroke with no release between answers
+  nothing, and a rebound key answers. No host runs in that test, so it checks
+  that an answer was sent, not the host's reply. The keys have not been
+  pressed in the installed app: real key repeat, key release while Command is
+  held, the menu items, and choosing either command in the palette are
+  unchecked there.
 - Asking about diff lines is covered by unit tests of the quote (line ranges,
   removed-only picks, header lines left out, fences longer than any backtick
   run, long picks summarized) and a desktop test that picks lines in a real

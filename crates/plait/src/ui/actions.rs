@@ -118,6 +118,10 @@ pub(super) const ACTIONS: &[AppAction] = &[
     entry("thread.show_archived", "Show or Hide Archived Threads", "Thread", None, Item, || Box::new(ToggleArchived)),
     entry("thread.filter", "Find a Thread", "Thread", None, Item, || Box::new(FilterThreads)),
     entry("thread.notifications", "Mute or Unmute Thread Alerts", "Thread", None, Item, || Box::new(ToggleNotifications)),
+    // Answers to the open thread's approval. Both need Command and Option, so
+    // no typing slip sends one, and their keys sit far apart.
+    entry("approval.deny_once", "Deny Once", "Thread", Some("cmd-alt-."), Group, || Box::new(DenyOnce)),
+    entry("approval.allow_once", "Allow Once", "Thread", Some("cmd-alt-y"), Item, || Box::new(AllowOnce)),
     entry("git.stage_all", "Stage All Changes", "Git", None, Item, || Box::new(StageAll)),
     entry("git.unstage_all", "Unstage All Changes", "Git", None, Item, || Box::new(UnstageAll)),
     entry("git.commit", "Commit Staged Changes…", "Git", Some("cmd-shift-c"), Group, || Box::new(CommitStaged)),
@@ -646,6 +650,7 @@ fn documented(keystroke: &str) -> String {
         "alt" => "Option".to_owned(),
         "ctrl" => "Control".to_owned(),
         "," => "comma".to_owned(),
+        "." => "period".to_owned(),
         part => {
             let mut letters = part.chars();
             letters.next().map_or_else(String::new, |first| {
@@ -812,6 +817,35 @@ mod tests {
         assert_eq!(documented("cmd-,"), "Cmd-comma");
         assert_eq!(documented("cmd-alt-down"), "Cmd-Option-Down");
         assert_eq!(documented("shift-tab"), "Shift-Tab");
+        assert_eq!(documented("cmd-alt-."), "Cmd-Option-period");
+    }
+
+    /// An approval answer must not come from a typing slip or from the
+    /// composer's own keys, and Allow must not be one key away from Deny.
+    #[test]
+    fn approval_answers_need_command_and_stay_apart() {
+        let default = |id: &str| {
+            let action = ACTIONS.iter().find(|action| action.id == id).unwrap();
+            assert_eq!(action.category, "Thread", "{id}");
+            action.default_key().unwrap()
+        };
+        let (allow, deny) = (
+            default("approval.allow_once"),
+            default("approval.deny_once"),
+        );
+        // The composer's keys: send, new line, steer, stop, and send by Command-Enter.
+        let composer = ["enter", "shift-enter", "alt-enter", "escape", "cmd-enter"]
+            .map(|key| super::parsed(key).unwrap().remove(0));
+        for key in [&allow, &deny] {
+            assert!(key.modifiers.platform && key.modifiers.alt, "{key:?}");
+            assert!(!key.modifiers.shift && !key.modifiers.control, "{key:?}");
+            assert!(super::reserved(key, &composer).is_none(), "{key:?}");
+        }
+        assert_ne!(allow.key, deny.key);
+        // Neither rides on a key that confirms, cancels, deletes, or moves focus.
+        for key in [&allow.key, &deny.key] {
+            assert!(!["enter", "escape", "backspace", "tab"].contains(&key.as_str()));
+        }
     }
 
     #[test]
