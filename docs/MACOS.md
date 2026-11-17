@@ -309,10 +309,12 @@ Solarized, and Tokyo Night. A choice applies at once and is saved in the
 desktop preferences.
 
 **Code font** sets the font for code, file paths, and commands. Left empty, it
-is the system's monospaced font, SF Mono. Type the name of an installed font
-family, such as `JetBrains Mono`; matching installed names are offered as you
-type, and the font changes as soon as the name matches one. A name that is not
-installed changes nothing, and the line beneath the field says so.
+is the system's monospaced font, SF Mono. Type the name of an installed
+monospaced font family, such as `JetBrains Mono`; matching installed names are
+offered as you type, and the font changes as soon as the name matches one. A
+name that is not installed, or a font whose characters differ in width, changes
+nothing, and the line beneath the field says so. Fonts installed while Plait is
+running are found the next time Settings opens.
 
 More themes come from Base16 scheme files: put `.yaml` files (for example from
 [tinted-theming/schemes](https://github.com/tinted-theming/schemes)) in
@@ -332,7 +334,7 @@ loaded history and requests an earlier page when one is available. End or Cmd-Do
 returns to the latest messages. Text fields keep their usual editing shortcuts.
 Version 3 history also loads as you scroll toward the top; use **Load earlier**
 for an explicit page request and **Retry** after a failed read. Older hosts retain
-bounded previews. Completed reasoning expands with **Show reasoning**.
+bounded previews. Completed reasoning expands from its **Reasoning** line.
 
 
 ### Application shortcuts

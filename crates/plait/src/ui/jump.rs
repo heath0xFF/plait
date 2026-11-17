@@ -123,8 +123,10 @@ impl Plait {
                 }
                 super::actions::install(cx, &this.preferences.value.keymap);
                 this.apply_theme(cx);
+                // Settings opened before this read shows the default font.
+                this.show_code_font(cx);
                 // The system's font needs no check; a chosen one is drawn
-                // only after the installed families have been read.
+                // only after it has been found installed and measured.
                 if this.preferences.value.code_font().is_some() {
                     this.load_fonts(cx);
                 }

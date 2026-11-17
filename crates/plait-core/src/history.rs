@@ -527,12 +527,46 @@ impl TurnSummary {
 
     /// The whole record in one line, for assistive technology.
     pub fn label(&self) -> String {
-        if self.files.is_empty() {
+        if self.steps == 0 {
+            "no tool calls".into()
+        } else if self.files.is_empty() {
             self.steps_label()
         } else {
             format!("{} · edited {}", self.steps_label(), self.files.join(", "))
         }
     }
+}
+
+/// The record each message's own row draws: its turn's, unless the message
+/// ends the rows. There the state line draws it, or, while older history is
+/// being read, nothing does: the turn may run on past what is loaded.
+pub fn row_record<'a>(
+    summaries: &'a std::collections::HashMap<String, TurnSummary>,
+    snapshot: &Snapshot,
+    id: &str,
+) -> Option<&'a TurnSummary> {
+    summaries
+        .get(id)
+        .filter(|_| snapshot.messages.last().is_none_or(|last| last.id != id))
+}
+
+/// Positions in `after` of the messages whose rows draw another record than
+/// they did in `before`. Those rows change height though their text has not,
+/// as when a new request arrives and the answer before it takes its record.
+pub fn moved_records(
+    before: (&Snapshot, &std::collections::HashMap<String, TurnSummary>),
+    after: (&Snapshot, &std::collections::HashMap<String, TurnSummary>),
+) -> Vec<usize> {
+    after
+        .0
+        .messages
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| {
+            row_record(before.1, before.0, &message.id) != row_record(after.1, after.0, &message.id)
+        })
+        .map(|(index, _)| index)
+        .collect()
 }
 
 /// Summaries describe observed steps, without inventing per-turn timing.
@@ -541,12 +575,18 @@ pub fn turn_summaries(snapshot: &Snapshot) -> std::collections::HashMap<String, 
     let mut answer: Option<String> = None;
     let mut steps = 0usize;
     let mut files = Vec::new();
+    // A turn whose request is outside what is loaded has no record: the
+    // steps before the first loaded row cannot be counted.
+    let mut whole = false;
     let finish = |answer: &mut Option<String>,
                   steps: usize,
+                  whole: bool,
                   files: &mut Vec<String>,
                   summaries: &mut std::collections::HashMap<String, TurnSummary>| {
+        // Every turn that ended in an answer has a record, so each closes
+        // the same way; one with no tool calls has nothing to count.
         if let Some(id) = answer.take()
-            && steps > 0
+            && whole
         {
             let files = std::mem::take(files);
             summaries.insert(id, TurnSummary { steps, files });
@@ -556,8 +596,9 @@ pub fn turn_summaries(snapshot: &Snapshot) -> std::collections::HashMap<String, 
     for row in transcript::rows(snapshot) {
         match row {
             Row::Message(m) if m.role == MessageRole::User => {
-                finish(&mut answer, steps, &mut files, &mut summaries);
+                finish(&mut answer, steps, whole, &mut files, &mut summaries);
                 steps = 0;
+                whole = true;
             }
             Row::Message(m) => answer = Some(m.id.clone()),
             Row::Tool(t) => {
@@ -575,7 +616,7 @@ pub fn turn_summaries(snapshot: &Snapshot) -> std::collections::HashMap<String, 
         }
     }
     if !snapshot.status.busy() {
-        finish(&mut answer, steps, &mut files, &mut summaries);
+        finish(&mut answer, steps, whole, &mut files, &mut summaries);
     }
     summaries
 }
@@ -983,8 +1024,48 @@ mod tests {
             files: Vec::new(),
         };
         assert_eq!(reads.label(), "3 steps");
+        // A turn that ends in tool calls, with no answer after them, has no record.
         snapshot.messages.pop();
         assert!(turn_summaries(&snapshot).is_empty());
+        // A turn that only answered still closes with a record, with nothing to count.
+        let mut talk = live(&["user", "answer"]);
+        talk.messages[0].role = MessageRole::User;
+        let summaries = turn_summaries(&talk);
+        let summary = summaries.get("answer").expect("the answer closes the turn");
+        assert_eq!((summary.steps, summary.files.len()), (0, 0));
+        assert_eq!(summary.label(), "no tool calls");
+        // While the turn runs it has not closed.
+        talk.status = ThreadStatus::Running;
+        assert!(turn_summaries(&talk).is_empty());
+        // Rows that begin after a turn's request cannot count its steps.
+        let mut cut = live(&["answer", "user", "reply"]);
+        cut.messages[1].role = MessageRole::User;
+        let summaries = turn_summaries(&cut);
+        assert_eq!(summaries.keys().collect::<Vec<_>>(), ["reply"]);
+    }
+
+    #[test]
+    fn a_record_moves_into_its_row_when_another_message_ends_the_rows() {
+        let turns = |ids: &[&str]| {
+            let mut snapshot = live(ids);
+            for message in snapshot.messages.iter_mut().step_by(2) {
+                message.role = MessageRole::User;
+            }
+            let summaries = turn_summaries(&snapshot);
+            (snapshot, summaries)
+        };
+        let (one, first) = turns(&["ask", "answer"]);
+        // The answer that ends the rows leaves its record to the state line.
+        assert!(first.contains_key("answer"));
+        assert_eq!(row_record(&first, &one, "answer"), None);
+        // A new request ends the rows instead, so the answer's row takes it.
+        let (two, second) = turns(&["ask", "answer", "again"]);
+        assert!(row_record(&second, &two, "answer").is_some());
+        assert_eq!(moved_records((&one, &first), (&two, &second)), [1]);
+        // Nothing moves while the same message ends the rows.
+        assert!(moved_records((&two, &second), (&two, &second)).is_empty());
+        let (three, third) = turns(&["ask", "answer", "again", "reply"]);
+        assert!(moved_records((&two, &second), (&three, &third)).is_empty());
     }
 
     #[test]

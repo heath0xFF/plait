@@ -342,16 +342,18 @@ impl Plait {
             Kind::List { depth, marker } => self.list_item(site, block, *depth, *marker),
             Kind::Table(table) => self.table(site, block, table, key),
             Kind::Diff(lines) => self.diff(site, block, lines, key),
+            // Headings stay within the interface's sizes and one step apart,
+            // so a reply's sections never outrank the request above them.
             Kind::Heading(level) => prose()
                 .w_full()
                 .min_w_0()
                 .font_weight(FontWeight::BOLD)
                 .text_size(px(match level {
-                    1 => 18.,
-                    2 => 16.,
-                    _ => 14.,
+                    1 => 15.,
+                    2 => 14.,
+                    _ => 13.,
                 }))
-                .line_height(px(24.))
+                .line_height(px(22.))
                 .child(self.block_text(site, block, whole, false))
                 .into_any_element(),
             Kind::Quote => prose()
@@ -377,6 +379,28 @@ impl Plait {
             .min_w_0()
             .pl(px(block.indent as f32 * LIST_STEP))
             .child(body)
+            .into_any_element()
+    }
+
+    /// A request as it was written: plain text, in the request's own size.
+    pub(super) fn request(&self, site: &Site, blocks: &[Block]) -> AnyElement {
+        let blocks = blocks.iter().enumerate().map(|(index, block)| {
+            let site = Site {
+                block: index,
+                ..site.clone()
+            };
+            request_prose().w_full().min_w_0().child(self.block_text(
+                &site,
+                block,
+                0..block.text.len(),
+                false,
+            ))
+        });
+        column()
+            .w_full()
+            .min_w_0()
+            .gap_2()
+            .children(blocks.collect::<Vec<_>>())
             .into_any_element()
     }
 

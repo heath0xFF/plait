@@ -313,7 +313,8 @@ impl ToolStatus {
         match self {
             Self::Running => "Running",
             Self::Done => "Done",
-            Self::Error => "Error",
+            // The word its opened output is headed with.
+            Self::Error => "Failed",
             Self::Interrupted => "Interrupted",
         }
     }

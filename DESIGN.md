@@ -44,13 +44,17 @@ conversation keeps a readable minimum width.
 - **Conversation.** A log of turns, not a chat. A turn is one request and
   everything up to the next request. A one-point turn line runs down the
   conversation's left margin, outside the text column, so text keeps the
-  composer's edges. A request heads its turn: left-aligned and semibold, with
-  a ring on the line. Replies, reasoning, and tool calls are open text beside
-  the line. An earlier turn closes at a filled node with its record: the step
-  count and the files its edits changed, each opening in Changes. The line
-  ends at one node, in the state's color, that names the latest turn's state
-  and, once that turn has finished, its record. The state is said there once,
-  not repeated in the answer above. Messages carry no visible author label;
+  composer's edges. A request heads its turn: left-aligned, semibold, and a
+  size above the replies, with a ring on the line. Replies, reasoning, and
+  tool calls are open text beside the line; headings inside a reply stay
+  smaller than or equal to the request. Every earlier turn that ended in an
+  answer closes at a filled node. One that called tools carries its record
+  there: the step count and the files its edits changed, each opening in
+  Changes. The line ends at one node, in the state's color, that names the
+  latest turn's state and, once that turn has finished, its record. The state
+  is said there once, not repeated in the answer above. While older history is
+  being read, the line stops short of that node, because the rows do not reach
+  the latest turn. Messages carry no visible author label;
   give each row a full author/context label for assistive technology. Copy
   controls stay out of sight until the pointer is over their row or they take
   keyboard focus. Away from the newest row, one control at the bottom of the
@@ -65,7 +69,8 @@ conversation keeps a readable minimum width.
   preserves the current row and its scroll position. Home/Cmd-Up goes to the
   loaded beginning; End/Cmd-Down and Jump to latest return to the live end.
   Reasoning is a separate, muted disclosure, initially closed after a response
-  finishes. Live reasoning opens in a bounded-height region. Both use the same
+  finishes, with its chevron first, as on a tool call. Live reasoning opens in
+  a bounded-height region. Both use the same
   text selection and copy behavior as answers. A turn's record holds only what
   the host reported: tool steps and the files its edits changed. Do not invent
   durations or identify who stopped a run when the host does not report that,
@@ -161,11 +166,15 @@ a `+` or `−` gutter mark with a faint mint or rose line tint. Selected
 text is main text at low opacity, so it reads the same on every surface. Inline
 code is main text on the panel color.
 
-System sans-serif at 11–15 points, with 13 points for body and navigation. Code,
-file paths, and commands use the system's monospaced font (SF Mono) at 12
-points, or an installed family named in Settings → Appearance; a family that
-is not installed is never drawn, so code cannot fall back to a proportional face. Conversation content, the composer, and settings pages
-are capped at 760 points; the turn line hangs 15 points left of that column.
+System sans-serif at 11–15 points, with 13 points for body and navigation. A
+request is 14 points semibold; headings inside a reply are 15, 14, and 13
+points bold. Code, file paths, and commands use the system's monospaced font
+(SF Mono) at 12 points, or an installed monospaced family named in Settings →
+Appearance; a family that is not installed, or whose characters differ in
+width, is not drawn, so code keeps one character width. Conversation content,
+the composer, and settings pages are capped at 760 points; the turn line, in
+the control outline color, hangs 12 points left of that column, in the middle
+of the margin.
 Spacing follows a 4-point base. Preserve gradients inside the supplied brand artwork
 only. Avoid new chrome gradients, shadows, animation, and decorative dashboard
 cards.

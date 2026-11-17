@@ -51,8 +51,17 @@ const SCENE_HOME: &str = "PLAIT_SCENE_HOME";
 /// reports the child's result. Only that child returns `true`.
 fn isolated(test: &str) -> bool {
     if let Some(home) = std::env::var_os(SCENE_HOME) {
-        assert_eq!(std::env::var_os("HOME"), Some(home), "scene home");
+        assert_eq!(std::env::var_os("HOME").as_ref(), Some(&home), "scene home");
         assert!(std::env::var_os("PLAIT_HOST_STORE").is_some(), "host store");
+        // A preferences file named in the environment is outside the scratch
+        // home, and a test that saves a preference would write it.
+        let preferences = plait_core::preferences::default_path();
+        assert!(
+            preferences
+                .as_ref()
+                .is_some_and(|path| path.starts_with(&home)),
+            "preferences are outside the scratch home: {preferences:?}"
+        );
         return true;
     }
     // Unix sockets have a short pathname limit, including the temporary home.
@@ -68,6 +77,8 @@ fn isolated(test: &str) -> bool {
         .env("HOME", &home)
         .env("PLAIT_HOST_STORE", home.join("host"))
         .env("PLAIT_DESKTOP_STATE_DIR", home.join("desktop"))
+        // Both would point the preferences outside the scratch home.
+        .env_remove("PLAIT_DESKTOP_PREFERENCES_FILE")
         .env_remove("XDG_CONFIG_HOME")
         .output()
         .expect("re-run the test binary");
@@ -1237,6 +1248,7 @@ fn a_worktree_thread_is_created_in_a_new_worktree_listed_under_its_project() {
 #[cfg(target_os = "macos")]
 #[core::prelude::v1::test]
 fn a_typed_code_font_is_drawn_only_when_it_is_installed() {
+    use super::appearance::Fit;
     use super::theme::{SYSTEM_MONO, mono};
     // Choosing a font saves a preference; only a scratch home may receive it.
     if !isolated("a_typed_code_font_is_drawn_only_when_it_is_installed") {
@@ -1248,30 +1260,13 @@ fn a_typed_code_font_is_drawn_only_when_it_is_installed() {
     let mut harness = Harness::new(&repository, None, 1380., 860.);
     harness.settle();
     harness.update(|plait, _, cx| plait.prepare_code_font(cx));
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        harness.settle();
-        let read = harness
-            .window
-            .update(&mut harness.cx, |plait, _, _| {
-                plait.code_font.installed.is_some()
-            })
-            .unwrap();
-        if read {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the installed fonts were not read"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    fonts_settled(&mut harness);
     let type_name = |harness: &mut Harness, name: &'static str| {
         harness.update(move |plait, _, cx| {
             let field = plait.code_font.field.clone().expect("the field");
             field.update(cx, |field, cx| field.set_text(name, cx));
         });
-        harness.settle();
+        fonts_settled(harness);
     };
     assert_eq!(mono().as_ref(), SYSTEM_MONO);
     // A family that is not installed is never handed to the text system.
@@ -1292,12 +1287,89 @@ fn a_typed_code_font_is_drawn_only_when_it_is_installed() {
         assert_eq!(mono().as_ref(), "Menlo");
         assert_eq!(plait.preferences.value.code_font(), Some("Menlo"));
     });
+    // Helvetica ships with every Mac too, and its characters differ in
+    // width: files and diffs could not be laid out in it, so it is refused.
+    type_name(&mut harness, "Helvetica");
+    harness.update(|plait, _, _| {
+        assert_eq!(plait.code_font.fit("Helvetica"), Some(Fit::Uneven));
+        assert_eq!(mono().as_ref(), "Menlo");
+        assert_eq!(plait.preferences.value.code_font(), Some("Menlo"));
+    });
+    // Opening Settings again shows the choice, not the name left in the field.
+    harness.update(|plait, _, cx| plait.prepare_code_font(cx));
+    fonts_settled(&mut harness);
+    harness.update(|plait, _, cx| {
+        let field = plait.code_font.field.clone().expect("the field");
+        assert_eq!(field.read(cx).text(), "Menlo");
+        assert_eq!(mono().as_ref(), "Menlo");
+    });
     // An empty field is the system's font again.
     type_name(&mut harness, "");
     harness.update(|plait, _, _| {
         assert_eq!(mono().as_ref(), SYSTEM_MONO);
         assert_eq!(plait.preferences.value.code_font(), None);
     });
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+/// Wait for the installed fonts to be read and for every check of a family
+/// to finish: both run in the background.
+#[cfg(target_os = "macos")]
+fn fonts_settled(harness: &mut Harness) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        harness.settle();
+        let settled = harness
+            .window
+            .update(&mut harness.cx, |plait, _, _| plait.code_font.settled())
+            .unwrap();
+        if settled {
+            // What the last result set off has run.
+            harness.settle();
+            return;
+        }
+        assert!(Instant::now() < deadline, "the fonts were not read");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Settings can open before the preferences have been read. The field then
+/// shows the default, which must not be taken for a choice: the saved font
+/// is still the one drawn, and the one on disk.
+#[cfg(target_os = "macos")]
+#[core::prelude::v1::test]
+fn a_saved_code_font_outlasts_settings_opening_before_the_preferences_load() {
+    use super::theme::{SYSTEM_MONO, mono};
+    if !isolated("a_saved_code_font_outlasts_settings_opening_before_the_preferences_load") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-font-load-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 1380., 860.);
+    harness.settle();
+    // Settings opens, and the installed fonts are read, with nothing saved yet.
+    harness.update(|plait, _, cx| plait.prepare_code_font(cx));
+    fonts_settled(&mut harness);
+    assert_eq!(mono().as_ref(), SYSTEM_MONO);
+    // The file names a font, and is read as it is at launch.
+    let path = plait_core::preferences::default_path().expect("scratch preferences");
+    std::fs::create_dir_all(path.parent().expect("a folder")).unwrap();
+    std::fs::write(&path, r#"{"code_font":"Menlo"}"#).unwrap();
+    harness.update(|plait, _, cx| plait.load_preferences(cx));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while mono().as_ref() != "Menlo" {
+        assert!(Instant::now() < deadline, "the saved font was not drawn");
+        std::thread::sleep(Duration::from_millis(5));
+        fonts_settled(&mut harness);
+    }
+    harness.update(|plait, _, cx| {
+        assert_eq!(plait.preferences.value.code_font(), Some("Menlo"));
+        let field = plait.code_font.field.clone().expect("the field");
+        assert_eq!(field.read(cx).text(), "Menlo");
+    });
+    let saved = plait_core::preferences::load(&path).expect("the file reads");
+    assert_eq!(saved.code_font(), Some("Menlo"));
     let _ = std::fs::remove_dir_all(&scratch);
 }
 

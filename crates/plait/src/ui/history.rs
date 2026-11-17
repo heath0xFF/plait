@@ -165,8 +165,10 @@ impl Plait {
                     return;
                 }
                 let previous = this.history.display.replace(display);
-                this.formatted = formatted;
-                this.reconcile_live_list(previous.as_deref());
+                let before = std::mem::replace(&mut this.formatted, formatted);
+                if this.reconcile_live_list(previous.as_deref()) {
+                    this.remeasure_records(previous.as_deref(), &before);
+                }
                 if this.history.enabled
                     && this.history.loading.is_none()
                     && let Some(live) = this.host.snapshot.as_ref()

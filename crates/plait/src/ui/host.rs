@@ -356,8 +356,12 @@ impl Plait {
         self.reconcile_live_list(previous);
     }
 
-    pub(super) fn reconcile_live_list(&mut self, previous: Option<&Snapshot>) {
+    /// Bring the list's rows in line with the snapshot now shown. Returns
+    /// whether rows were added or removed while the others kept their
+    /// measured heights.
+    pub(super) fn reconcile_live_list(&mut self, previous: Option<&Snapshot>) -> bool {
         let next = self.history.display.as_deref();
+        let mut spliced = false;
         match transcript::changes(previous, next) {
             Update::Reset(count) => {
                 self.live_scroll.reset(count);
@@ -365,6 +369,7 @@ impl Plait {
                 self.history.expanded.clear();
             }
             Update::Patch { splices, remeasure } => {
+                spliced = !splices.is_empty();
                 for splice in splices {
                     self.live_scroll.splice(splice.range, splice.count);
                 }
@@ -385,6 +390,31 @@ impl Plait {
         self.live_layout = next.map(transcript::layout).unwrap_or_default();
         self.live_count = self.live_layout.len();
         debug_assert_eq!(self.live_scroll.item_count(), self.live_count);
+        spliced
+    }
+
+    /// Measure again the rows that took or gave up their turn's record. The
+    /// row diff compares text, so it misses a row whose record moved: when a
+    /// new request arrives, the answer before it draws the record that the
+    /// state line drew until then. Only a change in the rows can move one.
+    pub(super) fn remeasure_records(
+        &mut self,
+        previous: Option<&Snapshot>,
+        before: &plait_core::markdown::Transcript,
+    ) {
+        let (Some(previous), Some(next)) = (previous, self.history.display.as_deref()) else {
+            return;
+        };
+        let moved = plait_core::history::moved_records(
+            (previous, &before.turn_summaries),
+            (next, &self.formatted.turn_summaries),
+        );
+        for message in moved {
+            let slot = transcript::Slot::Message(message);
+            if let Some(row) = self.live_layout.iter().position(|shown| *shown == slot) {
+                self.live_scroll.remeasure_items(row..row + 1);
+            }
+        }
     }
 
     pub(super) fn create_host_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {

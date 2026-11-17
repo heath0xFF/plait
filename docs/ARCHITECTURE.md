@@ -377,9 +377,12 @@ Use GPUI's native macOS platform, Metal renderer, system sans-serif font, and
 the system's monospaced font for code. That font is SF Mono, which macOS does
 not install under a public name, so it is asked for by its Core Text family
 name, `.AppleSystemUIFontMonospaced`. A family chosen in Settings → Appearance
-replaces it only after the installed families have been read, in the
-background: GPUI draws a missing family in a proportional fallback, so a name
-that is not installed is never handed to it. SVG assets are embedded strings, not runtime file reads. The
+replaces it only after the installed families have been read and the family
+has been loaded and measured, both in the background. GPUI draws a missing
+family in a proportional fallback, so a name that is not installed is not
+drawn; and file and diff views size their sideways scrolling from the line
+with the most characters, so a family whose characters differ in width is
+refused. The installed families are read again each time Settings opens. SVG assets are embedded strings, not runtime file reads. The
 app shows no in-window logo; category glyphs use GPUI's tinted SVG path. Brand
 files live in `assets/branding`. The development bundle and icon build are
 described in [MACOS.md](MACOS.md).
@@ -612,7 +615,9 @@ selection survive ordinary snapshot updates. Replacing an oversized text part
 clears selection because its offsets now refer to another part. Run-state copy
 uses only host facts: no invented stop actor or per-turn duration. A finished
 turn's record counts observed tool steps and names successfully edited or
-written paths (`plait-core::history::TurnSummary`).
+written paths (`plait-core::history::TurnSummary`). A turn with no tool calls
+has a record with nothing to count. A turn whose request is outside the loaded
+rows has none, because the steps before the first loaded row cannot be counted.
 A response still streaming can only show the host's bounded live tail; its full
 stored text loads after the host saves it.
 
@@ -640,6 +645,10 @@ meet; a row needs only its own kind and position, so no pass over the
 transcript runs per frame. An earlier turn's record is part of its last
 answer's row. The latest
 turn's record is drawn with the run state below the list, where the line ends.
+When a new request arrives, the answer before it takes its record into its own
+row; that row is measured again, since its text has not changed. While older
+history is being read the rows stop short of the latest turn, so the line is
+broken above the state and no record is drawn there.
 Tool details start collapsed. Disclosure state belongs to the UI and clears on thread selection.
 A call folded into a closed group keeps its list row and draws nothing, so row
 identity and the scroll anchor do not depend on grouping; rows whose folding

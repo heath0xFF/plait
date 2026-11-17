@@ -190,6 +190,16 @@ feel during page delivery, VoiceOver disclosure behavior, and live-provider
 history timing still need native acceptance. No provider calls are needed by
 these tests.
 
+Turn records have core tests: a record attaches to the answer that closes a
+turn and counts only the paths its finished edits changed, a turn with no tool
+calls has a record with nothing to count, a running turn and a turn whose
+request is outside the loaded rows have none, and a record moves into its
+answer's row when a later message ends the rows. Scenes draw the turn line,
+the closing nodes, and the state line in both themes and at both window sizes.
+Three things are not exercised by a test or a scene: the row being measured
+again when its record moves, the broken line while older history is being
+read, and a failure message long enough to wrap in the state line.
+
 ## Known gaps
 
 - Gatekeeper approval, installed authentication, and a live-model source change
@@ -478,13 +488,18 @@ The code font is covered by a core test (an older preferences file keeps the
 system font, a named family round-trips, a blank name is no choice), by
 desktop tests of the name matching (a family is found whatever its case;
 offered names lead with those that start with what was typed, and leave out
-system families), and by a desktop test that types into the setting on a Mac:
-a family that is not installed is not drawn or saved, `menlo` is drawn and
-saved as Menlo, a half-typed name keeps the last choice, and an empty field
-returns to the system's font. Every scene draws code in the system's
-monospaced font, and the Appearance scene shows the empty field. The offered
-names as drawn, a saved family being applied at launch, and the setting in
-the installed app have not been checked.
+system families), and by two desktop tests on a Mac that read the family code
+is set to draw in and the preferences in memory. One types into the setting: a
+family that is not installed changes neither, `menlo` selects Menlo, a
+half-typed name keeps the last choice, Helvetica is refused because its
+characters differ in width, reopening Settings shows the choice again, and an
+empty field returns to the system's font. The other opens Settings before a
+preferences file that names Menlo is read, as can happen at launch: Menlo is
+then selected, shown in the field, and still in the file. Every scene draws
+code in the system's monospaced font, and the Appearance scene shows the empty
+field. The tests do not look at drawn pixels. The offered names as drawn, a
+font installed or removed while Plait runs, and the setting in the installed
+app have not been checked.
 
 ## Measuring frame cost
 
