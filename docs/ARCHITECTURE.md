@@ -7,10 +7,10 @@ contains `crates/plait` (native desktop), `crates/plait-core` (headless models,
 client state, local host client, and Git), and `crates/plait-host`
 (local daemon and filesystem/process helpers). `runtime/` contains the pinned
 Pi Durable TypeScript sidecar. There is no remote execution,
-embedded terminal, editor, or worktree manager. Git writes are limited to
+embedded terminal, or editor. Git writes are limited to
 staging, unstaging, committing, pushing (or publishing a branch), fetching,
-fast-forward pulls,
-and discarding unstaged changes after saving a copy for undo.
+fast-forward pulls, discarding unstaged changes after saving a copy for undo,
+and adding or removing an optional per-thread worktree.
 
 This remains an early local preview. Linux command execution and remote
 transport are not implemented. [Verification](VERIFICATION.md) records versioned
@@ -47,6 +47,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
   settings_policy.rs    the checkout's command policy, read from the host
   settings_providers.rs provider sign-in, API keys, and custom endpoints
   update.rs             release checks and in-app update installation
+  worktree.rs           starting a thread in its own worktree, and removing it
   theme.rs              tokens and the small original controls
   snapshot.rs           headless scene snapshots of the root view (tests only)
   composer/             native input, IME, clipboard, undo, and its events
@@ -89,6 +90,7 @@ selection.rs            selection order, ranges, word bounds, and copied text
 git.rs                  synchronous Git adapter: hardened reads; background only
   git/write.rs          stage, unstage, commit, push, pull, fetch, discard
   git/log.rs            commit history and one commit's patch (read-only)
+  git/worktree.rs       add and remove optional per-thread worktrees
 fuzzy.rs                case-insensitive subsequence matching for pickers
 ```
 

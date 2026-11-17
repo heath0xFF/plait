@@ -409,6 +409,14 @@ impl Plait {
                 .border_color(rgb(BORDER))
                 .text_size(px(12.))
         };
+        if self.worktree_busy {
+            return Some(
+                bar()
+                    .child(dot(BLUE))
+                    .child(div().text_color(rgb(MUTED)).child("Preparing worktree…"))
+                    .into_any_element(),
+            );
+        }
         if self.host.creating {
             let model = self.host.pending_create.as_ref().map(|(_, model)| model);
             let label = model.map_or_else(

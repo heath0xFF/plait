@@ -227,6 +227,13 @@ these tests.
   push and pull). Pushing to GitHub over SSH or HTTPS with `gh` sign-in has been checked
   only by asking Git for credentials, not by a push from the installed app.
 
+- Per-thread worktrees are covered against real repositories (refused before
+  a first commit, created beside the repository on a new branch, and removal
+  refused while untracked work remains, keeping the branch), by the Mac sandbox
+  suite (`git status` and `git log` in a linked worktree succeed, creating a
+  branch is denied), and by a desktop test that creates one and requests its
+  thread there. A worktree thread has not been run from the installed app.
+
 ## Manual release acceptance
 
 Use a disposable checkout and private host/session directories. Do not reuse

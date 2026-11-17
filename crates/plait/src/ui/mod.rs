@@ -28,6 +28,7 @@ pub mod theme;
 mod thread_controls;
 mod tool_card;
 mod update;
+mod worktree;
 
 use gpui::{prelude::*, *};
 use plait_core::{
@@ -72,6 +73,7 @@ actions!(
         PreviousFile,
         NewThread,
         NewThreadWithModel,
+        NewWorktreeThread,
         SwitchThreadModel,
         CommandPalette,
         ToggleInspector,
@@ -115,6 +117,8 @@ pub struct Plait {
     /// A new thread was requested: open it when the host confirms creation,
     /// unless the user has gone elsewhere in the meantime.
     new_thread_open: bool,
+    /// A worktree is being created or removed.
+    worktree_busy: bool,
     /// The command palette or model picker, above the workspace.
     overlay: Option<commands::Overlay>,
     /// The inspector toggle was used on a window too narrow to show it.
@@ -179,6 +183,7 @@ impl Plait {
             policy: Default::default(),
             providers: Default::default(),
             new_thread_open: false,
+            worktree_busy: false,
             overlay: None,
             inspector_note: false,
             panels: Default::default(),
@@ -772,6 +777,9 @@ impl Render for Plait {
             .on_action(
                 cx.listener(|this, _: &NewThread, window, cx| this.new_thread(None, window, cx)),
             )
+            .on_action(cx.listener(|this, _: &NewWorktreeThread, window, cx| {
+                this.new_worktree_thread(window, cx)
+            }))
             .on_action(cx.listener(|this, _: &NewThreadWithModel, window, cx| {
                 this.open_model_picker(model_picker::ModelPurpose::NewThread, window, cx)
             }))

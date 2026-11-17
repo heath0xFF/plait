@@ -22,6 +22,17 @@ export async function checkout(path: string): Promise<string> {
     return await realpath((await git(root, ['rev-parse', '--show-toplevel'])).trim());
   } catch { fail('invalid_request', 'Checkout must be an accessible Git working tree.'); }
 }
+/** A linked worktree keeps its objects and refs in the main repository's Git
+ * directory, outside its own root. Returns that directory, or undefined when
+ * it lies inside the root as usual. Fixed per root, so it is remembered. */
+const sharedDirs = new Map<string, string | undefined>();
+export async function sharedGitDir(root: string): Promise<string | undefined> {
+  if (sharedDirs.has(root)) return sharedDirs.get(root);
+  const dir = await realpath((await git(root, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).trim());
+  const shared = dir === root || dir.startsWith(root + '/') ? undefined : dir;
+  sharedDirs.set(root, shared);
+  return shared;
+}
 export async function dirtyPaths(root: string): Promise<string[]> {
   let names = '';
   try { names = await git(root, ['config', '--name-only', '--get-regexp', '^filter\\..*\\.(clean|process)$']); }

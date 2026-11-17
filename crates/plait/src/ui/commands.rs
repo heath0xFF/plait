@@ -127,6 +127,7 @@ impl Plait {
         let mut numbers = HashMap::new();
         for number in 1..=9 {
             if let Some(jump) = plait_core::navigation::jump(
+                &self.preferences.value.navigation,
                 &self.state.projects,
                 &self.host.threads,
                 &indices,

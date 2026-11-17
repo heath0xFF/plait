@@ -790,6 +790,64 @@ fn new_thread_keeps_its_request_id_and_overlays_return_focus() {
     std::fs::remove_dir_all(scratch).unwrap();
 }
 
+#[core::prelude::v1::test]
+fn a_worktree_thread_is_created_in_a_new_worktree_listed_under_its_project() {
+    if !isolated("a_worktree_thread_is_created_in_a_new_worktree_listed_under_its_project") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-worktree-ui-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.update(|plait, window, cx| {
+        plait.host.status.as_mut().unwrap().protocol_version = 3;
+        plait.new_worktree_thread(window, cx);
+        assert!(plait.worktree_busy);
+        assert!(plait.creation_bar(cx).is_some(), "preparing is shown");
+    });
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let checkout = loop {
+        harness.settle();
+        let done = harness
+            .window
+            .update(&mut harness.cx, |plait, _, _| {
+                (!plait.worktree_busy && plait.host.pending_create.is_some())
+                    .then(|| plait.host.checkout.clone())
+            })
+            .expect("window update");
+        if let Some(checkout) = done {
+            break checkout;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the worktree thread was not requested"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let main = repository.canonicalize().unwrap();
+    assert_ne!(checkout, main);
+    assert!(checkout.join(".git").is_file(), "a linked worktree");
+    harness.update(|plait, _, _| {
+        let tree = plait
+            .preferences
+            .value
+            .navigation
+            .worktree(&checkout)
+            .unwrap();
+        assert_eq!(tree.main, main);
+        assert!(tree.branch.starts_with("plait/"));
+        assert_eq!(
+            plait.active_project().checkout,
+            main,
+            "listed under its project"
+        );
+        assert_eq!(plait.notice, None);
+    });
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
 /// Draw, then deliver one key as the platform would: bindings first, then text input.
 fn press(harness: &mut Harness, key: &'static str) {
     harness.capture("keys");
@@ -2693,6 +2751,22 @@ fn navigation_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         plait.navigation.menu = Some(THREAD.into());
     });
     harness.capture(&format!("navigation-actions-{suffix}"));
+    // Threads in a Plait worktree list under the project it was made from.
+    let main = repository.to_owned();
+    harness.update(move |plait, _, cx| {
+        plait.preferences.value.navigation.remember_worktree(
+            main.join("sample-api"),
+            main.clone(),
+            "plait/3f9a2c".into(),
+        );
+        plait.rebuild_projects(cx);
+        plait.navigation.menu = Some("sample-navigation-1".into());
+    });
+    harness.capture(&format!("navigation-worktree-{suffix}"));
+    harness.update(|plait, _, cx| {
+        plait.preferences.value.navigation.worktrees.clear();
+        plait.rebuild_projects(cx);
+    });
     harness.update(|plait, _, _| {
         plait.navigation.menu = None;
         plait.navigation.error = Some(

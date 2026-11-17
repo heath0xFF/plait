@@ -91,6 +91,7 @@ pub(super) const ACTIONS: &[AppAction] = &[
     entry("app.quit", "Quit Plait", "Plait", Some("cmd-q"), Group, || Box::new(Quit)),
     entry("thread.new", "New Thread", "File", Some("cmd-n"), Item, || Box::new(NewThread)),
     entry("thread.new_with_model", "New Thread with Model…", "File", Some("cmd-shift-n"), Item, || Box::new(NewThreadWithModel)),
+    entry("thread.new_worktree", "New Thread in Worktree", "File", Some("cmd-alt-n"), Item, || Box::new(NewWorktreeThread)),
     entry("thread.switch_model", "Change Thread Model…", "File", Some("cmd-shift-m"), Item, || Box::new(SwitchThreadModel)),
     entry("repository.open", "Open Repository…", "File", Some("cmd-o"), Group, || Box::new(OpenRepository)),
     entry("git.refresh", "Refresh Git Status", "File", Some("cmd-r"), Item, || Box::new(Refresh)),

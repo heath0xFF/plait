@@ -1345,3 +1345,62 @@ fn restore_never_writes_through_a_symlink() {
     assert!(error.contains("Cannot restore"), "{error}");
     assert!(!outside.0.join("escaped.txt").exists());
 }
+
+#[test]
+fn a_worktree_needs_a_first_commit() {
+    let repo = Repo::new();
+    let error = add_worktree(&repo.0).unwrap_err();
+    assert!(error.contains("first commit"), "{error}");
+}
+
+#[test]
+fn a_worktree_is_created_beside_the_repository_and_removed_only_when_clean() {
+    let repo = Repo::new();
+    repo.write("hello.txt", "hello\n");
+    repo.git(&["add", "hello.txt"]);
+    repo.git(&["commit", "-q", "-m", "First"]);
+    let tree = add_worktree(&repo.0).unwrap();
+    let base = tree.path.parent().unwrap().to_owned();
+    let mut folder = repo.0.file_name().unwrap().to_owned();
+    folder.push(".worktrees");
+    assert_eq!(
+        base,
+        repo.0
+            .canonicalize()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join(folder)
+    );
+    assert!(tree.branch.starts_with("plait/"));
+    let snapshot = status(&tree.path).unwrap();
+    assert_eq!(snapshot.root, tree.path);
+    assert_eq!(snapshot.branch, tree.branch);
+    assert_eq!(
+        fs::read_to_string(tree.path.join("hello.txt")).unwrap(),
+        "hello\n"
+    );
+
+    // A second worktree gets its own folder and branch.
+    let other = add_worktree(&repo.0).unwrap();
+    assert_ne!(other.path, tree.path);
+    assert_ne!(other.branch, tree.branch);
+
+    fs::write(tree.path.join("draft.txt"), "unsaved\n").unwrap();
+    let error = remove_worktree(&repo.0, &tree.path).unwrap_err();
+    assert!(error.contains("uncommitted changes"), "{error}");
+    assert!(tree.path.exists());
+
+    fs::remove_file(tree.path.join("draft.txt")).unwrap();
+    remove_worktree(&repo.0, &tree.path).unwrap();
+    remove_worktree(&repo.0, &other.path).unwrap();
+    assert!(!tree.path.exists());
+    assert!(!base.exists(), "the empty shared folder is removed");
+    // The branch and its commits stay.
+    repo.git(&[
+        "rev-parse",
+        "--verify",
+        "-q",
+        &format!("refs/heads/{}", tree.branch),
+    ]);
+}

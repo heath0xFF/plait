@@ -77,8 +77,13 @@ impl Plait {
         self.state
             .projects
             .iter()
-            .find(|project| project.checkout == self.host.checkout)
+            .find(|project| project.checkout == self.project_of(&self.host.checkout))
             .unwrap_or(&self.state.projects[0])
+    }
+
+    /// The project a checkout lists under; a Plait worktree belongs to its repository.
+    pub(super) fn project_of<'a>(&'a self, checkout: &'a std::path::Path) -> &'a std::path::Path {
+        self.preferences.value.navigation.project_of(checkout)
     }
 
     pub(super) fn filtered_threads(&self, cx: &App) -> Vec<usize> {
@@ -96,7 +101,8 @@ impl Plait {
             .iter()
             .enumerate()
             .filter_map(|(index, thread)| {
-                let (project_index, project) = projects.get(&thread.checkout)?;
+                let checkout = self.project_of(&thread.checkout).to_path_buf();
+                let (project_index, project) = projects.get(&checkout)?;
                 nav::matches(
                     thread,
                     &self.summary_title(thread),
@@ -114,17 +120,17 @@ impl Plait {
     }
 
     fn navigation_rows(&self, cx: &App) -> Vec<Row> {
-        let mut grouped = HashMap::<&PathBuf, Vec<usize>>::new();
+        let mut grouped = HashMap::<&std::path::Path, Vec<usize>>::new();
         for index in self.filtered_threads(cx) {
             grouped
-                .entry(&self.host.threads[index].checkout)
+                .entry(self.project_of(&self.host.threads[index].checkout))
                 .or_default()
                 .push(index);
         }
         let query = self.navigation.filter.read(cx).text().trim().to_lowercase();
         let mut rows = Vec::new();
         for (pi, project) in self.state.projects.iter().enumerate() {
-            let matching = grouped.get(&project.checkout);
+            let matching = grouped.get(project.checkout.as_path());
             let project_matches = query.is_empty() || project.name.to_lowercase().contains(&query);
             if matching.is_none() && (!project_matches || self.navigation.attention) {
                 continue;
@@ -262,6 +268,12 @@ impl Plait {
             .as_millis() as u64;
         let age = nav::age(thread.updated_at, now);
         let label = self.thread_title(&id);
+        let worktree = self
+            .preferences
+            .value
+            .navigation
+            .worktree(&thread.checkout)
+            .is_some();
         row()
             .w_full()
             .h(px(ROW_HEIGHT))
@@ -280,12 +292,17 @@ impl Plait {
                 nav_row(
                     ("host-thread", index),
                     format!(
-                        "Thread {} · {} · {} / {}. {}{}",
+                        "Thread {} · {} · {} / {}. {}{}{}",
                         id,
                         status,
                         thread.model.provider,
                         thread.model.model_id,
                         label,
+                        if worktree {
+                            ". In its own worktree"
+                        } else {
+                            ""
+                        },
                         if unread { ". Unread activity" } else { "" }
                     ),
                     selected,
@@ -307,6 +324,10 @@ impl Plait {
                         .text_color(rgb(TEXT))
                         .when(unread, |el| el.font_weight(FontWeight::SEMIBOLD)),
                 )
+                // A glyph, not a word: the title needs the width more.
+                .when(worktree, |el| {
+                    el.child(icon("branch").size(px(12.)).text_color(rgb(SUBTLE)))
+                })
                 .child(
                     tag(
                         if thread.archived == Some(true) {
@@ -489,7 +510,7 @@ impl Plait {
             panel = panel.child(tag("Project", MUTED))
                 .child(button("project-open", "Open project").on_activate(cx, move |this, window, cx| { this.navigation.menu = None; this.change_checkout(select.clone(), window, cx); }))
                 .child(button("project-hide", "Remove from sidebar").on_activate(cx, move |this, _, cx| {
-                    if this.host.checkout == hide { this.navigation.error = Some("Open another project before removing this one. Host threads are kept.".into()); }
+                    if this.project_of(&this.host.checkout) == hide { this.navigation.error = Some("Open another project before removing this one. Host threads are kept.".into()); }
                     else { let mut value = this.preferences.value.clone(); value.navigation.hide(&hide); this.set_preferences(value, PreferenceGroup::View, cx); this.rebuild_projects(cx); }
                     this.navigation.menu = None; cx.notify();
                 }))
@@ -498,6 +519,9 @@ impl Plait {
             let rename = id.clone();
             let archive = id.clone();
             let archived = thread.archived == Some(true);
+            let tree = self.preferences.value.navigation.worktree(&thread.checkout);
+            let branch = tree.map(|tree| tree.branch.clone());
+            let remove = thread.checkout.clone();
             panel = panel
                 .child(tag(self.thread_title(id), TEXT).truncate())
                 .child(
@@ -518,7 +542,17 @@ impl Plait {
                     .on_activate(cx, move |this, window, cx| {
                         this.archive_thread(archive.clone(), !archived, window, cx)
                     }),
-                );
+                )
+                .when_some(branch, |el, branch| {
+                    el.child(tag(format!("Worktree on {branch}"), SUBTLE).truncate())
+                        .child(
+                            button("thread-remove-worktree", "Remove worktree…")
+                                .disabled(self.worktree_busy)
+                                .on_activate(cx, move |this, window, cx| {
+                                    this.remove_worktree(remove.clone(), window, cx)
+                                }),
+                        )
+                });
         }
         panel
             .child(
@@ -540,7 +574,8 @@ impl Plait {
             .update(cx, |field, cx| field.set_text("", cx));
         self.navigation.attention = false;
         if let Some(thread) = self.host.threads.iter().find(|thread| thread.id == id) {
-            self.navigation.collapsed.remove(&thread.checkout);
+            let project = self.project_of(&thread.checkout).to_path_buf();
+            self.navigation.collapsed.remove(&project);
             if thread.archived == Some(true) {
                 self.navigation.archived = true;
             }

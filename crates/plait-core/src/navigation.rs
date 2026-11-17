@@ -21,6 +21,21 @@ pub struct Preferences {
     pub observed: BTreeMap<String, Activity>,
     pub unread: BTreeSet<String>,
     pub mute_notifications: bool,
+    /// Worktrees Plait created, by folder. Their threads list under the
+    /// project they were made from rather than as projects of their own.
+    pub worktrees: BTreeMap<PathBuf, WorktreeOf>,
+}
+
+/// Remembered worktrees beyond this drop out of grouping; their threads
+/// then list under the worktree folder, as any other checkout.
+const WORKTREE_LIMIT: usize = 256;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorktreeOf {
+    /// The repository checkout the worktree was created from.
+    pub main: PathBuf,
+    pub branch: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,7 +55,26 @@ impl Activity {
 }
 
 impl Preferences {
+    /// The project a checkout lists under: the repository a Plait worktree was
+    /// made from, or the checkout itself.
+    pub fn project_of<'a>(&'a self, checkout: &'a Path) -> &'a Path {
+        self.worktrees
+            .get(checkout)
+            .map_or(checkout, |tree| tree.main.as_path())
+    }
+
+    pub fn worktree(&self, checkout: &Path) -> Option<&WorktreeOf> {
+        self.worktrees.get(checkout)
+    }
+
+    pub fn remember_worktree(&mut self, path: PathBuf, main: PathBuf, branch: String) {
+        self.worktrees.insert(path, WorktreeOf { main, branch });
+        self.normalize();
+    }
+
+    /// Opening a worktree opens the project it belongs to.
     pub fn open(&mut self, checkout: &Path) {
+        let checkout = &self.project_of(checkout).to_owned();
         self.hidden.retain(|path| path != checkout);
         if !self.opened.iter().any(|path| path == checkout) {
             self.opened.push(checkout.into());
@@ -49,6 +83,7 @@ impl Preferences {
     }
 
     pub fn hide(&mut self, checkout: &Path) {
+        let checkout = &self.project_of(checkout).to_owned();
         self.opened.retain(|path| path != checkout);
         if !self.hidden.iter().any(|path| path == checkout) {
             self.hidden.push(checkout.into());
@@ -80,6 +115,20 @@ impl Preferences {
             }
         }
         self.unread.retain(|id| self.observed.contains_key(id));
+        self.worktrees.retain(|path, tree| {
+            path.is_absolute()
+                && tree.main.is_absolute()
+                && path != &tree.main
+                && path.as_os_str().len() <= 4096
+                && tree.main.as_os_str().len() <= 4096
+                && tree.branch.len() <= 256
+        });
+        // A worktree of a worktree lists under the first one's project.
+        let mains = self.worktrees.keys().cloned().collect::<HashSet<_>>();
+        self.worktrees.retain(|_, tree| !mains.contains(&tree.main));
+        while self.worktrees.len() > WORKTREE_LIMIT {
+            self.worktrees.pop_first();
+        }
     }
 
     /// Mark terminal/approval changes, but never notify from an initial listing.
@@ -184,9 +233,11 @@ pub fn projects(
     current: &Path,
     machine: &str,
 ) -> Vec<Project> {
+    let current = preferences.project_of(current);
     let mut activity = HashMap::new();
     for thread in threads {
-        let updated = activity.entry(thread.checkout.as_path()).or_insert(0);
+        let project = preferences.project_of(&thread.checkout);
+        let updated = activity.entry(project).or_insert(0);
         *updated = (*updated).max(thread.updated_at.unwrap_or(0));
     }
     let hidden = preferences
@@ -197,7 +248,7 @@ pub fn projects(
     let mut seen = HashSet::new();
     let mut paths = threads
         .iter()
-        .map(|thread| thread.checkout.as_path())
+        .map(|thread| preferences.project_of(&thread.checkout))
         .chain(preferences.opened.iter().map(PathBuf::as_path))
         .chain(std::iter::once(current))
         .filter(|path| (!hidden.contains(path) || *path == current) && seen.insert(*path))
@@ -217,7 +268,8 @@ pub fn projects(
         .collect()
 }
 
-/// A project match includes all its threads; a thread match retains its project.
+/// A project match includes all its threads; a thread match retains its
+/// project. The caller pairs each thread with its project.
 pub fn matches(
     thread: &ThreadSummary,
     title: &str,
@@ -227,8 +279,7 @@ pub fn matches(
     attention: bool,
     unread: &BTreeSet<String>,
 ) -> bool {
-    if thread.checkout != project.checkout
-        || (!archived && thread.archived == Some(true))
+    if (!archived && thread.archived == Some(true))
         || (attention && !needs_attention(thread, unread))
     {
         return false;
@@ -242,6 +293,7 @@ pub fn matches(
 }
 
 pub fn jump(
+    preferences: &Preferences,
     projects: &[Project],
     threads: &[ThreadSummary],
     indices: &[usize],
@@ -256,7 +308,9 @@ pub fn jump(
             indices
                 .iter()
                 .copied()
-                .filter(move |&index| threads[index].checkout == p.checkout)
+                .filter(move |&index| {
+                    preferences.project_of(&threads[index].checkout) == p.checkout
+                })
                 .map(move |thread| Jump {
                     project,
                     machine: 0,
@@ -388,18 +442,42 @@ mod tests {
             ["two", "one", "empty"]
         );
         assert_eq!(
-            jump(&groups, &threads, &[0, 1], JumpTarget::Threads, 1)
-                .unwrap()
-                .thread,
+            jump(
+                &Preferences::default(),
+                &groups,
+                &threads,
+                &[0, 1],
+                JumpTarget::Threads,
+                1
+            )
+            .unwrap()
+            .thread,
             1
         );
         assert_eq!(
-            jump(&groups, &threads, &[0, 1], JumpTarget::Projects, 2)
-                .unwrap()
-                .thread,
+            jump(
+                &Preferences::default(),
+                &groups,
+                &threads,
+                &[0, 1],
+                JumpTarget::Projects,
+                2
+            )
+            .unwrap()
+            .thread,
             0
         );
-        assert!(jump(&groups, &threads, &[0, 1], JumpTarget::Projects, 3).is_none());
+        assert!(
+            jump(
+                &Preferences::default(),
+                &groups,
+                &threads,
+                &[0, 1],
+                JumpTarget::Projects,
+                3
+            )
+            .is_none()
+        );
         p.hide(Path::new("/two"));
         assert_eq!(projects(&threads, &p, Path::new("/one"), "Local").len(), 2);
         assert_eq!(threads.len(), 2);
@@ -460,6 +538,63 @@ mod tests {
             true,
             &BTreeSet::new()
         ));
+    }
+    #[test]
+    fn worktree_threads_list_under_the_project_they_were_made_from() {
+        let mut preferences = Preferences::default();
+        preferences.remember_worktree(
+            "/repo.worktrees/a1".into(),
+            "/repo".into(),
+            "plait/a1".into(),
+        );
+        let threads = [
+            thread("w", "/repo.worktrees/a1", ThreadStatus::Running, 30),
+            thread("o", "/other", ThreadStatus::Idle, 20),
+            thread("m", "/repo", ThreadStatus::Idle, 10),
+        ];
+        let list = projects(
+            &threads,
+            &preferences,
+            Path::new("/repo.worktrees/a1"),
+            "Local",
+        );
+        let checkouts = list
+            .iter()
+            .map(|p| p.checkout.to_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            checkouts,
+            ["/repo", "/other"],
+            "newest activity, worktree folded in"
+        );
+        let jump = jump(
+            &preferences,
+            &list,
+            &threads,
+            &[0, 1, 2],
+            JumpTarget::Threads,
+            2,
+        )
+        .unwrap();
+        assert_eq!((jump.project, jump.thread), (0, 2));
+        // Opening the worktree opens its project.
+        preferences.open(Path::new("/repo.worktrees/a1"));
+        assert_eq!(preferences.opened, [PathBuf::from("/repo")]);
+        assert_eq!(
+            preferences
+                .worktree(Path::new("/repo.worktrees/a1"))
+                .unwrap()
+                .branch,
+            "plait/a1"
+        );
+        // Nested and self-referential entries never chain.
+        preferences.remember_worktree(
+            "/repo.worktrees/b2".into(),
+            "/repo.worktrees/a1".into(),
+            "plait/b2".into(),
+        );
+        preferences.remember_worktree("/same".into(), "/same".into(), "x".into());
+        assert_eq!(preferences.worktrees.len(), 1);
     }
     #[test]
     fn older_preferences_and_future_timestamps_are_safe() {

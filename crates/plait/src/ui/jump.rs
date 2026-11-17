@@ -62,6 +62,7 @@ impl Plait {
     /// Select the Nth thread, machine, or project in sidebar order.
     pub(super) fn jump_to(&mut self, number: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(jump) = plait_core::navigation::jump(
+            &self.preferences.value.navigation,
             &self.state.projects,
             &self.host.threads,
             &self.filtered_threads(cx),

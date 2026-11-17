@@ -717,7 +717,12 @@ fn write_command(root: &Path) -> Command {
     command
 }
 
-fn git(root: &Path, args: &[&str], input: Option<Vec<u8>>, timeout: Duration) -> Result<()> {
+pub(super) fn git(
+    root: &Path,
+    args: &[&str],
+    input: Option<Vec<u8>>,
+    timeout: Duration,
+) -> Result<()> {
     let mut command = write_command(root);
     // A stopped write can leave Git's lock behind; say how to recover.
     let raw = run(command.args(args), input, STATUS_LIMIT, timeout).map_err(|error| {

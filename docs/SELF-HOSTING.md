@@ -32,7 +32,8 @@ protocol; a new host may be staged until existing runs finish.
 Open this checkout with **Open repository…**, choose an authenticated model in
 **Settings → Providers / Models**, and start a thread. Existing dirty files
 remain protected by the file tools; commit or finish that work before asking a
-new thread to edit those files. Worktrees are optional.
+new thread to edit those files, or start it with **New Thread in Worktree**
+so it works on its own branch and files. Worktrees are optional.
 
 ## Choose the development command policy
 

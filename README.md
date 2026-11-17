@@ -109,8 +109,11 @@ This is the **M2 local preview**, not a complete IDE.
 - Local macOS execution only. Remote hosts and Linux execution are not available.
 - Changes stages and discards (by file or hunk, with undo), commits, fetches,
   pushes, and fast-forward pulls; History shows commits and their patches.
-  There is no merge, rebase, branch switching, file editor,
-  embedded terminal, or mandatory worktree. Updates are
+  **New Thread in Worktree** (Cmd-Option-N) starts a thread on a new branch in
+  its own worktree beside the repository, listed under the same project;
+  the thread's menu removes it once its work is committed. Worktrees are never
+  required. There is no merge, rebase, branch switching, file editor, or
+  embedded terminal. Updates are
   installed explicitly; they never restart active work automatically.
 - Sandboxed commands cannot use external networking or write the checkout.
   Approved file tools make edits; build output goes to private caches. The

@@ -284,6 +284,7 @@ path alongside separate `PLAIT_HOST_STORE` and `PLAIT_DESKTOP_STATE_DIR` paths.
 | Cmd-Q | Quit Plait | `app.quit` |
 | Cmd-N | New Thread | `thread.new` |
 | Cmd-Shift-N | New Thread with Model… | `thread.new_with_model` |
+| Cmd-Option-N | New Thread in Worktree | `thread.new_worktree` |
 | Cmd-Shift-M | Change Thread Model… | `thread.switch_model` |
 | Cmd-O | Open Repository… | `repository.open` |
 | Cmd-R | Refresh Git Status | `git.refresh` |

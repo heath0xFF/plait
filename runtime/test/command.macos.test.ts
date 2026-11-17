@@ -158,3 +158,17 @@ test('edit opens originals read-only and reports fixed mismatch diagnostics', as
   assert.equal(await readFile(path, 'utf8'), 'after\n');
   assert.equal((await stat(path)).mode & 0o777, 0o444);
 });
+
+test('a sandboxed command in a linked worktree reads, but cannot write, the main repository', { timeout: 15000 }, async t => {
+  const { root, base } = await setup(t);
+  const git = (cwd: string, ...args: string[]) => exec('/usr/bin/git', ['-C', cwd, '-c', 'user.name=Plait', '-c', 'user.email=plait@example.invalid', ...args]);
+  await writeFile(join(root, 'README.md'), 'hello\n');
+  await git(root, 'add', 'README.md'); await git(root, 'commit', '-q', '-m', 'First');
+  const tree = join(base, 'repo.worktrees', 'side');
+  await git(root, 'worktree', 'add', '-q', '-b', 'plait/side', tree, 'HEAD');
+  const run = (text: string) => command(tree, text, [], new AbortController().signal, () => {});
+  await writeFile(join(tree, 'README.md'), 'changed\n');
+  assert.match(await run('git status --porcelain && git log -1 --format=%s'), /M README\.md[\s\S]*First/);
+  await assert.rejects(run('git branch escaped'));
+  await assert.rejects(git(root, 'rev-parse', '--verify', '-q', 'refs/heads/escaped'));
+});

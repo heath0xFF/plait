@@ -723,7 +723,7 @@ snapshot does not yet report the policy its run used.
 | Process | Seatbelt profile, `/bin/sh -c` | `/bin/sh -c` as the user, no profile |
 | Working directory | Checkout | Checkout |
 | Checkout and Git writes | Denied | Allowed |
-| Other files | Read system and toolchain paths; write private scratch and the thread build cache | Anything the user account can read or write |
+| Other files | Read system and toolchain paths, and the main repository's Git directory when the checkout is a linked worktree; write private scratch and the thread build cache | Anything the user account can read or write |
 | Network | Denied, except Unix sockets in scratch | Allowed |
 | HOME and TMPDIR | A new private directory per command | The user's real home and temporary directory |
 | Environment | Fixed PATH and Apple toolchain | The user's login-shell environment |

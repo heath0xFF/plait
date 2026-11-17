@@ -1,7 +1,7 @@
 import { lstat, mkdir, readlink, readdir, realpath, symlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fail } from '../protocol.ts';
-import { fileAction } from '../safety.ts';
+import { fileAction, sharedGitDir } from '../safety.ts';
 import { prepareBuildCache } from '../build-cache.ts';
 import type { BuildCache } from '../build-cache.ts';
 import { appleToolchain, DEVELOPER, SDK } from '../apple-toolchain.ts';
@@ -35,6 +35,9 @@ async function buildEnvironment(root: string, scratch: string, signal: AbortSign
   const cargoHome = paths.cargo;
   if (!cache) await mkdir(cargoHome);
   const readOnly: string[] = [];
+  // Git in a worktree reads the main repository's objects; the sandbox still denies writes under .git.
+  const shared = await sharedGitDir(root);
+  if (shared) readOnly.push(shared);
   for (const cache of ['registry', 'git']) {
     try {
       const path = await realpath(join(home, '.cargo', cache));

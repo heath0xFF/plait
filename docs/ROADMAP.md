@@ -52,8 +52,7 @@ Do not expose the current local socket protocol over a public TCP listener.
 Multiple threads do not imply isolated files. Worktrees stay optional, and
 writers must coordinate around existing dirty work. There is no embedded terminal,
 mandatory agent orchestration, automatic swarm, or built-in cloud compute service.
-Per-thread worktree creation remains planned. Existing checkouts can be opened
-as projects.
+Existing checkouts can be opened as projects.
 
 **Agreed for M4 Git, ahead of M3:** Plait builds Plait, so committing reviewed
 work without leaving the app comes before remote execution. The desktop may
@@ -75,6 +74,17 @@ so Plait never reads a token or changes Git configuration. Discard always asks
 for confirmation first. Pull is fast-forward only: Plait fetches, then moves
 the branch to its upstream, and refuses a diverged branch or a pull that would
 overwrite uncommitted changes. Merge and rebase are not part of this step.
+
+**Agreed for M2.5 worktrees:** a thread may start in its own worktree, never by
+default. The desktop runs `git worktree add` from HEAD on a new `plait/<name>`
+branch, in a `<repository>.worktrees/` folder beside the repository, and starts
+the thread with that folder as its checkout. The host treats the worktree as
+any other checkout: its own lease, run limit, and sandboxed command policy.
+Sandboxed commands there may read the main repository's Git directory, and
+still cannot write it. Its threads list under the project it came from.
+Removal asks first and uses `git worktree remove`, which refuses uncommitted
+work; the branch and its commits stay. Merging the branch back is left to the
+person's own tools.
 Use existing tools for interactive shells and debugging. A future Open in Rex
 integration and native mobile companion are possibilities, not current features.
 
