@@ -420,6 +420,12 @@ stays unavailable until every conflict is marked resolved. If a hook or filter
 takes longer than its limit (60 seconds for staging, 120 for a commit), Plait
 stops it and says so.
 
+To ask a thread about specific lines, click a line number in the diff, and
+Shift-click another to extend the pick. **Ask about this** puts a reference such
+as `src/main.rs:10-12` and the picked lines, as a fenced diff, at the end of the
+selected thread's message and opens the conversation. Nothing is sent until you
+send it. **Clear** drops the pick; choosing another file or side ignores it.
+
 Above Stage all, Changes shows how the branch stands against its upstream (for
 example "2 to push") as of the last fetch, with **Fetch** and **Push**. A branch
 with no upstream offers **Publish** instead, which pushes it to `origin` (or

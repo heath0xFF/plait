@@ -15,6 +15,7 @@ pub mod markdown;
 pub mod model;
 pub mod preferences;
 pub mod recent;
+pub mod review;
 pub mod selection;
 pub mod session;
 pub mod state;

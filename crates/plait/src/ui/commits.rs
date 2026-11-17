@@ -161,7 +161,7 @@ impl Plait {
                 diff.clone(),
                 &self.commit_scroll,
                 None,
-                None,
+                Default::default(),
                 cx,
             ),
         }

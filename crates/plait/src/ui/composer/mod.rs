@@ -415,6 +415,38 @@ impl Composer {
         }
     }
 
+    /// Add a block, such as quoted diff lines, to the end of the draft as its
+    /// own paragraph, with the cursor after it. False when the composer is off.
+    pub fn append_block(
+        &mut self,
+        block: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        window.focus(&self.focus, cx);
+        self.edit(
+            |draft| {
+                draft.finish_composition();
+                let text = &draft.value.text;
+                let gap = match () {
+                    _ if text.is_empty() || text.ends_with("\n\n") => "",
+                    _ if text.ends_with('\n') => "\n",
+                    _ => "\n\n",
+                };
+                let block = format!("{gap}{block}\n\n");
+                draft.select(text.len(), false);
+                draft.insert(&block);
+            },
+            window,
+            cx,
+        );
+        self.reveal_cursor = true;
+        true
+    }
+
     fn edit(
         &mut self,
         operation: impl FnOnce(&mut Draft),

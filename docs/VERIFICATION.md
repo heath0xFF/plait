@@ -214,6 +214,11 @@ these tests.
   unborn branch, hooks, filters, a held `index.lock`, paging) and by scene
   snapshots of Changes and History. They have not been exercised with a native
   pointer in the installed app, with Git LFS, or with signed commits.
+- Asking about diff lines is covered by unit tests of the quote (line ranges,
+  removed-only picks, header lines left out, fences longer than any backtick
+  run, long picks summarized) and a desktop test that picks lines in a real
+  diff and quotes them into a composer. Native pointer clicks on line numbers
+  have not been exercised in the installed app.
 - Hunk staging is covered against real repositories (staging and unstaging
   one of two hunks, refusing a hunk that moved, refusing filtered files, and
   byte-exact patches with tabs, CRLF, and missing final newlines).

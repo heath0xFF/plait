@@ -848,6 +848,68 @@ fn a_worktree_thread_is_created_in_a_new_worktree_listed_under_its_project() {
     std::fs::remove_dir_all(scratch).unwrap();
 }
 
+/// The index of the shown diff's first added line.
+fn first_added(plait: &Plait) -> usize {
+    let Load::Ready(diff) = &plait.state.repository.diff else {
+        panic!("the diff is read");
+    };
+    diff.lines
+        .iter()
+        .position(|line| line.kind == plait_core::model::DiffKind::Added)
+        .expect("an added line")
+}
+
+#[core::prelude::v1::test]
+fn asking_about_picked_lines_quotes_them_into_the_thread_composer() {
+    let scratch = std::env::temp_dir().join(format!("plait-ask-ui-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 1380., 860.);
+    harness.update(|plait, window, cx| plait.select_file(1, DiffMode::Unstaged, window, cx));
+    harness.settle();
+    harness.update(|plait, window, cx| {
+        let first = first_added(plait);
+        plait.pick_line(first, false, cx);
+        plait.pick_line(first - 1, true, cx);
+        // Without a thread there is nobody to ask; the pick stays.
+        plait.ask_about_pick(window, cx);
+        assert!(plait.line_pick.is_some());
+
+        plait.host.selected = Some(THREAD.into());
+        let composer = cx.new(|cx| Composer::new(window, cx));
+        composer.update(cx, |composer, cx| {
+            composer.set_enabled(true, None, cx);
+            composer.type_text("Why this?", window, cx);
+        });
+        plait.composers.insert(THREAD.into(), composer.clone());
+        plait.ask_about_pick(window, cx);
+        let text = composer.read(cx).text().to_owned();
+        assert!(text.starts_with("Why this?\n\n`"), "{text}");
+        assert!(text.contains("` (unstaged):\n```diff\n"), "{text}");
+        assert!(text.ends_with("```\n\n"), "{text}");
+        assert!(plait.line_pick.is_none());
+        assert_eq!(plait.tab, super::Workspace::Conversation);
+
+        // A pick belongs to its file and side.
+        plait.show_tab(super::Workspace::Changes, cx);
+        plait.pick_line(first, false, cx);
+        assert!(plait.line_pick.is_some());
+        plait.select_file(1, DiffMode::Staged, window, cx);
+        assert!(plait.current_pick(usize::MAX).is_none());
+        // Clicking a lone picked line again clears it.
+        plait.select_file(1, DiffMode::Unstaged, window, cx);
+    });
+    harness.settle();
+    harness.update(|plait, _, cx| {
+        let first = first_added(plait);
+        assert!(plait.current_pick(usize::MAX).is_some(), "back on its side");
+        plait.pick_line(first, false, cx);
+        assert!(plait.line_pick.is_none());
+    });
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
 /// Draw, then deliver one key as the platform would: bindings first, then text input.
 fn press(harness: &mut Harness, key: &'static str) {
     harness.capture("keys");
@@ -1015,6 +1077,17 @@ fn walk(output: Option<&Path>) {
             let write = &mut plait.state.repository.write;
             write.note = Some(("Staged 1 file".into(), false));
             write.undo = None;
+        });
+        // Lines picked by their numbers, ready to ask about.
+        harness.update(|plait, _, cx| {
+            let first = first_added(plait);
+            plait.pick_line(first - 1, false, cx);
+            plait.pick_line(first + 1, true, cx);
+        });
+        harness.capture(&format!("changes-pick-{suffix}"));
+        harness.update(|plait, _, cx| {
+            plait.line_pick = None;
+            cx.notify();
         });
         harness.update(|plait, _, cx| {
             plait

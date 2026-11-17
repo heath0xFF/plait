@@ -8,6 +8,35 @@ use plait_core::{
 use std::path::Path;
 
 const DIFF_LINE_HEIGHT: f32 = 21.;
+/// Tint behind lines picked to ask about.
+const PICKED: u32 = 0x2a3550;
+
+/// Lines picked in the Changes diff by clicking line numbers. It applies only
+/// while the same file and side are shown; another file ignores it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct LinePick {
+    pub path: std::path::PathBuf,
+    pub mode: DiffMode,
+    pub anchor: usize,
+    pub end: usize,
+}
+
+impl LinePick {
+    fn range(&self) -> std::ops::RangeInclusive<usize> {
+        self.anchor.min(self.end)..=self.anchor.max(self.end)
+    }
+}
+
+/// What a diff offers beyond reading. History passes the default: none.
+#[derive(Default)]
+pub(super) struct DiffControls {
+    /// Hunk buttons on `@@` lines.
+    hunks: Option<HunkTarget>,
+    /// Line numbers can be clicked to pick lines; `Some(None)` before any pick.
+    pick: Option<Option<std::ops::RangeInclusive<usize>>>,
+    /// Shown above the footer while lines are picked.
+    bar: Option<AnyElement>,
+}
 
 /// One-letter state and its tint. The accessible name carries the full word.
 fn change_mark(label: &str) -> (&'static str, u32) {
@@ -438,15 +467,138 @@ impl Plait {
                 format!("{error}\nRefresh to read the latest repository state."),
             )
             .into_any_element(),
-            Load::Ready(diff) => self.diff_lines(
-                "diff-lines",
-                diff.clone(),
-                &self.diff_scroll,
-                Some("⌥↑ / ⌥↓ switch file"),
-                self.hunk_target(),
-                cx,
-            ),
+            Load::Ready(diff) => {
+                let picked = self.current_pick(diff.lines.len());
+                let bar = picked.as_ref().map(|pick| self.pick_bar(pick, cx));
+                self.diff_lines(
+                    "diff-lines",
+                    diff.clone(),
+                    &self.diff_scroll,
+                    Some("Click line numbers to ask · ⌥↑ ⌥↓ switch file"),
+                    DiffControls {
+                        hunks: self.hunk_target(),
+                        pick: Some(picked.map(|pick| pick.range())),
+                        bar,
+                    },
+                    cx,
+                )
+            }
         }
+    }
+
+    /// The pick, if it belongs to the file and side on screen.
+    pub(super) fn current_pick(&self, lines: usize) -> Option<LinePick> {
+        let pick = self.line_pick.as_ref()?;
+        let repo = &self.state.repository;
+        let key = repo.selected.as_ref()?;
+        let change = repo.snapshot.ready()?.changes.get(key.file)?;
+        (change.path == pick.path && key.mode == pick.mode && pick.range().end() < &lines)
+            .then(|| pick.clone())
+    }
+
+    /// Click picks a line, Shift-click extends from it, and clicking a lone
+    /// picked line clears it.
+    pub(super) fn pick_line(&mut self, index: usize, extend: bool, cx: &mut Context<Self>) {
+        let repo = &self.state.repository;
+        let Some(key) = repo.selected.as_ref() else {
+            return;
+        };
+        let Some(change) = repo.snapshot.ready().and_then(|s| s.changes.get(key.file)) else {
+            return;
+        };
+        let lines = match &repo.diff {
+            Load::Ready(diff) => diff.lines.len(),
+            _ => return,
+        };
+        let current = self.current_pick(lines);
+        self.line_pick = match current {
+            Some(pick) if extend => Some(LinePick { end: index, ..pick }),
+            Some(pick) if pick.anchor == index && pick.end == index => None,
+            _ => Some(LinePick {
+                path: change.path.clone(),
+                mode: key.mode,
+                anchor: index,
+                end: index,
+            }),
+        };
+        cx.notify();
+    }
+
+    /// Ask the selected thread about the picked lines: quote them into its
+    /// composer and go there. Nothing is sent until the user sends it.
+    pub(super) fn ask_about_pick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Load::Ready(diff) = &self.state.repository.diff else {
+            return;
+        };
+        let Some(pick) = self.current_pick(diff.lines.len()) else {
+            return;
+        };
+        let Some(composer) = self
+            .host
+            .selected
+            .as_ref()
+            .and_then(|id| self.composers.get(id))
+            .cloned()
+        else {
+            return;
+        };
+        let side = match pick.mode {
+            DiffMode::Unstaged => "unstaged",
+            DiffMode::Staged => "staged",
+        };
+        let path = pick.path.to_string_lossy();
+        let Some(quote) = plait_core::review::quote(&path, side, &diff.lines[pick.range()]) else {
+            return;
+        };
+        if !composer.update(cx, |composer, cx| composer.append_block(&quote, window, cx)) {
+            self.notice = Some("This thread cannot take a message right now.".into());
+            return cx.notify();
+        }
+        self.line_pick = None;
+        self.tab = super::Workspace::Conversation;
+        cx.notify();
+    }
+
+    fn pick_bar(&self, pick: &LinePick, cx: &mut Context<Self>) -> AnyElement {
+        let range = pick.range();
+        let count = range.end() - range.start() + 1;
+        let thread = self.host.selected.is_some();
+        row()
+            .h(px(36.))
+            .px_4()
+            .gap_2()
+            .flex_shrink_0()
+            .border_t_1()
+            .border_color(rgb(BORDER))
+            .bg(rgb(RAIL))
+            .text_size(px(12.))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(rgb(MUTED))
+                    .child(if thread {
+                        format!(
+                            "{count} {} picked · Shift-click a line number to extend",
+                            if count == 1 { "line" } else { "lines" }
+                        )
+                    } else {
+                        "Select a thread to ask about these lines.".into()
+                    }),
+            )
+            .child(
+                toned_button("pick-ask", "Ask about this", Tone::Filled)
+                    .disabled(!thread)
+                    .on_activate(cx, |this, window, cx| this.ask_about_pick(window, cx)),
+            )
+            .child(
+                button("pick-clear", "Clear").on_activate(cx, |this, _, cx| {
+                    this.line_pick = None;
+                    cx.notify();
+                }),
+            )
+            .into_any_element()
     }
 
     /// The selected file, if its hunks can be staged one at a time. Renames,
@@ -470,9 +622,10 @@ impl Plait {
         diff: std::sync::Arc<plait_core::model::Diff>,
         scroll: &UniformListScrollHandle,
         hint: Option<&'static str>,
-        hunks: Option<HunkTarget>,
+        controls: DiffControls,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let DiffControls { hunks, pick, bar } = controls;
         {
             {
                 let count = diff.lines.len();
@@ -517,17 +670,21 @@ impl Plait {
                                             DiffKind::Header => (MUTED, RAIL),
                                             DiffKind::Context => (TEXT, BG),
                                         };
-                                        row()
-                                            .id(("diff-line", index))
-                                            .role(Role::Group)
-                                            .aria_label(SharedString::from(line.text.clone()))
+                                        let pickable = pick.is_some()
+                                            && matches!(
+                                                line.kind,
+                                                DiffKind::Added
+                                                    | DiffKind::Removed
+                                                    | DiffKind::Context
+                                            );
+                                        let picked = pick
+                                            .as_ref()
+                                            .and_then(|pick| pick.as_ref())
+                                            .is_some_and(|range| range.contains(&index));
+                                        let numbers = row()
+                                            .id(("diff-pick", index))
                                             .gap_0()
-                                            .w_full()
-                                            .h(px(DIFF_LINE_HEIGHT))
-                                            .bg(rgb(bg))
-                                            .font_family(MONO)
-                                            .text_size(px(12.))
-                                            .line_height(px(DIFF_LINE_HEIGHT))
+                                            .flex_shrink_0()
                                             .child(gutter().pr_2().child(
                                                 line.old_line
                                                     .map_or(String::new(), |n| n.to_string()),
@@ -536,6 +693,29 @@ impl Plait {
                                                 line.new_line
                                                     .map_or(String::new(), |n| n.to_string()),
                                             ))
+                                            .when(picked, |el| el.text_color(rgb(TEXT)))
+                                            .when(pickable, |el| {
+                                                el.cursor_pointer()
+                                                    .hover(|el| el.text_color(rgb(TEXT)))
+                                                    .on_click(cx.listener(
+                                                        move |this, event: &ClickEvent, _, cx| {
+                                                            let extend = event.modifiers().shift;
+                                                            this.pick_line(index, extend, cx)
+                                                        },
+                                                    ))
+                                            });
+                                        row()
+                                            .id(("diff-line", index))
+                                            .role(Role::Group)
+                                            .aria_label(SharedString::from(line.text.clone()))
+                                            .gap_0()
+                                            .w_full()
+                                            .h(px(DIFF_LINE_HEIGHT))
+                                            .bg(rgb(if picked { PICKED } else { bg }))
+                                            .font_family(MONO)
+                                            .text_size(px(12.))
+                                            .line_height(px(DIFF_LINE_HEIGHT))
+                                            .child(numbers)
                                             .child(
                                                 div()
                                                     .flex_shrink_0()
@@ -579,6 +759,7 @@ impl Plait {
                         .flex_1()
                         .min_h_0(),
                     )
+                    .children(bar)
                     .child(
                         row()
                             .h(px(28.))

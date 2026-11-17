@@ -85,6 +85,7 @@ session.rs              private desktop journal, identity checks, writer lock
 markdown.rs             plain text blocks and style ranges, parsed off render
 highlight.rs            lexical syntax classes for fenced and tool code
 diff.rs                 line diff of an edit's old and new text
+review.rs               quoting picked diff lines into a message
 tool_view.rs            what each tool call shows, and grouping of long runs
 selection.rs            selection order, ranges, word bounds, and copied text
 git.rs                  synchronous Git adapter: hardened reads; background only

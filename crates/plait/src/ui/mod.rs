@@ -119,6 +119,8 @@ pub struct Plait {
     new_thread_open: bool,
     /// A worktree is being created or removed.
     worktree_busy: bool,
+    /// Diff lines picked in Changes to ask the selected thread about.
+    line_pick: Option<changes::LinePick>,
     /// The command palette or model picker, above the workspace.
     overlay: Option<commands::Overlay>,
     /// The inspector toggle was used on a window too narrow to show it.
@@ -184,6 +186,7 @@ impl Plait {
             providers: Default::default(),
             new_thread_open: false,
             worktree_busy: false,
+            line_pick: None,
             overlay: None,
             inspector_note: false,
             panels: Default::default(),
