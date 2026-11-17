@@ -599,11 +599,18 @@ Project, Machine, branch, and saved model sit on a context line beneath it.
 (ghost, selected, filled, primary) is chosen when it is built, because GPUI
 accepts one hover style per element and reports a second one only at draw time.
 
-The sidebar is 272 points on wide windows, 240 on narrow windows. Below 1150
-points, the conversation's 280-point Git inspector is removed; Git remains available in
-the Changes tab. The minimum window is 900 × 600. Cmd-B hides the sidebar.
+The sidebar defaults to 272 points on wide windows and 240 on narrow windows.
+Below 1150 points, the conversation's Git inspector (280 points by default) is
+removed; Git remains available in the Changes tab. The minimum window is
+900 × 600. Cmd-B hides the sidebar.
 
-Cmd-Option-B hides the inspector on wide windows and the choice is saved; on a
+Both panels resize by dragging their inner edge (`ui/panels.rs`): the sidebar
+between 200 and 480 points, the inspector between 220 and 560, and neither so
+wide that the conversation has less than 420. A drag changes only the width on
+screen and saves it to desktop preferences on release; double-clicking the
+edge restores the default.
+
+Cmd-L hides the inspector on wide windows and the choice is saved; on a
 narrow window the same control says that Git is in Changes.
 
 Controls have focus rings, tab stops, accessible names, and semantic roles.

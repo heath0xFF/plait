@@ -12,6 +12,7 @@ mod model_picker;
 mod navigation;
 mod navigation_host;
 mod palette;
+mod panels;
 mod selection;
 mod session;
 mod settings;
@@ -100,6 +101,7 @@ pub struct Plait {
     overlay: Option<commands::Overlay>,
     /// The inspector toggle was used on a window too narrow to show it.
     inspector_note: bool,
+    panels: panels::Panels,
     thread_controls: thread_controls::ThreadControls,
     focus: FocusHandle,
     expanded_live_tools: HashSet<String>,
@@ -153,6 +155,7 @@ impl Plait {
             new_thread_open: false,
             overlay: None,
             inspector_note: false,
+            panels: Default::default(),
             thread_controls: Default::default(),
             focus,
             expanded_live_tools: HashSet::new(),
@@ -600,6 +603,7 @@ impl Render for Plait {
             self.switch_us = interaction.elapsed().as_micros();
         }
         let wide = Self::wide(window);
+        self.panels.viewport = f32::from(window.viewport_size().width);
         let project = self.active_project();
         let machine = &project.machines[0];
         let real = self.host.selected.is_some();
@@ -737,6 +741,7 @@ impl Render for Plait {
             .map(|root| self.on_jump_actions(root, cx))
             .map(|root| self.on_selection_actions(root, cx))
             .map(|root| self.on_keyboard_controls(root, cx))
+            .map(|root| self.on_panel_resize(root, cx))
             .size_full()
             .overflow_hidden()
             .bg(rgb(BG))
@@ -749,7 +754,7 @@ impl Render for Plait {
                     .flex_1()
                     .min_h_0()
                     .items_stretch()
-                    .when(self.sidebar, |el| el.child(self.navigation(wide, cx)))
+                    .when(self.sidebar, |el| el.child(self.navigation(cx)))
                     .child(
                         column()
                             .flex_1()

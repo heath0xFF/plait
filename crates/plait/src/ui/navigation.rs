@@ -789,9 +789,10 @@ impl Plait {
             )
     }
 
-    pub(super) fn navigation(&self, wide: bool, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn navigation(&self, cx: &mut Context<Self>) -> impl IntoElement {
         column()
-            .w(px(if wide { 272. } else { 240. }))
+            .relative()
+            .w(px(self.panel_width(super::panels::Panel::Sidebar)))
             .flex_shrink_0()
             .bg(rgb(RAIL))
             .border_r_1()
@@ -801,5 +802,6 @@ impl Plait {
             .child(self.tree(cx))
             .child(self.navigation_menu(cx))
             .child(self.host_footer(cx))
+            .child(self.resize_handle(super::panels::Panel::Sidebar, cx))
     }
 }

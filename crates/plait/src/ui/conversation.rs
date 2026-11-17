@@ -1,4 +1,4 @@
-use super::{Plait, theme::*};
+use super::{Plait, panels::Panel, theme::*};
 use gpui::{prelude::*, *};
 use plait_core::host::ApprovalMode;
 
@@ -6,7 +6,8 @@ impl Plait {
     /// Git for the checkout beside the conversation on wide windows.
     pub(super) fn inspector(&self, cx: &mut Context<Self>) -> impl IntoElement {
         column()
-            .w(px(280.))
+            .relative()
+            .w(px(self.panel_width(Panel::Inspector)))
             .flex_shrink_0()
             .border_l_1()
             .border_color(rgb(BORDER))
@@ -21,6 +22,7 @@ impl Plait {
                     .child(tag("Git · read-only", SUBTLE)),
             )
             .child(self.file_panel(true, cx))
+            .child(self.resize_handle(Panel::Inspector, cx))
     }
 
     /// What to say, and offer, when no thread is selected.

@@ -25,8 +25,9 @@ pub(super) struct ThreadControls {
     pub(super) usage_open: bool,
 }
 
-struct UsageTooltip(String);
-impl Render for UsageTooltip {
+/// Plain text shown on hover, for controls whose label is a summary.
+struct TextTooltip(String);
+impl Render for TextTooltip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
             .max_w(px(360.))
@@ -252,19 +253,29 @@ impl Plait {
                     .on_activate(cx, |this, window, cx| this.open_thinking(window, cx)),
             );
         }
+        // These apply from the next message, so the label names the setting
+        // and the tooltip says when it takes effect.
+        let detail = plait_core::host::policy::approval_detail(ask, self.command_policy())
+            .trim_end_matches(" Applies from your next message.");
+        let approval_tip = format!(
+            "{detail} Click to switch. Applies from your next message; steering keeps the active run's mode."
+        );
         controls = controls.child(
             button(
                 "message-approval",
-                if ask { "Next: ask" } else { "Next: automatic" },
+                if ask {
+                    "Ask before actions"
+                } else {
+                    "Auto-approve actions"
+                },
             )
             .aria_label(if ask {
-                "Next message asks before actions"
+                "Approvals: ask before each edit and command"
             } else {
-                "Next message approves actions automatically"
+                "Approvals: edits and commands run without asking"
             })
-            .aria_description(
-                "Changes the next message. Steering uses the active run's approval mode.",
-            )
+            .aria_description(approval_tip.clone())
+            .tooltip(move |_, cx| cx.new(|_| TextTooltip(approval_tip.clone())).into())
             .disabled(self.host.protocol() < 2)
             .on_activate(cx, |this, _, cx| {
                 let mut preferences = this.preferences.value.clone();
@@ -283,7 +294,7 @@ impl Plait {
                 button("thread-usage", usage.label.clone())
                     .text_color(rgb(tint))
                     .aria_description(detail.clone())
-                    .tooltip(move |_, cx| cx.new(|_| UsageTooltip(detail.clone())).into())
+                    .tooltip(move |_, cx| cx.new(|_| TextTooltip(detail.clone())).into())
                     .on_activate(cx, |this, _, cx| {
                         this.thread_controls.usage_open = !this.thread_controls.usage_open;
                         cx.notify();
@@ -292,11 +303,16 @@ impl Plait {
         }
         let policy = self.command_policy();
         let policy_label = plait_core::host::policy::context_label(policy);
+        let policy_tip = format!(
+            "{} Click to change in Settings. Applies from your next message; a running task keeps its policy.",
+            policy.map_or("", |policy| policy.meaning())
+        )
+        .trim_start()
+        .to_owned();
         controls = controls.child(
-            button("thread-command-policy", format!("Next: {policy_label}"))
-                .aria_description(
-                    "Policy for the next run. An active run keeps its original policy.",
-                )
+            button("thread-command-policy", policy_label)
+                .aria_description(policy_tip.clone())
+                .tooltip(move |_, cx| cx.new(|_| TextTooltip(policy_tip.clone())).into())
                 .on_activate(cx, |this, window, cx| {
                     this.show_settings(true, window, cx);
                     this.settings_section = 2;

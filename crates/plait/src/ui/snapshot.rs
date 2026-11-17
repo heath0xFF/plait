@@ -440,7 +440,11 @@ fn long_run(snapshot: &mut Snapshot, running: bool) {
         .enumerate()
         .map(|(index, name)| {
             let (input, output) = match *name {
-                "command" => ("{\"command\":\"cargo check\"}", "Sample output."),
+                // Long enough to wrap in the row at both window sizes.
+                "command" => (
+                    "{\"command\":\"cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && git status --short --branch\"}",
+                    "Sample output.",
+                ),
                 "edit" => (
                     "{\"path\":\"src/review.rs\",\"old_text\":\"a\",\"new_text\":\"b\"}",
                     "Replaced 1 occurrence.",
@@ -1640,6 +1644,16 @@ fn inspector_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         plait.toggle_inspector(window, cx);
         assert!(!plait.preferences.value.hide_inspector);
         assert!(!plait.inspector_note);
+    });
+    // Widths saved by dragging, fitted so the conversation keeps its room.
+    harness.update(|plait, _, _| {
+        plait.preferences.value.sidebar_width = Some(380);
+        plait.preferences.value.inspector_width = Some(520);
+    });
+    harness.capture(&format!("panels-resized-{suffix}"));
+    harness.update(|plait, _, _| {
+        plait.preferences.value.sidebar_width = None;
+        plait.preferences.value.inspector_width = None;
     });
 }
 

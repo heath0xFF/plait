@@ -95,6 +95,10 @@ pub struct Preferences {
     pub ask_before_actions: bool,
     /// Hide the Git inspector beside the conversation on wide windows.
     pub hide_inspector: bool,
+    /// Widths dragged on this desktop, in points. `None` keeps the default;
+    /// the desktop fits a saved width to the window it is drawn in.
+    pub sidebar_width: Option<u16>,
+    pub inspector_width: Option<u16>,
     /// Models pinned to the top of the picker, oldest first.
     pub favorite_models: Vec<ModelKey>,
     /// Models used to start threads from this desktop, newest first.
@@ -434,6 +438,8 @@ mod tests {
             jump_target: JumpTarget::Machines,
             ask_before_actions: true,
             hide_inspector: true,
+            sidebar_width: Some(318),
+            inspector_width: Some(402),
             ..Preferences::default()
         };
         chosen.toggle_favorite(&choice("openai-codex", "gpt-5.6-luna"));
@@ -487,6 +493,7 @@ mod tests {
         assert_eq!(loaded.jump_target, JumpTarget::Machines);
         assert!(loaded.ask_before_actions);
         assert!(!loaded.hide_inspector);
+        assert_eq!((loaded.sidebar_width, loaded.inspector_width), (None, None));
         assert!(loaded.favorite_models.is_empty());
         assert!(loaded.recent_models.is_empty());
         assert!(loaded.keymap.is_empty());

@@ -28,6 +28,21 @@ fn tool_tint(status: ToolStatus) -> u32 {
     }
 }
 
+/// Line height of a call's row, so a wrapped subject and its chevron align.
+const TOOL_LINE: f32 = 18.;
+/// A collapsed call's subject wraps to at most this many lines.
+const SUBJECT_LINES: usize = 4;
+
+/// A chevron centered on the first line of a row that may wrap.
+fn line_icon(name: &'static str) -> Div {
+    div()
+        .flex()
+        .flex_shrink_0()
+        .items_center()
+        .h(px(TOOL_LINE))
+        .child(icon(name))
+}
+
 /// Rounded surface for a tool's content, matching fenced code.
 fn frame() -> Div {
     div()
@@ -221,6 +236,13 @@ impl Plait {
                     .px_1()
                     .ml(px(-TOOL_INSET))
                     .min_w_0()
+                    // A long subject wraps under itself rather than running
+                    // past the window, so the row grows and may shrink.
+                    .flex_shrink_1()
+                    .h_auto()
+                    .py(px(4.))
+                    .items_start()
+                    .line_height(px(TOOL_LINE))
                     .aria_label(format!(
                         "{} tool{} · {}",
                         tool.name,
@@ -231,7 +253,7 @@ impl Plait {
                         tool.status.label()
                     ))
                     .aria_expanded(expanded)
-                    .child(icon(if expanded { "down" } else { "right" }))
+                    .child(line_icon(if expanded { "down" } else { "right" }))
                     .child(
                         div()
                             .flex_shrink_0()
@@ -242,7 +264,8 @@ impl Plait {
                         el.child(
                             div()
                                 .min_w_0()
-                                .truncate()
+                                // The opened call shows the whole command.
+                                .line_clamp(SUBJECT_LINES)
                                 .font_family(MONO)
                                 .text_size(px(12.))
                                 .text_color(rgb(MUTED))
@@ -353,7 +376,13 @@ impl Plait {
                         .text_color(rgb(SUBTLE))
                         .child("$"),
                 )
-                .child(div().flex_1().min_w_0().child(code(TEXT)))
+                // A command is read as a line, not scanned like code; wrap it.
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(code(TEXT).whitespace_normal()),
+                )
                 .into_any_element(),
             (Part::Diff, Kind::Diff(lines)) => frame()
                 .child(self.diff(site, block, lines, &key))

@@ -290,7 +290,7 @@ path alongside separate `PLAIT_HOST_STORE` and `PLAIT_DESKTOP_STATE_DIR` paths.
 | Cmd-W | Close Window | `window.close` |
 | Cmd-K | Command Palette… | `palette.toggle` |
 | Cmd-B | Toggle Sidebar | `view.toggle_sidebar` |
-| Cmd-Option-B | Toggle Git Inspector | `view.toggle_inspector` |
+| Cmd-L | Toggle Git Inspector | `view.toggle_inspector` |
 | Cmd-Shift-D | Toggle Diagnostics | `view.toggle_diagnostics` |
 | Cmd-Shift-1 | Conversation | `view.conversation` |
 | Cmd-Shift-2 | Changes | `view.changes` |
@@ -307,9 +307,11 @@ Cmd-N creates a thread with the saved default model and puts the cursor in its
 composer. When no default can be used, it opens the model picker and creates
 the thread on selection. Cmd-Shift-N always asks for the model. Cmd-1 to Cmd-9
 count threads in sidebar order; Settings can change this to machines or
-projects. Cmd-Option-B hides or shows the Git inspector beside the conversation
-and the choice is remembered. On a window too narrow for the inspector it
-explains where Git is instead.
+projects. Cmd-B hides or shows the sidebar on the left; Cmd-L hides or shows the
+Git inspector on the right, and that choice is remembered. On a window too narrow
+for the inspector it explains where Git is instead. Drag either panel's inner
+edge to resize it; the width is remembered, and double-clicking the edge restores
+the default. Both shortcuts can be changed in Settings → Keyboard.
 
 ### Command palette and model picker
 
