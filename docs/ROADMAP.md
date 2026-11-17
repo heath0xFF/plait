@@ -188,7 +188,12 @@ and says plainly when nothing asks or nothing is sandboxed. Whatever a harness
 asks becomes a Plait approval. Claude Code runs as the person's installed
 `claude` through a pinned Agent SDK, loading their own settings, `CLAUDE.md`
 files, skills, slash commands, hooks, and MCP servers; Plait never offers or
-handles a Claude sign-in. Features are checked from what the installed version
+handles a Claude sign-in. Plait's releases do not include the SDK, whose license
+reserves all rights: setting up Claude Code threads in Settings → Agent has the
+host download that exact version from the npm registry and check it against
+the pinned hash before use. Whatever sign-in the person's `claude` uses, a
+Claude subscription, an API key, or a cloud provider, is accepted. Features
+are checked from what the installed version
 reports. Steering, Stop, usage, and stored history work as for Codex, and each
 run resumes the thread's Claude session. This replaces step 1's mapping from
 command policy and approval mode for Codex, before it is released.

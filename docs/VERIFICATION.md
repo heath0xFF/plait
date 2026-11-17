@@ -374,10 +374,18 @@ mode reporting it, a steering message joining the running turn, Stop sending
 history read live and again after a restart without starting Codex, and every
 server closing once idle. The adapter's message types were checked against
 `codex app-server` 0.169.0 with a handshake that starts no thread or turn
-(initialize, model list, account state, and refusals). A real Codex turn, the
-order of a real turn's events, `clientId` echoing, and what each mode's
-reviewer and sandbox do in a real Codex have not been checked against a live
-model; nothing in the tests reaches one.
+(initialize, model list, account state, and refusals).
+
+Opt-in live tests (`PLAIT_LIVE=codex npm run test:live` in `runtime/`) run real
+Codex turns through the runtime with the installed Codex and its own sign-in,
+on Codex's smallest listed model. They passed against Codex 0.169.0 on 2026-11-17:
+Full access running a command without asking and reporting `full_access`, a
+second run recalling the first, Read only asking before a write and the
+approved file landing, a steering message joining the turn and shaping its
+answer, Stop ending a running command within 15 seconds, and history reading
+after a restart without starting Codex. They assert structure, not wording,
+and are not part of `npm test` or `scripts/check.sh`. Ask and Approve for me
+have not been run live, nor has what Codex's reviewer decides.
 
 Measured on a replayed stream of 7,081 Codex events (20 answers and 20
 commands, after 100 earlier entries): translation cost 0.6 µs per event, and
