@@ -17,6 +17,7 @@ Current work is M4: Git (mostly shipped) and a read-only file viewer.**
 | M5 — Previews | Live HTML, Markdown and MDX, automatic refresh, and selected-content feedback to the agent | Planned |
 | M6 — Multiple machines | Unified project navigation across independent hosts, including disconnected/reconnecting states | Planned |
 | M7 — Any agent harness | Threads run by other agent harnesses (Claude Code, Codex, Pi, omp, Antigravity, and others) beside Pi, with the same conversation, approval, Git, and navigation views | Direction agreed; does not depend on M3. Protocol details need agreement before implementation |
+| M8 — Skills, tools, and CLIs | Pi threads use the skills, prompt templates, global instructions, MCP servers, and command-line tools the person already set up for their agent, with each one visible in Settings and every call under Plait's approvals | Direction agreed; does not depend on M3 or M7. Protocol and sandbox details need agreement before implementation |
 
 Do not build the whole roadmap at once. Each change must compile, run, and have
 its own checks. Protocol, storage, and shared-contract changes need agreement
@@ -139,6 +140,55 @@ Before implementation: agree the protocol additions (harness choice when a
 thread starts, capability flags, increments), the order of harnesses, and how
 installs are found and pinned. Compare other multi-agent workspaces by outcomes
 only, per the originality policy.
+
+**Direction for M8, skills, tools, and CLIs:** today a Pi thread in Plait sees
+only Plait's five tools (read, read_output, edit, write, command) and the
+project's `AGENTS.md`. The skills, prompt templates, user-level instructions,
+MCP servers, and CLIs a person set up for Pi are invisible to it, so the agent
+is less capable in Plait than in a terminal. M8 closes that gap without
+weakening what protects the checkout.
+
+- **Skills, as the [Agent Skills](https://agentskills.io/specification)
+  format defines them.** Discover `SKILL.md` directories in the locations Pi
+  reads: the Pi agent directory, `~/.agents/skills`, and paths in Pi's
+  settings, then the project's `.agents/skills` and `.pi/skills`. Only each skill's name, description, and
+  location enter the instructions; the model reads the full `SKILL.md` and its
+  bundled files when a task calls for it, through a read-only, bounded,
+  no-symlink read limited to skill directories. `/skill:name` in the composer
+  loads one explicitly. Skills that ship inside a repository are inert until
+  the person trusts that project, as trusted commands are today.
+- **Global instructions and prompt templates.** The person's user-level
+  instructions (`AGENTS.md` or `CLAUDE.md` in the Pi agent directory) join the
+  project's, under the same size bound. Prompt templates
+  appear as `/` commands in the composer.
+- **CLIs the agent knows about.** In trusted command mode, commands already run
+  with the login-shell `PATH`, network, and real `HOME`, but the agent is not
+  told which tools exist. Skills close most of that gap, since they name the
+  CLIs they use. For sandboxed projects, the person can name CLIs that may run
+  outside the sandbox (for example a deployment or search tool that needs the
+  network and its own credentials); each call is still an approval showing the
+  exact command, and the checkout stays read-only to it.
+- **MCP servers before Pi extensions.** MCP servers from the person's Pi
+  configuration run as separate processes, and their tools join the thread
+  under Plait's approval policy, shown as their own tool rows. Large catalogs
+  are found through tool search rather than listed in every request. Pi
+  TypeScript extensions run arbitrary code in the runtime and have a different
+  replay model, so they come after MCP, if at all. External tools are never
+  repeated automatically after a host restart.
+- **Visible and switchable.** Settings lists every skill, template, MCP server,
+  and allowed CLI with where it came from, whether it loaded, and why not, as
+  the themes list does. Each can be turned off per project. Plait never reads
+  or copies a tool's credentials; they stay in the tool's own configuration.
+- **Cheap.** Discovery runs on the host off the request path, is cached, and is
+  rescanned when a thread starts only if its sources changed. Counts and file
+  sizes are bounded. Only names and descriptions cost context until used.
+- **Shared with M7.** Other harnesses load their own skills and MCP servers
+  natively; Plait shows what they report rather than injecting its own.
+
+Before implementation: agree the protocol additions (the discovered list, the
+skill read, project trust, the CLI allowance), the sandbox profile change that
+lets commands read skill directories, and the order (skills and instructions
+first, then CLIs, then MCP).
 
 Use existing tools for interactive shells and debugging. A future Open in Rex
 integration and native mobile companion are possibilities, not current features.
