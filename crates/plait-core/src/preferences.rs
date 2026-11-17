@@ -3,7 +3,10 @@
 //! The host owns model defaults and credentials. This file holds presentation
 //! choices that belong to one desktop installation, so it never leaves the Mac.
 
-use crate::{host::ModelChoice, model::Project};
+use crate::{
+    host::{ModelChoice, ThinkingLevel},
+    model::Project,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -103,12 +106,30 @@ pub struct Preferences {
     pub favorite_models: Vec<ModelKey>,
     /// Models used to start threads from this desktop, newest first.
     pub recent_models: Vec<ModelKey>,
+    /// The thinking level new threads start at; see `default_thinking`.
+    #[serde(deserialize_with = "lenient_level")]
+    pub default_thinking: Option<ThinkingLevel>,
     /// Shortcuts changed on this desktop. Action IDs this client does not know
     /// are kept, so an entry written by a newer client survives an older one.
     pub keymap: Keymap,
 }
 
+/// A level this client does not know (written by a newer one) reads as unset
+/// rather than failing the whole file.
+fn lenient_level<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<ThinkingLevel>, D::Error> {
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| serde_json::from_value(value).ok()))
+}
+
 impl Preferences {
+    /// Unset means Medium: with thinking off, reasoning models answer worse,
+    /// and that should not be what a new thread gets without asking.
+    pub fn default_thinking(&self) -> ThinkingLevel {
+        self.default_thinking.unwrap_or(ThinkingLevel::Medium)
+    }
+
     pub fn is_favorite(&self, choice: &ModelChoice) -> bool {
         self.favorite_models.iter().any(|key| key == choice)
     }
@@ -366,6 +387,20 @@ pub fn jump(
 mod tests {
     use super::*;
     use crate::model::Machine;
+
+    #[test]
+    fn default_thinking_is_medium_until_chosen_and_survives_newer_levels() {
+        let preferences = Preferences::default();
+        assert_eq!(preferences.default_thinking(), ThinkingLevel::Medium);
+        let saved: Preferences = serde_json::from_str(r#"{"default_thinking":"high"}"#).unwrap();
+        assert_eq!(saved.default_thinking(), ThinkingLevel::High);
+        // A level from a newer client leaves the rest of the file intact.
+        let newer: Preferences =
+            serde_json::from_str(r#"{"default_thinking":"extreme","hide_inspector":true}"#)
+                .unwrap();
+        assert_eq!(newer.default_thinking(), ThinkingLevel::Medium);
+        assert!(newer.hide_inspector);
+    }
 
     fn choice(provider: &str, model_id: &str) -> ModelChoice {
         ModelChoice {

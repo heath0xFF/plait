@@ -201,6 +201,7 @@ unchanged, and the operations and fields below do not exist for a version 1 or
 {"op":"history_text","protocol_version":3,"thread_id":"HOST_UUID","ref":"REF","offset":65536}
 {"op":"rename_thread","protocol_version":3,"thread_id":"HOST_UUID","title":"New title"}
 {"op":"archive_thread","protocol_version":3,"thread_id":"HOST_UUID","archived":true}
+{"op":"create_thread","protocol_version":3,"checkout":"/absolute/checkout","provider":"anthropic","model_id":"MODEL","request_id":"CLIENT_UUID","thinking":"medium"}
 {"op":"configure_thread","protocol_version":3,"thread_id":"HOST_UUID","provider":"anthropic","model_id":"MODEL","thinking":"high"}
 {"op":"submit","protocol_version":3,"thread_id":"HOST_UUID","request_id":"CLIENT_UUID","text":"User message","approval":"ask","when_busy":"follow_up"}
 {"op":"cancel_queued","protocol_version":3,"thread_id":"HOST_UUID","request_id":"CLIENT_UUID"}
@@ -208,8 +209,11 @@ unchanged, and the operations and fields below do not exist for a version 1 or
 
 In `list_threads`, `checkout`, `limit`, `cursor`, and `archived` are optional. In
 `watch_threads`, `archived` is optional. In `history`, `before` and `limit` are
-optional. In `configure_thread`, give `provider` with `model_id`, `thinking`, or
-all three. In `submit`, `approval` and `when_busy` are optional. Every other
+optional. In `create_thread`, `thinking` is optional: the thread starts at that
+level, or the nearest one its model supports (a model without reasoning starts
+at `off`); it is part of the request's deduplicated input. In
+`configure_thread`, give `provider` with `model_id`, `thinking`, or all three,
+and a level the model lacks is rejected. In `submit`, `approval` and `when_busy` are optional. Every other
 field shown is required. Timestamps are Unix milliseconds.
 
 ### Snapshot and summary
@@ -234,7 +238,8 @@ A version 3 snapshot has every version 2 key, with these changes and additions:
   do not advance it. Threads saved before version 3 report the time the store
   was first opened by a version 3 host for both.
 - **`thinking_level`.** One of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`,
-  `max`. `off` until changed with `configure_thread`.
+  `max`. The level `create_thread` asked for, or `off`, until changed with
+  `configure_thread`.
 - **`queued`.** Inputs waiting behind the active run, oldest first. `id` is the
   message ID the input takes when it joins the conversation. `mode` is
   `follow_up` or `steer`. See [Messages during a run](#messages-during-a-run).

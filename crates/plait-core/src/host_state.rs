@@ -23,6 +23,9 @@ pub struct HostState {
     pub saving: bool,
     pub save_message: Option<String>,
     pub pending_create: Option<(String, ModelChoice)>,
+    /// The starting thinking level fixed when `pending_create` was made, so a
+    /// retry repeats the same request even if the default changes meanwhile.
+    pub pending_thinking: Option<crate::host::ThinkingLevel>,
     pub creating: bool,
     pub submitting: bool,
     pub controlling: bool,
@@ -48,6 +51,7 @@ impl HostState {
             saving: false,
             save_message: None,
             pending_create: None,
+            pending_thinking: None,
             creating: false,
             submitting: false,
             controlling: false,

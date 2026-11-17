@@ -114,11 +114,15 @@ export class Runtime {
       case 'create_thread': {
         const root = await checkout(String(request.checkout));
         const choice = { provider: String(request.provider), model_id: String(request.model_id) };
-        const input = [root, choice.provider, choice.model_id];
+        const requested = request.thinking as ThinkingLevel | undefined;
+        // Appended only when given, so a retried request from an older client matches its record.
+        const input = [root, choice.provider, choice.model_id, ...(requested === undefined ? [] : [requested])];
         const duplicate = this.store.duplicate('create', String(request.request_id), input);
         if (duplicate !== undefined) return duplicate;
         this.model(choice);
         const snapshot: Snapshot = { id: randomUUID(), checkout: root, model: choice, status: 'idle', messages: [], live_text: '', tools: [], pending_approval: null, error: null, truncated: false };
+        // A starting level is a preference, not a demand: use the nearest one the model has.
+        if (requested !== undefined) snapshot.thinking_level = clampThinkingLevel(this.models.getModel(choice.provider, choice.model_id)!, requested);
         const result = { thread: snapshot };
         this.store.admit('create', String(request.request_id), input, result, snapshot, await rootIdentity(root));
         this.changed('#');

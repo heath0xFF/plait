@@ -36,6 +36,8 @@ pub(super) enum Command {
     },
     /// Open the project's command policy in Settings.
     PolicySettings,
+    /// The thinking level new threads start at.
+    DefaultThinking(plait_core::host::ThinkingLevel),
 }
 
 impl Clone for Command {
@@ -61,6 +63,7 @@ impl Clone for Command {
                 mode: *mode,
             },
             Self::PolicySettings => Self::PolicySettings,
+            Self::DefaultThinking(level) => Self::DefaultThinking(*level),
         }
     }
 }
@@ -366,6 +369,11 @@ impl Plait {
                     self.select_host_thread(id, window, cx);
                     self.focus_composer(window, cx);
                 }
+            }
+            Command::DefaultThinking(level) => {
+                let mut preferences = self.preferences.value.clone();
+                preferences.default_thinking = Some(level);
+                self.set_preferences(preferences, super::jump::PreferenceGroup::Models, cx);
             }
             Command::Thinking {
                 thread_id,

@@ -120,6 +120,7 @@ const fields3: Record<string, string[]> = {
 const optional3: Record<string, string[]> = {
   submit: ['when_busy'], list_threads: ['checkout', 'limit', 'cursor', 'archived'], history: ['before', 'limit'],
   watch_threads: ['archived'], configure_thread: ['provider', 'model_id', 'thinking'],
+  create_thread: ['thinking'],
 };
 const limits: Record<string, number> = { list_threads: 200, history: 500 };
 export const CURSOR = /^\d{1,16}:\d{1,16}$/;
@@ -137,10 +138,10 @@ function validate3(request: Request) {
   if (request.ref !== undefined && !HISTORY_REF.test(request.ref as string)) invalid('Invalid ref.');
   if (request.archived !== undefined && typeof request.archived !== 'boolean') invalid('archived must be boolean.');
   if (request.when_busy !== undefined && request.when_busy !== 'follow_up' && request.when_busy !== 'steer') invalid('when_busy must be follow_up or steer.');
+  if (request.thinking !== undefined && !THINKING_LEVELS.includes(request.thinking as ThinkingLevel)) invalid(`thinking must be one of ${THINKING_LEVELS.join(', ')}.`);
   if (request.op !== 'configure_thread') return;
   if ((request.provider === undefined) !== (request.model_id === undefined)) invalid('provider and model_id must be given together.');
   if (request.provider !== undefined && (!text(request.provider) || !text(request.model_id))) invalid('provider and model_id must be nonempty strings.');
-  if (request.thinking !== undefined && !THINKING_LEVELS.includes(request.thinking as ThinkingLevel)) invalid(`thinking must be one of ${THINKING_LEVELS.join(', ')}.`);
   if (request.provider === undefined && request.thinking === undefined) invalid('Give a model, a thinking level, or both.');
 }
 export function validate(value: unknown): Request {

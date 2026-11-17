@@ -3,8 +3,10 @@
 
 use super::{
     Plait,
+    commands::Command,
     jump::PreferenceGroup,
     model_picker::{ModelPurpose, model_label},
+    palette::{Item, Options, Palette},
     theme::*,
 };
 use gpui::{prelude::*, *};
@@ -226,6 +228,7 @@ impl Plait {
             .when_some(self.default_model_state(), |el, (state, tint)| {
                 el.child(state_line(state, tint))
             })
+            .child(self.default_thinking_setting(cx))
             .when_some(self.catalog_summary(), |el, summary| {
                 el.child(tag(summary, SUBTLE))
             })
@@ -237,6 +240,61 @@ impl Plait {
                 self.preference_note(Some(PreferenceGroup::Models)),
                 |el, note| el.child(tag(format!("Favorites and recent models: {note}"), SUBTLE)),
             )
+    }
+
+    /// Saved on this desktop and sent with each new thread. The host picks the
+    /// nearest level the thread's model offers, so one setting fits all models.
+    fn default_thinking_setting(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let level = self.preferences.value.default_thinking();
+        let detail = if self.host.connected && self.host.protocol() < 3 {
+            "This host starts every thread with thinking off. Update the host to use this setting."
+        } else {
+            "New threads start at this level, or the closest one their model offers. A thread's own level is under its message box."
+        };
+        let control = toned_button("choose-default-thinking", "", Tone::Filled)
+            .aria_label(format!(
+                "Default thinking: {}. Choose another…",
+                level.label()
+            ))
+            .gap_2()
+            .child(level.label())
+            .child(icon("down").text_color(rgb(MUTED)))
+            .on_activate(cx, |this, window, cx| {
+                this.open_default_thinking(window, cx)
+            });
+        setting("Default thinking for new threads", detail, control)
+    }
+
+    fn open_default_thinking(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let current = self.preferences.value.default_thinking();
+        let items = plait_core::host::ThinkingLevel::ALL
+            .iter()
+            .map(|level| {
+                Item::new(
+                    format!("default-thinking-{level:?}"),
+                    level.label(),
+                    Command::DefaultThinking(*level),
+                )
+            })
+            .collect();
+        let palette = cx.new(|cx| {
+            Palette::new(
+                Options {
+                    name: "Default thinking level".into(),
+                    placeholder: "Choose the level new threads start at…".into(),
+                    empty: "No levels match.".into(),
+                    // Start on the saved level, so Return keeps it.
+                    initial: Some(format!("default-thinking-{current:?}").into()),
+                    mark: None,
+                    aside: None,
+                    note: Some("Existing threads keep their own level.".into()),
+                },
+                items,
+                window,
+                cx,
+            )
+        });
+        self.present(palette, None, window, cx);
     }
 
     pub(super) fn settings(&self, cx: &mut Context<Self>) -> impl IntoElement {

@@ -375,14 +375,17 @@ impl Plait {
                 return;
             }
             self.host.pending_create = Some((request_id(), choice));
+            self.host.pending_thinking = Some(self.preferences.value.default_thinking());
         }
         let (id, choice) = self.host.pending_create.clone().unwrap();
+        let thinking = self.host.pending_thinking;
+        let protocol = self.host.protocol();
         self.host.creating = true;
         self.host.error = None;
         let selection_epoch = self.host.watch_epoch;
-        self.host_request::<host::ThreadReply>(Request::CreateThread {
-            checkout: self.host.checkout.clone(), provider: choice.provider.clone(), model_id: choice.model_id.clone(), request_id: id,
-        }, window, cx, move |this, result, window, cx| {
+        self.host_request::<host::ThreadReply>(Request::create_thread(
+            self.host.checkout.clone(), &choice, id, thinking, protocol,
+        ), window, cx, move |this, result, window, cx| {
             this.host.creating = false;
             match result {
                 Ok(reply) if reply.thread.model == choice => {

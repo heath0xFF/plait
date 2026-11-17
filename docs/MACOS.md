@@ -348,7 +348,9 @@ nothing. A held queue resumes from its oldest input on the next send.
 
 Choose the model beneath the composer, or Cmd-Shift-M, to change this thread's
 next run. The adjacent thinking control lists exactly the chosen model's
-supported levels. Both are locked during a run.
+supported levels. Both are locked during a run. New threads start at **Settings → Models → Default
+thinking for new threads** (Medium unless changed), or the closest level their
+model offers; a model without reasoning starts with thinking off.
 
 The run-settings menu beside them chooses this thread's approval mode: **Use
 default** follows Settings → Approvals, or pick **Ask before actions** or

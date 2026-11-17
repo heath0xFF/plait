@@ -252,6 +252,30 @@ test('a thread changes model and thinking level between runs, and reasoning is k
   assert.deepEqual([restored.model.model_id, restored.thinking_level], ['faux-think', 'medium']);
 });
 
+test('a new thread starts at the requested thinking level, or the nearest its model supports', { timeout: 20000 }, async t => {
+  const f = await setup(t, 'v3-start-thinking');
+  const checkout = f.repo;
+  const create = (request_id: string, model_id: string, extra: Record<string, unknown> = {}) =>
+    v3<{ thread: Thread }>(f.store, { op: 'create_thread', checkout, provider: 'faux', model_id, request_id, ...extra });
+  const high = (await create('c1', 'faux-think', { thinking: 'high' })).result.thread;
+  assert.equal(high.thinking_level, 'high');
+  // Above what the model offers: its highest level. A model without reasoning: off.
+  assert.equal((await create('c2', 'faux-think', { thinking: 'max' })).result.thread.thinking_level, 'high');
+  assert.equal((await create('c3', 'faux-1', { thinking: 'medium' })).result.thread.thinking_level, 'off');
+  // Without a level, a thread starts as before.
+  assert.equal((await create('c4', 'faux-think')).result.thread.thinking_level, 'off');
+  // The level is part of the request: a retry matches, a changed level conflicts.
+  assert.equal((await create('c1', 'faux-think', { thinking: 'high' })).result.thread.id, high.id);
+  assert.equal((await create('c1', 'faux-think', { thinking: 'low' })).error?.code, 'conflict');
+  assert.equal((await create('c5', 'faux-think', { thinking: 'huge' })).error?.code, 'invalid_request');
+  // Older protocol versions do not know the field.
+  const older = await request(f.store, { op: 'create_thread', checkout, provider: 'faux', model_id: 'faux-think', request_id: 'c6', thinking: 'high', protocol_version: 2 });
+  assert.equal(older.error?.code, 'invalid_request');
+  // The level survives a restart.
+  f.host.kill('SIGKILL'); await delay(400); await f.start('v3-start-thinking');
+  assert.equal((await watch3(f, high.id)).thinking_level, 'high');
+});
+
 test('a follow-up queued during a run starts its own run in its own approval mode', { timeout: 40000 }, async t => {
   const f = await setup(t, 'separate-edits'); const thread = await f.create();
   // The first run approves automatically. The queued one asked to be prompted, and is.

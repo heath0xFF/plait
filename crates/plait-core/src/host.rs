@@ -55,6 +55,16 @@ pub enum ThinkingLevel {
     Max,
 }
 impl ThinkingLevel {
+    pub const ALL: [Self; 7] = [
+        Self::Off,
+        Self::Minimal,
+        Self::Low,
+        Self::Medium,
+        Self::High,
+        Self::Xhigh,
+        Self::Max,
+    ];
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Off => "Off",
@@ -368,6 +378,11 @@ pub enum Request {
         provider: String,
         model_id: String,
         request_id: String,
+        /// The starting level; the host uses the nearest one the model has.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        thinking: Option<ThinkingLevel>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        protocol_version: Option<u32>,
     },
     Submit {
         thread_id: String,
@@ -551,6 +566,26 @@ impl Request {
             thread_id,
             archived,
             protocol_version: 3,
+        }
+    }
+
+    /// A new thread. Only a version 3 host knows a starting thinking level, so
+    /// an older one gets the version 1 request.
+    pub fn create_thread(
+        checkout: PathBuf,
+        choice: &ModelChoice,
+        request_id: String,
+        thinking: Option<ThinkingLevel>,
+        protocol: u32,
+    ) -> Self {
+        let thinking = thinking.filter(|_| protocol >= 3);
+        Self::CreateThread {
+            checkout,
+            provider: choice.provider.clone(),
+            model_id: choice.model_id.clone(),
+            request_id,
+            thinking,
+            protocol_version: thinking.map(|_| 3),
         }
     }
 
@@ -1089,6 +1124,31 @@ mod tests {
                 r#"{"op":"history_text","thread_id":"t","ref":"e7.0.text","offset":65536,"protocol_version":3}"#
             )
         );
+        let choice = ModelChoice {
+            provider: "p".into(),
+            model_id: "m".into(),
+        };
+        let create = |thinking, protocol| {
+            wire(Request::create_thread(
+                "/c".into(),
+                &choice,
+                "r".into(),
+                thinking,
+                protocol,
+            ))
+        };
+        // A starting level goes only to a version 3 host, which then answers in version 3.
+        assert_eq!(
+            create(Some(ThinkingLevel::High), 3),
+            json(
+                r#"{"op":"create_thread","checkout":"/c","provider":"p","model_id":"m","request_id":"r","thinking":"high","protocol_version":3}"#
+            )
+        );
+        let plain = json(
+            r#"{"op":"create_thread","checkout":"/c","provider":"p","model_id":"m","request_id":"r"}"#,
+        );
+        assert_eq!(create(Some(ThinkingLevel::High), 2), plain);
+        assert_eq!(create(None, 3), plain);
         assert_eq!(
             wire(Request::rename_thread("t".into(), "Name".into())),
             json(r#"{"op":"rename_thread","thread_id":"t","title":"Name","protocol_version":3}"#)
