@@ -247,10 +247,19 @@ impl Plait {
             );
         if !levels.is_empty() {
             controls = controls.child(
-                button("thread-thinking", format!("Thinking: {}", level.label()))
-                    .aria_description(reason.unwrap_or("Choose how much this model thinks."))
-                    .disabled(reason.is_some())
-                    .on_activate(cx, |this, window, cx| this.open_thinking(window, cx)),
+                // Just the level; a bare "Off" beside the model would not say what is off.
+                button(
+                    "thread-thinking",
+                    if level == ThinkingLevel::Off {
+                        "No thinking"
+                    } else {
+                        level.label()
+                    },
+                )
+                .aria_label(format!("Thinking level: {}", level.label()))
+                .aria_description(reason.unwrap_or("Choose how much this model thinks."))
+                .disabled(reason.is_some())
+                .on_activate(cx, |this, window, cx| this.open_thinking(window, cx)),
             );
         }
         // These apply from the next message, so the label names the setting
