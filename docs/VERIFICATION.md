@@ -294,3 +294,9 @@ prepaint, and paint into a scene. These are headless CPU measurements. They
 exclude GPU submission, presentation, real input latency, and the installed
 app's process, so they do not establish the 60 FPS or 50 ms targets in the
 [roadmap](ROADMAP.md) for the shipped app.
+
+On an Apple Silicon development Mac (release profile, November 2026), every
+heavy scene drew in under 3 ms per frame, tab and cached file or thread
+switches took under 5 ms at the median (12 ms p95 for a 1,500-message thread),
+and selecting a file whose diff is not cached took about 34 ms, almost all of
+it the background Git read. Warm launch was not measured.

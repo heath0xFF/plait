@@ -280,9 +280,25 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.show_file(file, mode, None, window, cx);
+    }
+
+    /// `step` carries the direction when moving through the list by keyboard,
+    /// which reads the following file ahead.
+    fn show_file(
+        &mut self,
+        file: usize,
+        mode: DiffMode,
+        step: Option<bool>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         window.focus(&self.focus, cx);
         self.interaction = Some(Instant::now());
-        self.state.repository.select(file, mode);
+        match step {
+            Some(forward) => self.state.repository.step(file, mode, forward),
+            None => self.state.repository.select(file, mode),
+        }
         self.diff_scroll = UniformListScrollHandle::new();
         self.tab = Workspace::Changes;
         self.pump(cx);
@@ -310,7 +326,7 @@ impl Plait {
             DiffMode::Staged
         };
         self.file_scroll.scroll_to_item(next, ScrollStrategy::Top);
-        self.select_file(next, mode, window, cx);
+        self.show_file(next, mode, Some(forward), window, cx);
     }
 
     fn refresh(&mut self, _: &Refresh, window: &mut Window, cx: &mut Context<Self>) {

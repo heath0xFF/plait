@@ -1,12 +1,9 @@
 use crate::{
     git, machine,
     model::{Diff, DiffMode, Machine, Project, Snapshot},
+    recent::Recent,
 };
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 #[derive(Debug, Default)]
 pub enum Load<T> {
@@ -81,6 +78,10 @@ pub enum Reply {
     Show(Result<Arc<Diff>, String>),
 }
 
+/// Diffs kept for quick switching. A diff is at most 10,000 parsed lines, so
+/// this bounds memory to a few tens of megabytes in the worst case.
+const DIFF_CACHE: usize = 16;
+
 /// Commits listed per history page.
 pub const HISTORY_PAGE: usize = 100;
 
@@ -113,7 +114,13 @@ pub struct RepositoryState {
     pending: Option<Job>,
     // Separate from `pending`, so a file list and a diff cannot displace each other.
     files_queued: bool,
-    cache: HashMap<DiffKey, Arc<Diff>>,
+    /// Recently read diffs, so moving between files does not rerun Git.
+    cache: Recent<DiffKey, Arc<Diff>>,
+    /// The next file's diff, read ahead while nothing else waits.
+    prefetch: Option<Job>,
+    /// Set while stepping through files, with the direction. A click is
+    /// random access, so it reads nothing ahead that it might wait behind.
+    ahead: Option<bool>,
     /// Staging and committing; see `request_write`.
     pub write: WriteState,
     /// Count behind `staged()`; set when a status arrives.
@@ -164,7 +171,7 @@ pub struct CommitLog {
     queued_page: Option<usize>,
     queued_show: Option<String>,
     /// Patches by commit ID. A commit never changes, so these survive reloads.
-    shows: HashMap<String, Arc<Diff>>,
+    shows: Recent<String, Arc<Diff>>,
 }
 
 impl RepositoryState {
@@ -179,7 +186,9 @@ impl RepositoryState {
             running: false,
             pending: None,
             files_queued: false,
-            cache: HashMap::new(),
+            cache: Recent::new(DIFF_CACHE),
+            prefetch: None,
+            ahead: None,
             write: WriteState::default(),
             staged: 0,
             commits: CommitLog::default(),
@@ -221,6 +230,7 @@ impl RepositoryState {
         self.files = Load::Empty;
         self.files_queued = false;
         self.cache.clear();
+        self.prefetch = None;
         self.pending = Some(Job::Status {
             epoch: self.epoch,
             path: self.path.clone(),
@@ -255,7 +265,20 @@ impl RepositoryState {
         self.conflicts
     }
 
+    /// Show a file's diff, as a click does.
     pub fn select(&mut self, file: usize, mode: DiffMode) {
+        self.ahead = None;
+        self.show(file, mode);
+    }
+
+    /// Show a file's diff while stepping through the list, and read the one
+    /// after it (in the same direction) ahead of time.
+    pub fn step(&mut self, file: usize, mode: DiffMode, forward: bool) {
+        self.ahead = Some(forward);
+        self.show(file, mode);
+    }
+
+    fn show(&mut self, file: usize, mode: DiffMode) {
         let Some(snapshot) = self.snapshot.ready() else {
             return;
         };
@@ -264,12 +287,49 @@ impl RepositoryState {
         }
         let key = DiffKey { file, mode };
         self.selected = Some(key.clone());
-        if let Some(diff) = self.cache.get(&key) {
-            self.diff = Load::Ready(diff.clone());
+        if let Some(diff) = self.cache.get(&key).cloned() {
+            self.diff = Load::Ready(diff);
             self.pending = None;
+            self.queue_prefetch(&key);
         } else {
             self.diff = Load::Loading;
             self.pending = Some(Job::Diff {
+                epoch: self.epoch,
+                key,
+                snapshot: snapshot.clone(),
+            });
+        }
+    }
+
+    /// While stepping, read the next file in that direction ahead of time, in
+    /// the view it would open in, so the next step shows a cached diff. One
+    /// file only: one background Git process per step.
+    fn queue_prefetch(&mut self, from: &DiffKey) {
+        self.prefetch = None;
+        let (Some(forward), Some(snapshot)) = (self.ahead, self.snapshot.ready()) else {
+            return;
+        };
+        let count = snapshot.changes.len();
+        // Stepping wraps around the list, so read-ahead does too.
+        let file = if forward {
+            (from.file + 1) % count.max(1)
+        } else {
+            (from.file + count - 1) % count.max(1)
+        };
+        if file == from.file {
+            return;
+        }
+        let Some(change) = snapshot.changes.get(file) else {
+            return;
+        };
+        let mode = if change.unstaged() {
+            DiffMode::Unstaged
+        } else {
+            DiffMode::Staged
+        };
+        let key = DiffKey { file, mode };
+        if !self.cache.contains(&key) {
+            self.prefetch = Some(Job::Diff {
                 epoch: self.epoch,
                 key,
                 snapshot: snapshot.clone(),
@@ -374,8 +434,8 @@ impl RepositoryState {
     /// Show a commit's patch, from the cache when it was seen recently.
     pub fn select_commit(&mut self, id: String) {
         self.commits.selected = Some(id.clone());
-        if let Some(patch) = self.commits.shows.get(&id) {
-            self.commits.patch = Load::Ready(patch.clone());
+        if let Some(patch) = self.commits.shows.get(&id).cloned() {
+            self.commits.patch = Load::Ready(patch);
             self.commits.queued_show = None;
         } else {
             self.commits.patch = Load::Loading;
@@ -413,7 +473,8 @@ impl RepositoryState {
             .write_job()
             .or_else(|| self.pending.take())
             .or_else(|| self.history_job())
-            .or_else(|| self.files_job())?;
+            .or_else(|| self.files_job())
+            .or_else(|| self.prefetch.take())?;
         self.running = true;
         Some(job)
     }
@@ -474,18 +535,18 @@ impl RepositoryState {
             }
             (Job::Diff { epoch, key, .. }, Reply::Diff(result)) if epoch == self.epoch => {
                 if let Ok(diff) = &result {
-                    // Keep memory bounded without making cached switching depend on repository size.
-                    if self.cache.len() >= 8 {
-                        self.cache.clear();
-                    }
                     self.cache.insert(key.clone(), diff.clone());
                 }
                 if self.selected.as_ref() == Some(&key) {
+                    let ok = result.is_ok();
                     self.diff = match result {
                         Ok(diff) => Load::Ready(diff),
                         Err(error) => Load::Error(error),
                     };
                     self.pending = None;
+                    if ok {
+                        self.queue_prefetch(&key);
+                    }
                 }
             }
             (Job::Write { root, .. }, Reply::Write(result)) => {
@@ -524,9 +585,6 @@ impl RepositoryState {
             }
             (Job::Show { epoch, id, .. }, Reply::Show(result)) if epoch == self.commits.epoch => {
                 if let Ok(patch) = &result {
-                    if self.commits.shows.len() >= 8 {
-                        self.commits.shows.clear();
-                    }
                     self.commits.shows.insert(id.clone(), patch.clone());
                 }
                 if self.commits.selected.as_ref() == Some(&id) {
@@ -671,7 +729,22 @@ mod tests {
         );
         s.select(0, DiffMode::Unstaged);
         assert_eq!(&*s.diff.ready().unwrap().lines[0].text, "old");
+        // A click reads nothing ahead.
         assert!(s.next_job().is_none());
+    }
+
+    /// Run the queued read-ahead and return which file it read.
+    fn prefetched(s: &mut RepositoryState) -> usize {
+        let job = s.next_job().expect("a read-ahead is queued");
+        let Job::Diff { key, .. } = &job else {
+            panic!("expected a diff read-ahead");
+        };
+        let file = key.file;
+        s.complete(
+            job,
+            Reply::Diff(Ok(Arc::new(Diff::message("ahead", Duration::ZERO)))),
+        );
+        file
     }
 
     fn file_list(path: &str) -> Arc<git::FileList> {
@@ -1064,6 +1137,36 @@ mod tests {
         assert_eq!(s.conflicts(), 1);
         s.refresh();
         assert_eq!(s.conflicts(), 0);
+    }
+
+    #[test]
+    fn stepping_reads_the_next_file_ahead_and_a_click_does_not() {
+        let mut s = ready("repo");
+        assert!(s.next_job().is_none());
+        // Stepping forward to file 1 would read file 0 next (the list wraps),
+        // which is cached already, so only file 1 itself is read.
+        s.step(1, DiffMode::Unstaged, true);
+        let diff = s.next_job().unwrap();
+        s.complete(
+            diff,
+            Reply::Diff(Ok(Arc::new(Diff::message("one", Duration::ZERO)))),
+        );
+        assert!(s.next_job().is_none(), "file 0 is cached");
+        // With an empty cache, a step reads the following file ahead.
+        s.refresh();
+        let status = s.next_job().unwrap();
+        s.complete(status, Reply::Status(Ok(snapshot())));
+        let first = s.next_job().unwrap();
+        s.complete(first, Reply::Diff(Err("gone".into())));
+        s.step(1, DiffMode::Unstaged, false);
+        let one = s.next_job().unwrap();
+        s.complete(
+            one,
+            Reply::Diff(Ok(Arc::new(Diff::message("one", Duration::ZERO)))),
+        );
+        assert_eq!(prefetched(&mut s), 0);
+        s.step(0, DiffMode::Unstaged, false);
+        assert_eq!(&*s.diff.ready().unwrap().lines[0].text, "ahead");
     }
 
     #[test]

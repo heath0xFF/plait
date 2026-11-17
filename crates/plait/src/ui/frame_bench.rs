@@ -198,10 +198,19 @@ fn big_diff(count: usize) -> Arc<Diff> {
             }
         })
         .collect();
-    let widest = lines.iter().map(|line| line.text.len()).max().unwrap_or(0);
+    // An index into `lines`, as the parser reports it, not a length.
+    let widest = lines
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, line)| line.text.len())
+        .map_or(0, |(index, _)| index);
+    let hunks = (0..lines.len())
+        .filter(|&index| matches!(lines[index].kind, DiffKind::Hunk))
+        .collect();
     Arc::new(Diff {
         lines,
         widest_line: widest,
+        hunks,
         truncated: false,
         elapsed: Duration::ZERO,
     })
@@ -503,7 +512,9 @@ pub fn run() -> Vec<Row> {
         18,
         |h, round| select(h, files[round % files.len()]),
     ));
-    // The cache holds 8 diffs and then clears, so stay inside it: both files were read in d2.
+    // Both files were read in d2 and stay in the recent-diff cache. A step reads
+    // the following file ahead in the background; the harness waits for that
+    // read when it settles the next action, so one sample includes it.
     rows.push(
         harness.switching("d4 step_file to next, cached", 20, |h, _| {
             select(h, big_index);

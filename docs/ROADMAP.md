@@ -81,7 +81,10 @@ not as source or layout templates. See [the originality policy](ORIGINALITY.md).
 
 ## Performance goals
 
-Initial targets from the product brief, **not measured results**:
+Targets from the product brief. Headless frame-cost measurements, which
+exclude GPU and the installed app, are in
+[Verification](VERIFICATION.md#measuring-frame-cost); installed-app results
+are not yet measured:
 
 - 60 FPS or better for normal local interaction.
 - Cached thread switching and Git views below 50 ms.
