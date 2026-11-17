@@ -108,7 +108,9 @@ still wait for you.
 
 ## Current limits
 
-This is the **M2 local preview**, not a complete IDE.
+This is the **M2.5 daily-driver preview** (v0.1.0-preview.8), not a complete
+IDE. Pi is the only agent harness today; other harnesses are
+[planned](docs/ROADMAP.md).
 
 - Local macOS execution only. Remote hosts and Linux execution are not available.
 - Changes stages and discards (by file or hunk, with undo), commits, fetches,

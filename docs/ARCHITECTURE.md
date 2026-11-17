@@ -2,7 +2,7 @@
 
 ## Scope
 
-The M2 local preview uses a native desktop and an independent host. The workspace
+The local preview (M2.5) uses a native desktop and an independent host. The workspace
 contains `crates/plait` (native desktop), `crates/plait-core` (headless models,
 client state, local host client, and Git), and `crates/plait-host`
 (local daemon and filesystem/process helpers). `runtime/` contains the pinned

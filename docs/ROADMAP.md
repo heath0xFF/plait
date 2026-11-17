@@ -2,8 +2,8 @@
 
 These are planned milestones, not a list of shipped features. See the
 [README](../README.md) for the current preview and [Verification](VERIFICATION.md)
-for acceptance evidence and open checks. **Current work is M2.5 and the Git half
-of M4.**
+for acceptance evidence and open checks. **M2.5 shipped in v0.1.0-preview.8.
+Current work is M4: Git (mostly shipped) and a read-only file viewer.**
 
 ## Milestones
 
@@ -11,11 +11,12 @@ of M4.**
 | --- | --- | --- |
 | M1 — Native foundation | GPUI desktop, navigation, conversations, read-only Git status and diffs | Foundation implemented |
 | M2 — Local agents | Real agent events, approved edits and commands, persistent threads, safe Stop and reconnect | Shipped in the local preview; hardening and live installed acceptance continue |
-| M2.5 — Daily driver | Complete, paged conversation history; projects and threads across checkouts with live status; thread titles, rename, and archive; model and thinking changes within a thread; follow-up and steering messages during a run; provider sign-in from the app; selectable, highlighted conversation text and readable tool results; a command palette; optional per-thread worktrees; an opt-in trusted command mode | Current work; not shipped until the README says so |
+| M2.5 — Daily driver | Complete, paged conversation history; projects and threads across checkouts with live status; thread titles, rename, and archive; model and thinking changes within a thread; follow-up and steering messages during a run; provider sign-in from the app; selectable, highlighted conversation text and readable tool results; a command palette; optional per-thread worktrees; an opt-in trusted command mode | Shipped in v0.1.0-preview.8; installed acceptance continues ([Verification](VERIFICATION.md#v010-preview8-acceptance)) |
 | M3 — Remote execution | Authenticated host connections, remote project discovery, activity/Git updates, network recovery | Planned; Linux execution requires tested containment first |
-| M4 — Development tools | Git staging, commits and history; file browser/editor; review feedback; process and log views | Git staging, commits and history in progress, ahead of M3; the rest planned |
+| M4 — Development tools | Git staging, commits and history; file browser/editor; review feedback; process and log views | Git shipped ahead of M3 (staging, hunks, commits, history, push, fetch, fast-forward pull); a read-only file viewer is current work; the rest planned |
 | M5 — Previews | Live HTML, Markdown and MDX, automatic refresh, and selected-content feedback to the agent | Planned |
 | M6 — Multiple machines | Unified project navigation across independent hosts, including disconnected/reconnecting states | Planned |
+| M7 — Any agent harness | Threads run by other agent harnesses (Claude Code, Codex, Pi, omp, Antigravity, and others) beside Pi, with the same conversation, approval, Git, and navigation views | Direction agreed; does not depend on M3. Protocol details need agreement before implementation |
 
 Do not build the whole roadmap at once. Each change must compile, run, and have
 its own checks. Protocol, storage, and shared-contract changes need agreement
@@ -27,11 +28,11 @@ byte-for-byte unchanged and existing stores keep loading. The trusted command
 mode is opt-in per project; the current sandbox stays the default. The
 [host contract](HOST.md) records each addition when it lands.
 
-The remaining M2.5 self-hosting work is ranged file reads, retained command
-output with explicit limits, long-session compaction and restart coverage, and
-the complete development/install/continue workflow. Additive runtime tool
-schemas and private output storage are in scope; existing client protocol
-versions and the default sandbox policy remain compatible.
+M2.5's self-hosting work is done in source and host tests: ranged file reads,
+retained command output with explicit limits (`read_output`), automatic
+compaction that keeps full history across a host restart, and the
+[development/install/continue workflow](SELF-HOSTING.md). What remains is
+installed acceptance, listed in [Verification](VERIFICATION.md#v010-preview8-acceptance).
 
 The release installer must install the prebuilt app and host without development
 tools, preserve user data, and produce a per-user installation eligible for
@@ -97,6 +98,48 @@ still cannot write it. Its threads list under the project it came from.
 Removal asks first and uses `git worktree remove`, which refuses uncommitted
 work; the branch and its commits stay. Merging the branch back is left to the
 person's own tools.
+**Agreed for M4 file viewer:** open any file in a checkout read-only, with
+line numbers and the same syntax highlighting as the conversation, from a
+quick-open picker and from paths the desktop already shows (changed files,
+tool rows, diffs). Find within the file. Reads stay inside the checkout without
+following symlinks, run off the UI thread, and are bounded in size; binary and
+oversized files say so instead of drawing. An open file reloads when it changes
+on disk. No editing in this step. Sidelit (same maintainer, MIT) is a source
+for the reading, walking, and find logic; Plait's own views stay native GPUI.
+
+**Direction for M7, any agent harness:** a thread may be run by another agent
+harness instead of Pi: Claude Code, Codex, omp, Antigravity, and others with a
+machine-readable interface. Plait's value is the workspace around the agent
+(projects across machines, Git review, durable threads, approvals in one
+place), so the agent itself should be the person's choice.
+
+- **Adapters live in the host.** The client keeps one thread model: messages,
+  reasoning, tool calls, approvals, status, usage. Each adapter runs one
+  harness through its documented programmatic interface, at a pinned version
+  checked against upstream before use, and translates its events into that
+  model. Screen-scraping a terminal UI is out.
+- **Each harness keeps its own identity.** Its authentication, configuration,
+  and session files stay its own; Plait never reads its credentials. A thread
+  records which harness and version ran it, and continues in that harness.
+- **Say what protects the checkout.** Plait's command sandbox and approval
+  policy govern Pi threads. Another harness runs under its own permission and
+  sandbox model, which the thread names plainly; where the harness offers a
+  permission callback, its requests appear as Plait approvals. Plait never
+  implies a protection it does not enforce.
+- **Durable on Plait's side.** The host stores the translated events, so
+  history, search, and changed files work the same for every harness, and a
+  restarted host shows the thread as it was without replaying work.
+- **Faster than running it elsewhere.** Measure against the harness run
+  directly: added latency to first token and per event, memory per idle
+  thread, and frame cost while streaming. Targets: under 5 ms added per event,
+  no full-snapshot resend per event (adapters send increments), idle threads
+  holding no process, and the same 120 Hz reveal for every harness.
+
+Before implementation: agree the protocol additions (harness choice when a
+thread starts, capability flags, increments), the order of harnesses, and how
+installs are found and pinned. Compare other multi-agent workspaces by outcomes
+only, per the originality policy.
+
 Use existing tools for interactive shells and debugging. A future Open in Rex
 integration and native mobile companion are possibilities, not current features.
 

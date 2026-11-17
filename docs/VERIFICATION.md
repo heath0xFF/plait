@@ -246,6 +246,28 @@ these tests.
   branch is denied), and by a desktop test that creates one and requests its
   thread there. A worktree thread has not been run from the installed app.
 
+## v0.1.0-preview.8 acceptance
+
+Preview.8 completes M2.5 in source and scripted tests. These checks need the
+installed app, a native pointer, and a live provider, and are open until
+recorded here:
+
+- [ ] Streaming text flows in smoothly on a ProMotion display, and the window
+      stops redrawing once a reply has caught up.
+- [ ] Appearance follows a live macOS light/dark switch; the titlebar matches
+      the theme in System, Light, and Dark; Stillwater is the default dark theme.
+- [ ] A Base16 file placed in the themes folder appears after Reload, and a broken
+      one is named with its reason.
+- [ ] The changed-files card lists a running thread's writes with counts, and a
+      row opens the file in Changes.
+- [ ] Clicking diff line numbers and **Ask about this** quotes them into the
+      thread's message.
+- [ ] **New Thread in Worktree** runs a thread on its own branch, and removing it
+      refuses while work is uncommitted.
+- [ ] Pull fast-forwards from Changes and refuses a diverged branch.
+- [ ] The sidebar's filter chips, bell, and refresh controls work with the pointer
+      and show their names on hover.
+
 ## Manual release acceptance
 
 Use a disposable checkout and private host/session directories. Do not reuse

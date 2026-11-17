@@ -29,6 +29,7 @@ mandatory worktrees, hidden execution, or speculative orchestration. Build small
 testable changes with clear state, presentation, and execution boundaries.
 
 ## Decisions
-Current work is M2.5, the daily driver, on local execution. Changes to shared contracts,
+M2.5, the daily driver, shipped in v0.1.0-preview.8; current work is M4 on local
+execution. Agent harnesses other than Pi are planned (M7). Changes to shared contracts,
 permissions, or persistence require agreement and compatibility tests. Follow
 [Contributing](CONTRIBUTING.md) and the [originality policy](docs/ORIGINALITY.md).
