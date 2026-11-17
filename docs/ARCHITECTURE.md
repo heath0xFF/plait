@@ -46,6 +46,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
   commits.rs            the History tab: commit list and a commit's patch
   file_view.rs          the Files tab: quick open, virtualized lines, find, reload
   panels.rs             sidebar and inspector widths and their drag handles
+  window_bar.rs         the traffic lights' place, header inset, and window dragging
   jump.rs               Cmd-1 to Cmd-9 and the desktop preferences file
   session.rs            draft and submission recovery, and save scheduling
   settings.rs           the Settings page and its sections
@@ -666,7 +667,20 @@ rather than cloning large strings on every render. Long diff lines scroll
 horizontally.
 
 One 44-point header carries the thread title, its state, and the Conversation /
-Changes switch; there is no separate tab strip. Navigation, changed-file, and
+Changes switch; there is no separate tab strip. The header is also the window's
+title bar (`ui/window_bar.rs`). The window opens with a transparent, untitled
+title bar, so macOS draws only the traffic lights, placed by
+`TitlebarOptions::traffic_light_position` to center on the 44-point row 14
+points in. The window keeps its title, Plait, for Mission Control and the
+Window menu. The rail starts with an empty 44-point strip under the lights;
+with the rail hidden, the header's left padding clears them, except in full
+screen. The window is opened with `app_owns_titlebar_drag`, so AppKit neither
+moves it from the title bar area nor delays clicks there. Instead the strip
+and the header move it themselves: a left press that no control took (a
+control prevents default when it takes focus) arms a move, the first drag
+calls `Window::start_window_move`, and any release disarms it. A second press
+calls `Window::titlebar_double_click`, which follows the system's
+double-click setting. The strip stops short of the rail's resize handle. Navigation, changed-file, and
 model rows are 28 to 36 points and one line. The composer is one raised box; the
 Project, Machine, branch, and saved model sit on a context line beneath it.
 `ui/theme.rs` owns the small original controls and the current palette, which
@@ -796,7 +810,8 @@ and color only.
 
 Neither is the native window. The images do **not** show or check:
 
-- the title bar, or the height it takes from a 1380 × 860 window;
+- the traffic lights, which macOS draws over the rail's top strip; scenes
+  show that strip empty;
 - presentation through the window's layer, display color management, or a
   display that is not 2×;
 - hover, pressed, and focus states that follow native pointer and key events,

@@ -414,6 +414,14 @@ for the inspector it explains where Git is instead. Drag either panel's inner
 edge to resize it; the width is remembered, and double-clicking the edge restores
 the default. Both shortcuts can be changed in Settings → Keyboard.
 
+The window has one bar at the top instead of a separate title bar. The close,
+minimize, and full-screen buttons sit at the top of the sidebar, and the header
+runs beside them. Drag an empty part of the sidebar's top strip or the header to
+move the window; double-clicking there does what **System Settings → Desktop &
+Dock → Double-click a window's title bar to** is set to. With the sidebar
+hidden, the header moves right to clear the buttons, except in full screen,
+where macOS hides them.
+
 Above the message box, a card lists the files the thread wrote that are not
 committed yet, with lines added and removed against HEAD. It updates as the
 thread's edits finish and as Git status refreshes. Click its header to fold it,

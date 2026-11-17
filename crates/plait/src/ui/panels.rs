@@ -21,7 +21,7 @@ struct Resize(Panel);
 /// The conversation keeps at least this much room when a panel is dragged wider.
 const MIN_MAIN: f32 = 420.;
 /// Wide enough to grab without covering the panel's content.
-const HANDLE: f32 = 6.;
+pub(super) const HANDLE: f32 = 6.;
 
 impl Panel {
     fn limits(self) -> (f32, f32) {

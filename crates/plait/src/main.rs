@@ -22,10 +22,17 @@ fn main() {
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     window_min_size: Some(size(px(900.), px(600.))),
+                    // One bar: the lights sit over the rail's top strip, and
+                    // the app draws the rest. The title is not drawn, but
+                    // Mission Control and the Window menu still name it.
                     titlebar: Some(TitlebarOptions {
                         title: Some("Plait".into()),
-                        ..Default::default()
+                        appears_transparent: true,
+                        traffic_light_position: Some(ui::TRAFFIC_LIGHTS),
                     }),
+                    // The bar moves the window itself, so AppKit does not
+                    // drag from the titlebar area or delay clicks there.
+                    app_owns_titlebar_drag: true,
                     app_id: Some("dev.plait.desktop".into()),
                     ..Default::default()
                 },

@@ -290,6 +290,13 @@ keystrokes into their desktop.
    with an account authorized for the test.
 2. Check repository/model selection, native typing and IME, keyboard navigation,
    VoiceOver, and the 900 × 600 minimum window.
+   - [ ] The window bar: the traffic lights sit centered on the 44-point bar
+         about 14 points in, clear of the header with the sidebar hidden; an
+         empty part of the rail strip or header drags the window while its
+         controls still click; double-clicking there follows the system
+         setting; full screen hides the lights and the header returns to the
+         edge. Only where the lights sit with the rail shown has been checked
+         in a real window.
 3. Ask for a small real source change and test. Review exact approvals, actual
    output, the Git diff, and preservation of unrelated work.
 4. Close/reopen during work, then test Stop, provider failure, and recovery.
@@ -500,6 +507,29 @@ code in the system's monospaced font, and the Appearance scene shows the empty
 field. The tests do not look at drawn pixels. The offered names as drawn, a
 font installed or removed while Plait runs, and the setting in the installed
 app have not been checked.
+
+## Window bar
+
+Desktop unit tests check that the traffic lights' offset centers them on the
+44-point bar, that the header clears them only while the rail is hidden and the
+window is not in full screen, and which presses may move the window: a press a
+control took never does, a second press is a double-click. A desktop test sends
+pointer presses through GPUI's dispatch: the rail's empty strip, the space the
+header leaves under the lights, and the header's empty middle arm a move; the
+rail's resize handle and the sidebar toggle do not, and the toggle's click
+still works; in GPUI's test full screen the toggle returns to the edge. Every
+release disarms. The test platform cannot move a window or perform the
+system's double-click action, so the test stops at arming. Scenes show the
+rail's top strip empty, where macOS draws the lights.
+
+One capture of a development build's window, on macOS 26 with the rail shown,
+shows the traffic lights where they are meant to be: about 14 points in, their
+centers level with the header's title, and ending 10 points short of where
+the header starts when the rail is hidden. Nothing else has been checked in
+the native window: the lights on macOS 15, the header with the rail hidden,
+dragging the window from the strip and the header, the double-click action,
+and full screen are open in the
+[manual acceptance](#manual-release-acceptance) list.
 
 ## Measuring frame cost
 

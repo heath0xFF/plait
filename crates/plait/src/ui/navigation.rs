@@ -887,8 +887,17 @@ impl Plait {
             )
     }
 
+    /// The rail's share of the window bar. It holds nothing: the traffic lights
+    /// sit over it. It stops short of the resize handle, so a press there
+    /// resizes the rail instead of moving the window.
+    fn lights_strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        self.window_drag(div(), cx)
+            .h(px(CHROME_HEIGHT))
+            .flex_shrink_0()
+            .mr(px(super::panels::HANDLE))
+    }
+
     fn actions(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // The first row centers on the 44-point header beside it.
         column()
             .flex_shrink_0()
             .px_2()
@@ -961,6 +970,7 @@ impl Plait {
             .bg(rgb(colors().rail))
             .border_r_1()
             .border_color(rgb(colors().border))
+            .child(self.lights_strip(cx))
             .child(self.actions(cx))
             .child(self.navigation_controls(cx))
             .child(self.tree(cx))

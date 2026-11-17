@@ -15,13 +15,18 @@ optional wide-window Git inspector. Keep machine and thread context visible.
 Both side panels resize from their inner edge (Cmd-B and Cmd-L hide them); the
 conversation keeps a readable minimum width.
 
-- **Chrome.** One 44-point header: sidebar toggle, thread title, a muted
-  `project / machine` on wide windows, state dot with a text label, and the
+- **Chrome.** One 44-point window bar, with no system title bar above it. The
+  native traffic lights sit at its left, centered on it and 14 points in, over
+  the rail's top strip. The rest is the header: sidebar toggle, thread title, a
+  muted `project / machine` on wide windows, state dot with a text label, and the
   Conversation / Changes switch, then the Git inspector toggle, mirroring the
-  sidebar toggle at the other end. The sidebar's first action row centers on the
-  same 44 points. No second header, tab strip, or permanent footer.
+  sidebar toggle at the other end. With the rail hidden, the header starts clear
+  of the lights; in full screen, where macOS hides them, it starts at the edge.
+  The bar's empty parts move the window, and double-clicking them does what
+  macOS is set to do for a title bar. No window title is drawn, no second
+  header, tab strip, or permanent footer.
 - **Rail.** No in-app logo: the app icon and window carry the brand. The rail
-  starts with two actions, New thread and Open repository. New thread names the
+  starts with an empty 44-point strip under the traffic lights, then two actions, New thread and Open repository. New thread names the
   model it will use; the control beside it opens the model picker. Projects are plain
   section headers, ordered by their newest thread activity. The local machine
   stays in the data model and workspace context; it does not add a repeated row
@@ -180,7 +185,7 @@ only. Avoid new chrome gradients, shadows, animation, and decorative dashboard
 cards.
 
 ## Behavior
-Native titlebar, menus, folder picker, close/minimize controls. Keyboard focus
+Native traffic lights (over the app's own window bar), menus, and folder picker. Keyboard focus
 must remain visible: a blue ring on controls and a blue edge on the composer.
 Selection is not color-only. Long lists are virtualized.
 Do not draw an enabled composer or a send control until an agent can run.

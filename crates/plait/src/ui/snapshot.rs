@@ -4710,6 +4710,80 @@ fn reconnect_releases_management_and_rejects_its_late_reply() {
 #[path = "frame_bench.rs"]
 mod frame_bench;
 
+/// The rail strip and the header's empty space arm a window move; controls in
+/// the bar and the rail's resize handle keep their presses. The test platform
+/// cannot move a window, so this stops before the drag.
+#[core::prelude::v1::test]
+fn the_window_bar_moves_the_window_only_from_empty_space() {
+    if !isolated("the_window_bar_moves_the_window_only_from_empty_space") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-window-bar-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 1380., 860.);
+    let rail = harness
+        .window
+        .update(&mut harness.cx, |plait, _, _| {
+            plait.panel_width(super::panels::Panel::Sidebar)
+        })
+        .unwrap();
+    // Whether a press at `x` on the bar's center line arms a move. Each press
+    // is released, which always disarms.
+    let arms = |harness: &mut Harness, x: f32| {
+        harness.draw();
+        let position = point(px(x), px(22.));
+        harness.pointer(PlatformInput::MouseDown(MouseDownEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: Modifiers::default(),
+            click_count: 1,
+            first_mouse: false,
+        }));
+        let armed = harness
+            .window
+            .update(&mut harness.cx, |plait, _, _| plait.window_drag)
+            .unwrap();
+        harness.pointer(PlatformInput::MouseUp(MouseUpEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: Modifiers::default(),
+            click_count: 1,
+        }));
+        let released = harness
+            .window
+            .update(&mut harness.cx, |plait, _, _| plait.window_drag)
+            .unwrap();
+        assert!(!released, "a release disarms the move");
+        armed
+    };
+    let sidebar = |harness: &mut Harness| {
+        harness
+            .window
+            .update(&mut harness.cx, |plait, _, _| plait.sidebar)
+            .unwrap()
+    };
+    assert!(arms(&mut harness, 40.), "the rail's empty strip");
+    assert!(!arms(&mut harness, rail - 2.), "the rail's resize handle");
+    assert!(arms(&mut harness, rail + 400.), "the header's empty middle");
+    // A control in the bar keeps its click: this one hides the rail.
+    assert!(!arms(&mut harness, rail + 22.), "the sidebar toggle");
+    assert!(!sidebar(&mut harness));
+    // With the rail hidden the header starts under the lights, so its toggle
+    // moves clear of them and the space it leaves still moves the window.
+    assert!(arms(&mut harness, 22.), "the space under the lights");
+    assert!(!arms(&mut harness, 98.), "the inset sidebar toggle");
+    assert!(sidebar(&mut harness));
+    // Full screen hides the lights, so the toggle returns to the edge.
+    harness.update(|plait, window, _| {
+        plait.sidebar = false;
+        window.toggle_fullscreen();
+    });
+    assert!(!arms(&mut harness, 22.), "the toggle in full screen");
+    assert!(sidebar(&mut harness));
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
 /// Heavy-scene frame cost. Run it with `bash scripts/bench-frames.sh`.
 #[core::prelude::v1::test]
 #[ignore = "timing run; use scripts/bench-frames.sh"]

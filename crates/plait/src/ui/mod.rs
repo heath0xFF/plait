@@ -36,6 +36,7 @@ mod thread_controls;
 mod thread_files;
 mod tool_card;
 mod update;
+mod window_bar;
 mod worktree;
 
 use gpui::{prelude::*, *};
@@ -50,6 +51,7 @@ use std::{
     time::Instant,
 };
 use theme::*;
+pub use window_bar::TRAFFIC_LIGHTS;
 
 actions!(
     plait,
@@ -165,6 +167,8 @@ pub struct Plait {
     commit_sent: Option<String>,
     tab: Workspace,
     sidebar: bool,
+    /// A left press on the window bar may become a window move.
+    window_drag: bool,
     diagnostics: bool,
     preferences: jump::PreferenceState,
     themes: appearance::Themes,
@@ -234,6 +238,7 @@ impl Plait {
             diff_scroll: UniformListScrollHandle::new(),
             tab: Workspace::Conversation,
             sidebar: true,
+            window_drag: false,
             diagnostics: false,
             preferences: jump::PreferenceState::default(),
             themes: Default::default(),
@@ -544,12 +549,14 @@ impl Plait {
     }
 
     /// One compact chrome row: where you are, its state, and the two workspaces.
+    /// It is also the window's title bar, so its empty parts move the window.
     fn header(
         &self,
         title: String,
         location: String,
         status: (String, u32),
         wide: bool,
+        fullscreen: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let changed = self
@@ -559,10 +566,10 @@ impl Plait {
             .ready()
             .map(|snapshot| snapshot.changes.len())
             .filter(|count| *count > 0);
-        row()
+        self.window_drag(row(), cx)
             .h(px(CHROME_HEIGHT))
             .flex_shrink_0()
-            .pl_2()
+            .pl(window_bar::header_inset(self.sidebar, fullscreen))
             .pr_3()
             .gap_3()
             .border_b_1()
@@ -742,6 +749,8 @@ impl Render for Plait {
             self.switch_us = interaction.elapsed().as_micros();
         }
         let wide = Self::wide(window);
+        // Full screen hides the traffic lights the header otherwise clears.
+        let fullscreen = window.is_fullscreen();
         self.panels.viewport = f32::from(window.viewport_size().width);
         self.advance_reveals(window);
         let project = self.active_project();
@@ -947,7 +956,7 @@ impl Render for Plait {
                             .flex_1()
                             .min_w_0()
                             .min_h_0()
-                            .child(self.header(title, location, status, wide, cx))
+                            .child(self.header(title, location, status, wide, fullscreen, cx))
                             .when_some(self.session.note.clone(), |el, note| {
                                 el.child(
                                     div()
