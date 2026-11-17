@@ -122,6 +122,9 @@ pub struct DiffLine {
 pub struct Diff {
     pub lines: Vec<DiffLine>,
     pub widest_line: usize,
+    /// Indexes into `lines` of each `@@` hunk header, in order, so a row
+    /// finds its hunk by binary search instead of scanning.
+    pub hunks: Vec<usize>,
     pub truncated: bool,
     pub elapsed: Duration,
 }
@@ -136,6 +139,7 @@ impl Diff {
                 new_line: None,
             }],
             widest_line: 0,
+            hunks: Vec::new(),
             truncated: false,
             elapsed,
         }

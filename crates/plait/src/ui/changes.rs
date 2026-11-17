@@ -1,6 +1,7 @@
 use super::{OpenRepository, Plait, Refresh, theme::*};
 use gpui::{prelude::*, *};
 use plait_core::{
+    git::WriteOp,
     model::{Change, DiffKind, DiffMode},
     state::Load,
 };
@@ -29,6 +30,39 @@ fn stage_verb(change: &Change, stage: bool) -> &'static str {
         (true, false) => "Stage",
         (false, _) => "Unstage",
     }
+}
+
+/// Where a diff's hunks stage to, captured once per frame for visible rows.
+pub(super) struct HunkTarget {
+    path: std::path::PathBuf,
+    mode: DiffMode,
+    busy: bool,
+}
+
+/// Shown on hover beside a hunk's `@@` line; built only for visible rows.
+fn hunk_button(
+    target: &HunkTarget,
+    hunk: usize,
+    header: &str,
+    cx: &mut Context<Plait>,
+) -> Stateful<Div> {
+    let stage = target.mode == DiffMode::Unstaged;
+    let op = WriteOp::Hunk {
+        path: target.path.clone(),
+        from: target.mode,
+        index: hunk,
+        header: header.to_owned(),
+    };
+    quiet_button(
+        ("hunk-stage", hunk),
+        if stage { "Stage hunk" } else { "Unstage hunk" },
+        "diff-hunk",
+    )
+    .h(px(DIFF_LINE_HEIGHT - 2.))
+    .font_family(".SystemUIFont")
+    .text_size(px(11.))
+    .disabled(target.busy)
+    .on_activate(cx, move |this, _, cx| this.git_write(op.clone(), cx))
 }
 
 fn split_path(change: &Change) -> (String, String) {
@@ -336,11 +370,11 @@ impl Plait {
         )
     }
 
-    fn diff_view(&self) -> AnyElement {
+    fn diff_view(&self, cx: &mut Context<Self>) -> AnyElement {
         match &self.state.repository.diff {
             Load::Empty => empty(
                 "Nothing to compare",
-                "Select a changed file. Plait shows the index and working tree separately, without staging or discarding anything.",
+                "Select a changed file to see its staged and unstaged changes separately.",
             )
             .into_any_element(),
             Load::Loading => empty(
@@ -358,8 +392,24 @@ impl Plait {
                 diff.clone(),
                 &self.diff_scroll,
                 Some("⌥↑ / ⌥↓ switch file"),
+                self.hunk_target(),
+                cx,
             ),
         }
+    }
+
+    /// The selected file, if its hunks can be staged one at a time. Renames,
+    /// new files, and conflicts stage whole.
+    fn hunk_target(&self) -> Option<HunkTarget> {
+        let repo = &self.state.repository;
+        let key = repo.selected.as_ref()?;
+        let change = repo.snapshot.ready()?.changes.get(key.file)?;
+        let whole = change.index == b'?' || change.original.is_some() || change.conflicted();
+        (!whole).then(|| HunkTarget {
+            path: change.path.clone(),
+            mode: key.mode,
+            busy: repo.write.busy(),
+        })
     }
 
     /// A patch as numbered, colored lines, virtualized. Shared by Changes and History.
@@ -369,6 +419,8 @@ impl Plait {
         diff: std::sync::Arc<plait_core::model::Diff>,
         scroll: &UniformListScrollHandle,
         hint: Option<&'static str>,
+        hunks: Option<HunkTarget>,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
         {
             {
@@ -403,7 +455,7 @@ impl Plait {
                         uniform_list(
                             id,
                             count,
-                            move |range: std::ops::Range<usize>, _, _| {
+                            cx.processor(move |_, range: std::ops::Range<usize>, _, cx| {
                                 range
                                     .map(|index| {
                                         let line = &diff.lines[index];
@@ -436,14 +488,28 @@ impl Plait {
                                             .child(
                                                 div()
                                                     .flex_shrink_0()
-                                                    .pr_6()
+                                                    .pr_3()
                                                     .whitespace_nowrap()
                                                     .text_color(rgb(fg))
                                                     .child(SharedString::from(line.text.clone())),
                                             )
+                                            .when_some(
+                                                hunks.as_ref().and_then(|target| {
+                                                    let hunk = diff.hunks.binary_search(&index).ok()?;
+                                                    Some((target, hunk))
+                                                }),
+                                                |el, (target, hunk)| {
+                                                    el.group("diff-hunk").child(hunk_button(
+                                                        target,
+                                                        hunk,
+                                                        &line.text,
+                                                        cx,
+                                                    ))
+                                                },
+                                            )
                                     })
                                     .collect::<Vec<_>>()
-                            },
+                            }),
                         )
                         .with_width_from_item(widest)
                         .with_horizontal_sizing_behavior(
@@ -491,7 +557,7 @@ impl Plait {
                     .min_w_0()
                     .min_h_0()
                     .children(self.diff_header(cx))
-                    .child(self.diff_view()),
+                    .child(self.diff_view(cx)),
             )
             .into_any_element()
     }

@@ -1101,3 +1101,108 @@ fn network_failures_are_explained() {
     );
     assert!(network_hint("something else").is_none());
 }
+
+fn numbered(lines: usize, changed: &[usize]) -> String {
+    (1..=lines)
+        .map(|n| {
+            if changed.contains(&n) {
+                format!("line {n} changed\n")
+            } else {
+                format!("line {n}\n")
+            }
+        })
+        .collect()
+}
+
+fn tracked(path: &str) -> Change {
+    Change {
+        path: PathBuf::from(path),
+        original: None,
+        index: b' ',
+        worktree: b'M',
+    }
+}
+
+fn hunk_op(diff: &Diff, from: DiffMode, index: usize) -> WriteOp {
+    WriteOp::Hunk {
+        path: PathBuf::from("a.txt"),
+        from,
+        index,
+        header: diff.lines[diff.hunks[index]].text.to_string(),
+    }
+}
+
+#[test]
+fn one_hunk_stages_and_unstages_without_touching_the_other() {
+    let repo = Repo::new();
+    repo.write("a.txt", numbered(30, &[]));
+    repo.commit();
+    repo.write("a.txt", numbered(30, &[1, 25]));
+    let unstaged = diff(&repo.0, &tracked("a.txt"), DiffMode::Unstaged).unwrap();
+    assert_eq!(unstaged.hunks.len(), 2);
+
+    let outcome = write(&repo.0, &hunk_op(&unstaged, DiffMode::Unstaged, 1)).unwrap();
+    assert_eq!(outcome.summary, "Staged a hunk of a.txt");
+    let staged = diff(&repo.0, &tracked("a.txt"), DiffMode::Staged).unwrap();
+    assert_eq!(staged.hunks.len(), 1);
+    assert!(text(&staged).contains("+line 25 changed"));
+    assert!(!text(&staged).contains("line 1 changed"));
+    let left = diff(&repo.0, &tracked("a.txt"), DiffMode::Unstaged).unwrap();
+    assert!(text(&left).contains("+line 1 changed"));
+    assert!(!text(&left).contains("line 25 changed"));
+
+    write(&repo.0, &hunk_op(&staged, DiffMode::Staged, 0)).unwrap();
+    let staged = diff(&repo.0, &tracked("a.txt"), DiffMode::Staged).unwrap();
+    assert!(staged.hunks.is_empty());
+    // The worktree never changes.
+    assert_eq!(
+        fs::read_to_string(repo.0.join("a.txt")).unwrap(),
+        numbered(30, &[1, 25])
+    );
+}
+
+#[test]
+fn a_hunk_that_moved_since_it_was_shown_is_refused() {
+    let repo = Repo::new();
+    repo.write("a.txt", numbered(30, &[]));
+    repo.commit();
+    repo.write("a.txt", numbered(30, &[25]));
+    let shown = diff(&repo.0, &tracked("a.txt"), DiffMode::Unstaged).unwrap();
+    // An agent edits above it; the hunk's header shifts.
+    let mut edited = String::from("new first line\n");
+    edited.push_str(&numbered(30, &[25]));
+    repo.write("a.txt", edited);
+    let error = write(&repo.0, &hunk_op(&shown, DiffMode::Unstaged, 0)).unwrap_err();
+    assert!(error.contains("changed since"), "{error}");
+    let missing = write(&repo.0, &hunk_op(&shown, DiffMode::Unstaged, 0));
+    assert!(missing.is_err());
+    let staged = diff(&repo.0, &tracked("a.txt"), DiffMode::Staged).unwrap();
+    assert!(staged.hunks.is_empty());
+}
+
+#[test]
+fn a_filtered_file_is_staged_whole_not_by_hunk() {
+    let repo = Repo::new();
+    repo.write(".gitattributes", "a.txt filter=custom\n");
+    repo.write("a.txt", numbered(10, &[]));
+    repo.commit();
+    repo.write("a.txt", numbered(10, &[2]));
+    let shown = diff(&repo.0, &tracked("a.txt"), DiffMode::Unstaged).unwrap();
+    let error = write(&repo.0, &hunk_op(&shown, DiffMode::Unstaged, 0)).unwrap_err();
+    assert!(error.contains("filter"), "{error}");
+}
+
+#[test]
+fn hunk_patches_keep_bytes_and_match_shown_headers() {
+    let diff = b"diff --git a/a b/a\nindex 1..2 100644\n--- a/a\n+++ b/a\n@@ -1,2 +1,2 @@ fn\tx\n-old\r\n+new\r\n same\r\n@@ -9 +9 @@\n-9\n+nine\n\\ No newline at end of file\n";
+    let first = hunk_patch(diff, 0, "@@ -1,2 +1,2 @@ fn    x").unwrap();
+    assert_eq!(
+        first,
+        b"diff --git a/a b/a\nindex 1..2 100644\n--- a/a\n+++ b/a\n@@ -1,2 +1,2 @@ fn\tx\n-old\r\n+new\r\n same\r\n"
+    );
+    let second = hunk_patch(diff, 1, "@@ -9 +9 @@").unwrap();
+    assert!(second.ends_with(b"+nine\n\\ No newline at end of file\n"));
+    assert!(hunk_patch(diff, 1, "@@ -8 +8 @@").is_err());
+    assert!(hunk_patch(diff, 2, "@@ -9 +9 @@").is_err());
+    assert!(hunk_patch(b"diff --cc a\n@@@ -1 -1 +1 @@@\n", 0, "@@@ -1 -1 +1 @@@").is_err());
+}

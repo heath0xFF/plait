@@ -7,8 +7,10 @@
 //! run while staging, and commit hooks run while committing.
 
 use super::{
-    Result, STATUS_LIMIT, TIMEOUT, base_command, head_exists, log::log, run, validate_relative,
+    DIFF_LIMIT, Result, STATUS_LIMIT, TIMEOUT, base_command, command, display_line, head_exists,
+    log::log, read_command, run, validate_relative,
 };
+use crate::model::DiffMode;
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
@@ -47,6 +49,15 @@ pub enum WriteOp {
     Publish,
     /// Fetch from the current branch's remote, or `origin`.
     Fetch,
+    /// Stage one hunk of a file's unstaged diff, or unstage one hunk of its
+    /// staged diff. `header` is the hunk's `@@` line as shown; the write
+    /// rereads the diff and refuses if hunk `index` no longer matches it.
+    Hunk {
+        path: PathBuf,
+        from: DiffMode,
+        index: usize,
+        header: String,
+    },
 }
 
 /// What a write did, in words for the user.
@@ -106,7 +117,113 @@ pub fn write(root: &Path, op: &WriteOp) -> Result<WriteOutcome> {
             remote_git(root, &["fetch", "-q"])?;
             Ok(done("Fetched".into()))
         }
+        WriteOp::Hunk {
+            path,
+            from,
+            index,
+            header,
+        } => hunk(root, path, *from, *index, header),
     }
+}
+
+const STALE: &str = "The file changed since its diff was shown. Plait reread it; try again.";
+
+fn hunk(
+    root: &Path,
+    path: &Path,
+    from: DiffMode,
+    index: usize,
+    header: &str,
+) -> Result<WriteOutcome> {
+    use std::ffi::OsStr;
+    validate_relative(path)?;
+    if has_filter(root, path)? {
+        return Err(
+            "This file passes through a Git filter (such as LFS). Stage the whole file.".into(),
+        );
+    }
+    let staged = from == DiffMode::Staged;
+    // The same diff the view reads, so hunk numbering and headers agree.
+    let mut args: Vec<&OsStr> = [
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "--unified=3",
+    ]
+    .into_iter()
+    .map(OsStr::new)
+    .collect();
+    if staged {
+        args.push(OsStr::new("--cached"));
+    }
+    args.extend([OsStr::new("--"), path.as_os_str()]);
+    let diff = command(root, &args, DIFF_LIMIT)?;
+    if diff.truncated {
+        return Err("This diff is too large to stage by hunk. Stage the whole file.".into());
+    }
+    let patch = hunk_patch(&diff.bytes, index, header)?;
+    let mut apply = vec!["apply", "--cached", "--whitespace=nowarn"];
+    if staged {
+        apply.push("--reverse");
+    }
+    apply.push("-");
+    git(root, &apply, Some(patch), STAGE_TIMEOUT).map_err(|error| {
+        if error.contains("does not apply") || error.contains("does not match index") {
+            STALE.to_owned()
+        } else {
+            error
+        }
+    })?;
+    let name = path
+        .file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy();
+    Ok(done(format!(
+        "{} a hunk of {name}",
+        if staged { "Unstaged" } else { "Staged" }
+    )))
+}
+
+/// A patch of the file header plus hunk `index`, if that hunk's header still
+/// reads as `header`. Splits on newlines only, keeping them, so bytes pass
+/// through unchanged.
+pub(super) fn hunk_patch(diff: &[u8], index: usize, header: &str) -> Result<Vec<u8>> {
+    let lines: Vec<&[u8]> = diff.split_inclusive(|b| *b == b'\n').collect();
+    if lines
+        .iter()
+        .filter(|line| line.starts_with(b"diff "))
+        .count()
+        != 1
+    {
+        return Err("Stage this file whole; its diff is not a single text change.".into());
+    }
+    let starts: Vec<usize> = (0..lines.len())
+        .filter(|&i| lines[i].starts_with(b"@@ "))
+        .collect();
+    let first = *starts.first().ok_or("This diff has no hunks to stage.")?;
+    let start = *starts.get(index).ok_or(STALE)?;
+    let end = starts.get(index + 1).copied().unwrap_or(lines.len());
+    let raw = String::from_utf8_lossy(lines[start]);
+    let raw = raw.trim_end_matches('\n').trim_end_matches('\r');
+    if display_line(raw) != header {
+        return Err(STALE.into());
+    }
+    Ok([&lines[..first], &lines[start..end]].concat().concat())
+}
+
+/// A clean or smudge filter means the index holds something other than the
+/// file's bytes, so a patch of those bytes would be wrong.
+fn has_filter(root: &Path, path: &Path) -> Result<bool> {
+    let mut command = read_command(root)?;
+    command.args(["check-attr", "-z", "filter", "--"]).arg(path);
+    let raw = run(&mut command, None, STATUS_LIMIT, TIMEOUT)?;
+    if !raw.status.success() {
+        return Err(raw.failure());
+    }
+    // -z output is path NUL attribute NUL value NUL.
+    let value = raw.out.bytes.split(|b| *b == 0).nth(2).unwrap_or_default();
+    Ok(!matches!(value, b"unspecified" | b"unset" | b""))
 }
 
 /// The ref a plain push updates, such as `origin/main`, for the summary.

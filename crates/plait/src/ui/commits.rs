@@ -146,7 +146,7 @@ impl Plait {
             .into_any_element()
     }
 
-    fn commit_patch(&self) -> AnyElement {
+    fn commit_patch(&self, cx: &mut Context<Self>) -> AnyElement {
         match &self.state.repository.commits.patch {
             Load::Empty => empty(
                 "Select a commit",
@@ -156,9 +156,14 @@ impl Plait {
             Load::Loading => empty("Reading commit…", "The patch is loading in the background.")
                 .into_any_element(),
             Load::Error(error) => empty("Cannot read commit", error.clone()).into_any_element(),
-            Load::Ready(diff) => {
-                self.diff_lines("commit-lines", diff.clone(), &self.commit_scroll, None)
-            }
+            Load::Ready(diff) => self.diff_lines(
+                "commit-lines",
+                diff.clone(),
+                &self.commit_scroll,
+                None,
+                None,
+                cx,
+            ),
         }
     }
 
@@ -203,7 +208,7 @@ impl Plait {
                     .flex_1()
                     .min_w_0()
                     .min_h_0()
-                    .child(self.commit_patch()),
+                    .child(self.commit_patch(cx)),
             )
     }
 }

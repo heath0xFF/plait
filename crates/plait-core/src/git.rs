@@ -596,8 +596,19 @@ fn open_regular_file(root: &Path, relative: &Path) -> Result<std::fs::File> {
     Ok(file)
 }
 
+/// A diff line as shown: clipped, with tabs expanded. Staging a hunk compares
+/// Git's raw header through this, so it matches what the person saw.
+fn display_line(line: &str) -> String {
+    let mut text: String = line.chars().take(2000).collect();
+    if line.chars().count() > 2000 {
+        text.push_str(" … [line clipped]");
+    }
+    text.replace('\t', "    ")
+}
+
 fn format_diff(bytes: &[u8], mut truncated: bool, elapsed: Duration) -> Diff {
     let mut lines = Vec::new();
+    let mut hunks = Vec::new();
     let (mut old, mut new) = (None, None);
     for line in String::from_utf8_lossy(bytes).lines().take(10_001) {
         if lines.len() == 10_000 {
@@ -648,12 +659,11 @@ fn format_diff(bytes: &[u8], mut truncated: bool, elapsed: Duration) -> Diff {
         if new_line.is_some() {
             new = new.map(|n| n.saturating_add(1));
         }
-        let mut text: String = line.chars().take(2000).collect();
-        if line.chars().count() > 2000 {
-            text.push_str(" … [line clipped]");
+        if matches!(kind, DiffKind::Hunk) {
+            hunks.push(lines.len());
         }
         lines.push(DiffLine {
-            text: Arc::from(text.replace('\t', "    ")),
+            text: Arc::from(display_line(line)),
             kind,
             old_line,
             new_line,
@@ -673,6 +683,7 @@ fn format_diff(bytes: &[u8], mut truncated: bool, elapsed: Duration) -> Diff {
     Diff {
         lines,
         widest_line,
+        hunks,
         truncated,
         elapsed,
     }
@@ -681,9 +692,9 @@ fn format_diff(bytes: &[u8], mut truncated: bool, elapsed: Duration) -> Diff {
 mod log;
 mod write;
 pub use log::{Commit, History, log, show};
-#[cfg(test)]
-use write::network_hint;
 pub use write::{WriteOp, WriteOutcome, write};
+#[cfg(test)]
+use write::{hunk_patch, network_hint};
 
 #[cfg(test)]
 mod tests;

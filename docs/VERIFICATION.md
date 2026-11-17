@@ -214,6 +214,9 @@ these tests.
   unborn branch, hooks, filters, a held `index.lock`, paging) and by scene
   snapshots of Changes and History. They have not been exercised with a native
   pointer in the installed app, with Git LFS, or with signed commits.
+- Hunk staging is covered against real repositories (staging and unstaging
+  one of two hunks, refusing a hunk that moved, refusing filtered files, and
+  byte-exact patches with tabs, CRLF, and missing final newlines).
 - Push, publish, and fetch are covered against a local bare repository
   (publish, push, fetch revealing a remote commit, and a refused diverged
   push). Pushing to GitHub over SSH or HTTPS with `gh` sign-in has been checked

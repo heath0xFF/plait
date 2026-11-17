@@ -393,7 +393,11 @@ open Git; the optional conversation inspector is hidden.
 ### Staging, commits, and history
 
 In **Changes**, hover a file and choose **Stage** or **Unstage**, or use **Stage
-file** in the diff header. **Stage all** and **Unstage all** sit above the commit
+file** in the diff header. To take part of a file, hover a hunk's `@@` line and
+choose **Stage hunk** (or **Unstage hunk** in the Staged view). If the file
+changed since its diff was shown, Plait refuses, rereads it, and asks you to
+try again. New, renamed, and conflicted files, and files that pass through a
+Git filter such as LFS, stage whole. **Stage all** and **Unstage all** sit above the commit
 message. Type a one-line message and press Return or **Commit** (Cmd-Shift-C
 moves to the message). Only staged changes are committed. Plait runs your
 repository's own Git configuration for these: clean filters such as LFS run when

@@ -934,6 +934,14 @@ fn walk(output: Option<&Path>) {
             plait.state.repository.write.note = Some(("Staged 1 file".into(), false));
         });
         harness.capture(&format!("changes-commit-{suffix}"));
+        // Resting on the hunk header reveals its Stage hunk control.
+        let hunk_row = point(px(if width > 1000. { 700. } else { 600. }), px(182.));
+        harness.pointer(PlatformInput::MouseMove(MouseMoveEvent {
+            position: hunk_row,
+            pressed_button: None,
+            modifiers: Modifiers::default(),
+        }));
+        harness.capture(&format!("changes-hunk-{suffix}"));
         harness.update(|plait, _, cx| {
             plait
                 .commit_message
