@@ -101,6 +101,7 @@ pub(super) const ACTIONS: &[AppAction] = &[
     entry("view.toggle_diagnostics", "Toggle Diagnostics", "View", Some("cmd-shift-d"), Item, || Box::new(ToggleDiagnostics)),
     entry("view.conversation", "Conversation", "View", Some("cmd-shift-1"), Item, || Box::new(Conversation)),
     entry("view.changes", "Changes", "View", Some("cmd-shift-2"), Item, || Box::new(Changes)),
+    entry("view.history", "History", "View", Some("cmd-shift-3"), Item, || Box::new(CommitHistory)),
     entry("thread.next", "Next Thread", "View", Some("cmd-alt-down"), Group, || Box::new(NextThread)),
     entry("thread.previous", "Previous Thread", "View", Some("cmd-alt-up"), Item, || Box::new(PreviousThread)),
     entry("git.next_file", "Next Changed File", "View", Some("alt-down"), Item, || Box::new(NextFile)),
@@ -110,6 +111,9 @@ pub(super) const ACTIONS: &[AppAction] = &[
     entry("thread.show_archived", "Show or Hide Archived Threads", "Thread", None, Item, || Box::new(ToggleArchived)),
     entry("thread.filter", "Find a Thread", "Thread", None, Item, || Box::new(FilterThreads)),
     entry("thread.notifications", "Mute or Unmute Thread Alerts", "Thread", None, Item, || Box::new(ToggleNotifications)),
+    entry("git.stage_all", "Stage All Changes", "Git", None, Item, || Box::new(StageAll)),
+    entry("git.unstage_all", "Unstage All Changes", "Git", None, Item, || Box::new(UnstageAll)),
+    entry("git.commit", "Commit Staged Changes…", "Git", Some("cmd-shift-c"), Group, || Box::new(CommitStaged)),
     entry("window.minimize", "Minimize", "Window", Some("cmd-m"), Item, || Box::new(Minimize)),
     entry("jump.1", "Jump to Sidebar Item 1", "Navigation", Some("cmd-1"), Hidden, || Box::new(Jump1)),
     entry("jump.2", "Jump to Sidebar Item 2", "Navigation", Some("cmd-2"), Hidden, || Box::new(Jump2)),
@@ -762,7 +766,10 @@ mod tests {
             .iter()
             .map(|menu| menu.name.to_string())
             .collect::<Vec<_>>();
-        assert_eq!(names, vec!["Plait", "File", "View", "Thread", "Window"]);
+        assert_eq!(
+            names,
+            vec!["Plait", "File", "View", "Thread", "Git", "Window"]
+        );
     }
 
     #[test]

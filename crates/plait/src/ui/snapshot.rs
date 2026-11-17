@@ -644,7 +644,7 @@ impl Harness {
             ));
             plait.settings_open = false;
             plait.new_thread_open = false;
-            plait.show_changes = false;
+            plait.tab = super::Workspace::Conversation;
             let composer = cx.new(|cx| Composer::new(window, cx));
             plait.composers.insert(THREAD.into(), composer);
             plait.refresh_live_list(None);
@@ -911,8 +911,39 @@ fn walk(output: Option<&Path>) {
             plait.select_file(1, DiffMode::Unstaged, window, cx);
         });
         harness.capture(&format!("changes-{suffix}"));
+        // A typed message and the result of an earlier write, without writing:
+        // every scene shares this fixture repository.
+        harness.update(|plait, _, cx| {
+            plait.commit_message.update(cx, |field, cx| {
+                field.set_text("Queue the status refresh", cx)
+            });
+            plait.state.repository.write.note = Some(("Staged 1 file".into(), false));
+        });
+        harness.capture(&format!("changes-commit-{suffix}"));
+        harness.update(|plait, _, cx| {
+            plait
+                .commit_message
+                .update(cx, |field, cx| field.set_text("", cx));
+            plait.state.repository.write.note = None;
+            plait.show_tab(super::Workspace::History, cx);
+        });
+        harness.capture(&format!("history-list-{suffix}"));
+        harness.update(|plait, _, cx| {
+            let id = plait
+                .state
+                .repository
+                .commits
+                .list
+                .ready()
+                .and_then(|history| history.commits.first())
+                .map(|commit| commit.id.clone())
+                .expect("the fixture has a commit");
+            plait.state.repository.select_commit(id);
+            plait.pump(cx);
+        });
+        harness.capture(&format!("history-commit-{suffix}"));
         harness.update(|plait, _, _| {
-            plait.show_changes = false;
+            plait.tab = super::Workspace::Conversation;
             plait.host.connecting = false;
             plait.host.connected = true;
             plait.host.status = Some(status());
@@ -1433,11 +1464,11 @@ fn composer_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         let event =
             super::composer::ComposerEvent::Command(super::composer::CommandId::ShowChanges);
         plait.composer_event(&event, window, cx);
-        assert!(plait.show_changes);
+        assert_eq!(plait.tab, super::Workspace::Changes);
         let event =
             super::composer::ComposerEvent::Command(super::composer::CommandId::ShowConversation);
         plait.composer_event(&event, window, cx);
-        assert!(!plait.show_changes);
+        assert_eq!(plait.tab, super::Workspace::Conversation);
     });
 
     let lines = |count: usize| {

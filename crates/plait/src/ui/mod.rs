@@ -1,6 +1,8 @@
 mod actions;
 mod changes;
 mod commands;
+mod commit_panel;
+mod commits;
 mod composer;
 mod conversation;
 mod history;
@@ -55,6 +57,10 @@ actions!(
         ToggleDiagnostics,
         Conversation,
         Changes,
+        CommitHistory,
+        StageAll,
+        UnstageAll,
+        CommitStaged,
         NextThread,
         PreviousThread,
         Tab,
@@ -73,6 +79,15 @@ actions!(
         ToggleNotifications
     ]
 );
+
+/// The workspace beside the sidebar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Workspace {
+    Conversation,
+    Changes,
+    /// Commit history and each commit's patch.
+    History,
+}
 
 /// Below this width the Git inspector is not shown; Git stays in Changes.
 const WIDE_WINDOW: f32 = 1150.;
@@ -108,7 +123,15 @@ pub struct Plait {
     reading: selection::Reading,
     file_scroll: UniformListScrollHandle,
     diff_scroll: UniformListScrollHandle,
-    show_changes: bool,
+    /// The History tab's commit list and the selected commit's patch.
+    history_scroll: UniformListScrollHandle,
+    commit_scroll: UniformListScrollHandle,
+    /// The commit message in Changes. Kept across tab switches until it commits.
+    commit_message: Entity<text_field::TextField>,
+    /// The message the running commit was sent with. The field clears after
+    /// the commit only if it still holds this, so later typing survives.
+    commit_sent: Option<String>,
+    tab: Workspace,
     sidebar: bool,
     diagnostics: bool,
     preferences: jump::PreferenceState,
@@ -161,8 +184,13 @@ impl Plait {
             expanded_live_tools: HashSet::new(),
             reading: Default::default(),
             file_scroll: UniformListScrollHandle::new(),
+            history_scroll: UniformListScrollHandle::new(),
+            commit_scroll: UniformListScrollHandle::new(),
+            commit_message: cx
+                .new(|cx| text_field::TextField::new("Commit message", "Commit message", cx)),
+            commit_sent: None,
             diff_scroll: UniformListScrollHandle::new(),
-            show_changes: false,
+            tab: Workspace::Conversation,
             sidebar: true,
             diagnostics: false,
             preferences: jump::PreferenceState::default(),
@@ -209,6 +237,7 @@ impl Plait {
             let (job, reply) = task.await;
             let _ = this.update(cx, |this, cx| {
                 this.state.repository.complete(job, reply);
+                this.after_git_write(cx);
                 this.normalize_checkout(cx);
                 this.deliver_files(cx);
                 this.pump(cx);
@@ -253,7 +282,7 @@ impl Plait {
         self.interaction = Some(Instant::now());
         self.state.repository.select(file, mode);
         self.diff_scroll = UniformListScrollHandle::new();
-        self.show_changes = true;
+        self.tab = Workspace::Changes;
         self.pump(cx);
         cx.notify();
     }
@@ -348,7 +377,7 @@ impl Plait {
             self.close_provider_form(cx);
         }
         if !open
-            && !self.show_changes
+            && self.tab == Workspace::Conversation
             && let Some(id) = self.host.selected.clone()
         {
             self.mark_thread_read(&id, cx);
@@ -402,7 +431,7 @@ impl Plait {
                     cx,
                     |this, _, cx| {
                         this.inspector_note = false;
-                        this.show_tab(true, cx);
+                        this.show_tab(Workspace::Changes, cx);
                     },
                 ),
             )
@@ -421,9 +450,15 @@ impl Plait {
         cx.notify();
     }
 
-    fn show_tab(&mut self, changes: bool, cx: &mut Context<Self>) {
-        self.show_changes = changes;
-        if !changes
+    fn show_tab(&mut self, tab: Workspace, cx: &mut Context<Self>) {
+        self.tab = tab;
+        if tab == Workspace::History {
+            self.state.repository.request_history();
+            self.pump(cx);
+        } else {
+            self.state.repository.leave_history();
+        }
+        if tab == Workspace::Conversation
             && !self.settings_open
             && let Some(id) = self.host.selected.clone()
         {
@@ -488,12 +523,20 @@ impl Plait {
             .child(
                 segmented()
                     .child(
-                        segment("conversation-tab", "Conversation", !self.show_changes)
-                            .aria_keyshortcuts(self.shortcut_aria("view.conversation"))
-                            .on_click(cx.listener(|this, _, _, cx| this.show_tab(false, cx))),
+                        segment(
+                            "conversation-tab",
+                            "Conversation",
+                            self.tab == Workspace::Conversation,
+                        )
+                        .aria_keyshortcuts(self.shortcut_aria("view.conversation"))
+                        .on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.show_tab(Workspace::Conversation, cx)
+                            }),
+                        ),
                     )
                     .child(
-                        segment("changes-tab", "Changes", self.show_changes)
+                        segment("changes-tab", "Changes", self.tab == Workspace::Changes)
                             .aria_keyshortcuts(self.shortcut_aria("view.changes"))
                             // The accessible name stays "Changes"; the count is visual.
                             .when_some(changed, |el, count| {
@@ -504,7 +547,16 @@ impl Plait {
                                         .child(count.to_string()),
                                 )
                             })
-                            .on_click(cx.listener(|this, _, _, cx| this.show_tab(true, cx))),
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.show_tab(Workspace::Changes, cx)),
+                            ),
+                    )
+                    .child(
+                        segment("history-tab", "History", self.tab == Workspace::History)
+                            .aria_keyshortcuts(self.shortcut_aria("view.history"))
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.show_tab(Workspace::History, cx)),
+                            ),
                     ),
             )
             .child(
@@ -711,8 +763,27 @@ impl Render for Plait {
                 this.diagnostics = !this.diagnostics;
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &Conversation, _, cx| this.show_tab(false, cx)))
-            .on_action(cx.listener(|this, _: &Changes, _, cx| this.show_tab(true, cx)))
+            .on_action(cx.listener(|this, _: &Conversation, _, cx| {
+                this.show_tab(Workspace::Conversation, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &Changes, _, cx| this.show_tab(Workspace::Changes, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &CommitHistory, _, cx| this.show_tab(Workspace::History, cx)),
+            )
+            // Show Changes, where the result and any error appear.
+            .on_action(cx.listener(|this, _: &StageAll, _, cx| {
+                this.show_tab(Workspace::Changes, cx);
+                this.git_write(plait_core::git::WriteOp::StageAll, cx)
+            }))
+            .on_action(cx.listener(|this, _: &UnstageAll, _, cx| {
+                this.show_tab(Workspace::Changes, cx);
+                this.git_write(plait_core::git::WriteOp::UnstageAll, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &CommitStaged, window, cx| this.focus_commit(window, cx)),
+            )
             .on_action(
                 cx.listener(|this, _: &NextThread, window, cx| this.step_thread(true, window, cx)),
             )
@@ -787,7 +858,9 @@ impl Render for Plait {
                             })
                             .child(if self.settings_open {
                                 self.settings(cx).into_any_element()
-                            } else if self.show_changes {
+                            } else if self.tab == Workspace::History {
+                                self.history_view(wide, cx).into_any_element()
+                            } else if self.tab == Workspace::Changes {
                                 self.changes(wide, cx).into_any_element()
                             } else if real {
                                 self.live_conversation(wide, cx).into_any_element()

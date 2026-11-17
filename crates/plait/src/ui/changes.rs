@@ -21,6 +21,16 @@ fn change_mark(label: &str) -> (&'static str, u32) {
 }
 
 /// File name first, so truncation removes the directory before the name.
+/// What staging does to this file, in words. For an unmerged file, staging
+/// is how Git records the conflict as resolved.
+fn stage_verb(change: &Change, stage: bool) -> &'static str {
+    match (stage, change.conflicted()) {
+        (true, true) => "Mark resolved",
+        (true, false) => "Stage",
+        (false, _) => "Unstage",
+    }
+}
+
 fn split_path(change: &Change) -> (String, String) {
     let display = change.display_path();
     let path = Path::new(&display);
@@ -57,6 +67,7 @@ impl Plait {
         let label = change.label();
         let (mark, tint) = change_mark(label);
         let (name, parent) = split_path(change);
+        let group = SharedString::from(format!("file-row-{index}"));
         nav_row(
             ("file", index),
             format!(
@@ -69,6 +80,8 @@ impl Plait {
             selected,
         )
         .aria_selected(selected)
+        .group(group.clone())
+        .relative()
         .rounded_none()
         .px_3()
         .child(
@@ -105,6 +118,22 @@ impl Plait {
             },
             SUBTLE,
         ))
+        // Anything left in the worktree stages; otherwise the row unstages.
+        // It overlays the state tag on hover, so the path keeps its width.
+        .child({
+            let stage = change.unstaged();
+            let verb = stage_verb(change, stage);
+            quiet_button(("file-stage", index), verb, group.clone())
+                .aria_label(format!("{verb} {}", change.display_path()))
+                .absolute()
+                .right(px(8.))
+                .bg(rgb(PANEL))
+                .disabled(self.state.repository.write.busy())
+                .on_activate(cx, move |this, _, cx| {
+                    this.stage_change(index, stage, cx);
+                    cx.stop_propagation();
+                })
+        })
         .on_click(cx.listener(move |this, _, window, cx| this.select_file(index, mode, window, cx)))
     }
 
@@ -203,37 +232,43 @@ impl Plait {
                     .into_any_element()
             }
         };
-        column().flex_1().min_h_0().child(body).child(
-            row()
-                .h(px(36.))
-                .px_2()
-                .flex_shrink_0()
-                .border_t_1()
-                .border_color(rgb(BORDER))
-                .child(
-                    button(
-                        if compact {
-                            "refresh-inspector"
-                        } else {
-                            "refresh-files"
-                        },
-                        "Refresh",
+        let ready = self.state.repository.snapshot.ready().is_some();
+        column()
+            .flex_1()
+            .min_h_0()
+            .child(body)
+            .when(!compact && ready, |el| el.child(self.commit_box(cx)))
+            .child(
+                row()
+                    .h(px(36.))
+                    .px_2()
+                    .flex_shrink_0()
+                    .border_t_1()
+                    .border_color(rgb(BORDER))
+                    .child(
+                        button(
+                            if compact {
+                                "refresh-inspector"
+                            } else {
+                                "refresh-files"
+                            },
+                            "Refresh",
+                        )
+                        .aria_keyshortcuts("Meta+R")
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.refresh(&Refresh, window, cx)),
+                        ),
                     )
-                    .aria_keyshortcuts("Meta+R")
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.refresh(&Refresh, window, cx)),
-                    ),
-                )
-                .child(tag("⌘R", SUBTLE))
-                .child(div().flex_1())
-                .when_some(read, |el, elapsed| {
-                    el.child(
-                        tag(format!("Read in {elapsed} ms"), SUBTLE)
-                            .pr_1()
-                            .truncate(),
-                    )
-                }),
-        )
+                    .child(tag("⌘R", SUBTLE))
+                    .child(div().flex_1())
+                    .when_some(read, |el, elapsed| {
+                        el.child(
+                            tag(format!("Read in {elapsed} ms"), SUBTLE)
+                                .pr_1()
+                                .truncate(),
+                        )
+                    }),
+            )
     }
 
     fn diff_header(&self, cx: &mut Context<Self>) -> Option<Div> {
@@ -275,6 +310,24 @@ impl Plait {
                         }),
                 )
                 .child(tag("Unified diff", SUBTLE).flex_shrink_0())
+                .child({
+                    let stage = key.mode == DiffMode::Unstaged;
+                    let possible = if stage {
+                        change.unstaged()
+                    } else {
+                        change.staged()
+                    };
+                    button(
+                        "diff-stage",
+                        match stage_verb(change, stage) {
+                            "Stage" => "Stage file",
+                            "Unstage" => "Unstage file",
+                            verb => verb,
+                        },
+                    )
+                    .disabled(!possible || repo.write.busy())
+                    .on_activate(cx, move |this, _, cx| this.stage_change(index, stage, cx))
+                })
                 .child(
                     segmented()
                         .child(mode("unstaged", "Unstaged", DiffMode::Unstaged))
@@ -300,8 +353,25 @@ impl Plait {
                 format!("{error}\nRefresh to read the latest repository state."),
             )
             .into_any_element(),
-            Load::Ready(diff) => {
-                let diff = diff.clone();
+            Load::Ready(diff) => self.diff_lines(
+                "diff-lines",
+                diff.clone(),
+                &self.diff_scroll,
+                Some("⌥↑ / ⌥↓ switch file"),
+            ),
+        }
+    }
+
+    /// A patch as numbered, colored lines, virtualized. Shared by Changes and History.
+    pub(super) fn diff_lines(
+        &self,
+        id: &'static str,
+        diff: std::sync::Arc<plait_core::model::Diff>,
+        scroll: &UniformListScrollHandle,
+        hint: Option<&'static str>,
+    ) -> AnyElement {
+        {
+            {
                 let count = diff.lines.len();
                 let widest = Some(diff.widest_line);
                 let elapsed = diff.elapsed;
@@ -331,7 +401,7 @@ impl Plait {
                     })
                     .child(
                         uniform_list(
-                            "diff-lines",
+                            id,
                             count,
                             move |range: std::ops::Range<usize>, _, _| {
                                 range
@@ -379,7 +449,7 @@ impl Plait {
                         .with_horizontal_sizing_behavior(
                             ListHorizontalSizingBehavior::Unconstrained,
                         )
-                        .track_scroll(&self.diff_scroll)
+                        .track_scroll(scroll)
                         .flex_1()
                         .min_h_0(),
                     )
@@ -392,7 +462,7 @@ impl Plait {
                             .text_size(px(11.))
                             .text_color(rgb(SUBTLE))
                             .child(format!("{} patch lines · {} ms", count, elapsed.as_millis()))
-                            .child("⌥↑ / ⌥↓ switch file"),
+                            .children(hint),
                     )
                     .into_any_element()
             }
@@ -429,7 +499,7 @@ impl Plait {
 
 #[cfg(test)]
 mod tests {
-    use super::{change_mark, split_path};
+    use super::{change_mark, split_path, stage_verb};
     use crate::ui::theme::{BLUE, MINT, RED};
     use plait_core::model::Change;
     use std::path::PathBuf;
@@ -470,5 +540,17 @@ mod tests {
         assert_eq!(change_mark("New").1, MINT);
         assert_eq!(change_mark("Conflict").1, RED);
         assert_eq!(change_mark("Modified").1, BLUE);
+    }
+
+    #[test]
+    fn staging_an_unmerged_file_is_called_marking_it_resolved() {
+        let mut file = change("a.rs");
+        file.index = b'U';
+        file.worktree = b'U';
+        assert_eq!(stage_verb(&file, true), "Mark resolved");
+        file.index = b' ';
+        file.worktree = b'M';
+        assert_eq!(stage_verb(&file, true), "Stage");
+        assert_eq!(stage_verb(&file, false), "Unstage");
     }
 }

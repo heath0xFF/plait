@@ -4,10 +4,11 @@
 
 The M2 local preview uses a native desktop and an independent host. The workspace
 contains `crates/plait` (native desktop), `crates/plait-core` (headless models,
-client state, local host client, and read-only Git), and `crates/plait-host`
+client state, local host client, and Git), and `crates/plait-host`
 (local daemon and filesystem/process helpers). `runtime/` contains the pinned
 Pi Durable TypeScript sidecar. There is no remote execution,
-embedded terminal, editor, Git-write interface, or worktree manager.
+embedded terminal, editor, or worktree manager. Git writes are limited to
+staging, unstaging, and committing.
 
 This remains an early local preview. Linux command execution and remote
 transport are not implemented. [Verification](VERIFICATION.md) records versioned
@@ -33,7 +34,9 @@ ui/                     GPUI layout, actions, focus, lists, theme
   selection.rs          text selection, copy, and link clicks in the conversation
   tool_card.rs          one line per tool call, its details, and grouped runs
   thread_controls.rs    model, thinking, context, run settings, and queued inputs
-  changes.rs            changed-file list and diff view (read-only Git)
+  changes.rs            changed-file list and diff view
+  commit_panel.rs       staging buttons, commit message, and write results
+  commits.rs            the History tab: commit list and a commit's patch
   panels.rs             sidebar and inspector widths and their drag handles
   jump.rs               Cmd-1 to Cmd-9 and the desktop preferences file
   session.rs            draft and submission recovery, and save scheduling
@@ -81,7 +84,9 @@ highlight.rs            lexical syntax classes for fenced and tool code
 diff.rs                 line diff of an edit's old and new text
 tool_view.rs            what each tool call shows, and grouping of long runs
 selection.rs            selection order, ranges, word bounds, and copied text
-git.rs                  synchronous, read-only Git adapter; background only
+git.rs                  synchronous Git adapter: hardened reads; background only
+  git/write.rs          staging, unstaging, and committing
+  git/log.rs            commit history and one commit's patch (read-only)
 fuzzy.rs                case-insensitive subsequence matching for pickers
 ```
 
@@ -263,9 +268,23 @@ implemented.
 
 ## Git boundary
 
-Public operations are `status(path)`, `diff(root, change, mode)`, and
-`files(root)`. Each returns data or a user-facing error. There are no write
-operations.
+Read operations are `status(path)`, `diff(root, change, mode)`, `files(root)`,
+`log(root, skip, limit)`, and `show(root, id)`. The only write operation is
+`write(root, op)`: stage, unstage, stage all, unstage all, or commit. Each
+returns data or a user-facing error.
+
+Reads and writes differ on purpose. A read must not run anything the
+repository configures, so it neutralizes filters and never runs hooks. A write
+is something the person asked for and must produce what their own `git add` or
+`git commit` would, so it runs with the repository's configuration: clean
+filters (such as LFS) run while staging, and hooks run while committing. Writes
+pass paths on standard input (`--pathspec-from-file`), never open an editor,
+and allow 60 seconds for staging and 120 for a commit. A held `index.lock` is
+reported as another Git process at work. On an unborn branch, unstaging uses
+`git rm --cached` because there is no HEAD to restore from. `state.rs` runs one
+write at a time, ahead of reads, then refreshes status and keeps the same file
+selected. `show` validates a full object ID and passes it after
+`--end-of-options`.
 
 - Git CLI, not libgit2. Use porcelain v1 with NUL-delimited paths.
 - Keep paths as `PathBuf`/OS bytes. Lossy text is for display only.

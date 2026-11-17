@@ -613,7 +613,10 @@ impl Plait {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         root.on_action(cx.listener(|this, _: &HistoryStart, window, cx| {
-            if this.settings_open || this.show_changes || this.host.selected.is_none() {
+            if this.settings_open
+                || this.tab != super::Workspace::Conversation
+                || this.host.selected.is_none()
+            {
                 cx.propagate();
                 return;
             }
@@ -622,7 +625,10 @@ impl Plait {
             cx.notify();
         }))
         .on_action(cx.listener(|this, _: &HistoryEnd, window, cx| {
-            if this.settings_open || this.show_changes || this.host.selected.is_none() {
+            if this.settings_open
+                || this.tab != super::Workspace::Conversation
+                || this.host.selected.is_none()
+            {
                 cx.propagate();
                 return;
             }

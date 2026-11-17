@@ -46,7 +46,7 @@ To publish a release that installed apps can update to, see
 | Area | Responsibility |
 | --- | --- |
 | `crates/plait` | GPUI presentation, input, focus, and background-work dispatch |
-| `crates/plait-core` | Plain models, state transitions, local client, recovery, read-only Git; no GPUI |
+| `crates/plait-core` | Plain models, state transitions, local client, recovery, hardened Git reads and explicit writes; no GPUI |
 | `crates/plait-host` | Independent host lifetime, peer identity, filesystem/process helpers |
 | `runtime/` | Pi integration, approvals, durable execution, and platform command policy |
 
@@ -63,8 +63,9 @@ Keep one active writer per checkout, preserve pre-existing dirty work, and retai
 exact-call approval and sandbox checks. Models and Git must remain independent
 of GPUI; filesystem and Git work must stay off the render thread.
 
-Remote execution, Git-write controls, unattended orchestration, and an embedded
-terminal are outside this milestone. See the [host contract](docs/HOST.md) for
+Remote execution, Git writes beyond staging and committing (push, discard,
+history rewriting), unattended orchestration, and an embedded terminal are
+outside the current work. See the [host contract](docs/HOST.md) for
 the complete safety boundary and the [roadmap](docs/ROADMAP.md) for later work.
 
 ## Required checks

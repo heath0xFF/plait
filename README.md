@@ -45,7 +45,8 @@ manifests. See [Mac setup and updates](docs/MACOS.md).
    offer **Providers** for sign-in, API keys, and custom servers; see
    [authentication setup](docs/MACOS.md#authentication-and-status) for the preview.
 3. Start a thread. Review each edit and command before **Allow once**.
-4. Read the results, inspect **Changes**, and continue in the same conversation.
+4. Read the results, review and commit them in **Changes**, and continue in the
+   same conversation. **History** shows earlier commits.
    Use **Stop** to cancel work; closing the desktop is not Stop.
 
 Current builds show projects across checkouts, live
@@ -86,7 +87,7 @@ flowchart TB
     desktop <-->|"Tasks, approvals, updates<br/>Local socket"| host
     host <-->|Model API| provider
     host <-->|Save / recover| history
-    desktop -->|Read-only Git| checkout
+    desktop -->|"Git status, history,<br/>stage and commit"| checkout
     host -->|File reads / approved edits| checkout
     host -->|Approved commands| sandbox
     sandbox -->|Read only| checkout
@@ -106,8 +107,9 @@ still wait for you.
 This is the **M2 local preview**, not a complete IDE.
 
 - Local macOS execution only. Remote hosts and Linux execution are not available.
-- Git views are read-only. Use your own tools for staging and commits. There is
-  no file editor, embedded terminal, or mandatory worktree. Updates are
+- Changes stages, unstages, and commits; History shows commits and their
+  patches. There is no push, discard, branch switching, file editor, embedded
+  terminal, or mandatory worktree. Updates are
   installed explicitly; they never restart active work automatically.
 - Sandboxed commands cannot use external networking or write the checkout.
   Approved file tools make edits; build output goes to private caches. The

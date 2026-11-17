@@ -357,7 +357,7 @@ impl Plait {
         self.host.new_model = Some(choice);
         self.new_thread_open = true;
         self.settings_open = false;
-        self.show_changes = false;
+        self.tab = super::Workspace::Conversation;
         self.create_host_thread(window, cx);
         cx.notify();
     }

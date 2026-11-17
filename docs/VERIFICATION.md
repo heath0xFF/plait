@@ -209,6 +209,11 @@ these tests.
   development tests and headless scene snapshots. Dragging a panel edge, hover
   text, and the menu have not been checked with a native pointer in the
   installed app.
+- Git staging, unstaging, committing, and History (after preview.7) are covered
+  by core tests against real temporary repositories (renames, deletions, an
+  unborn branch, hooks, filters, a held `index.lock`, paging) and by scene
+  snapshots of Changes and History. They have not been exercised with a native
+  pointer in the installed app, with Git LFS, or with signed commits.
 
 ## Manual release acceptance
 

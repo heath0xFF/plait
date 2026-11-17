@@ -5,8 +5,9 @@
   No web UI, embedded terminal, or mandatory worktrees.
 - Keep models and Git free of GPUI. State owns transitions; UI owns presentation.
 - Run all filesystem and Git work on the background executor, never in render.
-- The app's Git interface stays read-only through M2.5. Disable optional locks,
-  external diff, and textconv. Normal development commits are permitted.
+- Git reads in the app stay hardened: disable optional locks, external diff,
+  textconv, and filters. Git writes are limited to what docs/ROADMAP.md agrees
+  (staging, unstaging, committing). Normal development commits are permitted.
 - Show only real data in the app: no sample threads or placeholder machines.
   Test scenes may inject sample state, never in a shipped view. Do not imply execution.
 - Build original application code and design. Do not copy or port competitor code,

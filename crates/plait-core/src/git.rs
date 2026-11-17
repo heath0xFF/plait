@@ -1,9 +1,10 @@
 use std::{
     ffi::OsStr,
     io::{Read, Write},
+    os::unix::process::CommandExt,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
-    sync::Arc,
+    process::{Command, ExitStatus, Stdio},
+    sync::{Arc, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -12,7 +13,11 @@ use crate::model::{Change, Diff, DiffKind, DiffLine, DiffMode, Snapshot};
 
 const STATUS_LIMIT: usize = 8 * 1024 * 1024;
 const DIFF_LIMIT: usize = 512 * 1024;
+const ERROR_LIMIT: usize = 8192;
 const TIMEOUT: Duration = Duration::from_secs(10);
+/// How long to keep reading output after Git exits. A hook or filter can leave a
+/// background process holding the pipes; Git's own output is complete by then.
+const DRAIN_GRACE: Duration = Duration::from_secs(2);
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -71,7 +76,8 @@ fn base_command(root: &Path) -> Command {
     command
 }
 
-fn command(root: &Path, args: &[&OsStr], limit: usize) -> Result<Output> {
+/// A read command with every configured filter driver neutralized.
+fn read_command(root: &Path) -> Result<Command> {
     let keys = execute(
         base_command(root).args(["config", "--null", "--name-only", "--list"]),
         STATUS_LIMIT,
@@ -95,55 +101,143 @@ fn command(root: &Path, args: &[&OsStr], limit: usize) -> Result<Output> {
             command.arg("-c").arg(format!("{driver}.{setting}"));
         }
     }
-    execute(command.args(args), limit, TIMEOUT)
+    Ok(command)
+}
+
+fn command(root: &Path, args: &[&OsStr], limit: usize) -> Result<Output> {
+    execute(read_command(root)?.args(args), limit, TIMEOUT)
+}
+
+/// Whether HEAD names a commit. Exit status 1 from a quiet verify means an unborn branch.
+fn head_exists(root: &Path) -> Result<bool> {
+    let mut command = read_command(root)?;
+    let raw = run(
+        command.args(["rev-parse", "--verify", "-q", "HEAD"]),
+        None,
+        STATUS_LIMIT,
+        TIMEOUT,
+    )?;
+    match raw.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(raw.failure()),
+    }
+}
+
+/// A finished process: exit status plus bounded output.
+struct Raw {
+    status: ExitStatus,
+    out: Output,
+    err: Output,
+}
+
+impl Raw {
+    fn failure(&self) -> String {
+        format!("Git: {}", String::from_utf8_lossy(&self.err.bytes).trim())
+    }
 }
 
 fn execute(command: &mut Command, limit: usize, timeout: Duration) -> Result<Output> {
+    let raw = run(command, None, limit, timeout)?;
+    if !raw.status.success() {
+        return Err(raw.failure());
+    }
+    Ok(raw.out)
+}
+
+/// Run to completion under a deadline. `input` goes to stdin from its own
+/// thread so a full pipe cannot stall the output readers or the deadline.
+fn run(
+    command: &mut Command,
+    input: Option<Vec<u8>>,
+    limit: usize,
+    timeout: Duration,
+) -> Result<Raw> {
+    let stdin = if input.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    };
     let mut child = command
-        .stdin(Stdio::null())
+        .stdin(stdin)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        // Its own process group, so a timeout also stops hooks and filters.
+        .process_group(0)
         .spawn()
         .map_err(|e| format!("Cannot start Git: {e}"))?;
     let stdout = child.stdout.take().ok_or("Git stdout is unavailable")?;
     let stderr = child.stderr.take().ok_or("Git stderr is unavailable")?;
-    let out = thread::spawn(move || drain(stdout, limit));
-    let err = thread::spawn(move || drain(stderr, 8192));
+    let feed = child.stdin.take().zip(input).map(|(mut pipe, bytes)| {
+        // Git may exit before reading everything; its exit status says why.
+        thread::spawn(move || {
+            let _ = pipe.write_all(&bytes);
+        })
+    });
+    let out = reader(stdout, limit);
+    let err = reader(stderr, ERROR_LIMIT);
     let start = Instant::now();
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Ok(status),
             Ok(None) if start.elapsed() < timeout => thread::sleep(Duration::from_millis(10)),
             Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break Err(
-                    "Git command timed out. Try a smaller repository, then Refresh.".to_owned(),
-                );
+                stop_group(&mut child);
+                break Err(format!(
+                    "Git did not finish within {} seconds and was stopped.",
+                    timeout.as_secs()
+                ));
             }
             Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                stop_group(&mut child);
                 break Err(format!("Cannot wait for Git: {e}"));
             }
         }
     };
-    let out = out
-        .join()
-        .map_err(|_| "Git output reader failed")?
-        .map_err(|e| e.to_string())?;
-    let err = err
-        .join()
-        .map_err(|_| "Git error reader failed")?
-        .map_err(|e| e.to_string())?;
     let status = status?;
-    if !status.success() {
-        return Err(format!(
-            "Git: {}",
-            String::from_utf8_lossy(&err.bytes).trim()
-        ));
+    // A writer still blocked on a full pipe ends once Git's pipes close; it is
+    // never waited on, so a stray descendant cannot hold this thread.
+    drop(feed);
+    let out = collect(out, "output")?;
+    let err = collect(err, "error output")?;
+    Ok(Raw { status, out, err })
+}
+
+/// Drain a pipe on its own thread, reporting through a channel so the wait can be bounded.
+fn reader(
+    pipe: impl Read + Send + 'static,
+    limit: usize,
+) -> mpsc::Receiver<std::io::Result<Output>> {
+    let (send, receive) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = send.send(drain(pipe, limit));
+    });
+    receive
+}
+
+/// Git has exited. Wait briefly for its output, then give up on a pipe that a
+/// leftover process is holding open.
+fn collect(reader: mpsc::Receiver<std::io::Result<Output>>, name: &str) -> Result<Output> {
+    match reader.recv_timeout(DRAIN_GRACE) {
+        Ok(result) => result.map_err(|e| e.to_string()),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(format!(
+            "Git finished, but a program it started still holds its {name}. Check your hooks and filters."
+        )),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(format!("Git {name} reader failed")),
     }
-    Ok(out)
+}
+
+/// Kill Git and everything it started (hooks, filters), then reap Git.
+fn stop_group(child: &mut std::process::Child) {
+    // The child leads its own group (see `process_group(0)`), so its PID is the group ID.
+    if let Ok(group) = i32::try_from(child.id()) {
+        // SAFETY: killpg only sends a signal; a stale group ID fails with ESRCH.
+        unsafe {
+            libc::killpg(group, libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 pub fn status(path: &Path) -> Result<Snapshot> {
@@ -216,7 +310,7 @@ fn path_from_bytes(bytes: &[u8]) -> PathBuf {
     PathBuf::from(OsStr::from_bytes(bytes))
 }
 
-fn validate_relative(path: &Path) -> Result<()> {
+pub(super) fn validate_relative(path: &Path) -> Result<()> {
     if path.as_os_str().is_empty()
         || path
             .components()
@@ -533,6 +627,11 @@ fn format_diff(bytes: &[u8], mut truncated: bool, elapsed: Duration) -> Diff {
         elapsed,
     }
 }
+
+mod log;
+mod write;
+pub use log::{Commit, History, log, show};
+pub use write::{WriteOp, WriteOutcome, write};
 
 #[cfg(test)]
 mod tests;

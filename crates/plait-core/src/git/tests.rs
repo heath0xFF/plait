@@ -324,7 +324,7 @@ fn subprocess_deadline_reaps_the_child() {
     )
     .err()
     .unwrap();
-    assert!(error.contains("timed out"));
+    assert!(error.contains("was stopped"), "{error}");
     assert!(start.elapsed() < Duration::from_secs(2));
 }
 
@@ -471,4 +471,487 @@ fn file_records_skip_unusable_names_and_bound_the_list() {
     assert!(parse_files(b"H /absolute\0", false, 9).is_err());
     assert!(parse_files(b"Hmissing-space\0", false, 9).is_err());
     assert!(parse_files(b"H \0", false, 9).is_err());
+}
+
+// ---- writes and history ----
+
+impl Repo {
+    fn out(&self, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&self.0)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+    fn short_status(&self) -> String {
+        self.out(&["status", "--porcelain=v1", "--untracked-files=all"])
+    }
+    fn hook(&self, name: &str, script: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let path = self.0.join(".git/hooks").join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+fn paths(names: &[&str]) -> Vec<PathBuf> {
+    names.iter().map(PathBuf::from).collect()
+}
+
+fn stage(repo: &Repo, names: &[&str]) -> Result<WriteOutcome> {
+    write(&repo.0, &WriteOp::Stage(paths(names)))
+}
+
+fn unstage(repo: &Repo, names: &[&str]) -> Result<WriteOutcome> {
+    write(&repo.0, &WriteOp::Unstage(paths(names)))
+}
+
+fn commit_op(repo: &Repo, message: &str) -> Result<WriteOutcome> {
+    write(
+        &repo.0,
+        &WriteOp::Commit {
+            message: message.into(),
+        },
+    )
+}
+
+#[test]
+fn staging_covers_modified_new_and_deleted_files() {
+    let repo = Repo::new();
+    repo.write("mod.txt", "a\n");
+    repo.write("gone.txt", "b\n");
+    repo.commit();
+    repo.write("mod.txt", "changed\n");
+    repo.write("new.txt", "n\n");
+    fs::remove_file(repo.0.join("gone.txt")).unwrap();
+    let outcome = stage(&repo, &["mod.txt", "new.txt", "gone.txt"]).unwrap();
+    assert_eq!(outcome.summary, "Staged 3 files");
+    assert_eq!(outcome.commit, None);
+    assert_eq!(repo.short_status(), "D  gone.txt\nM  mod.txt\nA  new.txt\n");
+    assert_eq!(stage(&repo, &["mod.txt"]).unwrap().summary, "Staged 1 file");
+}
+
+#[test]
+fn staging_paths_are_literal_pathspecs() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    repo.write("*.txt", "star\n");
+    stage(&repo, &["*.txt"]).unwrap();
+    assert_eq!(repo.out(&["diff", "--cached", "--name-only"]), "*.txt\n");
+}
+
+#[test]
+fn unstage_with_head_restores_the_committed_state() {
+    let repo = Repo::new();
+    repo.write("mod.txt", "a\n");
+    repo.write("gone.txt", "b\n");
+    repo.commit();
+    repo.write("mod.txt", "changed\n");
+    repo.write("new.txt", "n\n");
+    fs::remove_file(repo.0.join("gone.txt")).unwrap();
+    write(&repo.0, &WriteOp::StageAll).unwrap();
+    let outcome = unstage(&repo, &["mod.txt", "new.txt", "gone.txt"]).unwrap();
+    assert_eq!(outcome.summary, "Unstaged 3 files");
+    assert_eq!(repo.short_status(), " D gone.txt\n M mod.txt\n?? new.txt\n");
+    // The worktree is untouched.
+    assert_eq!(
+        fs::read_to_string(repo.0.join("mod.txt")).unwrap(),
+        "changed\n"
+    );
+}
+
+#[test]
+fn unstage_on_an_unborn_branch_returns_files_to_untracked() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    fs::create_dir(repo.0.join("dir")).unwrap();
+    repo.write("dir/b.txt", "b\n");
+    stage(&repo, &["a.txt", "dir/b.txt"]).unwrap();
+    // Differs from both the index and (absent) HEAD: still unstages.
+    repo.write("a.txt", "edited after staging\n");
+    unstage(&repo, &["a.txt"]).unwrap();
+    assert_eq!(repo.short_status(), "A  dir/b.txt\n?? a.txt\n");
+    let outcome = write(&repo.0, &WriteOp::UnstageAll).unwrap();
+    assert_eq!(outcome.summary, "Unstaged all changes");
+    assert_eq!(repo.short_status(), "?? a.txt\n?? dir/b.txt\n");
+    // Nothing staged on an unborn branch is not an error.
+    write(&repo.0, &WriteOp::UnstageAll).unwrap();
+}
+
+#[test]
+fn rename_stages_and_unstages_with_both_paths() {
+    let repo = Repo::new();
+    repo.write("old.txt", "content that is long enough to match\n");
+    repo.commit();
+    fs::rename(repo.0.join("old.txt"), repo.0.join("new.txt")).unwrap();
+    stage(&repo, &["new.txt", "old.txt"]).unwrap();
+    assert_eq!(repo.short_status(), "R  old.txt -> new.txt\n");
+    unstage(&repo, &["new.txt", "old.txt"]).unwrap();
+    assert_eq!(repo.short_status(), " D old.txt\n?? new.txt\n");
+}
+
+#[test]
+fn stage_all_and_unstage_all() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    repo.commit();
+    repo.write("a.txt", "b\n");
+    repo.write("n.txt", "n\n");
+    assert_eq!(
+        write(&repo.0, &WriteOp::StageAll).unwrap().summary,
+        "Staged all changes"
+    );
+    assert_eq!(repo.short_status(), "M  a.txt\nA  n.txt\n");
+    write(&repo.0, &WriteOp::UnstageAll).unwrap();
+    assert_eq!(repo.short_status(), " M a.txt\n?? n.txt\n");
+}
+
+#[test]
+fn write_paths_are_validated() {
+    let repo = Repo::new();
+    for bad in ["../outside", "/etc/passwd", "a/../b", ""] {
+        assert!(stage(&repo, &[bad]).is_err(), "{bad}");
+        assert!(unstage(&repo, &[bad]).is_err(), "{bad}");
+    }
+    assert!(stage(&repo, &[]).is_err());
+    assert!(unstage(&repo, &[]).is_err());
+    let many: Vec<PathBuf> = (0..100_001).map(|n| PathBuf::from(n.to_string())).collect();
+    assert!(
+        write(&repo.0, &WriteOp::Stage(many))
+            .unwrap_err()
+            .contains("Too many")
+    );
+}
+
+#[test]
+fn many_paths_travel_over_stdin_without_deadlock() {
+    let repo = Repo::new();
+    let names: Vec<String> = (0..3000).map(|n| format!("f{n:04}.txt")).collect();
+    for name in &names {
+        repo.write(name, "x\n");
+    }
+    let list: Vec<PathBuf> = names.iter().map(PathBuf::from).collect();
+    let outcome = write(&repo.0, &WriteOp::Stage(list)).unwrap();
+    assert_eq!(outcome.summary, "Staged 3000 files");
+}
+
+#[test]
+fn commit_returns_the_new_id_and_summary() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    stage(&repo, &["a.txt"]).unwrap();
+    let outcome = commit_op(&repo, "First change\n\nBody text.\n\n").unwrap();
+    let head = repo.out(&["rev-parse", "HEAD"]).trim().to_owned();
+    assert_eq!(outcome.commit.as_deref(), Some(head.as_str()));
+    let short = repo
+        .out(&["rev-parse", "--short", "HEAD"])
+        .trim()
+        .to_owned();
+    assert_eq!(outcome.summary, format!("Committed {short}: First change"));
+    assert_eq!(
+        repo.out(&["log", "-1", "--format=%B"]),
+        "First change\n\nBody text.\n\n"
+    );
+    assert_eq!(repo.short_status(), "");
+}
+
+#[test]
+fn commit_takes_only_staged_changes() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    repo.write("b.txt", "b\n");
+    repo.commit();
+    repo.write("a.txt", "a2\n");
+    repo.write("b.txt", "b2\n");
+    stage(&repo, &["a.txt"]).unwrap();
+    commit_op(&repo, "Only a").unwrap();
+    assert_eq!(repo.short_status(), " M b.txt\n");
+}
+
+#[test]
+fn blank_message_and_empty_index_are_rejected() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    stage(&repo, &["a.txt"]).unwrap();
+    assert!(commit_op(&repo, " \n\t\n").unwrap_err().contains("message"));
+    assert!(commit_op(&repo, "").is_err());
+    commit_op(&repo, "Add a").unwrap();
+    let error = commit_op(&repo, "Nothing").unwrap_err();
+    assert!(error.contains("Nothing is staged"), "{error}");
+}
+
+#[test]
+fn failing_pre_commit_hook_blocks_the_commit_and_explains_why() {
+    let repo = Repo::new();
+    repo.hook(
+        "pre-commit",
+        "echo 'lint: trailing whitespace in a.txt' >&2\nexit 1",
+    );
+    repo.write("a.txt", "a\n");
+    stage(&repo, &["a.txt"]).unwrap();
+    let error = commit_op(&repo, "Blocked").unwrap_err();
+    assert!(error.contains("lint: trailing whitespace"), "{error}");
+    assert_eq!(log(&repo.0, None, 0, 5).unwrap(), History::default());
+    assert_eq!(repo.short_status(), "A  a.txt\n");
+}
+
+#[test]
+fn passing_hooks_run_and_may_see_a_non_interactive_environment() {
+    let repo = Repo::new();
+    repo.hook("pre-commit", "touch hook-ran");
+    repo.write("a.txt", "a\n");
+    stage(&repo, &["a.txt"]).unwrap();
+    commit_op(&repo, "Hooked").unwrap();
+    assert!(repo.0.join("hook-ran").exists());
+}
+
+#[test]
+fn held_index_lock_gives_a_friendly_message() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    repo.write(".git/index.lock", "");
+    let error = stage(&repo, &["a.txt"]).unwrap_err();
+    assert_eq!(
+        error,
+        "Another Git process is using this repository. Try again when it finishes."
+    );
+    assert_eq!(write(&repo.0, &WriteOp::StageAll).unwrap_err(), error);
+}
+
+#[test]
+fn missing_identity_surfaces_gits_message() {
+    let repo = Repo::new();
+    repo.git(&["config", "user.useConfigOnly", "true"]);
+    // Empty local values override any global identity on the machine.
+    repo.git(&["config", "user.name", ""]);
+    repo.git(&["config", "user.email", ""]);
+    repo.write("a.txt", "a\n");
+    stage(&repo, &["a.txt"]).unwrap();
+    let error = commit_op(&repo, "No identity").unwrap_err();
+    assert!(error.starts_with("Git: "), "{error}");
+}
+
+#[test]
+fn hash_lines_in_commit_messages_are_kept() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    stage(&repo, &["a.txt"]).unwrap();
+    commit_op(&repo, "# Heading style subject\n\n# kept line\nbody").unwrap();
+    assert_eq!(
+        repo.out(&["log", "-1", "--format=%B"]),
+        "# Heading style subject\n\n# kept line\nbody\n\n"
+    );
+}
+
+#[test]
+fn staging_runs_clean_filters_but_history_and_diff_reads_do_not() {
+    let repo = Repo::new();
+    repo.write(".gitattributes", "*.txt filter=upper\n");
+    repo.git(&["config", "filter.upper.clean", "tr a-z A-Z"]);
+    repo.write("a.txt", "hello\n");
+    stage(&repo, &["a.txt"]).unwrap();
+    assert_eq!(repo.out(&["show", ":a.txt"]), "HELLO\n");
+    repo.git(&["add", ".gitattributes"]);
+    repo.git(&["commit", "-m", "base"]);
+    // Reads stay hardened even though a failing filter is configured.
+    repo.git(&["config", "filter.upper.clean", "false"]);
+    repo.git(&["config", "filter.upper.process", "false"]);
+    repo.git(&["config", "filter.upper.required", "true"]);
+    let id = log(&repo.0, None, 0, 10).unwrap().commits[0].id.clone();
+    assert!(text(&show(&repo.0, &id).unwrap()).contains("+HELLO"));
+    repo.write("a.txt", "again\n");
+    assert_eq!(log(&repo.0, None, 0, 10).unwrap().commits.len(), 1);
+}
+
+#[test]
+fn log_on_an_unborn_branch_is_empty() {
+    let repo = Repo::new();
+    assert_eq!(log(&repo.0, None, 0, 10).unwrap(), History::default());
+}
+
+#[test]
+fn log_pages_with_skip_and_more() {
+    let repo = Repo::new();
+    for n in 0..5 {
+        repo.write("a.txt", format!("{n}\n"));
+        repo.git(&["add", "."]);
+        repo.git(&["commit", "-m", &format!("commit {n}")]);
+    }
+    let first = log(&repo.0, None, 0, 2).unwrap();
+    assert!(first.more);
+    assert_eq!(first.commits.len(), 2);
+    assert_eq!(first.commits[0].subject, "commit 4");
+    assert_eq!(first.commits[0].author, "Plait Test");
+    assert_eq!(first.commits[0].id.len(), 40);
+    assert!(first.commits[0].id.starts_with(&first.commits[0].short));
+    assert!(first.commits[0].time > 1_000_000_000);
+    let last = log(&repo.0, None, 4, 2).unwrap();
+    assert!(!last.more);
+    assert_eq!(last.commits.len(), 1);
+    assert_eq!(last.commits[0].subject, "commit 0");
+    let exact = log(&repo.0, None, 3, 2).unwrap();
+    assert!(!exact.more);
+    assert_eq!(log(&repo.0, None, 9, 2).unwrap(), History::default());
+    assert_eq!(log(&repo.0, None, 0, 0).unwrap(), History::default());
+    assert_eq!(log(&repo.0, None, 0, 10_000).unwrap().commits.len(), 5);
+}
+
+#[test]
+fn later_pages_follow_the_first_pages_tip_when_head_moves() {
+    let repo = Repo::new();
+    for n in 0..4 {
+        repo.write("a.txt", format!("{n}\n"));
+        repo.git(&["add", "."]);
+        repo.git(&["commit", "-m", &format!("commit {n}")]);
+    }
+    let first = log(&repo.0, None, 0, 2).unwrap();
+    let tip = first.commits[0].id.clone();
+    // A commit lands between pages.
+    repo.write("a.txt", "later\n");
+    repo.git(&["add", "."]);
+    repo.git(&["commit", "-m", "later"]);
+    let second = log(&repo.0, Some(&tip), 2, 2).unwrap();
+    let subjects: Vec<_> = second.commits.iter().map(|c| c.subject.as_str()).collect();
+    assert_eq!(subjects, ["commit 1", "commit 0"]);
+    assert!(log(&repo.0, Some("HEAD"), 0, 2).is_err());
+    assert!(log(&repo.0, Some("--all"), 0, 2).is_err());
+}
+
+#[test]
+fn a_hook_that_leaves_a_process_holding_output_does_not_hang_the_commit() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    repo.git(&["add", "."]);
+    let hooks = repo.0.join(".git/hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let hook = hooks.join("pre-commit");
+    // The background sleep inherits stdout and outlives the hook.
+    std::fs::write(&hook, "#!/bin/sh\nsleep 30 &\nexit 0\n").unwrap();
+    let mut permissions = std::fs::metadata(&hook).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&hook, permissions).unwrap();
+    let start = std::time::Instant::now();
+    let result = write(
+        &repo.0,
+        &WriteOp::Commit {
+            message: "with a stray hook process".into(),
+        },
+    );
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(15),
+        "{:?}",
+        start.elapsed()
+    );
+    // Either the commit is reported, or the stray process is named; never a hang.
+    match result {
+        Ok(outcome) => assert!(outcome.commit.is_some()),
+        Err(error) => assert!(error.contains("still holds"), "{error}"),
+    }
+}
+
+#[test]
+fn log_fields_are_sanitized_and_records_validated() {
+    let records = parse_log_for_test(b"");
+    assert!(records.is_empty());
+    let id = "a".repeat(40);
+    let raw = format!("{id}\0aaaaaaa\0Evil\x1b[31m Name\0100\0Sub\tject\r\n");
+    let commits = parse_log_for_test(raw.as_bytes());
+    assert_eq!(commits[0].author, "Evil [31m Name");
+    assert_eq!(commits[0].subject, "Sub ject");
+    assert!(log::parse_log(b"short\0a\0b\0c\0d\0").is_err());
+    assert!(log::parse_log(b"a\0b").is_err());
+}
+
+fn parse_log_for_test(bytes: &[u8]) -> Vec<Commit> {
+    log::parse_log(bytes).unwrap()
+}
+
+#[test]
+fn show_returns_message_then_patch() {
+    let repo = Repo::new();
+    repo.write("a.txt", "one\n");
+    repo.git(&["add", "."]);
+    repo.git(&["commit", "-m", "Root commit"]);
+    repo.write("a.txt", "one\ntwo\n");
+    repo.git(&["add", "."]);
+    repo.git(&[
+        "commit",
+        "-m",
+        "Add two",
+        "-m",
+        "diff --git fake\n@@ -1 +1 @@ in body",
+    ]);
+    let id = log(&repo.0, None, 0, 1).unwrap().commits[0].id.clone();
+    let diff = show(&repo.0, &id).unwrap();
+    let body = text(&diff);
+    assert!(body.contains("Author: Plait Test <test@example.invalid>"));
+    assert!(body.contains("    Add two"));
+    assert!(body.contains("+two"));
+    let first_diff = diff
+        .lines
+        .iter()
+        .position(|l| l.text.starts_with("diff --git a/a.txt"))
+        .unwrap();
+    // Everything before the patch, message included, is a header line.
+    assert!(
+        diff.lines[..first_diff]
+            .iter()
+            .all(|l| l.kind == DiffKind::Header)
+    );
+    assert!(
+        diff.lines
+            .iter()
+            .any(|l| l.kind == DiffKind::Added && &*l.text == "+two")
+    );
+    // The root commit shows its files as additions.
+    let root_id = log(&repo.0, None, 1, 1).unwrap().commits[0].id.clone();
+    assert!(text(&show(&repo.0, &root_id).unwrap()).contains("+one"));
+}
+
+#[test]
+fn show_rejects_ids_that_are_not_full_hex() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    repo.commit();
+    for bad in [
+        "HEAD",
+        "abc1234",
+        "--output=/tmp/x",
+        &"A".repeat(40),
+        &"g".repeat(40),
+        &"a".repeat(41),
+        "",
+    ] {
+        assert!(show(&repo.0, bad).is_err(), "{bad}");
+    }
+    // A well-formed ID that names nothing is an error, not output.
+    assert!(show(&repo.0, &"a".repeat(40)).is_err());
+}
+
+#[test]
+fn show_of_a_merge_uses_the_first_parent_and_truncates_large_commits() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    repo.commit();
+    repo.git(&["checkout", "-q", "-b", "side"]);
+    repo.write("side.txt", "s\n");
+    repo.commit();
+    repo.git(&["checkout", "-q", "main"]);
+    repo.git(&["merge", "--no-ff", "-q", "side", "-m", "Merge side"]);
+    let id = log(&repo.0, None, 0, 1).unwrap().commits[0].id.clone();
+    assert!(text(&show(&repo.0, &id).unwrap()).contains("+s"));
+    repo.write("big.txt", "line\n".repeat(200_000));
+    repo.commit();
+    let id = log(&repo.0, None, 0, 1).unwrap().commits[0].id.clone();
+    assert!(show(&repo.0, &id).unwrap().truncated);
 }

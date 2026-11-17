@@ -167,7 +167,7 @@ impl Plait {
         self.history = Default::default();
         self.settings_open = false;
         self.new_thread_open = false;
-        self.show_changes = false;
+        self.tab = super::Workspace::Conversation;
         self.refresh_live_list(None);
         self.formatted = Default::default();
         if !self.composers.contains_key(&id) {

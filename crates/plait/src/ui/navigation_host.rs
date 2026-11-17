@@ -15,7 +15,7 @@ impl Plait {
         cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active()
                 && !this.settings_open
-                && !this.show_changes
+                && this.tab == super::Workspace::Conversation
                 && let Some(id) = this.host.selected.clone()
             {
                 this.mark_thread_read(&id, cx);
@@ -176,7 +176,9 @@ impl Plait {
         if !self.preferences.loaded {
             return;
         }
-        let visible = (window.is_window_active() && !self.settings_open && !self.show_changes)
+        let visible = (window.is_window_active()
+            && !self.settings_open
+            && self.tab == super::Workspace::Conversation)
             .then_some(self.host.selected.as_deref())
             .flatten();
         let mut preferences = self.preferences.value.clone();

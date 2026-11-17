@@ -2,7 +2,8 @@
 
 These are planned milestones, not a list of shipped features. See the
 [README](../README.md) for the current preview and [Verification](VERIFICATION.md)
-for acceptance evidence and open checks. **Current work is M2.5.**
+for acceptance evidence and open checks. **Current work is M2.5 and the Git half
+of M4.**
 
 ## Milestones
 
@@ -12,7 +13,7 @@ for acceptance evidence and open checks. **Current work is M2.5.**
 | M2 — Local agents | Real agent events, approved edits and commands, persistent threads, safe Stop and reconnect | Shipped in the local preview; hardening and live installed acceptance continue |
 | M2.5 — Daily driver | Complete, paged conversation history; projects and threads across checkouts with live status; thread titles, rename, and archive; model and thinking changes within a thread; follow-up and steering messages during a run; provider sign-in from the app; selectable, highlighted conversation text and readable tool results; a command palette; optional per-thread worktrees; an opt-in trusted command mode | Current work; not shipped until the README says so |
 | M3 — Remote execution | Authenticated host connections, remote project discovery, activity/Git updates, network recovery | Planned; Linux execution requires tested containment first |
-| M4 — Development tools | Git staging, commits and history; file browser/editor; review feedback; process and log views | Planned |
+| M4 — Development tools | Git staging, commits and history; file browser/editor; review feedback; process and log views | Git staging, commits and history in progress, ahead of M3; the rest planned |
 | M5 — Previews | Live HTML, Markdown and MDX, automatic refresh, and selected-content feedback to the agent | Planned |
 | M6 — Multiple machines | Unified project navigation across independent hosts, including disconnected/reconnecting states | Planned |
 
@@ -51,8 +52,17 @@ Do not expose the current local socket protocol over a public TCP listener.
 Multiple threads do not imply isolated files. Worktrees stay optional, and
 writers must coordinate around existing dirty work. There is no embedded terminal,
 mandatory agent orchestration, automatic swarm, or built-in cloud compute service.
-Per-thread worktree creation remains planned: the desktop's Git interface stays
-read-only through M2.5. Existing checkouts can be opened as projects.
+Per-thread worktree creation remains planned. Existing checkouts can be opened
+as projects.
+
+**Agreed for M4 Git, ahead of M3:** Plait builds Plait, so committing reviewed
+work without leaving the app comes before remote execution. The desktop may
+stage, unstage, and commit, and show commit history and each commit's patch.
+Reads keep their hardening (no filters, hooks, or optional locks). An explicit
+write runs with the repository's own configuration, so staging runs clean
+filters and committing runs hooks, exactly as the person's own Git would. One
+write runs at a time. Push, fetch, discard, branch switching, amend, rebase,
+and other history rewriting are not part of this step.
 Use existing tools for interactive shells and debugging. A future Open in Rex
 integration and native mobile companion are possibilities, not current features.
 

@@ -294,10 +294,12 @@ path alongside separate `PLAIT_HOST_STORE` and `PLAIT_DESKTOP_STATE_DIR` paths.
 | Cmd-Shift-D | Toggle Diagnostics | `view.toggle_diagnostics` |
 | Cmd-Shift-1 | Conversation | `view.conversation` |
 | Cmd-Shift-2 | Changes | `view.changes` |
+| Cmd-Shift-3 | History | `view.history` |
 | Cmd-Option-Down | Next Thread | `thread.next` |
 | Cmd-Option-Up | Previous Thread | `thread.previous` |
 | Option-Down | Next Changed File | `git.next_file` |
 | Option-Up | Previous Changed File | `git.previous_file` |
+| Cmd-Shift-C | Commit Staged Changes… | `git.commit` |
 | Cmd-M | Minimize | `window.minimize` |
 | Cmd-1 to Cmd-9 | Jump to Sidebar Item 1–9 | `jump.1` to `jump.9` |
 | Tab | Focus Next Control | `focus.next` |
@@ -387,6 +389,26 @@ Search fields take one line: pasted line breaks become spaces.
 Scroll the conversation, navigation, file list, and diff with the trackpad or
 mouse. Long diff lines scroll horizontally. On narrow windows, use Changes to
 open Git; the optional conversation inspector is hidden.
+
+### Staging, commits, and history
+
+In **Changes**, hover a file and choose **Stage** or **Unstage**, or use **Stage
+file** in the diff header. **Stage all** and **Unstage all** sit above the commit
+message. Type a one-line message and press Return or **Commit** (Cmd-Shift-C
+moves to the message). Only staged changes are committed. Plait runs your
+repository's own Git configuration for these: clean filters such as LFS run when
+staging, and commit hooks run when committing; a failing hook's output is shown
+and nothing is committed. One write runs at a time. If a thread is running in
+the same checkout, Changes says so, since its edits may be unfinished. During a
+merge, an unmerged file offers **Mark resolved** instead of **Stage**; Commit
+stays unavailable until every conflict is marked resolved. If a hook or filter
+takes longer than its limit (60 seconds for staging, 120 for a commit), Plait
+stops it and says so.
+
+**History** (Cmd-Shift-3) lists commits on the current branch, newest first, 100
+at a time. Select one to see its message and patch against its first parent.
+There is no push, discard, amend, or branch switching yet; use your own Git
+tools for those.
 
 ## Updates
 

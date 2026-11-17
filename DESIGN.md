@@ -111,7 +111,11 @@ conversation keeps a readable minimum width.
   the risk, protected dirty paths, and Deny once / Allow once.
 - **Git.** Changed files are 28-point rows: a one-letter state, file name first,
   then its directory, then index/worktree. The accessible name carries the full
-  path and state. Diffs keep separate Unstaged and Staged views.
+  path and state. Diffs keep separate Unstaged and Staged views. Stage or
+  Unstage appears on a row on hover and in the diff header; the commit box
+  sits under the file list with one message line, Commit, and the last result
+  in words. History lists commits (subject, short ID, author, age) beside the
+  selected commit's message and patch.
 
 ## Tokens
 - Background: #171819. Navigation: #1c1d1f. Panel / user bubble: #26282b.

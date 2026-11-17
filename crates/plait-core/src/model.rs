@@ -28,13 +28,16 @@ impl Change {
     pub fn unstaged(&self) -> bool {
         self.worktree != b' '
     }
+    /// An unmerged path: staging it is how Git records it as resolved.
+    pub fn conflicted(&self) -> bool {
+        self.index == b'U'
+            || self.worktree == b'U'
+            || matches!((self.index, self.worktree), (b'A', b'A') | (b'D', b'D'))
+    }
     pub fn label(&self) -> &'static str {
         if self.index == b'?' {
             "New"
-        } else if self.index == b'U'
-            || self.worktree == b'U'
-            || matches!((self.index, self.worktree), (b'A', b'A') | (b'D', b'D'))
-        {
+        } else if self.conflicted() {
             "Conflict"
         } else if self.index == b'R' || self.worktree == b'R' {
             "Renamed"
