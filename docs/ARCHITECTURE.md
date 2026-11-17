@@ -40,6 +40,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
   changes.rs            changed-file list and diff view
   commit_panel.rs       staging buttons, commit message, and write results
   commits.rs            the History tab: commit list and a commit's patch
+  file_view.rs          the Files tab: quick open, virtualized lines, find, reload
   panels.rs             sidebar and inspector widths and their drag handles
   jump.rs               Cmd-1 to Cmd-9 and the desktop preferences file
   session.rs            draft and submission recovery, and save scheduling
@@ -87,6 +88,7 @@ session.rs              private desktop journal, identity checks, writer lock
 markdown.rs             plain text blocks and style ranges, parsed off render
 reveal.rs               frame-paced reveal of streaming text and cut blocks
 theme.rs                palettes, Base16 scheme parsing, contrast floors
+file_view.rs            bounded no-symlink file reads, line index, find, change stamps
 highlight.rs            lexical syntax classes for fenced and tool code
 diff.rs                 line diff of an edit's old and new text
 review.rs               quoting picked diff lines into a message

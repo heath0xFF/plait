@@ -309,6 +309,7 @@ path alongside separate `PLAIT_HOST_STORE` and `PLAIT_DESKTOP_STATE_DIR` paths.
 | Cmd-Option-N | New Thread in Worktree | `thread.new_worktree` |
 | Cmd-Shift-M | Change Thread Model… | `thread.switch_model` |
 | Cmd-O | Open Repository… | `repository.open` |
+| Cmd-P | Open File… | `file.open` |
 | Cmd-R | Refresh Git Status | `git.refresh` |
 | Cmd-W | Close Window | `window.close` |
 | Cmd-K | Command Palette… | `palette.toggle` |
@@ -318,6 +319,9 @@ path alongside separate `PLAIT_HOST_STORE` and `PLAIT_DESKTOP_STATE_DIR` paths.
 | Cmd-Shift-1 | Conversation | `view.conversation` |
 | Cmd-Shift-2 | Changes | `view.changes` |
 | Cmd-Shift-3 | History | `view.history` |
+| Cmd-F | Find in File | `file.find` |
+| Cmd-G | Find Next | `file.find_next` |
+| Cmd-Shift-G | Find Previous | `file.find_previous` |
 | Cmd-Option-Down | Next Thread | `thread.next` |
 | Cmd-Option-Up | Previous Thread | `thread.previous` |
 | Option-Down | Next Changed File | `git.next_file` |
@@ -478,6 +482,24 @@ also in the **Git** menu.
 at a time. Select one to see its message and patch against its first parent.
 There is no merge, rebase, amend, or branch switching yet; use your own Git
 tools for those.
+
+### Files
+
+**Files** shows one checkout file, read-only, with line numbers and the same
+syntax colors as the conversation. Open one with **Open File…** (Cmd-P), which
+searches the checkout's files by name and folder, or with **Open** in a Changes
+diff header. **Find in File** (Cmd-F) highlights every match and counts them;
+Enter or Cmd-G moves to the next, Shift-Enter or Cmd-Shift-G to the previous,
+wrapping at the ends, and Escape closes it. Find ignores letter case for plain
+ASCII text and matches other text exactly; it counts up to 1,000 matches.
+
+Plait rereads an open file when it may have changed: after a Git status read,
+when the window comes forward, and when you return to Files. It compares size
+and modification time first, so an unchanged file is not reread, and it never
+polls. A file changed on disk is redrawn with **Updated from disk**; one that was
+deleted keeps its last version on screen with a note. Binary files, files over
+8 MB, and text that is not UTF-8 are described instead of drawn. Files open
+inside the checkout only, and never through a symbolic link. There is no editing.
 
 ## Updates
 

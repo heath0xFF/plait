@@ -723,6 +723,115 @@ fn desktop_recovery_does_not_rebind_saved_work_or_clear_a_newer_revision() {
     std::fs::remove_dir_all(scratch).unwrap();
 }
 
+/// Opening a real file, finding in it, noticing changes on disk, and quick open.
+#[core::prelude::v1::test]
+fn files_tab_reads_finds_and_reloads_a_real_file() {
+    use plait_core::file_view::Contents;
+    let scratch = std::env::temp_dir().join(format!("plait-files-ui-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    let text = |plait: &Plait| match plait.file_viewer.opened.as_deref().map(|o| &o.contents) {
+        Some(Contents::Text(text)) => text.text.clone(),
+        other => panic!("not text: {other:?}"),
+    };
+    harness.update(|plait, _, cx| plait.open_file("src/review.rs".into(), Some(2), cx));
+    harness.update(|plait, _, _| {
+        assert_eq!(plait.tab, super::Workspace::Files);
+        assert!(text(plait).contains("notify_when_ready"));
+    });
+    harness.draw();
+    // Find counts matches off the UI thread and steps through them, wrapping.
+    harness.update(|plait, window, cx| {
+        plait.open_find(window, cx);
+        let field = plait.file_viewer.find.field.clone().unwrap();
+        field.update(cx, |field, cx| field.set_text("STATUS", cx));
+    });
+    harness.update(|plait, _, cx| {
+        assert_eq!(
+            plait.file_viewer.find.matches.len(),
+            1,
+            "ASCII case is ignored"
+        );
+        plait.step_find(true, cx);
+        assert_eq!(
+            plait.file_viewer.find.current, 0,
+            "one match wraps to itself"
+        );
+    });
+    harness.draw();
+    // A change on disk is noticed by size and time, then reread.
+    std::fs::write(repository.join("src/review.rs"), "pub fn refresh() {}\n").unwrap();
+    harness.update(|plait, _, cx| plait.check_file(cx));
+    harness.update(|plait, _, _| {
+        assert_eq!(text(plait), "pub fn refresh() {}\n");
+        assert_eq!(
+            plait.file_viewer.note.as_deref(),
+            Some("Updated from disk.")
+        );
+        assert!(
+            plait.file_viewer.find.matches.is_empty(),
+            "find reruns on new text"
+        );
+    });
+    // Deleted: the last version stays, with a note.
+    std::fs::remove_file(repository.join("src/review.rs")).unwrap();
+    harness.update(|plait, _, cx| plait.check_file(cx));
+    harness.update(|plait, _, _| {
+        assert_eq!(text(plait), "pub fn refresh() {}\n");
+        assert!(
+            plait
+                .file_viewer
+                .note
+                .as_ref()
+                .unwrap()
+                .contains("version read before")
+        );
+    });
+    // Binary files are described, not drawn.
+    std::fs::write(repository.join("logo.png"), [0x89, b'P', 0, 0]).unwrap();
+    harness.update(|plait, window, cx| {
+        plait.close_find(window, cx);
+        plait.open_file("logo.png".into(), None, cx)
+    });
+    harness.update(|plait, _, _| {
+        assert!(matches!(
+            plait.file_viewer.opened.as_deref().unwrap().contents,
+            Contents::Binary { len: 4 }
+        ));
+    });
+    harness.draw();
+    // Quick open lists the checkout's files once Git has read them.
+    harness.update(|plait, window, cx| plait.quick_open(window, cx));
+    harness.update(|plait, window, cx| {
+        let overlay = plait.overlay.as_ref().expect("quick open");
+        assert!(overlay.files && !overlay.palette.read(cx).is_empty());
+        plait.close_overlay(true, window, cx);
+    });
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
+/// The Files tab with a file, with find open, and quick open.
+fn files_walk(harness: &mut Harness, suffix: &str) {
+    harness.update(|plait, _, cx| plait.open_file("src/review.rs".into(), None, cx));
+    harness.capture(&format!("files-{suffix}"));
+    harness.update(|plait, window, cx| {
+        plait.open_find(window, cx);
+        let field = plait.file_viewer.find.field.clone().unwrap();
+        field.update(cx, |field, cx| field.set_text("status", cx));
+    });
+    harness.capture(&format!("files-find-{suffix}"));
+    harness.update(|plait, window, cx| {
+        plait.close_find(window, cx);
+        plait.quick_open(window, cx);
+    });
+    harness.capture(&format!("quick-open-{suffix}"));
+    harness.update(|plait, window, cx| {
+        plait.close_overlay(true, window, cx);
+        plait.show_tab(super::Workspace::Conversation, cx);
+    });
+}
+
 /// New Thread creates at once with the default, asks when there is none, and
 /// never replaces the request ID of a creation the host has not confirmed.
 #[core::prelude::v1::test]
@@ -1260,6 +1369,7 @@ fn walk(output: Option<&Path>) {
         composer_v3_walk(&mut harness, &repository, suffix);
         settings_walk(&mut harness, &repository, suffix);
         settings_controls_walk(&mut harness, &repository, suffix);
+        files_walk(&mut harness, suffix);
         theme_walk(&mut harness, &repository, suffix);
         palette_walk(&mut harness, &repository, suffix);
         picker_walk(&mut harness, &repository, suffix);

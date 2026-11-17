@@ -582,7 +582,7 @@ fn open_regular_file(root: &Path, relative: &Path) -> Result<std::fs::File> {
 /// Open `relative` under `root` without following a symlink anywhere on the
 /// way, so a link swapped in by another process cannot point outside the
 /// checkout. `flags` and `mode` apply to the last component only.
-fn open_beneath(
+pub(crate) fn open_beneath(
     root: &Path,
     relative: &Path,
     flags: libc::c_int,

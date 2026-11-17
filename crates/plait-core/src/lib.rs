@@ -4,6 +4,7 @@
 
 pub mod compose;
 pub mod diff;
+pub mod file_view;
 pub mod fuzzy;
 pub mod git;
 pub mod highlight;

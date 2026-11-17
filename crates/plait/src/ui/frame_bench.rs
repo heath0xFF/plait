@@ -502,6 +502,19 @@ pub fn run() -> Vec<Row> {
         -60.,
     ));
 
+    // f. Files: a real 20,000-line Rust file, read and highlighted in the background.
+    let source = (0..20_000)
+        .map(|n| format!("    let value_{n} = compute(\"item {n}\", {n}); // step {n}\n"))
+        .collect::<String>();
+    std::fs::write(heavy.join("big.rs"), source).unwrap();
+    harness.update(|plait, _, cx| plait.open_file("big.rs".into(), Some(10_000), cx));
+    rows.push(harness.steady("f1 files, 20k-line highlighted file, middle"));
+    rows.push(harness.scrolling(
+        "f2 files, wheel-scrolling a 20k-line file",
+        point(px(900.), px(400.)),
+        -60.,
+    ));
+
     // d. Switching, all against the heavy state above.
     show(&mut harness, Workspace::Conversation);
     let tabs = [

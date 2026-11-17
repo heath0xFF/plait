@@ -430,6 +430,10 @@ impl Palette {
         this
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
     /// Replace the items, keeping the query and following the selected item.
     pub fn set_items(&mut self, items: Vec<Item>, cx: &mut Context<Self>) {
         let followed = self.selected.and_then(|row| {

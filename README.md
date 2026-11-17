@@ -122,8 +122,9 @@ IDE. Pi is the only agent harness today; other harnesses are
   **New Thread in Worktree** (Cmd-Option-N) starts a thread on a new branch in
   its own worktree beside the repository, listed under the same project;
   the thread's menu removes it once its work is committed. Worktrees are never
-  required. There is no merge, rebase, branch switching, file editor, or
-  embedded terminal. Updates are
+  required. **Files** (Cmd-P) shows any checkout file read-only, with find
+  (Cmd-F); source builds only, after preview.8. There is no merge, rebase,
+  branch switching, file editor, or embedded terminal. Updates are
   installed explicitly; they never restart active work automatically.
 - Sandboxed commands cannot use external networking or write the checkout.
   Approved file tools make edits; build output goes to private caches. The

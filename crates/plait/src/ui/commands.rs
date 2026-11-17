@@ -38,6 +38,8 @@ pub(super) enum Command {
     PolicySettings,
     /// The thinking level new threads start at.
     DefaultThinking(plait_core::host::ThinkingLevel),
+    /// A checkout-relative path, from quick open.
+    OpenFile(String),
 }
 
 impl Clone for Command {
@@ -45,6 +47,7 @@ impl Clone for Command {
         match self {
             Self::Action(action) => Self::Action(action.boxed_clone()),
             Self::OpenThread(id) => Self::OpenThread(id.clone()),
+            Self::OpenFile(path) => Self::OpenFile(path.clone()),
             Self::SignIn(id) => Self::SignIn(id.clone()),
             Self::OpenProject(path) => Self::OpenProject(path.clone()),
             Self::NewThread(choice) => Self::NewThread(choice.clone()),
@@ -77,6 +80,8 @@ pub(super) struct Overlay {
     restore: Option<FocusHandle>,
     /// The host state a model picker's rows were built from.
     pub stamp: Option<PickerStamp>,
+    /// Quick open: its rows fill in when the file list arrives.
+    pub files: bool,
     _events: Subscription,
 }
 
@@ -283,6 +288,7 @@ impl Plait {
             purpose,
             restore,
             stamp: purpose.map(|_| self.picker_stamp()),
+            files: false,
             _events: events,
         });
         cx.notify();
@@ -371,6 +377,7 @@ impl Plait {
                     self.focus_composer(window, cx);
                 }
             }
+            Command::OpenFile(path) => self.open_file(path.into(), None, cx),
             Command::DefaultThinking(level) => {
                 let mut preferences = self.preferences.value.clone();
                 preferences.default_thinking = Some(level);

@@ -13,6 +13,10 @@ impl Plait {
         let field = self.navigation.filter.clone();
         cx.subscribe(&field, |_, _, _, cx| cx.notify()).detach();
         cx.observe_window_activation(window, |this, window, cx| {
+            // Another app may have changed the open file.
+            if window.is_window_active() {
+                this.check_file(cx);
+            }
             if window.is_window_active()
                 && !this.settings_open
                 && this.tab == super::Workspace::Conversation

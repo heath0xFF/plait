@@ -402,6 +402,17 @@ impl Plait {
                             )
                         }),
                 )
+                // A deleted file has nothing left to open.
+                .when(change.worktree != b'D', |el| {
+                    let path = change.path.clone();
+                    el.child(
+                        button("diff-open-file", "Open")
+                            .aria_label(format!("Open {} in Files", change.display_path()))
+                            .on_activate(cx, move |this, _, cx| {
+                                this.open_file(path.clone(), None, cx)
+                            }),
+                    )
+                })
                 .child({
                     let stage = key.mode == DiffMode::Unstaged;
                     let possible = if stage {

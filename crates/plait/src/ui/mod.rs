@@ -6,6 +6,7 @@ mod commit_panel;
 mod commits;
 mod composer;
 mod conversation;
+mod file_view;
 mod history;
 mod host;
 mod jump;
@@ -61,6 +62,11 @@ actions!(
         Conversation,
         Changes,
         CommitHistory,
+        ShowFiles,
+        QuickOpen,
+        FindInFile,
+        FindNext,
+        FindPrevious,
         StageAll,
         UnstageAll,
         CommitStaged,
@@ -95,6 +101,8 @@ pub(super) enum Workspace {
     Changes,
     /// Commit history and each commit's patch.
     History,
+    /// One checkout file, read-only.
+    Files,
 }
 
 /// Below this width the Git inspector is not shown; Git stays in Changes.
@@ -151,6 +159,7 @@ pub struct Plait {
     diagnostics: bool,
     preferences: jump::PreferenceState,
     themes: appearance::Themes,
+    file_viewer: file_view::FileViewer,
     updates: update::UpdateState,
     session: session::SessionState,
     picker_open: bool,
@@ -215,6 +224,7 @@ impl Plait {
             diagnostics: false,
             preferences: jump::PreferenceState::default(),
             themes: Default::default(),
+            file_viewer: Default::default(),
             updates: update::UpdateState::default(),
             session: session::SessionState::default(),
             picker_open: false,
@@ -264,10 +274,12 @@ impl Plait {
                 this.state.repository.complete(job, reply);
                 if status {
                     this.thread_files_status(cx);
+                    this.check_file(cx);
                 }
                 this.after_git_write(cx);
                 this.normalize_checkout(cx);
                 this.deliver_files(cx);
+                this.deliver_quick_open(cx);
                 this.pump(cx);
                 cx.notify();
             });
@@ -502,6 +514,9 @@ impl Plait {
         } else {
             self.state.repository.leave_history();
         }
+        if tab == Workspace::Files {
+            self.check_file(cx);
+        }
         if tab == Workspace::Conversation
             && !self.settings_open
             && let Some(id) = self.host.selected.clone()
@@ -604,6 +619,13 @@ impl Plait {
                             .aria_keyshortcuts(self.shortcut_aria("view.history"))
                             .on_click(
                                 cx.listener(|this, _, _, cx| this.show_tab(Workspace::History, cx)),
+                            ),
+                    )
+                    .child(
+                        segment("files-tab", "Files", self.tab == Workspace::Files)
+                            .aria_keyshortcuts(self.shortcut_aria("view.files"))
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.show_tab(Workspace::Files, cx)),
                             ),
                     ),
             )
@@ -828,6 +850,13 @@ impl Render for Plait {
             .on_action(
                 cx.listener(|this, _: &CommitHistory, _, cx| this.show_tab(Workspace::History, cx)),
             )
+            .on_action(
+                cx.listener(|this, _: &ShowFiles, _, cx| this.show_tab(Workspace::Files, cx)),
+            )
+            .on_action(cx.listener(|this, _: &QuickOpen, window, cx| this.quick_open(window, cx)))
+            .on_action(cx.listener(|this, _: &FindInFile, window, cx| this.open_find(window, cx)))
+            .on_action(cx.listener(|this, _: &FindNext, _, cx| this.step_find(true, cx)))
+            .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.step_find(false, cx)))
             // Show Changes, where the result and any error appear.
             .on_action(cx.listener(|this, _: &StageAll, _, cx| {
                 this.show_tab(Workspace::Changes, cx);
@@ -928,6 +957,8 @@ impl Render for Plait {
                                 self.settings(cx).into_any_element()
                             } else if self.tab == Workspace::History {
                                 self.history_view(wide, cx).into_any_element()
+                            } else if self.tab == Workspace::Files {
+                                self.file_view(cx)
                             } else if self.tab == Workspace::Changes {
                                 self.changes(wide, cx).into_any_element()
                             } else if real {

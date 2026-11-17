@@ -321,6 +321,20 @@ project-development loop; it does not certify every provider, native input
 method, or long-running task. Automatic compaction remains covered by the
 scripted tests above rather than this live run.
 
+## Files
+
+Core tests read text, binary, non-UTF-8, and oversized files; refuse symlinks,
+paths outside the checkout, directories, missing files, and a FIFO; split CRLF
+and final lines; notice a changed stamp; and find with ASCII case folding, exact
+non-ASCII matches, no overlaps, and the 1,000-match cap. Desktop tests expand
+tabs and clip long lines on character boundaries, and a harness test opens a
+real file, finds in it, rereads it after an edit on disk, keeps the last version
+after deletion, describes a binary file, and lists files in quick open. Scenes
+draw the tab, find, and quick open. In the frame bench a 20,000-line highlighted
+file drew in 0.6 ms at rest and 1.2 ms per frame while wheel-scrolling. Native
+pointer use, find shortcuts, and reloading after an agent's edit have not been
+checked in the installed app.
+
 ## Themes
 
 Core tests parse both published Base16 layouts, name what is wrong with a broken

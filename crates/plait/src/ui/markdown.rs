@@ -20,7 +20,7 @@ const CELL_CHARACTER: f32 = 8.4;
 const CELL_PADDING: f32 = 10.;
 
 /// Syntax classes drawn with the existing palette; see DESIGN.md.
-fn token_color(token: Token) -> u32 {
+pub(super) fn token_color(token: Token) -> u32 {
     match token {
         Token::Comment => colors().subtle,
         Token::Keyword => colors().violet,
