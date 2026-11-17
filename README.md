@@ -8,7 +8,7 @@ not stop accepted work. Reopen it to return to the same thread and saved draft.
 
 [Download preview](https://github.com/heath0xFF/plait/releases) · [Documentation](docs/README.md) · [Contribute](CONTRIBUTING.md)
 
-![Plait showing a completed coding task, native code block, tool results, and saved draft](https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.2/installed-client-coding.png)
+![Plait showing a completed coding task, native code block, tool results, and saved draft](https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.6/installed-client-coding.png)
 
 *Installed Mac app. Scripted provider; real approved source edits and Cargo tests.*
 
@@ -91,8 +91,7 @@ flowchart TB
     sandbox -->|Write output| cache
 ```
 
-In v0.1.0-preview.2, each file change and command needs **Allow once**. Source
-builds after it run edits and commands without asking by default; choose
+Current builds run edits and commands without asking by default; choose
 **Ask each time** under Settings → Approvals to restore prompts. In both modes,
 files you had already changed are protected, and sandboxed commands cannot
 write the checkout or use external networking. The desktop never receives
@@ -107,17 +106,14 @@ This is the **M2 local preview**, not a complete IDE.
 - Git views are read-only. Use your own tools for staging and commits. There is
   no file editor, embedded terminal, or mandatory worktree. Updates are
   installed explicitly; they never restart active work automatically.
-- Commands cannot use external networking or write the checkout. Approved file
-  tools make edits; build output goes to private caches. Model requests need
-  access to your configured provider. Source builds of the host after
-  v0.1.0-preview.2 also have an opt-in, per-project
-  [trusted command mode](docs/HOST.md#command-policy) that lifts these limits;
-  source builds expose it under Settings → Approvals, with explicit confirmation.
-- The released preview shows bounded conversation previews. Source builds with a
-  version 3 host load complete stored messages and tools, page backward through
-  history, and show reasoning. A response still being generated remains a live
-  preview until it is saved; exceptionally large stored fields have explicit
-  text-part controls.
+- Sandboxed commands cannot use external networking or write the checkout.
+  Approved file tools make edits; build output goes to private caches. The
+  opt-in, per-project [trusted command mode](docs/HOST.md#command-policy) lifts
+  these limits. Settings → Approvals explains the scope before confirmation.
+- With a version 3 host, complete stored messages and tools load on demand,
+  including earlier history and reasoning. A response still being generated
+  remains a live preview until saved; exceptionally large stored fields have
+  explicit text-part controls.
 
 Mac CI verifies the installed app, sandbox, and recovery with scripted providers.
 A live-model self-development cycle has also been exercised; broader provider
