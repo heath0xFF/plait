@@ -175,6 +175,9 @@ export class Store {
   owned(id: string): Postimage[] {
     return this.db.prepare('SELECT image FROM postimages WHERE thread_id=? LIMIT 500').all(id).map(row => JSON.parse(String(row.image)));
   }
+  changedPaths(id: string): string[] {
+    return this.db.prepare('SELECT path FROM postimages WHERE thread_id=? ORDER BY path LIMIT 500').all(id).map(row => String(row.path));
+  }
   record(id: string, image: Postimage) {
     // FULL synchronous commits provenance before a tool reports completion.
     this.db.prepare('INSERT INTO postimages VALUES (?,?,?) ON CONFLICT(thread_id,path) DO UPDATE SET image=excluded.image')

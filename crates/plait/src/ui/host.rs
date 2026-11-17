@@ -273,6 +273,7 @@ impl Plait {
                                 }
                                 this.conversation_changed(window, cx);
                                 this.record_snapshot(cx);
+                                this.thread_files_snapshot(cx);
                                 if previous
                                     .as_ref()
                                     .is_some_and(|snapshot| snapshot.status.busy())

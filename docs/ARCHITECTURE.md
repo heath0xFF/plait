@@ -36,6 +36,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
   selection.rs          text selection, copy, and link clicks in the conversation
   tool_card.rs          one line per tool call, its details, and grouped runs
   thread_controls.rs    model, thinking, context, run settings, and queued inputs
+  thread_files.rs       files the thread changed, above its composer
   changes.rs            changed-file list and diff view
   commit_panel.rs       staging buttons, commit message, and write results
   commits.rs            the History tab: commit list and a commit's patch
@@ -91,6 +92,7 @@ selection.rs            selection order, ranges, word bounds, and copied text
 git.rs                  synchronous Git adapter: hardened reads; background only
   git/write.rs          stage, unstage, commit, push, pull, fetch, discard
   git/log.rs            commit history and one commit's patch (read-only)
+  git/counts.rs         uncommitted line counts for named paths (read-only)
   git/worktree.rs       add and remove optional per-thread worktrees
 fuzzy.rs                case-insensitive subsequence matching for pickers
 ```

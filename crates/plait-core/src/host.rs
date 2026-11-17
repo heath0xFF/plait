@@ -468,6 +468,10 @@ pub enum Request {
         request_id: String,
         protocol_version: u32,
     },
+    ChangedFiles {
+        thread_id: String,
+        protocol_version: u32,
+    },
 }
 
 impl Request {
@@ -614,6 +618,14 @@ impl Request {
             protocol_version: 3,
         }
     }
+
+    /// Files the thread's tools wrote. Hosts from before this operation reject it.
+    pub fn changed_files(thread_id: String) -> Self {
+        Self::ChangedFiles {
+            thread_id,
+            protocol_version: 3,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -632,6 +644,12 @@ pub struct ThreadsPage {
 #[serde(deny_unknown_fields)]
 pub struct ThreadReply {
     pub thread: Snapshot,
+}
+/// Paths relative to the thread's checkout, sorted, at most 500.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChangedFilesReply {
+    pub files: Vec<PathBuf>,
 }
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1183,6 +1201,10 @@ mod tests {
         assert_eq!(
             wire(Request::cancel_queued("t".into(), "r".into())),
             json(r#"{"op":"cancel_queued","thread_id":"t","request_id":"r","protocol_version":3}"#)
+        );
+        assert_eq!(
+            wire(Request::changed_files("t".into())),
+            json(r#"{"op":"changed_files","thread_id":"t","protocol_version":3}"#)
         );
         assert_eq!(
             wire(Request::submit_when_busy(

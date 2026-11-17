@@ -363,6 +363,22 @@ threads, archived ones only with `"archived":true`. Each later frame is
   client that does not read is disconnected rather than queued for, and a
   disconnect stops no work. After a reconnect the first frame is the full list.
 
+### Changed files
+
+`changed_files` with `thread_id` returns the files that thread's `edit` and
+`write` tools wrote, as the host records them for its file protections:
+
+```json
+{"files":["docs/notes.md","src/parser.rs"]}
+```
+
+Paths are relative to the thread's checkout, sorted, at most 500. A file stays
+listed after the thread's run ends, after a commit, and after someone else
+changes it; the list says what the thread wrote, not what differs now. Files
+that only commands changed are not listed. Unknown threads return `not_found`.
+The operation needs version 3; hosts from before it reject it as an unknown
+operation, so a client treats that as no list.
+
 ### Model and thinking level
 
 `configure_thread` changes a thread's model, its thinking level, or both, and

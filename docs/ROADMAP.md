@@ -75,6 +75,12 @@ for confirmation first. Pull is fast-forward only: Plait fetches, then moves
 the branch to its upstream, and refuses a diverged branch or a pull that would
 overwrite uncommitted changes. Merge and rebase are not part of this step.
 
+**Agreed for M2.5 changed files:** a version 3 `changed_files` operation
+returns the paths a thread's file tools wrote, from the host's existing
+provenance records. The desktop counts their uncommitted lines with a hardened
+Git read and lists them above the composer; Settings → View hides the list.
+Snapshots are unchanged, so older clients are unaffected.
+
 **Agreed for M2.5 worktrees:** a thread may start in its own worktree, never by
 default. The desktop runs `git worktree add` from HEAD on a new `plait/<name>`
 branch, in a `<repository>.worktrees/` folder beside the repository, and starts

@@ -115,7 +115,7 @@ const fields: Record<string, string[]> = {
 const fields3: Record<string, string[]> = {
   list_threads: [], history: ['thread_id'], history_text: ['thread_id', 'ref', 'offset'],
   rename_thread: ['thread_id', 'title'], archive_thread: ['thread_id', 'archived'], watch_threads: [],
-  configure_thread: ['thread_id'], cancel_queued: ['thread_id', 'request_id'],
+  configure_thread: ['thread_id'], cancel_queued: ['thread_id', 'request_id'], changed_files: ['thread_id'],
 };
 const optional3: Record<string, string[]> = {
   submit: ['when_busy'], list_threads: ['checkout', 'limit', 'cursor', 'archived'], history: ['before', 'limit'],

@@ -848,6 +848,73 @@ fn a_worktree_thread_is_created_in_a_new_worktree_listed_under_its_project() {
     std::fs::remove_dir_all(scratch).unwrap();
 }
 
+#[core::prelude::v1::test]
+fn changed_files_count_with_git_hide_on_request_and_open_in_changes() {
+    // Hiding saves a preference; only a scratch home may receive it.
+    if !isolated("changed_files_count_with_git_hide_on_request_and_open_in_changes") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-files-ui-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 1380., 860.);
+    harness.settle();
+    let root = repository.canonicalize().unwrap();
+    harness.update(move |plait, _, cx| {
+        plait.host.connected = true;
+        plait.host.status = Some(status());
+        plait.host.status.as_mut().unwrap().protocol_version = 3;
+        plait.host.selected = Some(THREAD.into());
+        plait.thread_files.inject(THREAD, root, Vec::new());
+        plait.thread_files.set_paths(vec![
+            "src/review.rs".into(),
+            "notes.md".into(),
+            "untouched.txt".into(),
+        ]);
+        plait.thread_files_status(cx);
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        harness.settle();
+        let shown = harness
+            .window
+            .update(&mut harness.cx, |plait, _, cx| {
+                plait.thread_files_card(cx).is_some()
+            })
+            .unwrap();
+        if shown {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the counts did not arrive");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    harness.update(|plait, window, cx| {
+        let paths: Vec<_> = plait
+            .thread_files
+            .counted()
+            .map(|c| c.path.clone())
+            .collect();
+        assert_eq!(
+            paths,
+            [PathBuf::from("src/review.rs"), PathBuf::from("notes.md")],
+            "clean files are left out"
+        );
+        plait.set_changed_files_hidden(true, cx);
+        assert!(plait.thread_files_card(cx).is_none());
+        plait.preferences.value.hide_changed_files = false;
+        plait.open_thread_file("src/review.rs".into(), window, cx);
+        assert_eq!(plait.tab, super::Workspace::Changes);
+        let repo = &plait.state.repository;
+        let key = repo.selected.as_ref().unwrap();
+        assert_eq!(
+            repo.snapshot.ready().unwrap().changes[key.file].path,
+            PathBuf::from("src/review.rs")
+        );
+    });
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
 /// The index of the shown diff's first added line.
 fn first_added(plait: &Plait) -> usize {
     let Load::Ready(diff) = &plait.state.repository.diff else {
@@ -2225,6 +2292,42 @@ fn composer_v3_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         plait.sync_composer(cx);
     });
     harness.capture(&format!("composer-v3-idle-{suffix}"));
+    // What the thread changed, above its composer. Injected sample counts.
+    let root = repository.to_owned();
+    harness.update(move |plait, _, cx| {
+        let count = |path: &str, added, removed, untracked| plait_core::git::LineCount {
+            path: path.into(),
+            added,
+            removed,
+            untracked,
+        };
+        plait.thread_files.inject(
+            THREAD,
+            root,
+            vec![
+                count(
+                    "crates/plait-core/src/git/worktree.rs",
+                    Some(102),
+                    Some(0),
+                    true,
+                ),
+                count("crates/plait/src/ui/worktree.rs", Some(137), Some(4), false),
+                count("docs/ROADMAP.md", Some(12), Some(3), false),
+                count("assets/icon.png", None, None, false),
+            ],
+        );
+        cx.notify();
+    });
+    harness.capture(&format!("composer-v3-changed-files-{suffix}"));
+    harness.update(|plait, _, cx| {
+        plait.thread_files.collapsed = true;
+        cx.notify();
+    });
+    harness.capture(&format!("composer-v3-changed-files-collapsed-{suffix}"));
+    harness.update(|plait, _, cx| {
+        plait.thread_files = Default::default();
+        cx.notify();
+    });
     harness.composer(|composer, window, cx| {
         let revision = composer.saved_draft().1;
         assert!(composer.restore_cancelled("Restored exact message", revision, cx));

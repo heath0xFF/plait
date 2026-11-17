@@ -26,6 +26,7 @@ mod snapshot;
 mod text_field;
 pub mod theme;
 mod thread_controls;
+mod thread_files;
 mod tool_card;
 mod update;
 mod worktree;
@@ -77,6 +78,7 @@ actions!(
         SwitchThreadModel,
         CommandPalette,
         ToggleInspector,
+        ToggleChangedFiles,
         RenameThread,
         ArchiveThread,
         ToggleArchived,
@@ -121,6 +123,8 @@ pub struct Plait {
     worktree_busy: bool,
     /// Diff lines picked in Changes to ask the selected thread about.
     line_pick: Option<changes::LinePick>,
+    /// Files the selected thread changed, above its composer.
+    thread_files: thread_files::ThreadFiles,
     /// The command palette or model picker, above the workspace.
     overlay: Option<commands::Overlay>,
     /// The inspector toggle was used on a window too narrow to show it.
@@ -187,6 +191,7 @@ impl Plait {
             new_thread_open: false,
             worktree_busy: false,
             line_pick: None,
+            thread_files: Default::default(),
             overlay: None,
             inspector_note: false,
             panels: Default::default(),
@@ -247,7 +252,11 @@ impl Plait {
         cx.spawn(async move |this, cx| {
             let (job, reply) = task.await;
             let _ = this.update(cx, |this, cx| {
+                let status = matches!(job, plait_core::state::Job::Status { .. });
                 this.state.repository.complete(job, reply);
+                if status {
+                    this.thread_files_status(cx);
+                }
                 this.after_git_write(cx);
                 this.normalize_checkout(cx);
                 this.deliver_files(cx);
@@ -780,6 +789,10 @@ impl Render for Plait {
             .on_action(
                 cx.listener(|this, _: &NewThread, window, cx| this.new_thread(None, window, cx)),
             )
+            .on_action(cx.listener(|this, _: &ToggleChangedFiles, _, cx| {
+                let hidden = !this.preferences.value.hide_changed_files;
+                this.set_changed_files_hidden(hidden, cx)
+            }))
             .on_action(cx.listener(|this, _: &NewWorktreeThread, window, cx| {
                 this.new_worktree_thread(window, cx)
             }))

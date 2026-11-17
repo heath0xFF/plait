@@ -1404,3 +1404,82 @@ fn a_worktree_is_created_beside_the_repository_and_removed_only_when_clean() {
         &format!("refs/heads/{}", tree.branch),
     ]);
 }
+
+#[test]
+fn numstat_records_parse_counts_binary_and_odd_names() {
+    let counts =
+        parse_numstat(b"3\t1\tsrc/a.rs\0-\t-\timage.png\x000\t2\twith\ttab.txt\0").unwrap();
+    assert_eq!(counts.len(), 3);
+    assert_eq!((counts[0].added, counts[0].removed), (Some(3), Some(1)));
+    assert_eq!((counts[1].added, counts[1].removed), (None, None));
+    assert_eq!(counts[2].path, PathBuf::from("with\ttab.txt"));
+    assert!(parse_numstat(b"3\t1\0").is_err());
+    assert!(parse_numstat(b"1\t1\t../escape\0").is_err());
+}
+
+#[test]
+fn line_counts_cover_staged_unstaged_and_new_files_and_skip_clean_ones() {
+    let repo = Repo::new();
+    repo.write("a.txt", "one\ntwo\n");
+    repo.write("clean.txt", "same\n");
+    repo.write("gone.txt", "x\ny\n");
+    repo.git(&["add", "."]);
+    repo.git(&["commit", "-q", "-m", "First"]);
+    repo.write("a.txt", "one\nTWO\nthree\n");
+    repo.git(&["add", "a.txt"]);
+    repo.write("a.txt", "one\nTWO\nthree\nfour\n");
+    fs::remove_file(repo.0.join("gone.txt")).unwrap();
+    repo.write("new.txt", "a\nb\nc");
+    repo.write("bin.dat", [0u8, 1, 2]);
+    repo.write(".gitignore", "ignored.txt\n");
+    repo.write("ignored.txt", "x\n");
+    let paths: Vec<PathBuf> = [
+        "new.txt",
+        "a.txt",
+        "clean.txt",
+        "gone.txt",
+        "bin.dat",
+        "ignored.txt",
+        "missing.txt",
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .collect();
+    let counts = line_counts(&repo.0, &paths).unwrap();
+    let shown: Vec<_> = counts
+        .iter()
+        .map(|c| (c.path.to_str().unwrap(), c.added, c.removed, c.untracked))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("new.txt", Some(3), Some(0), true),
+            ("a.txt", Some(3), Some(1), false),
+            ("gone.txt", Some(0), Some(2), false),
+            ("bin.dat", None, None, true),
+        ]
+    );
+    assert!(line_counts(&repo.0, &[PathBuf::from("../x")]).is_err());
+    assert!(line_counts(&repo.0, &[]).unwrap().is_empty());
+}
+
+#[test]
+fn line_counts_before_the_first_commit_count_staged_files_as_new() {
+    let repo = Repo::new();
+    repo.write("staged.txt", "a\nb\n");
+    repo.git(&["add", "staged.txt"]);
+    repo.write("loose.txt", "c\n");
+    let counts = line_counts(
+        &repo.0,
+        &[PathBuf::from("staged.txt"), PathBuf::from("loose.txt")],
+    )
+    .unwrap();
+    let shown: Vec<_> = counts
+        .iter()
+        .map(|c| (c.path.to_str().unwrap(), c.added, c.untracked))
+        .collect();
+    assert_eq!(
+        shown,
+        [("staged.txt", Some(2), false), ("loose.txt", Some(1), true)]
+    );
+}

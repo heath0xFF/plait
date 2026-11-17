@@ -324,9 +324,16 @@ impl Plait {
                 .child(self.host_status(cx))
                 .child({
                     let mut tabs = row().gap_1().flex_wrap();
-                    for (index, label) in ["Models", "Providers", "Approvals", "Keyboard", "About"]
-                        .into_iter()
-                        .enumerate()
+                    for (index, label) in [
+                        "Models",
+                        "Providers",
+                        "Approvals",
+                        "Keyboard",
+                        "View",
+                        "About",
+                    ]
+                    .into_iter()
+                    .enumerate()
                     {
                         tabs = tabs.child(
                             toned_button(
@@ -366,7 +373,8 @@ impl Plait {
                                 .child(self.policy_settings(cx))
                                 .into_any_element(),
                             3 => self.keyboard_settings(cx).into_any_element(),
-                            4 => self.build_details(cx).into_any_element(),
+                            4 => self.view_settings(cx).into_any_element(),
+                            5 => self.build_details(cx).into_any_element(),
                             _ => self.model_settings(cx).into_any_element(),
                         }),
                 ),
@@ -395,6 +403,47 @@ impl Plait {
                     .child(tag(host, SUBTLE)),
             )
             .child(self.update_controls(cx))
+    }
+
+    fn view_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let hidden = self.preferences.value.hide_changed_files;
+        let mut choices = segmented();
+        for (index, (label, value)) in [("Show", false), ("Hide", true)].into_iter().enumerate() {
+            choices = choices.child(
+                segment(("changed-files", index), label, value == hidden)
+                    .role(Role::RadioButton)
+                    .aria_toggled(if value == hidden {
+                        Toggled::True
+                    } else {
+                        Toggled::False
+                    })
+                    .aria_label(format!("Changed files above the message box: {label}"))
+                    .on_activate(cx, move |this, _, cx| {
+                        this.set_changed_files_hidden(value, cx)
+                    }),
+            );
+        }
+        section("View")
+            .child(setting(
+                "Changed files above the message box",
+                "Files the thread wrote that are not committed yet, with lines added and removed. Click one to see it in Changes.",
+                choices,
+            ))
+            .when_some(
+                self.preference_note(Some(PreferenceGroup::View)),
+                |el, note| el.child(tag(note, SUBTLE)),
+            )
+    }
+
+    pub(super) fn set_changed_files_hidden(&mut self, hidden: bool, cx: &mut Context<Self>) {
+        let mut value = self.preferences.value.clone();
+        value.hide_changed_files = hidden;
+        self.set_preferences(value, PreferenceGroup::View, cx);
+        // Lists were not fetched while hidden.
+        if !hidden {
+            self.thread_files.reset();
+            self.thread_files_snapshot(cx);
+        }
     }
 
     fn approval_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {

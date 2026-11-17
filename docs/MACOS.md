@@ -316,6 +316,13 @@ for the inspector it explains where Git is instead. Drag either panel's inner
 edge to resize it; the width is remembered, and double-clicking the edge restores
 the default. Both shortcuts can be changed in Settings → Keyboard.
 
+Above the message box, a card lists the files the thread wrote that are not
+committed yet, with lines added and removed against HEAD. It updates as the
+thread's edits finish and as Git status refreshes. Click its header to fold it,
+or a file to see that file in Changes. Settings → View, or **Toggle Changed
+Files** in the View menu, hides it. Files changed only by commands are not
+listed, and the card needs a host from this release or later.
+
 ### Command palette and model picker
 
 Cmd-K opens the command palette: threads in the open checkout, every menu

@@ -78,6 +78,23 @@ fn base_command(root: &Path) -> Command {
 
 /// A read command with every configured filter driver neutralized.
 fn read_command(root: &Path) -> Result<Command> {
+    let overrides = filter_overrides(root)?;
+    Ok(read_command_with(root, &overrides))
+}
+
+/// The base command plus `-c` overrides from `filter_overrides`, so several
+/// reads can share one configuration read.
+fn read_command_with(root: &Path, overrides: &[String]) -> Command {
+    let mut command = base_command(root);
+    for setting in overrides {
+        command.arg("-c").arg(setting);
+    }
+    command
+}
+
+/// Settings that disable every configured filter driver. Even read-only Git
+/// commands can execute clean/process filters while comparing the worktree.
+fn filter_overrides(root: &Path) -> Result<Vec<String>> {
     let keys = execute(
         base_command(root).args(["config", "--null", "--name-only", "--list"]),
         STATUS_LIMIT,
@@ -94,14 +111,12 @@ fn read_command(root: &Path) -> Result<Command> {
             driver.starts_with("filter.").then_some(driver)
         })
         .collect();
-    let mut command = base_command(root);
-    // Even read-only Git commands can execute clean/process filters while comparing the worktree.
-    for driver in filters {
-        for setting in ["clean=", "process=", "required=false"] {
-            command.arg("-c").arg(format!("{driver}.{setting}"));
-        }
-    }
-    Ok(command)
+    Ok(filters
+        .into_iter()
+        .flat_map(|driver| {
+            ["clean=", "process=", "required=false"].map(|setting| format!("{driver}.{setting}"))
+        })
+        .collect())
 }
 
 fn command(root: &Path, args: &[&OsStr], limit: usize) -> Result<Output> {
@@ -697,9 +712,13 @@ fn format_diff(bytes: &[u8], mut truncated: bool, elapsed: Duration) -> Diff {
     }
 }
 
+mod counts;
 mod log;
 mod worktree;
 mod write;
+#[cfg(test)]
+use counts::parse_numstat;
+pub use counts::{LineCount, line_counts};
 pub use log::{Commit, History, log, show};
 pub use worktree::{Worktree, add_worktree, remove_worktree};
 pub use write::{Backup, WriteOp, WriteOutcome, write};

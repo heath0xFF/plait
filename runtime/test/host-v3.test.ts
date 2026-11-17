@@ -276,6 +276,20 @@ test('a new thread starts at the requested thinking level, or the nearest its mo
   assert.equal((await watch3(f, high.id)).thinking_level, 'high');
 });
 
+test('changed_files lists the files a thread wrote, for version 3 clients only', { timeout: 30000 }, async t => {
+  const f = await setup(t, 'edit'); const thread = await f.create();
+  const changed = async () => (await v3<{ files: string[] }>(f.store, { op: 'changed_files', thread_id: thread.id })).result.files;
+  assert.deepEqual(await changed(), []);
+  assert.equal((await submit3(f, thread.id, 's1', 'Edit the notes.', { approval: 'auto' })).ok, true);
+  await until(() => watch3(f, thread.id), value => value.status === 'idle', 20000);
+  assert.equal(await readFile(join(f.repo, 'notes.txt'), 'utf8'), 'after\n');
+  // A file it only read is not listed.
+  assert.deepEqual(await changed(), ['notes.txt']);
+  assert.equal((await v3(f.store, { op: 'changed_files', thread_id: 'missing' })).error?.code, 'not_found');
+  const older = await request(f.store, { op: 'changed_files', thread_id: thread.id, protocol_version: 2 });
+  assert.equal(older.error?.code, 'invalid_request');
+});
+
 test('a follow-up queued during a run starts its own run in its own approval mode', { timeout: 40000 }, async t => {
   const f = await setup(t, 'separate-edits'); const thread = await f.create();
   // The first run approves automatically. The queued one asked to be prompted, and is.

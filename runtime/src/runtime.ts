@@ -166,6 +166,11 @@ export class Runtime {
       }
       case 'configure_thread': return { thread: this.configure(String(request.thread_id), request) };
       case 'cancel_queued': return { thread: await this.cancelQueued(String(request.thread_id), String(request.request_id)) };
+      case 'changed_files': {
+        // Files this thread's tools wrote, as recorded for provenance: a list, not a diff.
+        const id = String(request.thread_id); this.snapshot(id);
+        return { files: this.store.changedPaths(id) };
+      }
       case 'history': {
         const id = String(request.thread_id); this.snapshot(id);
         return this.read(id, source => historyPage(source, request.before as string | undefined, Number(request.limit ?? 100)));

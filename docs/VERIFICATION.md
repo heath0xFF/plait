@@ -214,6 +214,13 @@ these tests.
   unborn branch, hooks, filters, a held `index.lock`, paging) and by scene
   snapshots of Changes and History. They have not been exercised with a native
   pointer in the installed app, with Git LFS, or with signed commits.
+- The changed-files list is covered by a host test of `changed_files` (a
+  written file is listed, a read one is not, unknown threads and version 2
+  requests are refused), by Git tests of the line counts (staged and unstaged
+  together, deleted, new, binary, ignored, and clean files, and a repository
+  without commits), and by a desktop test that counts real files, hides the
+  card, and opens a file in Changes. It has not been watched live in the
+  installed app.
 - Asking about diff lines is covered by unit tests of the quote (line ranges,
   removed-only picks, header lines left out, fences longer than any backtick
   run, long picks summarized) and a desktop test that picks lines in a real

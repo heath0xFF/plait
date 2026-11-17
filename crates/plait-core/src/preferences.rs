@@ -98,6 +98,8 @@ pub struct Preferences {
     pub ask_before_actions: bool,
     /// Hide the Git inspector beside the conversation on wide windows.
     pub hide_inspector: bool,
+    /// Hide the card above the composer listing the files a thread changed.
+    pub hide_changed_files: bool,
     /// Widths dragged on this desktop, in points. `None` keeps the default;
     /// the desktop fits a saved width to the window it is drawn in.
     pub sidebar_width: Option<u16>,

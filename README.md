@@ -110,7 +110,9 @@ This is the **M2 local preview**, not a complete IDE.
 - Changes stages and discards (by file or hunk, with undo), commits, fetches,
   pushes, and fast-forward pulls; History shows commits and their patches.
   Click line numbers in a diff, then **Ask about this**, to quote those lines
-  into the selected thread's message.
+  into the selected thread's message. Above the message box, the files a
+  thread wrote and has not committed are listed with their line counts
+  (Settings → View hides them).
   **New Thread in Worktree** (Cmd-Option-N) starts a thread on a new branch in
   its own worktree beside the repository, listed under the same project;
   the thread's menu removes it once its work is committed. Worktrees are never
