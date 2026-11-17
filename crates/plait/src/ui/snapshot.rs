@@ -942,6 +942,22 @@ fn walk(output: Option<&Path>) {
             modifiers: Modifiers::default(),
         }));
         harness.capture(&format!("changes-hunk-{suffix}"));
+        // After a discard, its result offers Undo. Injected, not performed.
+        harness.update(|plait, _, _| {
+            let write = &mut plait.state.repository.write;
+            write.note = Some(("Discarded changes to review.rs".into(), false));
+            write.undo = Some(plait_core::git::Backup {
+                path: "src/review.rs".into(),
+                blob: "0".repeat(40),
+                executable: false,
+            });
+        });
+        harness.capture(&format!("changes-undo-{suffix}"));
+        harness.update(|plait, _, _| {
+            let write = &mut plait.state.repository.write;
+            write.note = Some(("Staged 1 file".into(), false));
+            write.undo = None;
+        });
         harness.update(|plait, _, cx| {
             plait
                 .commit_message

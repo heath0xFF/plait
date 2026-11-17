@@ -107,8 +107,9 @@ still wait for you.
 This is the **M2 local preview**, not a complete IDE.
 
 - Local macOS execution only. Remote hosts and Linux execution are not available.
-- Changes stages, unstages, commits, fetches, and pushes; History shows commits
-  and their patches. There is no pull, discard, branch switching, file editor,
+- Changes stages and discards (by file or hunk, with undo), commits, fetches,
+  and pushes; History shows commits and their patches. There is no pull,
+  branch switching, file editor,
   embedded terminal, or mandatory worktree. Updates are
   installed explicitly; they never restart active work automatically.
 - Sandboxed commands cannot use external networking or write the checkout.

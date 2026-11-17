@@ -556,6 +556,23 @@ fn prompt_path(bytes: &[u8]) -> Option<&str> {
 }
 
 fn open_regular_file(root: &Path, relative: &Path) -> Result<std::fs::File> {
+    let file = open_beneath(root, relative, libc::O_RDONLY | libc::O_NONBLOCK, 0)
+        .map_err(|e| format!("Cannot safely open preview: {e}"))?;
+    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
+        return Err("Preview is not a regular file".into());
+    }
+    Ok(file)
+}
+
+/// Open `relative` under `root` without following a symlink anywhere on the
+/// way, so a link swapped in by another process cannot point outside the
+/// checkout. `flags` and `mode` apply to the last component only.
+fn open_beneath(
+    root: &Path,
+    relative: &Path,
+    flags: libc::c_int,
+    mode: libc::c_uint,
+) -> Result<std::fs::File> {
     use std::{
         ffi::CString,
         os::{
@@ -568,30 +585,21 @@ fn open_regular_file(root: &Path, relative: &Path) -> Result<std::fs::File> {
     let mut components = relative.components().peekable();
     while let Some(component) = components.next() {
         let name = CString::new(component.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
-        let directory = if components.peek().is_some() {
-            libc::O_DIRECTORY
-        } else {
-            0
-        };
+        let last = components.peek().is_none();
+        let flags = libc::O_CLOEXEC
+            | libc::O_NOFOLLOW
+            | if last {
+                flags
+            } else {
+                libc::O_RDONLY | libc::O_DIRECTORY
+            };
         // Resolve each component from its open parent so a concurrent symlink swap cannot escape.
-        let fd = unsafe {
-            libc::openat(
-                file.as_raw_fd(),
-                name.as_ptr(),
-                libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK | directory,
-            )
-        };
+        let fd = unsafe { libc::openat(file.as_raw_fd(), name.as_ptr(), flags, mode) };
         if fd < 0 {
-            return Err(format!(
-                "Cannot safely open preview: {}",
-                std::io::Error::last_os_error()
-            ));
+            return Err(std::io::Error::last_os_error().to_string());
         }
         // openat returned an owned descriptor; File closes it on every return path.
         file = unsafe { std::fs::File::from_raw_fd(fd) };
-    }
-    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
-        return Err("Preview is not a regular file".into());
     }
     Ok(file)
 }
@@ -692,7 +700,7 @@ fn format_diff(bytes: &[u8], mut truncated: bool, elapsed: Duration) -> Diff {
 mod log;
 mod write;
 pub use log::{Commit, History, log, show};
-pub use write::{WriteOp, WriteOutcome, write};
+pub use write::{Backup, WriteOp, WriteOutcome, write};
 #[cfg(test)]
 use write::{hunk_patch, network_hint};
 

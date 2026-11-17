@@ -112,7 +112,7 @@ fn display(bytes: &[u8]) -> String {
     cleaned.trim().to_owned()
 }
 
-fn is_object_id(id: &str) -> bool {
+pub(super) fn is_object_id(id: &str) -> bool {
     matches!(id.len(), 40 | 64) && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 

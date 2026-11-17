@@ -397,7 +397,15 @@ file** in the diff header. To take part of a file, hover a hunk's `@@` line and
 choose **Stage hunk** (or **Unstage hunk** in the Staged view). If the file
 changed since its diff was shown, Plait refuses, rereads it, and asks you to
 try again. New, renamed, and conflicted files, and files that pass through a
-Git filter such as LFS, stage whole. **Stage all** and **Unstage all** sit above the commit
+Git filter such as LFS, stage whole.
+
+**Discard…** in the diff header (Unstaged view) throws away a file's unstaged
+changes and returns it to its staged or committed version; staged work is
+kept. For an untracked file it reads **Delete…**. Hover a hunk for **Discard
+hunk…** to drop just that part. Each asks first in a macOS alert. Before
+discarding, Plait saves the file's exact bytes in the repository's object
+store, and **Undo** beside the result puts them back until your next Git
+action. Conflicted files cannot be discarded here. **Stage all** and **Unstage all** sit above the commit
 message. Type a one-line message and press Return or **Commit** (Cmd-Shift-C
 moves to the message). Only staged changes are committed. Plait runs your
 repository's own Git configuration for these: clean filters such as LFS run when
@@ -421,7 +429,7 @@ the **Git** menu.
 
 **History** (Cmd-Shift-3) lists commits on the current branch, newest first, 100
 at a time. Select one to see its message and patch against its first parent.
-There is no pull, discard, amend, or branch switching yet; use your own Git
+There is no pull, amend, or branch switching yet; use your own Git
 tools for those.
 
 ## Updates

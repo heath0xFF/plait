@@ -167,6 +167,62 @@ impl Plait {
         }
     }
 
+    /// Ask in a native alert, then discard. Undo stays offered afterwards.
+    pub(super) fn confirm_discard(
+        &mut self,
+        op: WriteOp,
+        title: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &title,
+            Some("Plait keeps a copy, so you can undo this until your next Git action."),
+            &[
+                PromptButton::Other("Discard".into()),
+                PromptButton::Cancel("Cancel".into()),
+            ],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if answer.await == Ok(0) {
+                let _ = this.update(cx, |this, cx| this.git_write(op, cx));
+            }
+        })
+        .detach();
+    }
+
+    /// Discard the selected file's unstaged changes, or delete it if untracked.
+    pub(super) fn discard_file(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(change) = self
+            .state
+            .repository
+            .snapshot
+            .ready()
+            .and_then(|snapshot| snapshot.changes.get(index))
+        else {
+            return;
+        };
+        let untracked = change.index == b'?';
+        let title = if untracked {
+            format!("Delete {}?", change.display_path())
+        } else {
+            format!("Discard unstaged changes to {}?", change.display_path())
+        };
+        let op = WriteOp::Discard {
+            path: change.path.clone(),
+            untracked,
+            hunk: None,
+        };
+        self.confirm_discard(op, title, window, cx);
+    }
+
     /// Push, or publish a branch the remote does not have yet.
     pub(super) fn push(&mut self, cx: &mut Context<Self>) {
         let Some(sync) = self.state.repository.snapshot.ready().map(|s| sync_of(s)) else {
@@ -316,10 +372,25 @@ impl Plait {
             .when(busy, |el| el.child(tag("Git is working…", SUBTLE)))
             .when_some(note.filter(|_| !busy), |el, (note, failed)| {
                 el.child(
-                    div()
-                        .text_size(px(11.))
-                        .text_color(rgb(if failed { RED } else { SUBTLE }))
-                        .child(note),
+                    row()
+                        .gap_1()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_size(px(11.))
+                                .text_color(rgb(if failed { RED } else { SUBTLE }))
+                                .child(note),
+                        )
+                        .when_some(write.undo.clone(), |el, backup| {
+                            el.child(
+                                button("undo-discard", "Undo")
+                                    .aria_description("Put the discarded file back as it was.")
+                                    .on_activate(cx, move |this, _, cx| {
+                                        this.git_write(WriteOp::Restore(backup.clone()), cx)
+                                    }),
+                            )
+                        }),
                 )
             })
     }

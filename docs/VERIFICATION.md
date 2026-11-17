@@ -217,6 +217,10 @@ these tests.
 - Hunk staging is covered against real repositories (staging and unstaging
   one of two hunks, refusing a hunk that moved, refusing filtered files, and
   byte-exact patches with tabs, CRLF, and missing final newlines).
+- Discard is covered against real repositories (a file keeps its staged side,
+  one hunk of two, an untracked executable deleted and restored with its mode,
+  and a restore that refuses to write through a symlink). The native
+  confirmation alert has not been exercised in the installed app.
 - Push, publish, and fetch are covered against a local bare repository
   (publish, push, fetch revealing a remote commit, and a refused diverged
   push). Pushing to GitHub over SSH or HTTPS with `gh` sign-in has been checked

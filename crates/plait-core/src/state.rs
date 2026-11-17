@@ -138,6 +138,8 @@ pub struct WriteState {
     reselect: Option<(PathBuf, DiffMode)>,
     /// Set when a commit succeeds, so the view can clear its message once.
     pub committed: Option<String>,
+    /// The last discard's saved copy, offered as Undo until the next write.
+    pub undo: Option<git::Backup>,
 }
 
 impl WriteState {
@@ -315,6 +317,7 @@ impl RepositoryState {
         // Keep the file in view across the refresh the write causes.
         self.write.reselect = self.selected_change();
         self.write.note = None;
+        self.write.undo = None;
         self.write.queued = Some(op);
         true
     }
@@ -489,6 +492,7 @@ impl RepositoryState {
                 self.write.running = false;
                 if let Ok(outcome) = &result {
                     self.write.committed = outcome.commit.clone();
+                    self.write.undo = outcome.backup.clone();
                 }
                 self.write.note = Some(match &result {
                     Ok(outcome) => (outcome.summary.clone(), false),
@@ -776,6 +780,7 @@ mod tests {
         Reply::Write(Ok(git::WriteOutcome {
             summary: summary.into(),
             commit: None,
+            backup: None,
         }))
     }
 
@@ -902,6 +907,7 @@ mod tests {
             Reply::Write(Ok(git::WriteOutcome {
                 summary: "Committed".into(),
                 commit: Some("abc".into()),
+                backup: None,
             })),
         );
         assert!(matches!(s.commits.list, Load::Loading));
@@ -1009,6 +1015,7 @@ mod tests {
             Reply::Write(Ok(git::WriteOutcome {
                 summary: "Committed".into(),
                 commit: Some("b".into()),
+                backup: None,
             })),
         );
         assert!(matches!(s.commits.list, Load::Empty));

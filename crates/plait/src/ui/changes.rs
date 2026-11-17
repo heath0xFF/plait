@@ -65,6 +65,37 @@ fn hunk_button(
     .on_activate(cx, move |this, _, cx| this.git_write(op.clone(), cx))
 }
 
+/// Beside Stage hunk on unstaged hunks; asks before anything is lost.
+fn discard_hunk_button(
+    target: &HunkTarget,
+    hunk: usize,
+    header: &str,
+    cx: &mut Context<Plait>,
+) -> Stateful<Div> {
+    let op = WriteOp::Discard {
+        path: target.path.clone(),
+        untracked: false,
+        hunk: Some((hunk, header.to_owned())),
+    };
+    let name = target.path.file_name().map_or_else(
+        || target.path.to_string_lossy().into_owned(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    quiet_button(("hunk-discard", hunk), "Discard hunk…", "diff-hunk")
+        .h(px(DIFF_LINE_HEIGHT - 2.))
+        .font_family(".SystemUIFont")
+        .text_size(px(11.))
+        .disabled(target.busy)
+        .on_activate(cx, move |this, window, cx| {
+            this.confirm_discard(
+                op.clone(),
+                format!("Discard this hunk in {name}?"),
+                window,
+                cx,
+            )
+        })
+}
+
 fn split_path(change: &Change) -> (String, String) {
     let display = change.display_path();
     let path = Path::new(&display);
@@ -319,14 +350,15 @@ impl Plait {
             row()
                 .h(px(44.))
                 .px_4()
-                .gap_3()
+                .gap_2()
                 .flex_shrink_0()
                 .border_b_1()
                 .border_color(rgb(BORDER))
                 .child(
                     column()
                         .flex_1()
-                        .min_w_0()
+                        // The path stays readable when the header is crowded.
+                        .min_w(px(96.))
                         .child(
                             div()
                                 .truncate()
@@ -343,7 +375,6 @@ impl Plait {
                             )
                         }),
                 )
-                .child(tag("Unified diff", SUBTLE).flex_shrink_0())
                 .child({
                     let stage = key.mode == DiffMode::Unstaged;
                     let possible = if stage {
@@ -362,6 +393,26 @@ impl Plait {
                     .disabled(!possible || repo.write.busy())
                     .on_activate(cx, move |this, _, cx| this.stage_change(index, stage, cx))
                 })
+                // Only the unstaged side can be thrown away; staged work is kept.
+                .when(
+                    key.mode == DiffMode::Unstaged && change.unstaged() && !change.conflicted(),
+                    |el| {
+                        el.child(
+                            button(
+                                "diff-discard",
+                                if change.index == b'?' {
+                                    "Delete…"
+                                } else {
+                                    "Discard…"
+                                },
+                            )
+                            .disabled(repo.write.busy())
+                            .on_activate(cx, move |this, window, cx| {
+                                this.discard_file(index, window, cx)
+                            }),
+                        )
+                    },
+                )
                 .child(
                     segmented()
                         .child(mode("unstaged", "Unstaged", DiffMode::Unstaged))
@@ -499,12 +550,21 @@ impl Plait {
                                                     Some((target, hunk))
                                                 }),
                                                 |el, (target, hunk)| {
-                                                    el.group("diff-hunk").child(hunk_button(
-                                                        target,
-                                                        hunk,
-                                                        &line.text,
-                                                        cx,
-                                                    ))
+                                                    el.group("diff-hunk")
+                                                        .child(hunk_button(
+                                                            target,
+                                                            hunk,
+                                                            &line.text,
+                                                            cx,
+                                                        ))
+                                                        .when(
+                                                            target.mode == DiffMode::Unstaged,
+                                                            |el| {
+                                                                el.child(discard_hunk_button(
+                                                                    target, hunk, &line.text, cx,
+                                                                ))
+                                                            },
+                                                        )
                                                 },
                                             )
                                     })

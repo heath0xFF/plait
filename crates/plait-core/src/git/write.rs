@@ -8,7 +8,8 @@
 
 use super::{
     DIFF_LIMIT, Result, STATUS_LIMIT, TIMEOUT, base_command, command, display_line, head_exists,
-    log::log, read_command, run, validate_relative,
+    log::{is_object_id, log},
+    open_beneath, read_command, run, validate_relative,
 };
 use crate::model::DiffMode;
 use std::{
@@ -58,6 +59,25 @@ pub enum WriteOp {
         index: usize,
         header: String,
     },
+    /// Throw away a file's unstaged changes, or one unstaged hunk, after
+    /// saving its bytes so `Restore` can undo it. An untracked file is deleted.
+    /// `hunk` is an index and shown header, as for `Hunk`.
+    Discard {
+        path: PathBuf,
+        untracked: bool,
+        hunk: Option<(usize, String)>,
+    },
+    /// Put back a file exactly as `Discard` saved it.
+    Restore(Backup),
+}
+
+/// A file's bytes saved in Git's object store before a discard. The object is
+/// unreferenced, so Git's own garbage collection removes it in time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Backup {
+    pub path: PathBuf,
+    pub blob: String,
+    pub executable: bool,
 }
 
 /// What a write did, in words for the user.
@@ -67,6 +87,8 @@ pub struct WriteOutcome {
     pub summary: String,
     /// The new commit's full ID, after a commit.
     pub commit: Option<String>,
+    /// What a discard saved, so it can be undone.
+    pub backup: Option<Backup>,
 }
 
 /// Run one write in the repository at `root`. Blocking: call on a background thread.
@@ -123,6 +145,158 @@ pub fn write(root: &Path, op: &WriteOp) -> Result<WriteOutcome> {
             index,
             header,
         } => hunk(root, path, *from, *index, header),
+        WriteOp::Discard {
+            path,
+            untracked,
+            hunk,
+        } => discard(root, path, *untracked, hunk.as_ref()),
+        WriteOp::Restore(backup) => restore(root, backup),
+    }
+}
+
+/// Larger files are not copied before a discard, so the discard is refused.
+const BACKUP_LIMIT: usize = 64 * 1024 * 1024;
+
+fn discard(
+    root: &Path,
+    path: &Path,
+    untracked: bool,
+    hunk: Option<&(usize, String)>,
+) -> Result<WriteOutcome> {
+    validate_relative(path)?;
+    if hunk.is_some() && has_filter(root, path)? {
+        return Err(
+            "This file passes through a Git filter (such as LFS). Discard the whole file.".into(),
+        );
+    }
+    // Save first: if this fails, nothing has been thrown away.
+    let backup = save(root, path)?;
+    let name = path
+        .file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy()
+        .into_owned();
+    let summary = match (untracked, hunk) {
+        (true, _) => {
+            git_path(root, &["clean", "-f", "-q"], path)?;
+            format!("Deleted {name}")
+        }
+        (false, None) => {
+            git_path(root, &["restore", "--worktree"], path)?;
+            format!("Discarded changes to {name}")
+        }
+        (false, Some((index, header))) => {
+            use std::ffi::OsStr;
+            let args: Vec<&OsStr> = [
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "--unified=3",
+                "--",
+            ]
+            .into_iter()
+            .map(OsStr::new)
+            .chain([path.as_os_str()])
+            .collect();
+            let diff = command(root, &args, DIFF_LIMIT)?;
+            if diff.truncated {
+                return Err(
+                    "This diff is too large to discard by hunk. Discard the whole file.".into(),
+                );
+            }
+            let patch = hunk_patch(&diff.bytes, *index, header)?;
+            git(
+                root,
+                &["apply", "--reverse", "--whitespace=nowarn", "-"],
+                Some(patch),
+                STAGE_TIMEOUT,
+            )
+            .map_err(|error| {
+                if error.contains("does not apply") {
+                    STALE.to_owned()
+                } else {
+                    error
+                }
+            })?;
+            format!("Discarded a hunk of {name}")
+        }
+    };
+    Ok(WriteOutcome {
+        summary,
+        commit: None,
+        backup,
+    })
+}
+
+/// Copy the file's bytes into the object store, unfiltered. A missing file or
+/// a symlink has nothing to save.
+fn save(root: &Path, path: &Path) -> Result<Option<Backup>> {
+    use std::{io::Read, os::unix::fs::PermissionsExt};
+    let Ok(file) = open_beneath(root, path, libc::O_RDONLY | libc::O_NONBLOCK, 0) else {
+        return Ok(None);
+    };
+    let meta = file.metadata().map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    file.take(BACKUP_LIMIT as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > BACKUP_LIMIT {
+        return Err(
+            "This file is too large to keep a copy of, so Plait will not discard it.".into(),
+        );
+    }
+    let mut command = write_command(root);
+    command.args(["hash-object", "-w", "--no-filters", "--stdin"]);
+    let raw = run(&mut command, Some(bytes), STATUS_LIMIT, STAGE_TIMEOUT)?;
+    let blob = String::from_utf8_lossy(&raw.out.bytes).trim().to_owned();
+    if !raw.status.success() || !is_object_id(&blob) {
+        return Err(failure_text(&raw));
+    }
+    Ok(Some(Backup {
+        path: path.to_owned(),
+        blob,
+        executable: meta.permissions().mode() & 0o111 != 0,
+    }))
+}
+
+fn restore(root: &Path, backup: &Backup) -> Result<WriteOutcome> {
+    use std::io::Write;
+    validate_relative(&backup.path)?;
+    if !is_object_id(&backup.blob) {
+        return Err("The saved copy has an invalid ID.".into());
+    }
+    let mut command = write_command(root);
+    command.args(["cat-file", "blob", &backup.blob]);
+    let raw = run(&mut command, None, BACKUP_LIMIT, STAGE_TIMEOUT)?;
+    if !raw.status.success() || raw.out.truncated {
+        return Err(failure_text(&raw));
+    }
+    let mode = if backup.executable { 0o755 } else { 0o644 };
+    let flags = libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC;
+    let mut file = open_beneath(root, &backup.path, flags, mode)
+        .map_err(|e| format!("Cannot restore the file: {e}"))?;
+    file.write_all(&raw.out.bytes).map_err(|e| e.to_string())?;
+    let name = backup
+        .path
+        .file_name()
+        .unwrap_or(backup.path.as_os_str())
+        .to_string_lossy();
+    Ok(done(format!("Restored {name}")))
+}
+
+/// A write whose last argument is one literal path, which may not be UTF-8.
+fn git_path(root: &Path, args: &[&str], path: &Path) -> Result<()> {
+    let mut command = write_command(root);
+    command.args(args).arg("--").arg(path);
+    let raw = run(&mut command, None, STATUS_LIMIT, STAGE_TIMEOUT)?;
+    if raw.status.success() {
+        Ok(())
+    } else {
+        Err(failure_text(&raw))
     }
 }
 
@@ -363,6 +537,7 @@ fn done(summary: String) -> WriteOutcome {
     WriteOutcome {
         summary,
         commit: None,
+        backup: None,
     }
 }
 
@@ -465,6 +640,7 @@ fn commit(root: &Path, message: &str) -> Result<WriteOutcome> {
     Ok(WriteOutcome {
         summary: format!("Committed {}: {}", head.short, head.subject),
         commit: Some(head.id),
+        backup: None,
     })
 }
 

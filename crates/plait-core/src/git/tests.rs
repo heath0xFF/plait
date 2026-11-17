@@ -1206,3 +1206,111 @@ fn hunk_patches_keep_bytes_and_match_shown_headers() {
     assert!(hunk_patch(diff, 2, "@@ -9 +9 @@").is_err());
     assert!(hunk_patch(b"diff --cc a\n@@@ -1 -1 +1 @@@\n", 0, "@@@ -1 -1 +1 @@@").is_err());
 }
+
+fn discard_op(path: &str, untracked: bool, hunk: Option<(usize, String)>) -> WriteOp {
+    WriteOp::Discard {
+        path: PathBuf::from(path),
+        untracked,
+        hunk,
+    }
+}
+
+#[test]
+fn discarding_a_file_keeps_its_staged_side_and_undo_restores_it() {
+    let repo = Repo::new();
+    repo.write("a.txt", numbered(10, &[]));
+    repo.commit();
+    repo.write("a.txt", numbered(10, &[2]));
+    repo.git(&["add", "a.txt"]);
+    repo.write("a.txt", numbered(10, &[2, 8]));
+    let outcome = write(&repo.0, &discard_op("a.txt", false, None)).unwrap();
+    assert_eq!(outcome.summary, "Discarded changes to a.txt");
+    // The worktree returns to the index, which still holds the staged change.
+    assert_eq!(
+        fs::read_to_string(repo.0.join("a.txt")).unwrap(),
+        numbered(10, &[2])
+    );
+    let backup = outcome.backup.unwrap();
+    assert_eq!(
+        write(&repo.0, &WriteOp::Restore(backup)).unwrap().summary,
+        "Restored a.txt"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.0.join("a.txt")).unwrap(),
+        numbered(10, &[2, 8])
+    );
+}
+
+#[test]
+fn discarding_one_hunk_leaves_the_others() {
+    let repo = Repo::new();
+    repo.write("a.txt", numbered(30, &[]));
+    repo.commit();
+    repo.write("a.txt", numbered(30, &[1, 25]));
+    let shown = diff(&repo.0, &tracked("a.txt"), DiffMode::Unstaged).unwrap();
+    let header = shown.lines[shown.hunks[0]].text.to_string();
+    let outcome = write(
+        &repo.0,
+        &discard_op("a.txt", false, Some((0, header.clone()))),
+    )
+    .unwrap();
+    assert_eq!(outcome.summary, "Discarded a hunk of a.txt");
+    assert_eq!(
+        fs::read_to_string(repo.0.join("a.txt")).unwrap(),
+        numbered(30, &[25])
+    );
+    // The same hunk again no longer matches.
+    let error = write(&repo.0, &discard_op("a.txt", false, Some((0, header)))).unwrap_err();
+    assert!(error.contains("changed since"), "{error}");
+    write(&repo.0, &WriteOp::Restore(outcome.backup.unwrap())).unwrap();
+    assert_eq!(
+        fs::read_to_string(repo.0.join("a.txt")).unwrap(),
+        numbered(30, &[1, 25])
+    );
+}
+
+#[test]
+fn deleting_an_untracked_file_can_be_undone_with_its_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    repo.commit();
+    fs::create_dir(repo.0.join("tools")).unwrap();
+    repo.write("tools/run.sh", "#!/bin/sh\n");
+    let script = repo.0.join("tools/run.sh");
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    let outcome = write(&repo.0, &discard_op("tools/run.sh", true, None)).unwrap();
+    assert_eq!(outcome.summary, "Deleted run.sh");
+    assert!(!script.exists());
+    write(&repo.0, &WriteOp::Restore(outcome.backup.unwrap())).unwrap();
+    assert_eq!(fs::read_to_string(&script).unwrap(), "#!/bin/sh\n");
+    assert_ne!(
+        fs::metadata(&script).unwrap().permissions().mode() & 0o111,
+        0
+    );
+}
+
+#[test]
+fn restore_never_writes_through_a_symlink() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    repo.commit();
+    let outside = Repo::new();
+    std::os::unix::fs::symlink(&outside.0, repo.0.join("link")).unwrap();
+    let backup = Backup {
+        path: PathBuf::from("link/escaped.txt"),
+        // The committed "a\n" blob exists, so only the symlink can stop this.
+        blob: "78981922613b2afb6025042ff6bd878ac1994e85".into(),
+        executable: false,
+    };
+    let mut inside = backup.clone();
+    inside.path = PathBuf::from("restored.txt");
+    write(&repo.0, &WriteOp::Restore(inside)).unwrap();
+    assert_eq!(
+        fs::read_to_string(repo.0.join("restored.txt")).unwrap(),
+        "a\n"
+    );
+    let error = write(&repo.0, &WriteOp::Restore(backup)).unwrap_err();
+    assert!(error.contains("Cannot restore"), "{error}");
+    assert!(!outside.0.join("escaped.txt").exists());
+}
