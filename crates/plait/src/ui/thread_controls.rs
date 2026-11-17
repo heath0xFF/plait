@@ -2,16 +2,21 @@
 use super::{
     Plait,
     commands::Command,
+    harnesses::{ModeLine, harness_of},
     model_picker::ModelPurpose,
     palette::{Item, Options, Palette},
+    permissions::Permissions,
     theme::*,
 };
 use gpui::{prelude::*, *};
 use plait_core::{
     compose::{ContextPressure, ContextUsage, thinking_levels},
-    host::{self, ApprovalMode, Model, ModelChoice, QueueMode, Request, ThinkingLevel},
+    host::{
+        self, ApprovalMode, Model, ModelChoice, QueueMode, Request, ThinkingLevel,
+        harness::HarnessId,
+    },
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf, rc::Rc, sync::Arc};
 
 #[derive(Default)]
 pub(super) struct ThreadControls {
@@ -19,12 +24,27 @@ pub(super) struct ThreadControls {
     pending: Option<(String, u64)>,
     pending_epoch: u64,
     pub picker_thread: Option<(String, u64)>,
-    note: Option<(String, String, bool)>,
+    pub(super) note: Option<(String, String, bool)>,
     cancelling: HashMap<String, u64>,
     pub(super) usage_open: bool,
     /// Approval choices made this session, by thread. `None` is an explicit
     /// return to the default, so it shadows an older saved choice.
     approvals: HashMap<String, Option<ApprovalMode>>,
+    /// A harness mode change waiting on the host's reply.
+    mode: Option<ModeRequest>,
+}
+
+/// A harness thread's mode change, from the click until the host answers.
+/// A reply is used only while this is still the latest request and the same
+/// thread is open on the same connection.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct ModeRequest {
+    thread: String,
+    checkout: PathBuf,
+    serial: u64,
+    epoch: u64,
+    watch_epoch: u64,
+    mode: String,
 }
 
 /// Plain text shown on hover, for controls whose label is a summary.
@@ -52,8 +72,8 @@ impl Plait {
     /// The open thread's model, from its harness's list when it does not run in Pi.
     fn thread_model(&self) -> Option<&Model> {
         let snapshot = self.host.snapshot.as_ref()?;
-        let harness = super::harnesses::harness_of(snapshot);
-        if harness != host::harness::HarnessId::Pi {
+        let harness = harness_of(snapshot);
+        if harness != HarnessId::Pi {
             return self.harness_model(harness, &snapshot.model);
         }
         self.host
@@ -291,26 +311,49 @@ impl Plait {
                     }),
             );
         }
-        controls = controls.child(self.run_settings_button(snapshot.id.clone(), cx));
+        // A harness thread runs under the harness's own mode; Plait's approvals are Pi's.
+        let pi = harness_of(snapshot) == HarnessId::Pi;
+        let mode = harness.and_then(|line| line.mode.as_ref());
+        if let Some(mode) = mode {
+            let chip = self.thread_permissions(mode).and_then(|permissions| {
+                self.permissions_chip("thread-permissions", permissions, cx)
+            });
+            controls = controls.children(chip);
+        } else if pi {
+            controls = controls.child(self.run_settings_button(snapshot.id.clone(), cx));
+        }
         let mut content = column()
             .w_full()
             .max_w(px(CONTENT_WIDTH))
             .mx_auto()
             .gap_1()
             .child(controls);
-        if let Some(protection) = harness.and_then(|line| line.protection.clone()) {
+        if let Some(mode) = mode {
+            let tint = if mode.overridden {
+                colors().amber
+            } else {
+                colors().subtle
+            };
+            content = content.child(tag(mode.note.clone(), tint).line_height(px(16.)));
+        } else if let Some(protection) = harness.and_then(|line| line.protection.clone()) {
             content = content.child(tag(protection, colors().subtle).line_height(px(16.)));
         }
         if snapshot.status.busy() {
-            let approval = if snapshot.approval_mode == Some(host::ApprovalMode::Auto) {
-                "automatic approval"
-            } else {
-                "ask before actions"
-            };
-            content = content.child(tag(
-                format!("Current run: {approval} · Model locked during run"),
-                colors().subtle,
-            ));
+            content = content.child(match mode {
+                Some(mode) => tag(mode.busy.clone(), colors().subtle),
+                None if !pi => tag("Model locked during run", colors().subtle),
+                None => {
+                    let approval = if snapshot.approval_mode == Some(host::ApprovalMode::Auto) {
+                        "automatic approval"
+                    } else {
+                        "ask before actions"
+                    };
+                    tag(
+                        format!("Current run: {approval} · Model locked during run"),
+                        colors().subtle,
+                    )
+                }
+            });
         }
         if self.thread_controls.usage_open
             && let Some(usage) = usage
@@ -683,5 +726,177 @@ impl Plait {
             )
         });
         self.present(palette, None, window, cx);
+    }
+}
+
+impl Plait {
+    /// Why the open harness thread's permissions cannot change now. A run does not stop it.
+    fn mode_reason(&self) -> Option<&'static str> {
+        if !self.host.connected {
+            Some("Reconnect to change this thread.")
+        } else if self.host.protocol() < 4 {
+            Some("Update the host to change this thread's permissions.")
+        } else if self.host.snapshot.is_none() {
+            Some("Loading thread…")
+        } else if self.mode_pending().is_some() {
+            Some("Saving permissions…")
+        } else {
+            None
+        }
+    }
+
+    /// The mode sent for the open thread and not yet answered.
+    fn mode_pending(&self) -> Option<&str> {
+        let request = self.thread_controls.mode.as_ref()?;
+        (request.epoch == self.host.epoch && self.host.selected.as_ref() == Some(&request.thread))
+            .then_some(request.mode.as_str())
+    }
+
+    /// The open harness thread's Permissions chip and menu. While a change is
+    /// saving, the chip shows where it is going.
+    fn thread_permissions(&self, line: &ModeLine) -> Option<Permissions> {
+        let snapshot = self.host.snapshot.as_ref()?;
+        let (thread_id, epoch) = (snapshot.id.clone(), self.host.epoch);
+        Some(Permissions {
+            harness: harness_of(snapshot),
+            current: self
+                .mode_pending()
+                .map_or_else(|| line.id.clone(), str::to_owned),
+            blocked: self.mode_reason(),
+            tip: line.tip.clone(),
+            note: if line.overridden {
+                line.note.clone()
+            } else {
+                line.applies.clone()
+            },
+            on_select: Rc::new(move |this, mode, window, cx| {
+                this.choose_thread_mode(thread_id.clone(), epoch, mode, window, cx)
+            }),
+        })
+    }
+
+    /// Opens the open harness thread's Permissions menu, as its chip does. For scenes.
+    #[cfg(test)]
+    pub(super) fn open_thread_permissions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let permissions = self
+            .thread_harness_line()
+            .and_then(|line| line.mode.as_ref())
+            .and_then(|line| self.thread_permissions(line));
+        if let Some(permissions) = permissions {
+            self.open_permissions(&permissions, window, cx);
+        }
+    }
+
+    /// A mode picked from the Permissions menu, for the thread it was opened on.
+    pub(super) fn choose_thread_mode(
+        &mut self,
+        thread_id: String,
+        epoch: u64,
+        mode: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if epoch != self.host.epoch || self.host.selected.as_ref() != Some(&thread_id) {
+            return;
+        }
+        let unchanged = self
+            .thread_harness_line()
+            .and_then(|line| line.mode.as_ref())
+            .is_some_and(|line| line.id == mode);
+        if unchanged {
+            return;
+        }
+        let Some(request) = self.begin_thread_mode(mode) else {
+            return;
+        };
+        self.host_request::<host::ThreadReply>(
+            Request::set_thread_mode(request.thread.clone(), request.mode.clone()),
+            window,
+            cx,
+            move |this, result, _, cx| this.finish_thread_mode(request, result, cx),
+        );
+        cx.notify();
+    }
+
+    /// Record a mode change for the open thread, if it can be sent now.
+    pub(super) fn begin_thread_mode(&mut self, mode: String) -> Option<ModeRequest> {
+        if self.mode_reason().is_some() {
+            return None;
+        }
+        let snapshot = self.host.snapshot.as_ref()?;
+        // Only a mode the harness listed.
+        self.harness_row(harness_of(snapshot))?.mode(&mode)?;
+        self.thread_controls.serial += 1;
+        let request = ModeRequest {
+            thread: snapshot.id.clone(),
+            checkout: snapshot.checkout.clone(),
+            serial: self.thread_controls.serial,
+            epoch: self.host.epoch,
+            watch_epoch: self.host.watch_epoch,
+            mode,
+        };
+        self.thread_controls.mode = Some(request.clone());
+        // The chip shows the new choice; only a failure needs words.
+        self.thread_controls.note = None;
+        Some(request)
+    }
+
+    /// The host answered `request`. A reply for a thread no longer open, or
+    /// one a later change superseded, changes nothing.
+    pub(super) fn finish_thread_mode(
+        &mut self,
+        request: ModeRequest,
+        result: Result<host::ThreadReply, host::Error>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.thread_controls.mode.as_ref() != Some(&request) {
+            return;
+        }
+        self.thread_controls.mode = None;
+        if !self
+            .host
+            .accepts_watch(request.epoch, request.watch_epoch, &request.thread)
+        {
+            return;
+        }
+        match result {
+            Ok(reply)
+                if reply.thread.id == request.thread
+                    && reply.thread.checkout == request.checkout
+                    && reply
+                        .thread
+                        .harness
+                        .as_ref()
+                        .and_then(|harness| harness.mode.as_deref())
+                        == Some(request.mode.as_str()) =>
+            {
+                if let Some(snapshot) = self
+                    .host
+                    .snapshot
+                    .as_mut()
+                    .filter(|snapshot| snapshot.id == request.thread)
+                {
+                    // The watch brings the same change, with the old report cleared as the
+                    // host clears it; show it now instead of the old mode until then.
+                    if let Some(harness) = Arc::make_mut(snapshot).harness.as_mut() {
+                        harness.mode = Some(request.mode.clone());
+                        harness.reported = None;
+                    }
+                }
+            }
+            Ok(_) => self.set_thread_notice(
+                request.thread,
+                "Permissions not confirmed: the host returned others. Reconnect to check them."
+                    .into(),
+                true,
+            ),
+            Err(error) => self.set_thread_notice(
+                request.thread,
+                format!("Permissions not changed: {error}"),
+                true,
+            ),
+        }
+        self.sync_composer(cx);
+        cx.notify();
     }
 }

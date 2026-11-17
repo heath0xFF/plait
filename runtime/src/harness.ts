@@ -11,7 +11,8 @@ import { declineUnsupported } from './codex/approval.ts';
 import { CODEX_SCHEMA_VERSION, threadOf } from './codex/protocol.ts';
 import { AppServer } from './codex/server.ts';
 import { fail as failWith, THINKING_LEVELS } from './protocol.ts';
-import type { HarnessId, ThinkingLevel } from './protocol.ts';
+import type { HarnessId, HarnessMode, ThinkingLevel } from './protocol.ts';
+import type { ApprovalsReviewer, AskForApproval, SandboxMode, SandboxPolicy } from './codex/protocol.ts';
 import type { Store } from './store.ts';
 
 export type HarnessState = 'ready' | 'not_installed' | 'unsupported_version' | 'signed_out' | 'unavailable';
@@ -24,10 +25,46 @@ export type HarnessEntry = {
   supported: { min: string; tested: string } | null; path: string | null;
   capabilities: { steer: boolean; approvals: boolean; thinking: boolean; usage: boolean };
   protection: string; models: WireModel[] | null;
+  /** The harness's own permission modes; empty for Pi, whose threads use Plait's approval mode. */
+  modes: HarnessMode[]; default_mode: string | null;
 };
 /** Codex threads name this provider, so a model choice says which harness runs it. */
 export const CODEX_PROVIDER = 'codex';
 const PATH_SETTING = 'harness_path:codex';
+const MODE_SETTING = 'harness_mode:codex';
+
+/** Codex's own permission presets, the same choices its `/permissions` menu offers. */
+export const CODEX_MODES: HarnessMode[] = [
+  { id: 'read_only', label: 'Read only', detail: 'Codex asks before any change; its sandbox lets commands only read.' },
+  { id: 'ask', label: 'Ask', detail: "Codex asks when it needs more than its sandbox: commands can write this checkout, with no network." },
+  { id: 'approve_for_me', label: 'Approve for me', detail: "Codex's reviewer approves or blocks each request itself, inside the same sandbox." },
+  { id: 'full_access', label: 'Full access', detail: 'Codex never asks and has no sandbox: it can change any file and use the network.' },
+];
+/** Like `codex --yolo`. */
+export const CODEX_DEFAULT_MODE = 'full_access';
+export type CodexPolicy = {
+  approvalPolicy: AskForApproval; sandbox: SandboxMode; sandboxPolicy: SandboxPolicy; approvalsReviewer: ApprovalsReviewer;
+};
+const WORKSPACE: SandboxPolicy = { type: 'workspaceWrite', writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false };
+/** Every field is set, so the person's Codex config cannot change what the chosen mode means. */
+export function codexPolicy(mode: string): CodexPolicy {
+  switch (mode) {
+    case 'read_only': return { approvalPolicy: 'on-request', sandbox: 'read-only', sandboxPolicy: { type: 'readOnly', networkAccess: false }, approvalsReviewer: 'user' };
+    case 'ask': return { approvalPolicy: 'on-request', sandbox: 'workspace-write', sandboxPolicy: WORKSPACE, approvalsReviewer: 'user' };
+    case 'approve_for_me': return { approvalPolicy: 'on-request', sandbox: 'workspace-write', sandboxPolicy: WORKSPACE, approvalsReviewer: 'auto_review' };
+    default: return { approvalPolicy: 'never', sandbox: 'danger-full-access', sandboxPolicy: { type: 'dangerFullAccess' }, approvalsReviewer: 'user' };
+  }
+}
+/** The mode Codex reports using, from a thread start or resume reply; `custom` when it matches none. */
+export function codexReported(reply: { approvalPolicy?: unknown; sandbox?: { type?: unknown } | unknown; approvalsReviewer?: unknown }): string {
+  const sandbox = (reply.sandbox as { type?: unknown } | undefined)?.type;
+  const reviewer = reply.approvalsReviewer ?? 'user';
+  if (reply.approvalPolicy === 'never' && sandbox === 'dangerFullAccess') return 'full_access';
+  if (reply.approvalPolicy !== 'on-request') return 'custom';
+  if (sandbox === 'readOnly') return 'read_only';
+  if (sandbox === 'workspaceWrite') return reviewer === 'auto_review' ? 'approve_for_me' : reviewer === 'user' ? 'ask' : 'custom';
+  return 'custom';
+}
 /** How long a Codex check is reused. A Settings refresh or a new path checks again at once. */
 const CHECK_TTL_MS = 60_000;
 /** An app-server with no thread left closes after this, so back-to-back runs share one. */
@@ -37,9 +74,9 @@ export const PI_ENTRY: HarnessEntry = {
   id: 'pi', name: 'Pi', state: 'ready', note: null, version: null, supported: null, path: null,
   capabilities: { steer: true, approvals: true, thinking: true, usage: true },
   protection: "Plait's command sandbox and your approvals. Files you had already changed are protected.",
-  models: null,
+  models: null, modes: [], default_mode: null,
 };
-const CODEX_PROTECTION = "Codex's own sandbox, set from this project's command policy. Plait's guard on files you had already changed does not apply.";
+const CODEX_PROTECTION = "The thread's Codex permissions and Codex's own sandbox. Plait's command policy and its guard on files you had already changed do not apply.";
 
 /** Plait's thinking levels that a Codex model offers, in Plait's order. Codex calls off `none`. */
 export function codexLevels(efforts: string[]): ThinkingLevel[] {
@@ -101,6 +138,17 @@ export class CodexHarness {
     this.deps = { ...defaults, ...deps };
   }
   path() { return this.store.setting(PATH_SETTING) ?? undefined; }
+  /** The mode new Codex threads start in. */
+  defaultMode() {
+    const saved = this.store.setting(MODE_SETTING);
+    return saved && CODEX_MODES.some(mode => mode.id === saved) ? saved : CODEX_DEFAULT_MODE;
+  }
+  setDefaultMode(mode: string) {
+    if (!CODEX_MODES.some(candidate => candidate.id === mode)) failWith('invalid_request', 'Codex has no such mode.');
+    this.store.setSetting(MODE_SETTING, mode);
+    // The default is part of the listed entry; the rest of a recent check stays valid.
+    if (this.latest) this.remember({ ...this.latest, entry: { ...this.latest.entry, default_mode: mode } });
+  }
   setPath(path: string | undefined) {
     this.store.setSetting(PATH_SETTING, path ?? null);
     this.check = undefined; this.latest = undefined;
@@ -221,6 +269,7 @@ export class CodexHarness {
       id: 'codex' as const, name: 'Codex', version: install.version ?? null,
       supported: { min: CODEX_SCHEMA_VERSION, tested: CODEX_SCHEMA_VERSION }, path: install.path ?? null,
       capabilities: { steer: true, approvals: true, thinking: true, usage: true }, protection: CODEX_PROTECTION,
+      modes: CODEX_MODES, default_mode: this.defaultMode(),
     };
   }
   private unready({ install, env, at }: Probe): Check {

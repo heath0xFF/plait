@@ -27,8 +27,14 @@ export type Queued = { id: string; request_id: string; text: string; mode: Queue
 /** Agent harnesses a thread can run in. Pi is built in; the others are the person's installs. */
 export const HARNESSES = ['pi', 'codex'] as const;
 export type HarnessId = typeof HARNESSES[number];
-/** The harness that runs a thread, and the version of its latest run (null before one, and for Pi). */
-export type ThreadHarness = { id: HarnessId; version: string | null };
+/**
+ * The harness that runs a thread, and the version of its latest run (null before one, and for Pi).
+ * `mode` is the harness's own permission mode chosen for the thread; `reported` is the mode the
+ * harness said it used in its latest run. Pi threads have neither: Plait's approval mode applies.
+ */
+export type ThreadHarness = { id: HarnessId; version: string | null; mode?: string; reported?: string | null };
+/** One of a harness's own permission modes, as Settings and the composer offer it. */
+export type HarnessMode = { id: string; label: string; detail: string };
 export type Usage = {
   input: number; output: number; cache_read: number; cache_write: number; reasoning: number | null; total: number;
   context_used: number | null; context_window: number | null;
@@ -106,7 +112,11 @@ export function view(snapshot: Snapshot, protocol: Protocol) {
     live_reasoning: snapshot.live_reasoning ?? '', retry: snapshot.retry ?? null,
   };
   // Version 4 adds the harness; Pi threads saved earlier have none recorded.
-  return protocol === 3 ? third : { ...third, harness: snapshot.harness ?? { id: 'pi', version: null } };
+  const harness = snapshot.harness;
+  return protocol === 3 ? third : {
+    ...third,
+    harness: { id: harness?.id ?? 'pi', version: harness?.version ?? null, mode: harness?.mode ?? null, reported: harness?.reported ?? null },
+  };
 }
 /** A thread summary in the negotiated shape: the harness is a version 4 field. */
 export function summaryView(summary: Summary, protocol: Protocol): Summary {
@@ -141,8 +151,8 @@ const fields3: Record<string, string[]> = {
   agent_resources: ['checkout'],
 };
 // Version 4 adds harnesses: an operation to list them and a choice when a thread starts.
-const fields4: Record<string, string[]> = { harnesses: [], set_harness_path: ['harness'] };
-const optional4: Record<string, string[]> = { create_thread: ['harness'], set_harness_path: ['path'] };
+const fields4: Record<string, string[]> = { harnesses: [], set_harness_path: ['harness'], set_harness_mode: ['harness', 'mode'] };
+const optional4: Record<string, string[]> = { create_thread: ['harness', 'mode'], set_harness_path: ['path'], configure_thread: ['mode'] };
 const optional3: Record<string, string[]> = {
   submit: ['when_busy'], list_threads: ['checkout', 'limit', 'cursor', 'archived'], history: ['before', 'limit'],
   watch_threads: ['archived'], configure_thread: ['provider', 'model_id', 'thinking'],
@@ -168,7 +178,7 @@ function validate3(request: Request) {
   if (request.op !== 'configure_thread') return;
   if ((request.provider === undefined) !== (request.model_id === undefined)) invalid('provider and model_id must be given together.');
   if (request.provider !== undefined && (!text(request.provider) || !text(request.model_id))) invalid('provider and model_id must be nonempty strings.');
-  if (request.provider === undefined && request.thinking === undefined) invalid('Give a model, a thinking level, or both.');
+  if (request.provider === undefined && request.thinking === undefined && request.mode === undefined) invalid('Give a model, a thinking level, a mode, or more than one.');
 }
 export function validate(value: unknown): Request {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail('invalid_request', 'Expected an object.');
@@ -197,6 +207,7 @@ export function validate(value: unknown): Request {
   }
   if (third) validate3(request);
   if (request.harness !== undefined && !HARNESSES.includes(request.harness as HarnessId)) fail('invalid_request', `harness must be one of ${HARNESSES.join(', ')}.`);
+  if (request.mode !== undefined && (typeof request.mode !== 'string' || !/^[a-z_]{1,32}$/.test(request.mode))) fail('invalid_request', 'Invalid mode.');
   if (request.path !== undefined && (typeof request.path !== 'string' || !request.path.startsWith('/') || request.path.length > 4096)) {
     fail('invalid_request', 'path must be an absolute path.');
   }

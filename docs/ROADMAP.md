@@ -4,8 +4,9 @@ These are planned milestones, not a list of shipped features. See the
 [README](../README.md) for the current preview and [Verification](VERIFICATION.md)
 for acceptance evidence and open checks. **M2.5 shipped in v0.1.0-preview.8.
 M8 steps 1 and 2 (skills, prompt templates, and user instructions) shipped in
-v0.1.0-preview.9. M7 step 1 (choosing a harness, and Codex) is on `main`,
-not yet released; M8 steps 3 and 4 follow M7.**
+v0.1.0-preview.9. M7 step 1 (choosing a harness, and Codex) and step 2's
+Codex modes are on `main`, not yet released; Claude Code threads are in
+progress. M8 steps 3 and 4 follow M7.**
 
 ## Milestones
 
@@ -174,10 +175,25 @@ protection in the composer line, and lists harnesses in Settings. A scripted
 fake app-server tests runs, approvals, steering, Stop, version checks, and
 restart without a paid model.
 
-Next, each agreed before it starts: step 2, Claude Code through the pinned
-Agent SDK and the person's installed `claude`, after checking Anthropic's terms
-for the SDK with the person's own sign-in; step 3, an ACP client, Antigravity
-first.
+**Agreed for M7 step 2, harness modes and Claude Code:** in Codex and Claude
+Code threads the harness's own permission modes replace Plait's ask and auto,
+and Plait's project command policy does not apply; Pi threads keep both. Codex
+offers Read only, Ask (workspace sandbox), Approve for me, and Full access
+(Codex's `--yolo`: never asks, no sandbox), Full access by default. Claude Code
+offers Ask, Accept edits, Plan, Auto, and Bypass, Auto by default. Each
+harness's default is a host setting in Settings → Agent. A thread's mode can
+change at any time: Claude Code switches during a run, Codex from its next
+turn. The composer shows the mode the harness reports, not the one requested,
+and says plainly when nothing asks or nothing is sandboxed. Whatever a harness
+asks becomes a Plait approval. Claude Code runs as the person's installed
+`claude` through a pinned Agent SDK, loading their own settings, `CLAUDE.md`
+files, skills, slash commands, hooks, and MCP servers; Plait never offers or
+handles a Claude sign-in. Features are checked from what the installed version
+reports. Steering, Stop, usage, and stored history work as for Codex, and each
+run resumes the thread's Claude session. This replaces step 1's mapping from
+command policy and approval mode for Codex, before it is released.
+
+Next, agreed before it starts: step 3, an ACP client, Antigravity first.
 
 **Direction for M8, skills, tools, and CLIs:** today a Pi thread in Plait sees
 only Plait's five tools (read, read_output, edit, write, command) and the

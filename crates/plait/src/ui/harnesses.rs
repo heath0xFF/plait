@@ -45,6 +45,33 @@ pub(super) struct ThreadLine {
     /// The harness and the version of the thread's latest run, as "Codex 0.169.0".
     pub(super) label: SharedString,
     pub(super) protection: Option<SharedString>,
+    /// The harness's own permission mode, when the host lists its modes.
+    pub(super) mode: Option<ModeLine>,
+}
+
+/// A harness thread's own permission mode as the composer shows it.
+#[derive(Debug, PartialEq)]
+pub(super) struct ModeLine {
+    /// The thread's chosen mode, or the harness default before it has one.
+    pub(super) id: String,
+    pub(super) label: SharedString,
+    /// What the mode lets the harness do, or that the harness used another.
+    pub(super) note: SharedString,
+    /// Whether `note` says the harness is not using the chosen mode.
+    pub(super) overridden: bool,
+    /// The Permissions chip's hover text: what protects the checkout, and when a change applies.
+    pub(super) tip: SharedString,
+    /// Under the Permissions menu: when a choice applies.
+    pub(super) applies: SharedString,
+    /// What the composer says while a run is under way.
+    pub(super) busy: SharedString,
+}
+
+/// One of a harness's own permission modes, as the host names it.
+pub(super) struct ModeRow {
+    pub(super) id: String,
+    pub(super) label: SharedString,
+    pub(super) detail: SharedString,
 }
 
 /// One harness as the picker, the composer, and Settings show it.
@@ -62,6 +89,11 @@ pub(super) struct HarnessRow {
     blocked: Option<SharedString>,
     /// Empty for Pi, whose models are the status catalog.
     pub(super) models: Vec<Model>,
+    /// The harness's own permission modes; empty for Pi, which uses Plait's approvals.
+    pub(super) modes: Vec<ModeRow>,
+    pub(super) default_mode: Option<String>,
+    /// Settings → Agent: what the default mode lets the harness do.
+    pub(super) default_detail: SharedString,
 }
 
 pub(super) struct HarnessesView {
@@ -95,6 +127,21 @@ impl HarnessRow {
         let state = harness.state.label();
         let version = version_line(&harness).into();
         let note = harness.note.filter(|note| !note.trim().is_empty());
+        let modes: Vec<ModeRow> = harness
+            .modes
+            .into_iter()
+            .map(|mode| ModeRow {
+                id: mode.id,
+                label: mode.label.into(),
+                detail: mode.detail.into(),
+            })
+            .collect();
+        let default_detail = harness
+            .default_mode
+            .as_deref()
+            .and_then(|id| modes.iter().find(|mode| mode.id == id))
+            .map(|mode| mode.detail.clone())
+            .unwrap_or_default();
         let blocked = (!ready).then(|| {
             let fix = note.as_deref().unwrap_or("See Settings → Agent.");
             SharedString::from(format!("{}: {}. {fix}", harness.name, state.to_lowercase()))
@@ -113,7 +160,14 @@ impl HarnessRow {
             protection: harness.protection.into(),
             blocked,
             models: harness.models.unwrap_or_default(),
+            modes,
+            default_mode: harness.default_mode,
+            default_detail,
         }
+    }
+
+    pub(super) fn mode(&self, id: &str) -> Option<&ModeRow> {
+        self.modes.iter().find(|mode| mode.id == id)
     }
 
     /// Only an installed harness can be pointed at another executable; Pi ships with the host.
@@ -195,6 +249,52 @@ pub(super) fn harness_of(snapshot: &Snapshot) -> HarnessId {
         .harness
         .as_ref()
         .map_or(HarnessId::Pi, |harness| harness.id)
+}
+
+/// What the composer says about a harness thread's own mode. The host clears
+/// `reported` when the mode changes, so a report always describes the chosen mode.
+pub(super) fn mode_line(row: &HarnessRow, key: &ThreadHarness) -> Option<ModeLine> {
+    let id = key.mode.clone().or_else(|| row.default_mode.clone())?;
+    let chosen = row.mode(&id);
+    let label = chosen.map_or_else(|| SharedString::from(id.clone()), |mode| mode.label.clone());
+    let name = &row.name;
+    let reported = key.reported.as_deref().filter(|reported| *reported != id);
+    let (note, overridden) = match reported.map(|reported| (reported, row.mode(reported))) {
+        None => (
+            chosen.map(|mode| mode.detail.clone()).unwrap_or_default(),
+            false,
+        ),
+        Some((_, Some(used))) => (
+            format!(
+                "{name} is using {} instead of {label}, set by your {name} configuration. {}",
+                used.label, used.detail
+            )
+            .into(),
+            true,
+        ),
+        // `custom`, or a mode this list does not name.
+        Some((_, None)) => (
+            format!("{name} is using permissions its own configuration sets, not {label}.").into(),
+            true,
+        ),
+    };
+    let protection = row.protection.trim();
+    let tip = format!(
+        "{protection}{}Choose what {name} may do in this thread. A change applies from its next turn, even during a run.",
+        if protection.is_empty() { "" } else { " " }
+    );
+    Some(ModeLine {
+        id,
+        label,
+        note,
+        overridden,
+        tip: tip.into(),
+        applies: format!("Applies from {name}'s next turn, even during a run.").into(),
+        busy: format!(
+            "Model locked during run · a permissions change applies from {name}'s next turn"
+        )
+        .into(),
+    })
 }
 
 /// What a refused or failed harness request says. Host messages are shown as sent.
@@ -338,7 +438,12 @@ impl Plait {
         self.send_harnesses(Request::set_harness_path(id, path), cx);
     }
 
-    /// Both requests answer with the whole list, checked again.
+    /// Start new threads in harness `id` in `mode`. The reply is the whole list.
+    pub(super) fn set_harness_mode(&mut self, id: HarnessId, mode: String, cx: &mut Context<Self>) {
+        self.send_harnesses(Request::set_harness_mode(id, mode), cx);
+    }
+
+    /// Every request answers with the whole list, checked again.
     fn send_harnesses(&mut self, request: Request, cx: &mut Context<Self>) {
         if self.harnesses.busy || !self.host.connected || self.host.protocol() < 4 || cfg!(test) {
             return;
@@ -439,7 +544,16 @@ impl Plait {
         let protection = row
             .map(|row| row.protection.clone())
             .filter(|protection| !protection.is_empty());
-        self.harnesses.line = Some((key, generation, ThreadLine { label, protection }));
+        let mode = row.and_then(|row| mode_line(row, &key));
+        self.harnesses.line = Some((
+            key,
+            generation,
+            ThreadLine {
+                label,
+                protection,
+                mode,
+            },
+        ));
     }
 
     /// The open thread's harness line, when it runs in a harness other than Pi.
@@ -551,6 +665,7 @@ impl Plait {
                 text.child(tag(harness.protection.clone(), colors().subtle).line_height(px(16.)));
         }
         let mut entry = row().items_start().gap_3().child(text);
+        let modes = self.default_mode_setting(index, harness, busy, cx);
         if harness.has_path() {
             let (id, name) = (harness.id, harness.name.clone());
             entry = entry.child(
@@ -579,14 +694,72 @@ impl Plait {
                     ),
             );
         }
-        entry
+        match modes {
+            Some(modes) => column().gap_3().child(entry).child(modes),
+            None => column().child(entry),
+        }
+    }
+
+    /// The mode new threads in a harness with its own modes start in.
+    fn default_mode_setting(
+        &self,
+        index: usize,
+        harness: &HarnessRow,
+        busy: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
+        if harness.modes.is_empty() {
+            return None;
+        }
+        let mut choices = segmented();
+        for (choice, mode) in harness.modes.iter().enumerate() {
+            let selected = harness.default_mode.as_deref() == Some(mode.id.as_str());
+            let (id, value) = (harness.id, mode.id.clone());
+            choices = choices.child(
+                toned_button(
+                    SharedString::from(format!("harness-mode-{index}-{choice}")),
+                    mode.label.clone(),
+                    if selected {
+                        Tone::Selected
+                    } else {
+                        Tone::Ghost
+                    },
+                )
+                .h(px(24.))
+                .role(Role::RadioButton)
+                .aria_toggled(if selected {
+                    Toggled::True
+                } else {
+                    Toggled::False
+                })
+                .aria_label(format!(
+                    "{} default permissions for new threads: {}",
+                    harness.name, mode.label
+                ))
+                .aria_description(mode.detail.clone())
+                .disabled(busy)
+                .when(!busy && !selected, |el| {
+                    el.on_activate(cx, move |this, _, cx| {
+                        this.set_harness_mode(id, value.clone(), cx)
+                    })
+                }),
+            );
+        }
+        Some(settings::setting(
+            "Default permissions for new threads",
+            harness.default_detail.clone(),
+            choices,
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     // Named imports: a glob would bring in GPUI's own `test` attribute.
-    use super::{Harnesses, HarnessesView, new_thread_items, thread_items};
+    use super::{
+        HarnessId, Harnesses, HarnessesView, ThreadHarness, mode_line, new_thread_items,
+        thread_items,
+    };
 
     fn sample() -> Harnesses {
         serde_json::from_str(
@@ -599,7 +772,11 @@ mod tests {
                  "capabilities":{"steer":true,"approvals":true,"thinking":true,"usage":true},
                  "protection":"Codex's sandbox.","models":[
                     {"provider":"codex","model_id":"a","name":"A","authenticated":true},
-                    {"provider":"codex","model_id":"b","name":"B","authenticated":false}]},
+                    {"provider":"codex","model_id":"b","name":"B","authenticated":false}],
+                 "modes":[{"id":"read_only","label":"Read only","detail":"Only reads."},
+                          {"id":"ask","label":"Ask","detail":"Asks first."},
+                          {"id":"full_access","label":"Full access","detail":"Never asks."}],
+                 "default_mode":"full_access"},
                 {"id":"someday","name":"Someday","state":"signed_out","note":"Sign in first.","version":null,
                  "supported":{"min":"1.0","tested":"1.2"},"path":null,
                  "capabilities":{"steer":false,"approvals":false,"thinking":false,"usage":false},
@@ -676,5 +853,52 @@ mod tests {
         // A Codex thread's menu lists only Codex models.
         assert_eq!(thread_items(&view.rows[1]).len(), 2);
         assert!(thread_items(&view.rows[0]).is_empty());
+    }
+
+    fn thread(mode: Option<&str>, reported: Option<&str>) -> ThreadHarness {
+        ThreadHarness {
+            id: HarnessId::Codex,
+            version: None,
+            mode: mode.map(Into::into),
+            reported: reported.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn the_mode_line_names_the_choice_and_says_when_the_harness_used_another() {
+        let view = HarnessesView::new(sample());
+        let (pi, codex) = (&view.rows[0], &view.rows[1]);
+        assert_eq!(codex.default_detail.as_ref(), "Never asks.");
+        // Pi uses Plait's approvals, so it has no mode line.
+        assert!(mode_line(pi, &thread(None, None)).is_none());
+        // Before the first run, the chosen mode says what it does.
+        let line = mode_line(codex, &thread(Some("ask"), None)).unwrap();
+        assert_eq!((line.id.as_str(), line.label.as_ref()), ("ask", "Ask"));
+        assert_eq!(
+            (line.note.as_ref(), line.overridden),
+            ("Asks first.", false)
+        );
+        assert!(
+            line.tip
+                .starts_with("Codex's sandbox. Choose what Codex may do")
+        );
+        // A thread without a mode yet shows the harness default.
+        let line = mode_line(codex, &thread(None, None)).unwrap();
+        assert_eq!(line.label.as_ref(), "Full access");
+        // The run used what was chosen.
+        let line = mode_line(codex, &thread(Some("ask"), Some("ask"))).unwrap();
+        assert!(!line.overridden);
+        // Codex's configuration ran another mode.
+        let line = mode_line(codex, &thread(Some("ask"), Some("read_only"))).unwrap();
+        assert!(line.overridden);
+        assert_eq!(
+            line.note.as_ref(),
+            "Codex is using Read only instead of Ask, set by your Codex configuration. Only reads."
+        );
+        let line = mode_line(codex, &thread(Some("full_access"), Some("custom"))).unwrap();
+        assert_eq!(
+            line.note.as_ref(),
+            "Codex is using permissions its own configuration sets, not Full access."
+        );
     }
 }

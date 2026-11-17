@@ -61,8 +61,12 @@ impl Plait {
     }
 
     /// The mode the next submission requests: the open thread's own choice,
-    /// else the default. Version 1 hosts always ask.
+    /// else the default. Version 1 hosts always ask. A harness thread asks for
+    /// none: the harness's own mode governs it.
     pub(super) fn next_approval_mode(&self) -> Option<ApprovalMode> {
+        if self.thread_harness() != plait_core::host::harness::HarnessId::Pi {
+            return None;
+        }
         let chosen = self
             .host
             .selected

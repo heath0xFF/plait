@@ -391,6 +391,9 @@ pub enum Request {
         /// Version 4 only; the host runs Pi without it.
         #[serde(skip_serializing_if = "Option::is_none")]
         harness: Option<harness::HarnessId>,
+        /// The harness's own mode; the host's default for the harness without it.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mode: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         protocol_version: Option<u32>,
     },
@@ -471,6 +474,9 @@ pub enum Request {
         model_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         thinking: Option<ThinkingLevel>,
+        /// Version 4, harness threads only. A mode alone may change during a run.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        mode: Option<String>,
         protocol_version: u32,
     },
     CancelQueued {
@@ -608,7 +614,29 @@ impl Request {
             request_id,
             thinking,
             harness,
+            mode: None,
             protocol_version,
+        }
+    }
+
+    /// Starts a harness thread in `mode` rather than the harness's default.
+    /// Pi threads and older hosts ignore it.
+    pub fn with_mode(mut self, chosen: Option<String>) -> Self {
+        if let Self::CreateThread { harness, mode, .. } = &mut self {
+            *mode = chosen.filter(|_| harness.is_some());
+        }
+        self
+    }
+
+    /// Changes a harness thread's own mode, from its next turn. Allowed during a run.
+    pub fn set_thread_mode(thread_id: String, mode: String) -> Self {
+        Self::ConfigureThread {
+            thread_id,
+            provider: None,
+            model_id: None,
+            thinking: None,
+            mode: Some(mode),
+            protocol_version: 4,
         }
     }
 
@@ -626,6 +654,7 @@ impl Request {
             provider,
             model_id,
             thinking,
+            mode: None,
             protocol_version: 3,
         }
     }
@@ -1220,6 +1249,27 @@ mod tests {
             )
         );
         assert_eq!(create_in(None, harness::HarnessId::Codex, 3), plain);
+        let with_mode = |harness, protocol| {
+            wire(
+                Request::create_thread("/c".into(), &choice, "r".into(), None, harness, protocol)
+                    .with_mode(Some("ask".into())),
+            )
+        };
+        assert_eq!(
+            with_mode(harness::HarnessId::Codex, 4),
+            json(
+                r#"{"op":"create_thread","checkout":"/c","provider":"p","model_id":"m","request_id":"r","harness":"codex","mode":"ask","protocol_version":4}"#
+            )
+        );
+        // A Pi thread, or a host too old to name the harness, never gets a mode.
+        assert_eq!(with_mode(harness::HarnessId::Pi, 4), plain);
+        assert_eq!(with_mode(harness::HarnessId::Codex, 3), plain);
+        assert_eq!(
+            wire(Request::set_thread_mode("t".into(), "read_only".into())),
+            json(
+                r#"{"op":"configure_thread","thread_id":"t","mode":"read_only","protocol_version":4}"#
+            )
+        );
         assert_eq!(
             wire(Request::rename_thread("t".into(), "Name".into())),
             json(r#"{"op":"rename_thread","thread_id":"t","title":"Name","protocol_version":3}"#)

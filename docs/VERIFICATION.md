@@ -364,16 +364,20 @@ translation of scripted turns through the same `update()` Pi threads use, and
 approval wording and replies.
 
 End-to-end runtime tests drive Codex threads through a scripted fake
-app-server: an asked command approval, a declined edit that lists no changed
-file, a second run that resumes the same Codex thread, auto mode sending
-`never`, a steering message joining the running turn, Stop sending
+app-server that echoes the settings it is sent: an Ask turn's command
+approval, a declined edit that lists no changed file, a second run that
+resumes the same Codex thread, the Full access default sending `never` and no
+sandbox, Approve for me sending Codex's reviewer, a mode change during a run
+that the next turn uses, the default mode setting, a Codex held to another
+mode reporting it, a steering message joining the running turn, Stop sending
 `turn/interrupt`, Codex exiting mid-turn ending the run with a fixed error,
 history read live and again after a restart without starting Codex, and every
 server closing once idle. The adapter's message types were checked against
 `codex app-server` 0.169.0 with a handshake that starts no thread or turn
 (initialize, model list, account state, and refusals). A real Codex turn, the
-order of a real turn's events, and `clientId` echoing have not been checked
-against a live model; nothing in the tests reaches one.
+order of a real turn's events, `clientId` echoing, and what each mode's
+reviewer and sandbox do in a real Codex have not been checked against a live
+model; nothing in the tests reaches one.
 
 Measured on a replayed stream of 7,081 Codex events (20 answers and 20
 commands, after 100 earlier entries): translation cost 0.6 µs per event, and

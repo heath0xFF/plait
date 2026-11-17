@@ -38,6 +38,11 @@ pub(super) enum Command {
         thread_id: String,
         mode: Option<plait_core::host::ApprovalMode>,
     },
+    /// A harness's own permission mode, chosen from a Permissions menu.
+    Permissions {
+        mode: String,
+        select: super::permissions::OnPermissions,
+    },
     /// Open the project's command policy in Settings.
     PolicySettings,
     /// The thinking level new threads start at.
@@ -70,6 +75,10 @@ impl Clone for Command {
             Self::Approval { thread_id, mode } => Self::Approval {
                 thread_id: thread_id.clone(),
                 mode: *mode,
+            },
+            Self::Permissions { mode, select } => Self::Permissions {
+                mode: mode.clone(),
+                select: select.clone(),
             },
             Self::PolicySettings => Self::PolicySettings,
             Self::DefaultThinking(level) => Self::DefaultThinking(*level),
@@ -409,6 +418,7 @@ impl Plait {
                     self.set_thread_approval(thread_id, mode, cx);
                 }
             }
+            Command::Permissions { mode, select } => select(self, mode, window, cx),
             Command::PolicySettings => {
                 self.show_settings(true, window, cx);
                 self.settings_section = 2;

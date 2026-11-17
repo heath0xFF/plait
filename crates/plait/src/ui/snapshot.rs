@@ -2162,7 +2162,7 @@ fn sample_harnesses(state: &str, note: Option<&str>) -> plait_core::host::harnes
             "supported": null, "path": null,
             "capabilities": {"steer": true, "approvals": true, "thinking": true, "usage": true},
             "protection": "Plait's command sandbox and approvals, and its guard on files you already changed.",
-            "models": null,
+            "models": null, "modes": [], "default_mode": null,
         },
         {
             "id": "codex", "name": "Codex", "state": state, "note": note,
@@ -2170,12 +2170,19 @@ fn sample_harnesses(state: &str, note: Option<&str>) -> plait_core::host::harnes
             "supported": {"min": "0.169.0", "tested": "0.169.0"},
             "path": ready.then_some("/opt/sample/bin/codex"),
             "capabilities": {"steer": true, "approvals": true, "thinking": true, "usage": true},
-            "protection": "Codex's own sandbox: commands can write this checkout, with no network. Plait's guard on files you already changed does not apply.",
+            "protection": "Codex's own permission mode and sandbox. Plait's command policy and its guard on files you already changed do not apply.",
             "models": if ready {
                 serde_json::json!([model("sample-codex-model", "Sample Codex Model"), model("sample-codex-mini", "Sample Codex Mini")])
             } else {
                 serde_json::json!([])
             },
+            "modes": [
+                {"id": "read_only", "label": "Read only", "detail": "Sample: asks before any change; commands only read."},
+                {"id": "ask", "label": "Ask", "detail": "Sample: asks when it needs more than its sandbox; commands can write this checkout, with no network."},
+                {"id": "approve_for_me", "label": "Approve for me", "detail": "Sample: its own reviewer approves or blocks each request, inside the same sandbox."},
+                {"id": "full_access", "label": "Full access", "detail": "Sample: never asks and has no sandbox; it can change any file and use the network."},
+            ],
+            "default_mode": "full_access",
         },
     ]}))
     .expect("sample harness list")
@@ -2219,6 +2226,8 @@ fn harnesses_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         snapshot.harness = Some(ThreadHarness {
             id: HarnessId::Codex,
             version: Some("0.169.0".into()),
+            mode: Some("full_access".into()),
+            reported: Some("full_access".into()),
         });
     });
     harness.update(|plait, _, cx| {
@@ -2229,11 +2238,44 @@ fn harnesses_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.capture(&format!("composer-codex-thread-{suffix}"));
     harness.update(|plait, window, cx| {
         assert!(plait.can_submit(), "a ready Codex model can send");
+        // Plait's approvals are Pi's: a Codex message asks for none.
+        assert_eq!(plait.next_approval_mode(), None);
         plait.open_thread_models(window, cx);
     });
     harness.capture(&format!("thread-models-codex-{suffix}"));
     harness.update(|plait, window, cx| {
         plait.close_overlay(true, window, cx);
+        plait.open_thread_permissions(window, cx);
+    });
+    harness.capture(&format!("thread-permissions-codex-{suffix}"));
+    harness.update(|plait, window, cx| plait.close_overlay(true, window, cx));
+    // The person asked for Ask; Codex's own configuration ran Read only.
+    harness.change_snapshot(|snapshot| {
+        let harness = snapshot.harness.as_mut().unwrap();
+        harness.mode = Some("ask".into());
+        harness.reported = Some("read_only".into());
+    });
+    harness.capture(&format!("composer-codex-reported-{suffix}"));
+    harness.change_snapshot(|snapshot| {
+        snapshot.harness.as_mut().unwrap().reported = Some("custom".into());
+    });
+    harness.capture(&format!("composer-codex-custom-{suffix}"));
+    let status = harness
+        .window
+        .update(&mut harness.cx, |plait, _, _| {
+            plait.host.snapshot.as_ref().unwrap().status
+        })
+        .expect("window update");
+    // During a run the mode can still change; the line says when it applies.
+    harness.change_snapshot(|snapshot| {
+        let harness = snapshot.harness.as_mut().unwrap();
+        harness.mode = Some("full_access".into());
+        harness.reported = Some("full_access".into());
+        snapshot.status = ThreadStatus::Running;
+    });
+    harness.capture(&format!("composer-codex-running-{suffix}"));
+    harness.change_snapshot(move |snapshot| snapshot.status = status);
+    harness.update(|plait, _, cx| {
         plait.inject_harnesses(Some(sample_harnesses(
             "signed_out",
             Some("Run codex login in a terminal, then Refresh in Settings → Agent."),
@@ -2335,6 +2377,100 @@ fn a_codex_model_starts_a_codex_thread_and_pi_stays_the_default() {
         assert!(!plait.usable_in(HarnessId::Codex, &codex_choice()));
         assert!(plait.harness_rows().is_empty());
     });
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn a_mode_reply_lands_only_on_the_thread_it_was_sent_for() {
+    if !isolated("a_mode_reply_lands_only_on_the_thread_it_was_sent_for") {
+        return;
+    }
+    use plait_core::host::{
+        Error, ThreadReply,
+        harness::{HarnessId, ThreadHarness},
+    };
+    let scratch = std::env::temp_dir().join(format!("plait-mode-ui-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.update(|plait, _, _| {
+        plait.host.status.as_mut().unwrap().protocol_version = 4;
+        plait.inject_harnesses(Some(sample_harnesses("ready", None)));
+    });
+    let codex = |mode: &str, reported: Option<&str>| ThreadHarness {
+        id: HarnessId::Codex,
+        version: Some("0.169.0".into()),
+        mode: Some(mode.into()),
+        reported: reported.map(Into::into),
+    };
+    harness.change_snapshot(|snapshot| {
+        snapshot.model = codex_choice();
+        snapshot.harness = Some(codex("full_access", Some("full_access")));
+    });
+    let reply = |mode: &str| -> Result<ThreadReply, Error> {
+        Ok(ThreadReply {
+            thread: Snapshot {
+                id: THREAD.into(),
+                checkout: repository.clone(),
+                // The host clears the report when the mode changes.
+                harness: Some(codex(mode, None)),
+                ..Default::default()
+            },
+        })
+    };
+    let shown = |plait: &Plait| {
+        let mode = plait.thread_harness_line().unwrap().mode.as_ref().unwrap();
+        (mode.id.clone(), mode.overridden)
+    };
+    harness.update(|plait, _, cx| {
+        // Only a mode the harness lists is sent, and a run does not block a change.
+        assert!(plait.host.snapshot.as_ref().unwrap().status.busy());
+        assert!(plait.begin_thread_mode("yolo".into()).is_none());
+        let request = plait.begin_thread_mode("ask".into()).unwrap();
+        // One change at a time.
+        assert!(plait.begin_thread_mode("read_only".into()).is_none());
+        plait.finish_thread_mode(request, reply("ask"), cx);
+        // The latest run's report was for the old mode, so it is not an override.
+        assert_eq!(shown(plait), ("ask".into(), false));
+        assert!(plait.thread_controls.note.is_none());
+
+        // A reply naming another mode is reported, not shown as chosen.
+        let request = plait.begin_thread_mode("read_only".into()).unwrap();
+        plait.finish_thread_mode(request, reply("ask"), cx);
+        assert_eq!(shown(plait), ("ask".into(), false));
+        assert!(plait.thread_controls.note.as_ref().unwrap().2);
+        plait.thread_controls.note = None;
+
+        // Sent, then the person opened another thread and came back: the
+        // reply belongs to a watch that has ended, so it changes nothing.
+        let saved = plait.host.snapshot.clone();
+        let request = plait.begin_thread_mode("read_only".into()).unwrap();
+        plait.host.select(Some("thr_0c44a9d1".into()));
+        plait.host.select(Some(THREAD.into()));
+        plait.host.snapshot = saved;
+        plait.finish_thread_mode(request, reply("read_only"), cx);
+        assert_eq!(shown(plait), ("ask".into(), false));
+        assert!(plait.thread_controls.note.is_none());
+        // A failure for a thread no longer open says nothing here either.
+        let request = plait.begin_thread_mode("read_only".into()).unwrap();
+        plait.host.select(Some("thr_0c44a9d1".into()));
+        plait.finish_thread_mode(request, Err(Error::Protocol("late".into())), cx);
+        assert!(plait.thread_controls.note.is_none());
+    });
+    harness.update(|plait, _, cx| {
+        plait.host.select(Some(THREAD.into()));
+        plait.host.snapshot = Some(Arc::new(thread_snapshot(&repository, false)));
+        plait.sync_composer(cx);
+    });
+    // The next run reports Full access although Ask was chosen: the harness overrode it.
+    harness.change_snapshot(|snapshot| {
+        snapshot.model = codex_choice();
+        snapshot.harness = Some(codex("ask", Some("full_access")));
+        snapshot.status = ThreadStatus::Running;
+    });
+    harness.update(|plait, _, _| assert_eq!(shown(plait), ("ask".into(), true)));
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();
 }

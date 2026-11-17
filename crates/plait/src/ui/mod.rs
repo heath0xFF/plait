@@ -18,6 +18,7 @@ mod navigation;
 mod navigation_host;
 mod palette;
 mod panels;
+mod permissions;
 mod selection;
 mod session;
 mod settings;

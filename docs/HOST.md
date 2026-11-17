@@ -480,13 +480,15 @@ A client that steps down from 4 to 3 sees only Pi.
 ```json
 {"op":"harnesses","protocol_version":4}
 {"op":"set_harness_path","protocol_version":4,"harness":"codex","path":"/absolute/path/to/codex"}
-{"op":"create_thread","protocol_version":4,"checkout":"/absolute/checkout","provider":"codex","model_id":"MODEL","request_id":"CLIENT_UUID","harness":"codex","thinking":"high"}
+{"op":"set_harness_mode","protocol_version":4,"harness":"codex","mode":"ask"}
+{"op":"create_thread","protocol_version":4,"checkout":"/absolute/checkout","provider":"codex","model_id":"MODEL","request_id":"CLIENT_UUID","harness":"codex","thinking":"high","mode":"ask"}
+{"op":"configure_thread","protocol_version":4,"thread_id":"THREAD_ID","mode":"read_only"}
 ```
 
 - **`harnesses`** lists every harness, Pi first:
 
   ```json
-  {"harnesses":[{"id":"codex","name":"Codex","state":"ready","note":null,"version":"0.169.0","supported":{"min":"0.169.0","tested":"0.169.0"},"path":"/absolute/path/to/codex","capabilities":{"steer":true,"approvals":true,"thinking":true,"usage":true},"protection":"One line","models":[{"provider":"codex","model_id":"MODEL","name":"Name","authenticated":true,"reasoning":true,"thinking_levels":["low","medium","high"],"context_window":null,"input":["text"]}]}]}
+  {"harnesses":[{"id":"codex","name":"Codex","state":"ready","note":null,"version":"0.169.0","supported":{"min":"0.169.0","tested":"0.169.0"},"path":"/absolute/path/to/codex","capabilities":{"steer":true,"approvals":true,"thinking":true,"usage":true},"protection":"One line","models":[{"provider":"codex","model_id":"MODEL","name":"Name","authenticated":true,"reasoning":true,"thinking_levels":["low","medium","high"],"context_window":null,"input":["text"]}],"modes":[{"id":"ask","label":"Ask","detail":"One sentence"}],"default_mode":"full_access"}]}
   ```
 
   `state` is `ready`, `not_installed`, `unsupported_version`, `signed_out`, or
@@ -495,20 +497,32 @@ A client that steps down from 4 to 3 sees only Pi.
   Plait runs and `supported.tested` the one its message types come from. Pi
   has `version`, `supported`, and `path` null and `models` null: its models are
   the `status` catalog. `protection` says in one line what protects the
-  checkout in that harness's threads. Clients must accept harness IDs, states,
-  and fields they do not know.
+  checkout in that harness's threads. `modes` are the harness's own permission
+  modes and `default_mode` the one new threads start in; Pi has `modes` empty
+  and `default_mode` null, because its threads use Plait's approval mode.
+  Clients must accept harness IDs, states, modes, and fields they do not know.
 - **`set_harness_path`** runs Codex from `path` instead of the login shell's
   `PATH`; omit `path` to return to `PATH`. It replies with the whole list,
   checked again. The path is a host setting in `host.sqlite`.
+- **`set_harness_mode`** sets a harness's `default_mode`, also a host setting,
+  and replies with the whole list. A mode the harness does not list, or Pi,
+  is `invalid_request`.
 - **`create_thread`** takes an optional `harness`, `pi` when absent. A Codex
   thread's model has provider `codex` and a model ID from Codex's list, and a
   model from the other harness is rejected with `invalid_request`. `thinking`
-  goes to the nearest level the Codex model offers. A thread stays in its
-  harness: `configure_thread` accepts only models of the same harness.
+  goes to the nearest level the Codex model offers. `mode` is one of the
+  harness's modes, its `default_mode` when absent; Pi threads refuse it. A
+  thread stays in its harness: `configure_thread` accepts only models of the
+  same harness. `configure_thread` also takes `mode`; given alone, it is
+  accepted while the thread runs and applies from the next Codex turn.
 - **Snapshots and summaries.** A version 4 snapshot adds
-  `"harness":{"id":"codex","version":"0.169.0"}`, the harness and the version
-  of its latest run (`null` before the first). Pi threads, including every
-  thread saved earlier, report `{"id":"pi","version":null}`. Version 4 thread
+  `"harness":{"id":"codex","version":"0.169.0","mode":"ask","reported":"ask"}`:
+  the harness, the version of its latest run (`null` before the first), the
+  thread's mode, and the mode the harness reported using for its latest run
+  (`null` before the first). `reported` differs from `mode` when the
+  harness's own configuration overrides it, and is `custom` when it matches
+  none of the modes. Pi threads, including every thread saved earlier, report
+  `{"id":"pi","version":null,"mode":null,"reported":null}`. Version 4 thread
   summaries in `list_threads` and `watch_threads` add `"harness":"pi"` or
   `"harness":"codex"`.
 
@@ -529,15 +543,23 @@ has one active run across both harnesses.
 
 Each run is one Codex turn. The first run starts a Codex thread and later runs
 resume it; if Codex no longer has it, the run fails and asks for a new thread.
-What protects the checkout is Codex's own sandbox, set from the project's
-command policy:
+What protects the checkout is the thread's Codex mode. It replaces Plait's
+approval mode and the project's command policy, which do not apply to Codex
+threads; a submission's `approval` is ignored. Each turn sends the mode's
+approval policy, sandbox, and reviewer in full, so Codex's own configuration
+defaults do not change what a mode means, though its enforced requirements
+can, and `reported` then shows what Codex used:
 
-- **Sandboxed** projects run Codex in `workspace-write` with no network: its
-  commands and edits can write the checkout.
-- **Trusted** projects give Codex full access.
-- **Ask** mode sets Codex's approval policy to `untrusted`, and each request
-  Codex makes (a command, an edit) is a Plait approval; denying it declines the
-  request. **Auto** mode sets `never`, so Codex does not ask.
+| Mode | Approval policy | Sandbox | Reviewer |
+|---|---|---|---|
+| `read_only` | `on-request` | `read-only` | `user` |
+| `ask` | `on-request` | `workspace-write`, no network | `user` |
+| `approve_for_me` | `on-request` | `workspace-write`, no network | `auto_review` |
+| `full_access`, the default | `never` | `danger-full-access` | `user` |
+
+- Each request Codex sends to the person (a command, an edit) is a Plait
+  approval; denying it declines the request. With `approve_for_me`, Codex's
+  own reviewer answers most requests. With `full_access`, Codex never asks.
 - Plait's guard on files that had changes before the run does not apply to
   Codex. Edit approvals list such files in `dirty_paths` so the person can see
   them, but nothing stops Codex writing them.

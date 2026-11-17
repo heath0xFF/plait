@@ -34,8 +34,11 @@ async function host(t: Context, scenario = 'turn', options: { store?: string; re
   const close = async () => { if (!closed) { closed = true; await runtime.close(); } };
   t.after(close);
   const call = (request: Record<string, unknown>) => runtime.reply({ protocol_version: 4, ...request }) as Promise<Reply>;
-  const create = async () => {
-    const reply = await call({ op: 'create_thread', checkout: root, provider: 'codex', model_id: 'gpt-fake', request_id: `c${Date.now()}`, harness: 'codex', thinking: 'high' });
+  const create = async (mode?: string) => {
+    const reply = await call({
+      op: 'create_thread', checkout: root, provider: 'codex', model_id: 'gpt-fake', request_id: `c${Date.now()}`, harness: 'codex', thinking: 'high',
+      ...(mode ? { mode } : {}),
+    });
     assert.equal(reply.ok, true, JSON.stringify(reply));
     return reply.result.thread as Snapshot;
   };
@@ -53,9 +56,10 @@ async function host(t: Context, scenario = 'turn', options: { store?: string; re
   return { runtime, root, store, call, create, until, idle, frames, servers, close };
 }
 
-test('an asked Codex turn shows its approval, finishes, stores its transcript, and leaves no process', async t => {
+test('a Codex turn in Ask shows its approval, finishes, stores its transcript, and leaves no process', async t => {
   const h = await host(t);
-  const thread = await h.create();
+  const thread = await h.create('ask');
+  assert.deepEqual(thread.harness, { id: 'codex', version: null, mode: 'ask', reported: null });
   assert.equal((await h.call({ op: 'submit', thread_id: thread.id, request_id: 'r1', text: 'List the files', approval: 'ask' })).ok, true);
   const asked = await h.until(thread.id, snapshot => !!snapshot.pending_approval);
   assert.equal(asked.status, 'awaiting_approval');
@@ -64,18 +68,19 @@ test('an asked Codex turn shows its approval, finishes, stores its transcript, a
   assert.equal((await h.call({ op: 'approve', thread_id: thread.id, approval_id: asked.pending_approval!.id, allow: true })).ok, true);
   const done = await h.idle(thread.id);
   assert.equal(done.status, 'idle', JSON.stringify(done.error));
-  assert.deepEqual(done.harness, { id: 'codex', version: '0.169.0' });
+  assert.deepEqual(done.harness, { id: 'codex', version: '0.169.0', mode: 'ask', reported: 'ask' });
   assert.deepEqual(done.messages.map(message => [message.id, message.role, message.text]), [
     ['request-r1', 'user', 'List the files'], [done.messages[1].id, 'assistant', ''], [done.messages[2].id, 'assistant', 'Two files.'],
   ]);
   assert.equal(done.messages[1].reasoning, 'Looking at the files.');
   assert.deepEqual(done.tools.map(tool => [tool.id, tool.status, tool.output]), [['cmd-1', 'done', 'a.txt\nb.txt\n']]);
   assert.equal(done.usage?.context_window, 272000);
-  // What Codex was told: the sandbox and approvals Plait chose, the effort, and the request ID to echo.
+  // What Codex was told: the mode's sandbox, approvals, and reviewer, the effort, and the request ID to echo.
   const sent = await h.frames();
   const start = sent.find(frame => frame.method === 'thread/start').params;
-  assert.deepEqual([start.sandbox, start.approvalPolicy, start.model], ['workspace-write', 'untrusted', 'gpt-fake']);
+  assert.deepEqual([start.sandbox, start.approvalPolicy, start.approvalsReviewer, start.model], ['workspace-write', 'on-request', 'user', 'gpt-fake']);
   const turn = sent.find(frame => frame.method === 'turn/start').params;
+  assert.deepEqual([turn.approvalPolicy, turn.approvalsReviewer], ['on-request', 'user']);
   assert.deepEqual(turn.sandboxPolicy, { type: 'workspaceWrite', writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false });
   assert.deepEqual([turn.effort, turn.clientUserMessageId, turn.input[0].text], ['high', 'r1', 'List the files']);
   // History reads the stored transcript, live and after the host restarts.
@@ -91,9 +96,10 @@ test('an asked Codex turn shows its approval, finishes, stores its transcript, a
   assert.equal(again.servers.length, 0, 'reading history starts no Codex');
 });
 
-test('a second run continues the same Codex thread; auto mode never asks', async t => {
+test('a second run continues the same Codex thread; Full access, the default, never asks', async t => {
   const h = await host(t);
   const thread = await h.create();
+  assert.equal(thread.harness?.mode, 'full_access');
   await h.call({ op: 'submit', thread_id: thread.id, request_id: 'r1', text: 'First', approval: 'auto' });
   const first = await h.idle(thread.id);
   assert.equal(first.status, 'idle', JSON.stringify(first.error));
@@ -105,12 +111,48 @@ test('a second run continues the same Codex thread; auto mode never asks', async
   const sent = await h.frames();
   assert.equal(sent.filter(frame => frame.method === 'thread/start').length, 1);
   assert.equal(sent.find(frame => frame.method === 'thread/resume').params.threadId, 'thread-fake-1');
-  assert.ok(sent.filter(frame => frame.method === 'turn/start').every(frame => frame.params.approvalPolicy === 'never'));
+  assert.ok(sent.filter(frame => frame.method === 'turn/start').every(frame =>
+    frame.params.approvalPolicy === 'never' && frame.params.sandboxPolicy.type === 'dangerFullAccess'));
+  assert.equal(second.harness?.reported, 'full_access');
+});
+
+test('a mode change while a turn runs applies to the next turn; the default mode is a setting', async t => {
+  const h = await host(t, 'slow');
+  const thread = await h.create();
+  await h.call({ op: 'submit', thread_id: thread.id, request_id: 'r1', text: 'Slow', approval: 'auto' });
+  await h.until(thread.id, snapshot => snapshot.status === 'running');
+  const changed = await h.call({ op: 'configure_thread', thread_id: thread.id, mode: 'approve_for_me' });
+  assert.equal(changed.ok, true, JSON.stringify(changed));
+  assert.deepEqual([changed.result.thread.harness.mode, changed.result.thread.harness.reported], ['approve_for_me', null]);
+  // A model change still waits for the run.
+  assert.equal((await h.call({ op: 'configure_thread', thread_id: thread.id, mode: 'ask', thinking: 'low' })).error?.code, 'busy');
+  await h.call({ op: 'stop', thread_id: thread.id });
+  await h.idle(thread.id);
+  assert.equal((await h.call({ op: 'configure_thread', thread_id: thread.id, mode: 'yolo' })).error?.code, 'invalid_request');
+  const listed = await h.call({ op: 'set_harness_mode', harness: 'codex', mode: 'read_only' });
+  const codex = listed.result.harnesses.find((entry: { id: string }) => entry.id === 'codex');
+  assert.equal(codex.default_mode, 'read_only');
+  assert.deepEqual(codex.modes.map((mode: { id: string }) => mode.id), ['read_only', 'ask', 'approve_for_me', 'full_access']);
+  assert.equal((await h.create()).harness?.mode, 'read_only');
+  assert.equal((await h.call({ op: 'set_harness_mode', harness: 'pi', mode: 'ask' })).error?.code, 'invalid_request');
+});
+
+test('Approve for me hands requests to Codex\'s reviewer; a Codex held to another mode reports it', async t => {
+  const h = await host(t, 'pinned');
+  const thread = await h.create('approve_for_me');
+  await h.call({ op: 'submit', thread_id: thread.id, request_id: 'r1', text: 'Go', approval: 'auto' });
+  const asked = await h.until(thread.id, snapshot => !!snapshot.pending_approval);
+  // Codex said it would run read-only, so the thread shows that rather than what was asked.
+  assert.deepEqual([asked.harness?.mode, asked.harness?.reported], ['approve_for_me', 'read_only']);
+  await h.call({ op: 'approve', thread_id: thread.id, approval_id: asked.pending_approval!.id, allow: true });
+  await h.idle(thread.id);
+  const turn = (await h.frames()).find(frame => frame.method === 'turn/start').params;
+  assert.deepEqual([turn.approvalPolicy, turn.approvalsReviewer], ['on-request', 'auto_review']);
 });
 
 test('a declined Codex edit is shown as declined and writes nothing to changed files', async t => {
   const h = await host(t, 'edit');
-  const thread = await h.create();
+  const thread = await h.create('ask');
   await h.call({ op: 'submit', thread_id: thread.id, request_id: 'r1', text: 'Edit', approval: 'ask' });
   const asked = await h.until(thread.id, snapshot => !!snapshot.pending_approval);
   assert.equal(asked.pending_approval!.kind, 'edit');

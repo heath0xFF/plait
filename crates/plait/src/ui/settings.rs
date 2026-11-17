@@ -488,12 +488,19 @@ impl Plait {
         } else {
             plait_core::host::policy::approval_detail(ask, self.command_policy())
         };
+        let harness_modes = self.harness_rows().iter().any(|row| !row.modes.is_empty());
         section("Approvals")
             .child(setting("Default for edits and commands", detail, choices))
             .child(tag(
                 "A thread can choose its own from the run settings under its message box.",
                 colors().subtle,
             ))
+            .when(harness_modes, |el| {
+                el.child(tag(
+                    "These apply to Pi threads. A thread in another harness uses that harness's own permissions, chosen under its message box and in Settings → Agent.",
+                    colors().subtle,
+                ).line_height(px(16.)))
+            })
             .when_some(
                 self.preference_note(Some(PreferenceGroup::Approvals)),
                 |el, note| el.child(tag(note, colors().subtle)),

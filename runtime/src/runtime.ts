@@ -27,7 +27,7 @@ import { InteractiveApproval, automaticApproval } from './approval.ts';
 import type { Providers } from './providers.ts';
 import { commandPolicy, commandPolicyOperation, TRUSTED_INSTRUCTIONS } from './command/policy.ts';
 import type { TemplateEntry } from './templates.ts';
-import { CODEX_PROVIDER, CodexHarness, PI_ENTRY, codexEffort, codexLevels } from './harness.ts';
+import { CODEX_MODES, CODEX_PROVIDER, CodexHarness, PI_ENTRY, codexEffort, codexLevels } from './harness.ts';
 import type { Lease } from './harness.ts';
 import { CodexEntries } from './codex/entries.ts';
 import { CodexRun } from './codex/run.ts';
@@ -147,14 +147,17 @@ export class Runtime {
         const requested = request.thinking as ThinkingLevel | undefined;
         const codex = request.harness === 'codex';
         // Appended only when given, so a retried request from an older client matches its record.
-        const input = [root, choice.provider, choice.model_id, ...(requested === undefined ? [] : [requested]), ...(codex ? ['codex'] : [])];
+        const mode = request.mode as string | undefined;
+        const input = [root, choice.provider, choice.model_id, ...(requested === undefined ? [] : [requested]), ...(codex ? ['codex'] : []), ...(mode === undefined ? [] : [`mode:${mode}`])];
         const duplicate = this.store.duplicate('create', String(request.request_id), input);
         if (duplicate !== undefined) return duplicate;
         // A provider names its harness, so a model can never run in the other one.
         if (codex !== (choice.provider === CODEX_PROVIDER)) fail('invalid_request', 'Choose a model from the harness that runs the thread.');
         const levels = codex ? codexLevels((await this.codex.model(choice.model_id)).efforts) : (this.model(choice), undefined);
         const snapshot: Snapshot = { id: randomUUID(), checkout: root, model: choice, status: 'idle', messages: [], live_text: '', tools: [], pending_approval: null, error: null, truncated: false };
-        if (codex) snapshot.harness = { id: 'codex', version: null };
+        if (mode !== undefined && !codex) fail('invalid_request', "Pi threads use Plait's approval mode, not a harness mode.");
+        if (mode !== undefined && !CODEX_MODES.some(candidate => candidate.id === mode)) fail('invalid_request', 'Codex has no such mode.');
+        if (codex) snapshot.harness = { id: 'codex', version: null, mode: mode ?? this.codex.defaultMode(), reported: null };
         // A starting level is a preference, not a demand: use the nearest one the model has.
         if (requested !== undefined) {
           snapshot.thinking_level = levels ? nearest(levels, requested) : clampThinkingLevel(this.models.getModel(choice.provider, choice.model_id)!, requested);
@@ -169,6 +172,11 @@ export class Runtime {
         if (request.harness !== 'codex') fail('invalid_request', 'Only Codex runs from a chosen path.');
         this.codex.setPath(request.path as string | undefined);
         return { harnesses: [PI_ENTRY, await this.codex.entry(true)] };
+      }
+      case 'set_harness_mode': {
+        if (request.harness !== 'codex') fail('invalid_request', "Pi threads use Plait's approval mode, not a harness mode.");
+        this.codex.setDefaultMode(String(request.mode));
+        return { harnesses: [PI_ENTRY, await this.codex.entry()] };
       }
       case 'watch': return { thread: this.snapshot(String(request.thread_id)) };
       case 'submit': return this.submit(String(request.thread_id), String(request.request_id), String(request.text),
@@ -233,7 +241,19 @@ export class Runtime {
   /** Changes apply from the next run, so a busy thread refuses them. */
   private async configure(id: string, request: ReturnType<typeof validate>) {
     const snapshot = this.snapshot(id);
+    if (request.mode !== undefined) {
+      if (snapshot.harness?.id !== 'codex') fail('invalid_request', "Pi threads use Plait's approval mode, not a harness mode.");
+      if (!CODEX_MODES.some(candidate => candidate.id === request.mode)) fail('invalid_request', 'Codex has no such mode.');
+      // A mode alone may change while a turn runs; Codex takes it from the next turn. What Codex
+      // reported was for the old mode, so it is cleared until the next turn reports again.
+      if (request.provider === undefined && request.thinking === undefined) {
+        snapshot.harness = { ...snapshot.harness, mode: String(request.mode), reported: null };
+        this.save(snapshot);
+        return snapshot;
+      }
+    }
     if (this.sessions.has(id)) fail('busy', 'Stop the run or wait for it before changing the model or thinking level.');
+    if (request.mode !== undefined) snapshot.harness = { ...snapshot.harness!, mode: String(request.mode), reported: null };
     const choice = request.provider === undefined ? snapshot.model : { provider: String(request.provider), model_id: String(request.model_id) };
     const codex = snapshot.harness?.id === 'codex';
     // A thread stays in its harness.
@@ -544,7 +564,8 @@ export class Runtime {
     session.codex = { lease };
     const model = lease.models.find(candidate => candidate.id === snapshot.model.model_id);
     if (!model) fail('model_unavailable', 'This Codex model is no longer offered by your Codex. Choose another.');
-    snapshot.harness = { id: 'codex', version: lease.install.version ?? null };
+    const mode = snapshot.harness?.mode ?? this.codex.defaultMode();
+    snapshot.harness = { ...snapshot.harness, id: 'codex', version: lease.install.version ?? null, mode };
     const entries = await this.gate(id, async () => new CodexEntries(join(this.directory, `${id}.codex.sqlite`)));
     session.codex.entries = entries;
     const placed = (requestId: string, entry: number) => {
@@ -553,7 +574,7 @@ export class Runtime {
       snapshot.queued = this.store.queue(id).map(queuedView);
     };
     const run = new CodexRun({
-      snapshot, mode: snapshot.approval_mode ?? 'ask', policy: session.commandPolicy ?? 'sandboxed', lease, entries,
+      snapshot, mode, lease, entries,
       approvals: session.approvals, signal: session.authorization.signal, dirty,
       inputs: () => session.inputs, place: placed, persist: head => this.save(snapshot, head), publish: () => this.changed(id),
       changed: path => this.store.recordWrite(id, path),

@@ -1,9 +1,9 @@
 // One Plait run of a Codex thread: a single Codex turn on the shared app-server.
 //
 // Codex owns the work: its sandbox, its tools, and its approvals policy. Plait
-// starts or resumes the Codex thread with settings from the project's command
-// policy and the run's approval mode, shows Codex's approval requests as Plait
-// approvals, and stores each finished item so the thread reads like a Pi one.
+// starts or resumes the Codex thread in the thread's Codex mode, records the
+// mode Codex reports, shows each approval Codex asks for as a Plait approval,
+// and stores each finished item so the thread reads like a Pi one.
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, relative, sep } from 'node:path';
 import type { ConversationView } from '@earendil-works/pi-durable';
@@ -11,14 +11,15 @@ import { approvalFor, approvalReply, declineUnsupported } from './approval.ts';
 import type { CodexEntries } from './entries.ts';
 import { NOTIFICATIONS } from './protocol.ts';
 import type {
-  AskForApproval, FileChangeItem, ItemNotification, SandboxMode, SandboxPolicy, ThreadResumeParams, ThreadStartParams,
+  FileChangeItem, ItemNotification, ThreadResumeParams, ThreadStartParams,
   ThreadStartResponse, TurnInterruptParams, TurnStartParams, TurnStartResponse, TurnSteerParams, UserInput,
 } from './protocol.ts';
 import { CodexTranscript, isTerminalTurn } from './transcript.ts';
+import { codexPolicy, codexReported } from '../harness.ts';
 import type { Lease } from '../harness.ts';
 import type { InteractiveApproval } from '../approval.ts';
 import { fail, HostError } from '../protocol.ts';
-import type { ApprovalMode, InputRecord, Snapshot } from '../protocol.ts';
+import type { InputRecord, Snapshot } from '../protocol.ts';
 import { update } from '../transcript.ts';
 
 /** The newest entries the live view is built from, as for Pi. */
@@ -30,8 +31,8 @@ const INTERRUPT_WAIT_MS = 10_000;
 
 export type CodexRunContext = {
   snapshot: Snapshot;
-  mode: ApprovalMode;
-  policy: 'sandboxed' | 'trusted';
+  /** The thread's Codex mode for this turn. */
+  mode: string;
   lease: Lease;
   entries: CodexEntries;
   approvals: InteractiveApproval;
@@ -86,24 +87,24 @@ export class CodexRun {
   private async turnFor(requestId: string, input: string, model: string, effort: string | undefined) {
     const { snapshot, lease, signal } = this.context;
     const cwd = snapshot.checkout;
-    // Ask: every request Codex makes is a Plait approval. Auto: Codex never asks.
-    const approvalPolicy: AskForApproval = this.context.mode === 'ask' ? 'untrusted' : 'never';
-    // Sandboxed projects let Codex write the checkout but not reach the network; trusted ones give it full access.
-    const sandbox: SandboxMode = this.context.policy === 'trusted' ? 'danger-full-access' : 'workspace-write';
-    const sandboxPolicy: SandboxPolicy = this.context.policy === 'trusted' ? { type: 'dangerFullAccess' }
-      : { type: 'workspaceWrite', writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false };
+    // The mode's settings are sent in full each turn, so a change between turns applies to the next one.
+    const { approvalPolicy, sandbox, sandboxPolicy, approvalsReviewer } = codexPolicy(this.context.mode);
     const saved = this.context.entries.thread();
+    let reply: ThreadStartResponse;
     if (saved) {
-      const params: ThreadResumeParams = { threadId: saved, cwd, approvalPolicy, sandbox, model, excludeTurns: true };
-      await lease.server.request('thread/resume', params).catch(() => {
+      const params: ThreadResumeParams = { threadId: saved, cwd, approvalPolicy, sandbox, approvalsReviewer, model, excludeTurns: true };
+      reply = await lease.server.request<ThreadStartResponse>('thread/resume', params).catch(() => {
         fail('runtime_error', 'Codex could not continue this thread. Its session may have been removed; start a new thread.');
       });
       this.thread = saved;
     } else {
-      const params: ThreadStartParams = { model, cwd, approvalPolicy, sandbox };
-      this.thread = (await lease.server.request<ThreadStartResponse>('thread/start', params)).thread.id;
+      const params: ThreadStartParams = { model, cwd, approvalPolicy, sandbox, approvalsReviewer };
+      reply = await lease.server.request<ThreadStartResponse>('thread/start', params);
+      this.thread = reply.thread.id;
       this.context.entries.setThread(this.thread);
     }
+    // What Codex says it will use, which its own requirements can override; the thread shows this, not what was asked.
+    if (snapshot.harness) snapshot.harness.reported = codexReported(reply);
     this.unroute = lease.route(this.thread, {
       notify: (method, params) => this.notify(method, params),
       request: (method, params) => this.request(method, params),
@@ -112,7 +113,7 @@ export class CodexRun {
     this.unplaced = requestId;
     const ended = new Promise<NonNullable<ReturnType<typeof isTerminalTurn>>>(resolve => { this.finish = resolve; });
     const params: TurnStartParams = {
-      threadId: this.thread, input: text(input), clientUserMessageId: requestId, cwd, approvalPolicy, sandboxPolicy, model,
+      threadId: this.thread, input: text(input), clientUserMessageId: requestId, cwd, approvalPolicy, sandboxPolicy, approvalsReviewer, model,
       effort: effort ?? null, summary: 'auto',
     };
     const { turn } = await lease.server.request<TurnStartResponse>('turn/start', params);
@@ -190,7 +191,6 @@ export class CodexRun {
       if (refusal === undefined) throw new Error('Plait does not answer this request.');
       return refusal;
     }
-    if (this.context.mode === 'auto') return approvalReply(method, true);
     this.flush();
     const dirty = approval.paths.map(path => this.inCheckout(path)).filter((path): path is string => !!path && this.context.dirty.has(path));
     const allowed = await this.context.approvals.ask({

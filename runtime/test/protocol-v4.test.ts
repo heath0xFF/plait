@@ -21,6 +21,8 @@ test('version 4 operations and fields validate only with version 4', () => {
     { op: 'harnesses', protocol_version: 4 },
     { op: 'set_harness_path', protocol_version: 4, harness: 'codex' },
     { op: 'set_harness_path', protocol_version: 4, harness: 'codex', path: '/opt/codex' },
+    { op: 'set_harness_mode', protocol_version: 4, harness: 'codex', mode: 'ask' },
+    { op: 'configure_thread', protocol_version: 4, thread_id: 't', mode: 'read_only' },
     { op: 'create_thread', protocol_version: 4, checkout: '/r', provider: 'codex', model_id: 'm', request_id: 'r', harness: 'codex' },
     { op: 'history', protocol_version: 4, thread_id: 't' },
   ]) assert.doesNotThrow(() => validate(input), JSON.stringify(input));
@@ -31,15 +33,18 @@ test('version 4 operations and fields validate only with version 4', () => {
     { op: 'set_harness_path', protocol_version: 4, harness: 'codex', path: 'relative/codex' },
     { op: 'set_harness_path', protocol_version: 4, harness: 'codex', path: 7 },
     { op: 'set_harness_path', protocol_version: 4 },
+    { op: 'set_harness_mode', protocol_version: 4, harness: 'codex' },
+    { op: 'create_thread', protocol_version: 4, checkout: '/r', provider: 'codex', model_id: 'm', request_id: 'r', harness: 'codex', mode: 'Full Access' },
+    { op: 'set_harness_mode', protocol_version: 3, harness: 'codex', mode: 'ask' },
   ]) assert.throws(() => validate(input), JSON.stringify(input));
 });
 
 test('only version 4 replies name the harness, and Pi threads saved earlier read as Pi', () => {
   const snapshot = empty();
   assert.equal('harness' in view(snapshot, 3), false);
-  assert.deepEqual((view(snapshot, 4) as { harness: unknown }).harness, { id: 'pi', version: null });
-  snapshot.harness = { id: 'codex', version: '0.169.0' };
-  assert.deepEqual((view(snapshot, 4) as { harness: unknown }).harness, { id: 'codex', version: '0.169.0' });
+  assert.deepEqual((view(snapshot, 4) as { harness: unknown }).harness, { id: 'pi', version: null, mode: null, reported: null });
+  snapshot.harness = { id: 'codex', version: '0.169.0', mode: 'ask', reported: 'read_only' };
+  assert.deepEqual((view(snapshot, 4) as { harness: unknown }).harness, { id: 'codex', version: '0.169.0', mode: 'ask', reported: 'read_only' });
   assert.equal('harness' in view(snapshot, 3), false);
   const summary = { id: 'x', checkout: '/r', model: snapshot.model, status: 'idle', title: '', created_at: 1, updated_at: 1, archived: false, pending_approval: false };
   assert.equal('harness' in summaryView({ ...summary, harness: 'codex' }, 3), false);
@@ -113,7 +118,7 @@ test('Codex threads start only with a Codex model, stay in Codex, and older clie
   assert.equal((await create({ provider: 'codex', model_id: 'missing', harness: 'codex' })).error?.code, 'model_unavailable');
   const made = await create({ provider: 'codex', model_id: 'gpt-test', harness: 'codex', thinking: 'high' }) as { ok: true; result: { thread: { id: string; harness: unknown; thinking_level: string } } };
   assert.equal(made.ok, true, JSON.stringify(made));
-  assert.deepEqual(made.result.thread.harness, { id: 'codex', version: null });
+  assert.deepEqual(made.result.thread.harness, { id: 'codex', version: null, mode: 'full_access', reported: null });
   assert.equal(made.result.thread.thinking_level, 'medium', 'the nearest level the model offers');
   const id = made.result.thread.id;
   const configure = (extra: Record<string, unknown>) => host.reply({ op: 'configure_thread', protocol_version: 4, thread_id: id, ...extra });

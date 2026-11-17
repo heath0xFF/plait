@@ -81,7 +81,9 @@ stop; this preview provides no security-policy bypass.
    model. Reconnect if the client opened before the host was ready.
 4. Start a real thread. Settings → Approvals selects automatic approval or
    asking for each action. Trusted commands require a separate explicit choice
-   for each project. The app shows only real threads.
+   for each project. A Codex thread uses Codex's own permissions instead,
+   chosen with **Permissions** under its message box, with a default for new
+   threads in Settings → Agent. The app shows only real threads.
 
 The host is a **per-user LaunchAgent**, not a root daemon. It starts for the
 current graphical user when possible and at later graphical logins. If no

@@ -42,10 +42,22 @@ const thread = (id = threadId) => ({
   recencyAt: null, status: { type: 'idle' }, path: null, cwd: '/work', cliVersion: '0.169.0', originator: null, source: 'appServer',
   threadSource: null, agentNickname: null, agentRole: null, gitInfo: null, name: null, turns: [],
 });
-const threadResponse = (id?: string) => ({
-  thread: thread(id), model: 'gpt-fake', modelProvider: 'openai', serviceTier: null, disabledPluginIds: [], cwd: '/work', instructionSources: [],
-  approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: { type: 'readOnly', networkAccess: false }, reasoningEffort: 'medium',
-});
+const SANDBOXES: Record<string, object> = {
+  'read-only': { type: 'readOnly', networkAccess: false },
+  'workspace-write': { type: 'workspaceWrite', writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false },
+  'danger-full-access': { type: 'dangerFullAccess' },
+};
+/** Echoes the settings asked for, as Codex does; `pinned` stands for a Codex whose requirements hold it read-only. */
+const threadResponse = (params: any, id?: string) => {
+  const pinned = scenario === 'pinned';
+  return {
+    thread: thread(id), model: 'gpt-fake', modelProvider: 'openai', serviceTier: null, disabledPluginIds: [], cwd: '/work', instructionSources: [],
+    approvalPolicy: pinned ? 'on-request' : params.approvalPolicy ?? 'on-request', approvalsReviewer: pinned ? 'user' : params.approvalsReviewer ?? 'user',
+    sandbox: SANDBOXES[pinned ? 'read-only' : params.sandbox ?? 'read-only'], reasoningEffort: 'medium',
+  };
+};
+/** The approval policy of the turn that is playing; with `never`, Codex runs everything without asking. */
+let policy = 'on-request';
 const turnOf = (id: string, status = 'inProgress', error: unknown = null) => ({
   id, rootTurnId: id, items: [], itemsView: 'full', status, error, startedAt: 1, completedAt: status === 'inProgress' ? null : 2, durationMs: null,
 });
@@ -78,11 +90,12 @@ async function playTurn(turnId: string) {
   item('item/completed', turnId, { type: 'reasoning', id: 'rs-1', summary: ['Looking at the files.'], content: [] });
   if (scenario === 'edit') {
     item('item/started', turnId, edit('inProgress'));
-    const answer = await ask('item/fileChange/requestApproval', { threadId, turnId, itemId: 'edit-1', startedAtMs: 1, reason: 'Update a.txt' });
+    const answer = policy === 'never' ? { result: { decision: 'accept' } }
+      : await ask('item/fileChange/requestApproval', { threadId, turnId, itemId: 'edit-1', startedAtMs: 1, reason: 'Update a.txt' });
     item('item/completed', turnId, edit(answer.result?.decision === 'accept' ? 'completed' : 'declined'));
   } else {
     item('item/started', turnId, command('inProgress'));
-    const answer = await ask('item/commandExecution/requestApproval', {
+    const answer = policy === 'never' ? { result: { decision: 'accept' } } : await ask('item/commandExecution/requestApproval', {
       kind: 'command', threadId, turnId, itemId: 'cmd-1', startedAtMs: 1, environmentId: null, command: 'ls -la', cwd: '/work', reason: 'List files',
     });
     if (answer.result?.decision === 'accept') {
@@ -136,13 +149,14 @@ function handle(frame: Frame) {
         : reply(id, { data: [model('gpt-fake')], nextCursor: 'page-2' });
     }
     case 'thread/start':
-      reply(id, threadResponse());
+      reply(id, threadResponse(params));
       return notify('thread/started', { thread: thread() });
     case 'thread/resume':
-      return params.threadId === threadId ? reply(id, threadResponse()) : failRequest(id, `no rollout found for thread id ${params.threadId}`);
+      return params.threadId === threadId ? reply(id, threadResponse(params)) : failRequest(id, `no rollout found for thread id ${params.threadId}`);
     case 'turn/start': {
       if (scenario === 'exit-on-turn') process.exit(3);
       const turnId = `turn-${++turns}`;
+      policy = params.approvalPolicy ?? policy;
       active = { id: turnId, interrupted: false };
       reply(id, { turn: turnOf(turnId) });
       const text = params.input?.map((input: { text?: string }) => input.text ?? '').join('') ?? '';

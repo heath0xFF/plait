@@ -53,13 +53,17 @@ export type SandboxPolicy =
 export type UserInput = { type: 'text'; text: string; text_elements: [] };
 
 // v2/ThreadStartParams.ts
+// v2/ApprovalsReviewer.ts
+export type ApprovalsReviewer = 'user' | 'auto_review' | 'guardian_subagent';
 export type ThreadStartParams = {
   model?: string | null; cwd?: string | null; approvalPolicy?: AskForApproval | null; sandbox?: SandboxMode | null;
+  approvalsReviewer?: ApprovalsReviewer | null;
   baseInstructions?: string | null; developerInstructions?: string | null; ephemeral?: boolean | null;
 };
 // v2/ThreadResumeParams.ts
 export type ThreadResumeParams = {
   threadId: string; model?: string | null; cwd?: string | null; approvalPolicy?: AskForApproval | null; sandbox?: SandboxMode | null;
+  approvalsReviewer?: ApprovalsReviewer | null;
   developerInstructions?: string | null;
   /** Return thread metadata without `thread.turns`. */
   excludeTurns?: boolean;
@@ -75,6 +79,7 @@ export type Thread = {
 export type ThreadStartResponse = {
   thread: Thread; model: string; modelProvider: string; cwd: string; approvalPolicy: AskForApproval | { granular: unknown };
   sandbox: SandboxPolicy | { type: 'externalSandbox'; networkAccess: unknown }; reasoningEffort: ReasoningEffort | null;
+  approvalsReviewer?: ApprovalsReviewer;
 };
 // v2/ThreadResumeResponse.ts (subset; same core fields as ThreadStartResponse)
 export type ThreadResumeResponse = ThreadStartResponse;
@@ -94,6 +99,7 @@ export type TurnStartParams = {
   /** Echoed as `clientId` on the resulting `userMessage` item. */
   clientUserMessageId?: string | null;
   cwd?: string | null; approvalPolicy?: AskForApproval | null; sandboxPolicy?: SandboxPolicy | null;
+  approvalsReviewer?: ApprovalsReviewer | null;
   model?: string | null; effort?: ReasoningEffort | null; summary?: ReasoningSummary | null;
 };
 // v2/TurnStartResponse.ts

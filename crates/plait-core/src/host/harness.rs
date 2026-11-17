@@ -37,6 +37,23 @@ pub struct ThreadHarness {
     pub id: HarnessId,
     /// `None` before the first run, and for Pi, which ships with the host.
     pub version: Option<String>,
+    /// The harness's own permission mode, one of its `modes`. `None` for Pi,
+    /// whose threads use Plait's approval mode.
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// The mode the harness reported using for the latest run, which its own
+    /// configuration can override; `custom` when it matches none of its modes.
+    #[serde(default)]
+    pub reported: Option<String>,
+}
+
+/// One of a harness's own permission modes, named as the harness names it.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct HarnessMode {
+    pub id: String,
+    pub label: String,
+    /// What the mode lets the harness do, in one sentence.
+    pub detail: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -52,6 +69,12 @@ pub enum Request {
         path: Option<PathBuf>,
         protocol_version: u32,
     },
+    /// The mode new threads in this harness start in. The reply is the whole list.
+    SetHarnessMode {
+        harness: HarnessId,
+        mode: String,
+        protocol_version: u32,
+    },
 }
 
 impl Request {
@@ -65,6 +88,14 @@ impl Request {
         Self::SetHarnessPath {
             harness,
             path,
+            protocol_version: 4,
+        }
+    }
+
+    pub fn set_harness_mode(harness: HarnessId, mode: String) -> Self {
+        Self::SetHarnessMode {
+            harness,
+            mode,
             protocol_version: 4,
         }
     }
@@ -135,6 +166,18 @@ pub struct Harness {
     pub protection: String,
     /// `None` for Pi, whose models are in the status catalog.
     pub models: Option<Vec<Model>>,
+    /// The harness's own permission modes; empty for Pi.
+    #[serde(default)]
+    pub modes: Vec<HarnessMode>,
+    /// The mode new threads start in; `None` for Pi.
+    #[serde(default)]
+    pub default_mode: Option<String>,
+}
+
+impl Harness {
+    pub fn mode(&self, id: &str) -> Option<&HarnessMode> {
+        self.modes.iter().find(|mode| mode.id == id)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -164,6 +207,24 @@ mod tests {
             serde_json::to_value(Request::set_harness_path(HarnessId::Codex, None)).unwrap(),
             serde_json::json!({"op": "set_harness_path", "harness": "codex", "protocol_version": 4})
         );
+        assert_eq!(
+            serde_json::to_value(Request::set_harness_mode(HarnessId::Codex, "ask".into()))
+                .unwrap(),
+            serde_json::json!({"op": "set_harness_mode", "harness": "codex", "mode": "ask", "protocol_version": 4})
+        );
+    }
+
+    #[test]
+    fn a_thread_harness_reads_its_mode_and_older_snapshots_have_none() {
+        let older: ThreadHarness =
+            serde_json::from_str(r#"{"id":"codex","version":"0.169.0"}"#).unwrap();
+        assert_eq!((older.mode, older.reported), (None, None));
+        let current: ThreadHarness = serde_json::from_str(
+            r#"{"id":"codex","version":"0.169.0","mode":"ask","reported":"read_only"}"#,
+        )
+        .unwrap();
+        assert_eq!(current.mode.as_deref(), Some("ask"));
+        assert_eq!(current.reported.as_deref(), Some("read_only"));
     }
 
     #[test]
@@ -176,7 +237,9 @@ mod tests {
                 {"id":"codex","name":"Codex","state":"ready","note":"Newer than tested.","version":"0.170.0",
                  "supported":{"min":"0.169.0","tested":"0.169.0"},"path":"/bin/codex",
                  "capabilities":{"steer":true,"approvals":true,"thinking":true,"usage":true,"later":1},
-                 "protection":"Codex's sandbox","models":[{"provider":"codex","model_id":"m","name":"M","authenticated":true}]},
+                 "protection":"Codex's sandbox","models":[{"provider":"codex","model_id":"m","name":"M","authenticated":true}],
+                 "modes":[{"id":"ask","label":"Ask","detail":"Asks."},{"id":"full_access","label":"Full access","detail":"Never asks."}],
+                 "default_mode":"full_access"},
                 {"id":"someday","name":"Someday","state":"warming_up","note":null,"version":null,"supported":null,
                  "path":null,"capabilities":{"steer":false,"approvals":false,"thinking":false,"usage":false},
                  "protection":"","models":[],"later":true}],
@@ -190,6 +253,9 @@ mod tests {
         assert!(pi.models.is_none());
         assert_eq!(codex.supported.as_ref().unwrap().tested, "0.169.0");
         assert_eq!(codex.models.as_ref().unwrap()[0].model_id, "m");
+        assert_eq!(codex.default_mode.as_deref(), Some("full_access"));
+        assert_eq!(codex.mode("ask").unwrap().label, "Ask");
+        assert!(pi.modes.is_empty() && pi.default_mode.is_none());
         assert_eq!(
             (other.id, other.state),
             (HarnessId::Other, HarnessState::Other)
