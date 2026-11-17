@@ -46,6 +46,8 @@ test('production runtime edits Plait source, runs Cargo, reconnects and resumes 
   for (const directory of [repo, store, agent]) await mkdir(directory, { recursive: true, mode: 0o700 });
   // No user's Git metadata, ignored files, credentials, or build output enter the disposable checkout.
   await cp(join(source, 'crates'), join(repo, 'crates'), { recursive: true });
+  // plait-core embeds the bundled theme schemes at compile time.
+  await cp(join(source, 'assets', 'themes'), join(repo, 'assets', 'themes'), { recursive: true });
   for (const file of ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'AGENTS.md']) {
     await cp(join(source, file), join(repo, file));
   }
