@@ -1,4 +1,5 @@
 import type { EntryRecord } from '@earendil-works/pi-durable';
+import type { Placed } from './store.ts';
 import { fail } from './protocol.ts';
 import type { PendingInput } from './store.ts';
 import { messageText, reasoningText } from './transcript.ts';
@@ -23,7 +24,9 @@ export type HistoryItem = MessageItem | ToolItem;
 export type HistorySource = {
   entries?(query: { minEntryId?: number; maxEntryId?: number; order: 'ascending' | 'descending' }, limit: number): Promise<readonly EntryRecord[]>;
   pending(anchor: number, rowid: number, limit: number): PendingInput[];
-  placed(low: number, high: number): Map<number, string>;
+  placed(low: number, high: number): Map<number, Placed>;
+  /** The typed text of the input placed at an entry. */
+  typed(entry: number): string | undefined;
   journal(rowid: number): string | undefined;
   /** A tool call with no result is still running only while its run is. */
   active: boolean;
@@ -46,7 +49,7 @@ function assign(item: HistoryItem, field: Field, value: string, ref: string) {
   sources.set(item, { ...sources.get(item), [field]: { ref, length: value.length } });
   setInline(item, field, clipHead(value, INLINE_UNITS));
 }
-function entryUnit(entry: EntryRecord, placed: Map<number, string>): Unit {
+function entryUnit(entry: EntryRecord, placed: Map<number, Placed>): Unit {
   const id = Number(entry.id);
   const unit: Unit = { key: `${id}:0:0`, items: [], results: new Map(), bytes: 0, entry: id };
   // A model-context summary is not a message the user sent; original entries remain readable.
@@ -54,11 +57,14 @@ function entryUnit(entry: EntryRecord, placed: Map<number, string>): Unit {
   for (const [index, message] of ((entry.model ?? []) as readonly Message[]).entries()) {
     const ref = `e${id}.${index}`;
     if (message.role === 'user' || message.role === 'assistant') {
-      const text = messageText(message); const reasoning = message.role === 'assistant' ? reasoningText(message) : '';
+      // A placed input reads as typed; the model may have received it expanded.
+      const input = message.role === 'user' ? placed.get(id) : undefined;
+      const typed = input?.text !== undefined;
+      const text = typed ? input!.text! : messageText(message); const reasoning = message.role === 'assistant' ? reasoningText(message) : '';
       if (text || reasoning) {
         // The same stable IDs the snapshot uses.
-        const item: MessageItem = { type: 'message', id: message.role === 'user' && placed.has(id) ? `request-${placed.get(id)}` : `${id}-${index}`, role: message.role, text: '', reasoning: '' };
-        assign(item, 'text', text, `${ref}.text`); assign(item, 'reasoning', reasoning, `${ref}.reasoning`);
+        const item: MessageItem = { type: 'message', id: input ? `request-${input.request_id}` : `${id}-${index}`, role: message.role, text: '', reasoning: '' };
+        assign(item, 'text', text, typed ? `p${id}` : `${ref}.text`); assign(item, 'reasoning', reasoning, `${ref}.reasoning`);
         unit.items.push(item);
       }
     }
@@ -85,7 +91,7 @@ async function* unitsBefore(source: HistorySource, before: string | undefined): 
   let maxEntry = kind === 1 ? entry : entry - 1;
   let bound = { anchor: entry, rowid: kind === 1 ? rowid : 0 };
   let entries: EntryRecord[] = []; let inputs: PendingInput[] = [];
-  let placed = new Map<number, string>(); let entriesDone = !source.entries; let inputsDone = false;
+  let placed = new Map<number, Placed>(); let entriesDone = !source.entries; let inputsDone = false;
   for (;;) {
     if (!entries.length && !entriesDone && maxEntry >= 0) {
       entries = [...await source.entries!({ maxEntryId: maxEntry, order: 'descending' }, CHUNK)];
@@ -163,6 +169,7 @@ export async function historyPage(source: HistorySource, before: string | undefi
 }
 async function resolve(source: HistorySource, ref: string): Promise<string | undefined> {
   if (ref.startsWith('q')) return source.journal(Number(ref.slice(1)));
+  if (ref.startsWith('p')) return source.typed(Number(ref.slice(1)));
   const [entry, index, field, part] = ref.slice(1).split('.');
   const found = (await source.entries?.({ minEntryId: Number(entry), maxEntryId: Number(entry), order: 'ascending' }, 1))?.[0];
   const message = ((found?.model ?? []) as readonly Message[])[Number(index)];

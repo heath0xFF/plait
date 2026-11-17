@@ -15,7 +15,7 @@ import { rangeArgs, rangeText, outputTail } from './tool-output.ts';
 import type { CommandOutputs, TextRange } from './tool-output.ts';
 import type { Snapshot } from './protocol.ts';
 import type { RunAuthorization } from './authorization.ts';
-import { skillFile } from './skills.ts';
+import { readableFolders, skillFile } from './skills.ts';
 import type { SkillEntry } from './skills.ts';
 
 export type ToolState = {
@@ -65,7 +65,7 @@ export function registry(state: ToolState) {
         const skill = skillFile(state.skills ?? [], args.path);
         // A skill's folder is its own root; the checkout lease and identity do not apply to it.
         const page = skill
-          ? await fileAction<TextRange>(skill.root, 'read_range', skill.path, rangeArgs(args))
+          ? await fileAction<TextRange>(skill.root, 'read_range', skill.path, rangeArgs(args), undefined, skill.identity)
           : await fileAction<TextRange>(state.snapshot.checkout, 'read_range', args.path, rangeArgs(args), state.lease?.fd, state.rootIdentity);
         text = rangeText(page, offset => `read(${JSON.stringify({ path: args.path, offset })})`);
       } else if (name === 'read_output') {
@@ -103,7 +103,7 @@ export function registry(state: ToolState) {
               ? await trustedCommand(state, args.command, signal, output, { capture: log.append })
               : await command(state.snapshot.checkout, args.command, state.baseline,
                 signal, output, state.lease?.fd, state.rootIdentity, state.buildCache, log.append,
-                (state.skills ?? []).map(entry => entry.root));
+                readableFolders(state.skills ?? []));
           } catch (error) { failure = error; text = ''; }
           const reference = log.finish();
           if (failure instanceof HostError) throw new HostError(failure.code, outputTail(failure.message) + reference);

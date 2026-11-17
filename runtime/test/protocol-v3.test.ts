@@ -6,7 +6,7 @@ import type { Snapshot } from '../src/protocol.ts';
 import { boundSnapshot, update } from '../src/transcript.ts';
 import { historyPage, historyText, INLINE_UNITS } from '../src/history.ts';
 import type { HistoryItem, HistorySource } from '../src/history.ts';
-import type { PendingInput } from '../src/store.ts';
+import type { PendingInput, Placed } from '../src/store.ts';
 import { clipTail, customTitle, title } from '../src/text.ts';
 
 const empty = (): Snapshot => ({ id: 'x', checkout: '/repo', model: { provider: 'faux', model_id: 'faux-1' }, status: 'idle',
@@ -140,7 +140,8 @@ test('oversized snapshots keep the content a version 2 host kept and stay inside
   assert(state.messages.some(message => message.reasoning));
 });
 
-function source(entries: unknown[], pending: PendingInput[] = [], placed: [number, string][] = [], active = false): HistorySource {
+function source(entries: unknown[], pending: PendingInput[] = [], placed: [number, string | Placed][] = [], active = false): HistorySource {
+  const inputs = placed.map(([entry, input]) => [entry, typeof input === 'string' ? { request_id: input } : input] as [number, Placed]);
   const records = entries as EntryRecord[];
   return {
     async entries(query, limit) {
@@ -149,7 +150,8 @@ function source(entries: unknown[], pending: PendingInput[] = [], placed: [numbe
     },
     pending: (anchor, rowid, limit) => pending.filter(input => input.anchor < anchor || (input.anchor === anchor && input.rowid < rowid))
       .sort((a, b) => b.anchor - a.anchor || b.rowid - a.rowid).slice(0, limit),
-    placed: (low, high) => new Map(placed.filter(([entry]) => entry >= low && entry <= high)),
+    placed: (low, high) => new Map(inputs.filter(([entry]) => entry >= low && entry <= high)),
+    typed: entry => inputs.find(([placedAt]) => placedAt === entry)?.[1].text,
     journal: rowid => pending.find(input => input.rowid === rowid)?.text,
     active,
   };
@@ -263,4 +265,13 @@ test('oversized items are delivered in bounded parts through history_text', asyn
   await assert.rejects(historyText(from, 'e2.0.text', 7), /splits a character/);
   await assert.rejects(historyText(from, 'e2.0.text', long.length + 1), /outside the text/);
   assert.deepEqual(await historyText(from, 'e2.0.text', long.length), { text: '', offset: long.length, next_offset: null, length: long.length });
+});
+
+test('a placed input reads as typed in history, though the model received it expanded', async () => {
+  const expanded = `<skill name="notes" location="/s/notes/SKILL.md">\n${'Long skill body. '.repeat(600)}\n</skill>\n\nfor v1.2`;
+  const from = source([{ id: 1, model: [{ role: 'user', content: expanded }] }], [], [[1, { request_id: 'typed', text: '/skill:notes for v1.2' }]]);
+  const [item] = (await historyPage(from, undefined, 10)).items;
+  assert.equal(item.id, 'request-typed');
+  assert.equal(item.type === 'message' && item.text, '/skill:notes for v1.2');
+  assert.equal((await historyText(from, 'p1', 0)).text, '/skill:notes for v1.2');
 });

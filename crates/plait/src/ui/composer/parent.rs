@@ -86,7 +86,7 @@ impl Plait {
                     .messages
                     .iter()
                     .filter(|message| message.role == MessageRole::User)
-                    .map(|message| plait_core::markdown::typed_input(&message.text)),
+                    .map(|message| message.text.as_str()),
             )
         });
     }

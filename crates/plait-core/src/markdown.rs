@@ -162,10 +162,9 @@ impl Message {
     }
 
     /// Text shown as written, such as the user's own message. Bare links still work.
-    /// A skill the runtime placed in the message is shown as the command typed.
     pub fn plain(source: &str) -> Self {
         let mut block = Block {
-            text: typed_input(source).into_owned(),
+            text: source.into(),
             ..Block::default()
         };
         autolink(&mut block);
@@ -652,57 +651,9 @@ impl Transcript {
     }
 }
 
-/// What the person typed for a message the runtime expanded: a leading
-/// `<skill name="…" location="…">…</skill>` block, as Pi sends for
-/// `/skill:name args`, reads back as that command. Other text is unchanged.
-pub fn typed_input(text: &str) -> std::borrow::Cow<'_, str> {
-    let Some(rest) = text.strip_prefix("<skill name=\"") else {
-        return text.into();
-    };
-    let Some((name, _)) = rest.split_once('"') else {
-        return text.into();
-    };
-    let Some((_, after)) = rest.split_once("\n</skill>") else {
-        return text.into();
-    };
-    // Names are plain identifiers; anything else is not a block the runtime wrote.
-    if name.is_empty() || name.contains(|c: char| c.is_whitespace() || c == '<' || c == '>') {
-        return text.into();
-    }
-    match after.strip_prefix("\n\n") {
-        Some(args) if !args.is_empty() => format!("/skill:{name} {args}").into(),
-        _ if after.is_empty() => format!("/skill:{name}").into(),
-        _ => text.into(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn an_expanded_skill_reads_back_as_the_typed_command() {
-        let block = "<skill name=\"release-notes\" location=\"/s/release-notes/SKILL.md\">\nReferences are relative to /s/release-notes.\n\nDo it.\n</skill>";
-        assert_eq!(typed_input(block), "/skill:release-notes");
-        assert_eq!(
-            typed_input(&format!("{block}\n\nfor v1.2\nand more")),
-            "/skill:release-notes for v1.2\nand more"
-        );
-        for text in [
-            "plain",
-            "<skill name=\"x\">no end",
-            "<skill name=\"a b\" location=\"\">\n</skill>",
-            "<skill name=\"x\" location=\"\">\n</skill>trailing",
-        ] {
-            assert_eq!(typed_input(text), text, "{text}");
-        }
-        assert_eq!(Message::plain(block).blocks[0].text, "/skill:release-notes");
-        assert_eq!(
-            Message::plain(block).source,
-            block,
-            "copy keeps what was sent"
-        );
-    }
 
     fn text(message: &Message) -> String {
         message

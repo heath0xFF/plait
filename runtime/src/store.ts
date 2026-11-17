@@ -9,6 +9,8 @@ import { CommandOutputs } from './tool-output.ts';
 import type { FileIdentity, Postimage } from './safety.ts';
 
 type Row = Record<string, unknown>;
+/** An input placed in the conversation store. `text` is absent for an input saved without its text. */
+export type Placed = { request_id: string; text?: string };
 export type PendingInput = { rowid: number; request_id: string; text: string; anchor: number };
 // Additive columns. Summary columns mirror the snapshot so listing never parses transcripts.
 const columns = [
@@ -163,10 +165,13 @@ export class Store {
       AND (COALESCE(anchor,0)<? OR (COALESCE(anchor,0)=? AND rowid<?)) ORDER BY COALESCE(anchor,0) DESC, rowid DESC LIMIT ?`).all(id, anchor, anchor, rowid, limit)
       .map(row => ({ rowid: Number(row.rowid), request_id: String(row.id), text: JSON.parse(String(row.input)), anchor: Number(row.anchor) }));
   }
-  /** Request IDs of the inputs placed at the given conversation entries. */
-  placed(id: string, low: number, high: number): Map<number, string> {
-    return new Map(this.db.prepare('SELECT id,entry FROM requests WHERE scope=? AND entry BETWEEN ? AND ?').all(id, low, high)
-      .map(row => [Number(row.entry), String(row.id)]));
+  /**
+   * The inputs placed at the given conversation entries: request ID and the text as
+   * typed, which the model may have received expanded (a `/skill:` command, say).
+   */
+  placed(id: string, low: number, high: number): Map<number, Placed> {
+    return new Map(this.db.prepare('SELECT id,entry,input FROM requests WHERE scope=? AND entry BETWEEN ? AND ?').all(id, low, high)
+      .map(row => [Number(row.entry), { request_id: String(row.id), text: row.input === null ? undefined : JSON.parse(String(row.input)) }]));
   }
   journal(id: string, rowid: number): string | undefined {
     const row = this.db.prepare('SELECT input FROM requests WHERE scope=? AND rowid=? AND input IS NOT NULL AND entry IS NULL AND state IS NULL').get(id, rowid);

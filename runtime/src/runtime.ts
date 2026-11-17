@@ -231,6 +231,7 @@ export class Runtime {
       const base = {
         pending: (anchor: number, rowid: number, limit: number) => this.store.pendingBefore(id, anchor, rowid, limit),
         placed: (low: number, high: number) => this.store.placed(id, low, high),
+        typed: (entry: number) => this.store.placed(id, entry, entry).get(entry)?.text,
         journal: (rowid: number) => this.store.journal(id, rowid), active: !!session,
       };
       if (session?.root) return work({ ...base, entries: entries(session.root) });
@@ -246,7 +247,7 @@ export class Runtime {
   }
   registry(state: ToolState) { return registry(state); }
   /** The person's Pi skills and instructions; a test runtime overrides it to stay independent of the machine. */
-  resources(checkout: string, trusted: boolean) { return discover(checkout, trusted); }
+  resources(checkout: string, trusted: boolean) { return discover(checkout, trusted, { protect: [this.directory] }); }
   async syncInputs(session: Session, all = false) {
     for (const input of session.inputs) {
       const steered = session.steered.has(input.request_id);

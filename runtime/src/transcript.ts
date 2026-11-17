@@ -108,7 +108,9 @@ export function update(snapshot: Snapshot, view: ConversationView, inputs: Input
     if (entry.kind === 'pi.compaction') continue;
     for (const [index, message] of ((entry.model ?? []) as readonly Message[]).entries()) {
       if (message.role === 'user' || message.role === 'assistant') {
-        const text = messageText(message);
+        // A placed input reads as typed; the model may have received it expanded.
+        const typed = message.role === 'user' ? placed.get(Number(entry.id))?.text : undefined;
+        const text = typed ?? messageText(message);
         const reasoning = message.role === 'assistant' ? clipTail(reasoningText(message), 4096) : '';
         if (text || reasoning) push({
           id: message.role === 'user' && placed.has(Number(entry.id)) ? `request-${placed.get(Number(entry.id))!.request_id}` : `${entry.id}-${index}`,

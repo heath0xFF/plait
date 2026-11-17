@@ -329,9 +329,13 @@ Runtime tests discover a user skill, add a project skill only for a trusted
 project, follow Pi's precedence and size bound for the user-level context file,
 map reads into a skill folder (refusing relative paths, prefix siblings, `..`,
 and the agent directory), read a skill file through the host helper, and send
-`/skill:name` in Pi's block. A real-sandbox test reads a skill folder only when
-it is passed, and cannot write it. Test runtimes ignore the machine's own skills.
-A core test reads a stored skill block back as the typed command. Discovery on
+`/skill:name` in Pi's block. Regression tests refuse a skill file swapped for a
+link to a dummy credential after discovery, grant a standalone skill in a
+scratch `~/.ssh` only its own file, and skip skill folders inside a credential
+folder or at the host store. A protocol test shows an expanded message in
+history as typed. A real-sandbox test reads a skill folder only when it is
+passed, and cannot write it. Test runtimes ignore the machine's own skills.
+Discovery on
 a real Pi setup with 66 skills (29 turned off in settings) took 7–20 ms per run.
 A live model choosing and following a skill in the installed app has not been
 checked.

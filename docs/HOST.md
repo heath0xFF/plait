@@ -892,16 +892,23 @@ failing it.
   project's `AGENTS.md`, which follows it), then each skill's name,
   description, and `SKILL.md` location in Pi's `<available_skills>` format.
   Full skill text costs context only when the model reads it.
-- `read` accepts an absolute path inside a skill's folder. Skills whose folder
-  is, or contains, the home directory or the Pi agent directory are skipped, so
-  credentials there are never readable this way.
-- Sandboxed commands may read, never write, the resolved skill folders, so a
-  skill's scripts and references work. Trusted commands already run as the user.
+- `read` accepts an absolute path inside the folder of a skill with its own
+  `SKILL.md`, or exactly the file of a standalone Markdown skill; a standalone
+  skill never grants the folder it sits in. A skill folder is skipped when it
+  is, or contains, the home, Pi agent, or host store directory, or when it is
+  in or holds a credential folder (`.ssh`, `.gnupg`, `.aws`, `.azure`, `.kube`,
+  `.docker`, `.config/gh`, `Library/Keychains`). Every skill read, including
+  the one below, goes through the no-symlink helper rooted at the folder found
+  at discovery, with that folder's device and inode checked, so a file or
+  folder swapped for a link later fails rather than being read.
+- Sandboxed commands may read, never write, those skill folders (not
+  standalone skills' folders), so a skill's scripts and references work.
+  Trusted commands already run as the user.
 - A message that starts with `/skill:name` is sent as Pi sends it: the skill's
-  `SKILL.md` (at most 65536 characters) in a `<skill name location>` block,
-  then the rest of the message. Unknown names are sent unchanged. The thread
-  keeps the typed text for its title; clients show a stored block as the
-  `/skill:` command that produced it.
+  file (at most 65536 characters) in a `<skill name location>` block, then the
+  rest of the message. Unknown names are sent unchanged. The model receives the
+  expanded message, while snapshots and `history` give the text as typed, so a
+  client shows and recalls the `/skill:` command whatever the skill's length.
 
 Not yet included: prompt templates, extensions, MCP servers, and skill
 discovery reported to the client. See the [roadmap](ROADMAP.md).
