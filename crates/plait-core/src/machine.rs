@@ -3,7 +3,7 @@
 /// Shown when the system gives no usable hostname.
 pub const FALLBACK_NAME: &str = "This machine";
 
-/// The host name, without a domain: `Zaphod.local` is shown as `Zaphod`.
+/// The host name, without a domain: `Workstation.local` is shown as `Workstation`.
 pub fn local_name() -> String {
     let mut buffer = [0u8; 256];
     // SAFETY: the buffer is valid for its length; the result is NUL-terminated
@@ -42,10 +42,10 @@ mod tests {
 
     #[test]
     fn domain_and_control_characters_are_removed() {
-        assert_eq!(display_name("Zaphod.local"), "Zaphod");
-        assert_eq!(display_name("arthur"), "arthur");
+        assert_eq!(display_name("Workstation.local"), "Workstation");
+        assert_eq!(display_name("studio"), "studio");
         assert_eq!(display_name("build-01.example.com"), "build-01");
-        assert_eq!(display_name("mar\u{7}vin"), "marvin");
+        assert_eq!(display_name("lap\u{7}top"), "laptop");
         assert_eq!(display_name(""), FALLBACK_NAME);
         assert_eq!(display_name(".local"), FALLBACK_NAME);
         assert_eq!(display_name("  "), FALLBACK_NAME);

@@ -759,12 +759,12 @@ mod tests {
             Project {
                 checkout: "/fixture".into(),
                 name: "plait".into(),
-                machines: vec![machine("zaphod", true), machine("arthur", false)],
+                machines: vec![machine("workstation", true), machine("laptop", false)],
             },
             Project {
                 checkout: "/fixture".into(),
                 name: "notes".into(),
-                machines: vec![machine("arthur", false)],
+                machines: vec![machine("laptop", false)],
             },
         ]
     }
