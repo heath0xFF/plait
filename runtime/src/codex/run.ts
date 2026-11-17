@@ -1,0 +1,237 @@
+// One Plait run of a Codex thread: a single Codex turn on the shared app-server.
+//
+// Codex owns the work: its sandbox, its tools, and its approvals policy. Plait
+// starts or resumes the Codex thread with settings from the project's command
+// policy and the run's approval mode, shows Codex's approval requests as Plait
+// approvals, and stores each finished item so the thread reads like a Pi one.
+import { randomUUID } from 'node:crypto';
+import { isAbsolute, relative, sep } from 'node:path';
+import type { ConversationView } from '@earendil-works/pi-durable';
+import { approvalFor, approvalReply, declineUnsupported } from './approval.ts';
+import type { CodexEntries } from './entries.ts';
+import { NOTIFICATIONS } from './protocol.ts';
+import type {
+  AskForApproval, FileChangeItem, ItemNotification, SandboxMode, SandboxPolicy, ThreadResumeParams, ThreadStartParams,
+  ThreadStartResponse, TurnInterruptParams, TurnStartParams, TurnStartResponse, TurnSteerParams, UserInput,
+} from './protocol.ts';
+import { CodexTranscript, isTerminalTurn } from './transcript.ts';
+import type { Lease } from '../harness.ts';
+import type { InteractiveApproval } from '../approval.ts';
+import { fail, HostError } from '../protocol.ts';
+import type { ApprovalMode, InputRecord, Snapshot } from '../protocol.ts';
+import { update } from '../transcript.ts';
+
+/** The newest entries the live view is built from, as for Pi. */
+const VIEW_ENTRIES = 100;
+/** Streaming text reaches watchers at most this often; finished items go at once. */
+const PUBLISH_MS = 16;
+/** How long Stop waits for Codex to end the turn before the run ends without it. */
+const INTERRUPT_WAIT_MS = 10_000;
+
+export type CodexRunContext = {
+  snapshot: Snapshot;
+  mode: ApprovalMode;
+  policy: 'sandboxed' | 'trusted';
+  lease: Lease;
+  entries: CodexEntries;
+  approvals: InteractiveApproval;
+  /** Ends the run: Stop, a host shutdown, or the run finishing. */
+  signal: AbortSignal;
+  /** Checkout paths that had changes when the run started, shown on edit approvals. */
+  dirty: ReadonlySet<string>;
+  inputs(): InputRecord[];
+  /** Records that a Plait request became this transcript entry. */
+  place(requestId: string, entry: number): void;
+  /** Saves the snapshot (and tells watchers); `head` is the newest stored entry. */
+  persist(head: number): void;
+  /** Tells watchers about live text without writing it to disk. */
+  publish(): void;
+  /** Records a checkout file Codex wrote, for changed files. */
+  changed(path: string): void;
+};
+
+const text = (value: string): UserInput[] => [{ type: 'text', text: value, text_elements: [] }];
+
+export class CodexRun {
+  private readonly context: CodexRunContext;
+  private readonly transcript: CodexTranscript;
+  private thread?: string;
+  private turn?: string;
+  /** Turns that ended before `turn/start` replied, so a fast turn is not missed. */
+  private readonly ended = new Map<string, NonNullable<ReturnType<typeof isTerminalTurn>>>();
+  private finish?: (end: NonNullable<ReturnType<typeof isTerminalTurn>>) => void;
+  private timer?: NodeJS.Timeout;
+  private head = 0;
+  private unroute?: () => void;
+  /** The run's own request until its user entry arrives. */
+  private unplaced?: string;
+
+  constructor(context: CodexRunContext) {
+    this.context = context;
+    const { entries, next } = context.entries.tail(VIEW_ENTRIES);
+    this.transcript = new CodexTranscript(entries, next);
+    this.head = next - 1;
+  }
+
+  /** Runs one turn for `text`; resolves when Codex ends it, and throws when it fails. */
+  async run(requestId: string, input: string, model: string, effort: string | undefined) {
+    try { await this.turnFor(requestId, input, model, effort); }
+    catch (error) {
+      // Codex's own errors and output can quote the provider or the machine, so the client gets a fixed message.
+      if (error instanceof HostError) throw error;
+      fail('runtime_error', 'Codex stopped or did not answer as expected. Inspect the checkout before a new submission.');
+    }
+  }
+
+  private async turnFor(requestId: string, input: string, model: string, effort: string | undefined) {
+    const { snapshot, lease, signal } = this.context;
+    const cwd = snapshot.checkout;
+    // Ask: every request Codex makes is a Plait approval. Auto: Codex never asks.
+    const approvalPolicy: AskForApproval = this.context.mode === 'ask' ? 'untrusted' : 'never';
+    // Sandboxed projects let Codex write the checkout but not reach the network; trusted ones give it full access.
+    const sandbox: SandboxMode = this.context.policy === 'trusted' ? 'danger-full-access' : 'workspace-write';
+    const sandboxPolicy: SandboxPolicy = this.context.policy === 'trusted' ? { type: 'dangerFullAccess' }
+      : { type: 'workspaceWrite', writableRoots: [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false };
+    const saved = this.context.entries.thread();
+    if (saved) {
+      const params: ThreadResumeParams = { threadId: saved, cwd, approvalPolicy, sandbox, model, excludeTurns: true };
+      await lease.server.request('thread/resume', params).catch(() => {
+        fail('runtime_error', 'Codex could not continue this thread. Its session may have been removed; start a new thread.');
+      });
+      this.thread = saved;
+    } else {
+      const params: ThreadStartParams = { model, cwd, approvalPolicy, sandbox };
+      this.thread = (await lease.server.request<ThreadStartResponse>('thread/start', params)).thread.id;
+      this.context.entries.setThread(this.thread);
+    }
+    this.unroute = lease.route(this.thread, {
+      notify: (method, params) => this.notify(method, params),
+      request: (method, params) => this.request(method, params),
+    });
+    if (signal.aborted) return;
+    this.unplaced = requestId;
+    const ended = new Promise<NonNullable<ReturnType<typeof isTerminalTurn>>>(resolve => { this.finish = resolve; });
+    const params: TurnStartParams = {
+      threadId: this.thread, input: text(input), clientUserMessageId: requestId, cwd, approvalPolicy, sandboxPolicy, model,
+      effort: effort ?? null, summary: 'auto',
+    };
+    const { turn } = await lease.server.request<TurnStartResponse>('turn/start', params);
+    this.turn = turn.id;
+    // The reply can come before Codex announces the turn; the transcript needs to know it either way.
+    this.notify(NOTIFICATIONS.turnStarted, { threadId: this.thread, turn });
+    const early = this.ended.get(turn.id);
+    if (early) this.finish!(early);
+    const stop = () => void this.interrupt();
+    signal.addEventListener('abort', stop, { once: true });
+    try {
+      const end = await Promise.race([
+        ended,
+        lease.server.exited.then(() => fail('runtime_error', 'Codex stopped unexpectedly. Inspect the checkout before a new submission.')),
+      ]);
+      // A failed turn's message is Codex's own and may quote the provider, so it is not passed on.
+      if (end.status === 'failed') fail('runtime_error', 'Codex ended the turn with an error. Its own logs have the details.');
+    } finally {
+      signal.removeEventListener('abort', stop);
+      this.flush();
+    }
+  }
+
+  /** Joins a message to the turn that is running now. False when there is no turn to join. */
+  async steer(requestId: string, input: string): Promise<boolean> {
+    if (!this.thread || !this.turn || this.context.signal.aborted) return false;
+    const params: TurnSteerParams = { threadId: this.thread, clientUserMessageId: requestId, input: text(input), expectedTurnId: this.turn };
+    return this.context.lease.server.request('turn/steer', params).then(() => true, () => false);
+  }
+
+  /** Asks Codex to end the turn, and stops waiting for it after a bound. */
+  private async interrupt() {
+    if (!this.thread || !this.turn) return;
+    const turn = this.turn;
+    const params: TurnInterruptParams = { threadId: this.thread, turnId: turn };
+    const timer = setTimeout(() => this.finish?.({ turnId: turn, status: 'interrupted' }), INTERRUPT_WAIT_MS);
+    timer.unref?.();
+    await this.context.lease.server.request('turn/interrupt', params).catch(() => {});
+  }
+
+  close() {
+    clearTimeout(this.timer);
+    this.unroute?.();
+  }
+
+  private notify(method: string, params: any) {
+    const end = isTerminalTurn(method, params);
+    const applied = this.transcript.apply(method, params);
+    if (applied.append.length) {
+      this.context.entries.append(applied.append);
+      this.head = Math.max(this.head, ...applied.append.map(entry => entry.id));
+    }
+    for (const { clientId, entry } of applied.placed) {
+      if (clientId === this.unplaced) this.unplaced = undefined;
+      this.context.place(clientId, entry);
+    }
+    // Codex is expected to echo the request ID; if it does not, the turn's first user entry is the run's own.
+    const user = this.unplaced === undefined ? undefined
+      : applied.append.find(entry => entry.model[0]?.role === 'user' && !applied.placed.some(placed => placed.entry === entry.id));
+    if (user && this.unplaced) { this.context.place(this.unplaced, user.id); this.unplaced = undefined; }
+    if (method === NOTIFICATIONS.itemCompleted) this.recordChanges((params as ItemNotification).item);
+    if (end) {
+      if (end.turnId === this.turn) this.finish?.(end);
+      else this.ended.set(end.turnId, end);
+    }
+    if (applied.append.length || applied.placed.length || end) this.flush();
+    else if (applied.changed) this.schedule();
+  }
+
+  /** Answers one Codex request: an approval Plait shows, or a refusal. */
+  private async request(method: string, params: any): Promise<unknown> {
+    const approval = approvalFor(method, params, this.transcript.edit(params?.itemId));
+    if (!approval) {
+      const refusal = declineUnsupported(method);
+      if (refusal === undefined) throw new Error('Plait does not answer this request.');
+      return refusal;
+    }
+    if (this.context.mode === 'auto') return approvalReply(method, true);
+    this.flush();
+    const dirty = approval.paths.map(path => this.inCheckout(path)).filter((path): path is string => !!path && this.context.dirty.has(path));
+    const allowed = await this.context.approvals.ask({
+      id: randomUUID(), tool_id: typeof params?.itemId === 'string' ? params.itemId : '', kind: approval.kind,
+      summary: approval.summary, details: approval.details, dirty_paths: dirty, risk: approval.risk,
+    }, this.context.signal).catch(() => false);
+    return approvalReply(method, allowed);
+  }
+
+  private recordChanges(item: ItemNotification['item'] | undefined) {
+    if (item?.type !== 'fileChange' || (item as FileChangeItem).status !== 'completed') return;
+    for (const change of (item as FileChangeItem).changes) {
+      const path = this.inCheckout(change.path);
+      if (path) this.context.changed(path);
+      const moved = change.kind.type === 'update' ? change.kind.move_path : null;
+      const target = moved ? this.inCheckout(moved) : undefined;
+      if (target) this.context.changed(target);
+    }
+  }
+
+  /** A checkout-relative path, or undefined for one outside the checkout. */
+  private inCheckout(path: string): string | undefined {
+    const inside = relative(this.context.snapshot.checkout, isAbsolute(path) ? path : `${this.context.snapshot.checkout}${sep}${path}`);
+    return inside && !inside.startsWith(`..${sep}`) && inside !== '..' && !isAbsolute(inside) ? inside : undefined;
+  }
+
+  private schedule() {
+    if (this.timer) return;
+    this.timer = setTimeout(() => { this.timer = undefined; this.render(); this.context.publish(); }, PUBLISH_MS);
+  }
+
+  /** Brings the snapshot up to date and saves it. */
+  private flush() {
+    clearTimeout(this.timer); this.timer = undefined;
+    this.render();
+    this.context.persist(this.head);
+  }
+
+  private render() {
+    const { snapshot } = this.context;
+    update(snapshot, this.transcript.view() as unknown as ConversationView, this.context.inputs(), null);
+    snapshot.usage = this.transcript.usage(null) ?? snapshot.usage ?? null;
+  }
+}

@@ -11,8 +11,8 @@ use std::{
 pub const REQUEST_LIMIT: usize = 64 * 1024;
 /// Newest protocol this client speaks. Version 2 adds ordered tools and approval modes.
 /// Version 3 adds full history, thread metadata, a live thread list, in-thread model and
-/// thinking changes, queued inputs, usage, and reasoning.
-pub const PROTOCOL_VERSION: u32 = 3;
+/// thinking changes, queued inputs, usage, and reasoning. Version 4 adds agent harnesses.
+pub const PROTOCOL_VERSION: u32 = 4;
 const REPLY_LIMIT: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,6 +142,9 @@ pub struct ThreadSummary {
     pub archived: Option<bool>,
     #[serde(default)]
     pub pending_approval: Option<bool>,
+    /// Version 4 only.
+    #[serde(default)]
+    pub harness: Option<harness::HarnessId>,
 }
 
 impl From<&Snapshot> for ThreadSummary {
@@ -160,6 +163,7 @@ impl From<&Snapshot> for ThreadSummary {
                 .title
                 .is_some()
                 .then_some(snapshot.pending_approval.is_some()),
+            harness: snapshot.harness.as_ref().map(|harness| harness.id),
         }
     }
 }
@@ -203,6 +207,9 @@ pub struct Snapshot {
     /// Set while the host waits to repeat a failed model request.
     #[serde(default)]
     pub retry: Option<Retry>,
+    /// Version 4 only: which harness runs the thread.
+    #[serde(default)]
+    pub harness: Option<harness::ThreadHarness>,
 }
 
 /// What a submission does when its thread already has an active run.
@@ -381,6 +388,9 @@ pub enum Request {
         /// The starting level; the host uses the nearest one the model has.
         #[serde(skip_serializing_if = "Option::is_none")]
         thinking: Option<ThinkingLevel>,
+        /// Version 4 only; the host runs Pi without it.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        harness: Option<harness::HarnessId>,
         #[serde(skip_serializing_if = "Option::is_none")]
         protocol_version: Option<u32>,
     },
@@ -573,23 +583,32 @@ impl Request {
         }
     }
 
-    /// A new thread. Only a version 3 host knows a starting thinking level, so
-    /// an older one gets the version 1 request.
+    /// A new thread. Only a version 3 host knows a starting thinking level, and only
+    /// a version 4 host another harness, so an older one gets the request it knows.
+    /// Pi is never named, so a Pi thread's request is unchanged from version 3.
     pub fn create_thread(
         checkout: PathBuf,
         choice: &ModelChoice,
         request_id: String,
         thinking: Option<ThinkingLevel>,
+        harness: harness::HarnessId,
         protocol: u32,
     ) -> Self {
         let thinking = thinking.filter(|_| protocol >= 3);
+        let harness = (harness != harness::HarnessId::Pi && protocol >= 4).then_some(harness);
+        let protocol_version = if harness.is_some() {
+            Some(4)
+        } else {
+            thinking.map(|_| 3)
+        };
         Self::CreateThread {
             checkout,
             provider: choice.provider.clone(),
             model_id: choice.model_id.clone(),
             request_id,
             thinking,
-            protocol_version: thinking.map(|_| 3),
+            harness,
+            protocol_version,
         }
     }
 
@@ -859,6 +878,7 @@ pub use threads::ThreadWatch;
 pub use watch::{CancelWatch, Snapshots, ThreadLists, Updates};
 
 pub mod agent;
+pub mod harness;
 pub mod policy;
 pub mod providers;
 pub mod sign_in;
@@ -1020,7 +1040,7 @@ mod tests {
     const UNKNOWN_FIELD: &str = r#"{"ok":false,"error":{"code":"invalid_request","message":"Unknown operation or field."}}"#;
 
     #[test]
-    fn negotiation_steps_down_from_three_to_two_to_one() {
+    fn negotiation_steps_down_from_four_to_one() {
         let newest = Request::Status {
             protocol_version: Some(PROTOCOL_VERSION),
         };
@@ -1030,10 +1050,21 @@ mod tests {
                 .map(|request| request["protocol_version"].clone())
                 .collect()
         };
-        // A version 3 host answers at once, with model capabilities.
+        // A version 4 host answers at once.
+        let (client, server, directory) = scripted(
+            "negotiate-4",
+            vec![r#"{"ok":true,"result":{"protocol_version":4,"default_model":null,"models":[]}}"#],
+        );
+        let status: Status = client.request(&newest).unwrap();
+        assert_eq!(status.protocol_version, 4);
+        assert_eq!(asked(server.join().unwrap()), [serde_json::json!(4)]);
+        std::fs::remove_dir_all(directory).unwrap();
+
+        // A version 3 host answers the step below, with model capabilities.
         let (client, server, directory) = scripted(
             "negotiate-3",
             vec![
+                UNKNOWN_VERSION,
                 r#"{"ok":true,"result":{"protocol_version":3,"default_model":null,"models":[{"provider":"p","model_id":"m","name":"M","authenticated":true,"reasoning":true,"thinking_levels":["off","xhigh","max"],"context_window":200000,"input":["text","image"]}]}}"#,
             ],
         );
@@ -1044,13 +1075,17 @@ mod tests {
             Some(&[ThinkingLevel::Off, ThinkingLevel::Xhigh, ThinkingLevel::Max][..])
         );
         assert_eq!(status.models[0].context_window, Some(200000));
-        assert_eq!(asked(server.join().unwrap()), [serde_json::json!(3)]);
+        assert_eq!(
+            asked(server.join().unwrap()),
+            [serde_json::json!(4), serde_json::json!(3)]
+        );
         std::fs::remove_dir_all(directory).unwrap();
 
         // A version 2 host knows the field but not the number.
         let (client, server, directory) = scripted(
             "negotiate-2",
             vec![
+                UNKNOWN_VERSION,
                 UNKNOWN_VERSION,
                 r#"{"ok":true,"result":{"protocol_version":2,"default_model":null,"models":[]}}"#,
             ],
@@ -1059,7 +1094,11 @@ mod tests {
         assert_eq!(status.protocol_version, 2);
         assert_eq!(
             asked(server.join().unwrap()),
-            [serde_json::json!(3), serde_json::json!(2)]
+            [
+                serde_json::json!(4),
+                serde_json::json!(3),
+                serde_json::json!(2)
+            ]
         );
         std::fs::remove_dir_all(directory).unwrap();
 
@@ -1067,6 +1106,7 @@ mod tests {
         let (client, server, directory) = scripted(
             "negotiate-1",
             vec![
+                UNKNOWN_FIELD,
                 UNKNOWN_FIELD,
                 UNKNOWN_FIELD,
                 r#"{"ok":true,"result":{"protocol_version":1,"default_model":null,"models":[{"provider":"p","model_id":"m","name":"M","authenticated":false}]}}"#,
@@ -1078,6 +1118,7 @@ mod tests {
         assert_eq!(
             asked(server.join().unwrap()),
             [
+                serde_json::json!(4),
                 serde_json::json!(3),
                 serde_json::json!(2),
                 serde_json::Value::Null
@@ -1147,15 +1188,17 @@ mod tests {
             provider: "p".into(),
             model_id: "m".into(),
         };
-        let create = |thinking, protocol| {
+        let create_in = |thinking, harness, protocol| {
             wire(Request::create_thread(
                 "/c".into(),
                 &choice,
                 "r".into(),
                 thinking,
+                harness,
                 protocol,
             ))
         };
+        let create = |thinking, protocol| create_in(thinking, harness::HarnessId::Pi, protocol);
         // A starting level goes only to a version 3 host, which then answers in version 3.
         assert_eq!(
             create(Some(ThinkingLevel::High), 3),
@@ -1168,6 +1211,15 @@ mod tests {
         );
         assert_eq!(create(Some(ThinkingLevel::High), 2), plain);
         assert_eq!(create(None, 3), plain);
+        // Pi is never named, so a Pi thread's request stays as version 3 sends it.
+        assert_eq!(create(None, 4), plain);
+        assert_eq!(
+            create_in(None, harness::HarnessId::Codex, 4),
+            json(
+                r#"{"op":"create_thread","checkout":"/c","provider":"p","model_id":"m","request_id":"r","harness":"codex","protocol_version":4}"#
+            )
+        );
+        assert_eq!(create_in(None, harness::HarnessId::Codex, 3), plain);
         assert_eq!(
             wire(Request::rename_thread("t".into(), "Name".into())),
             json(r#"{"op":"rename_thread","thread_id":"t","title":"Name","protocol_version":3}"#)

@@ -1376,6 +1376,7 @@ fn walk(output: Option<&Path>) {
         palette_walk(&mut harness, &repository, suffix);
         picker_walk(&mut harness, &repository, suffix);
         new_thread_walk(&mut harness, &repository, suffix);
+        harnesses_walk(&mut harness, &repository, suffix);
         inspector_walk(&mut harness, &repository, suffix);
         navigation_walk(&mut harness, &repository, suffix);
         // Threads exist, but none is open.
@@ -2136,6 +2137,206 @@ fn new_thread_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         plait.host.pending_create = None;
         plait.host.error = None;
     });
+}
+
+fn codex_choice() -> ModelChoice {
+    ModelChoice {
+        provider: "codex".into(),
+        model_id: "sample-codex-model".into(),
+    }
+}
+
+/// A version 4 host's harness list with Codex in `state`. Labeled sample data only.
+fn sample_harnesses(state: &str, note: Option<&str>) -> plait_core::host::harness::Harnesses {
+    let ready = state == "ready";
+    let model = |id: &str, name: &str| {
+        serde_json::json!({
+            "provider": "codex", "model_id": id, "name": name, "authenticated": true,
+            "reasoning": true, "thinking_levels": ["low", "medium", "high"],
+            "context_window": 272000,
+        })
+    };
+    serde_json::from_value(serde_json::json!({"harnesses": [
+        {
+            "id": "pi", "name": "Pi", "state": "ready", "note": null, "version": null,
+            "supported": null, "path": null,
+            "capabilities": {"steer": true, "approvals": true, "thinking": true, "usage": true},
+            "protection": "Plait's command sandbox and approvals, and its guard on files you already changed.",
+            "models": null,
+        },
+        {
+            "id": "codex", "name": "Codex", "state": state, "note": note,
+            "version": ready.then_some("0.170.0"),
+            "supported": {"min": "0.169.0", "tested": "0.169.0"},
+            "path": ready.then_some("/opt/sample/bin/codex"),
+            "capabilities": {"steer": true, "approvals": true, "thinking": true, "usage": true},
+            "protection": "Codex's own sandbox: commands can write this checkout, with no network. Plait's guard on files you already changed does not apply.",
+            "models": if ready {
+                serde_json::json!([model("sample-codex-model", "Sample Codex Model"), model("sample-codex-mini", "Sample Codex Mini")])
+            } else {
+                serde_json::json!([])
+            },
+        },
+    ]}))
+    .expect("sample harness list")
+}
+
+const NEWER: &str = "Newer than the 0.169.0 Plait was tested with. It should work; anything odd is worth reporting.";
+
+/// Version 4 harness choice: the new-thread picker with a ready and an unready
+/// Codex, a Codex thread's composer line and model menu, and Settings → Agent.
+fn harnesses_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
+    use plait_core::host::{
+        ThinkingLevel,
+        harness::{HarnessId, ThreadHarness},
+    };
+    harness.fresh_composer(repository);
+    harness.update(|plait, window, cx| {
+        let status = plait.host.status.as_mut().unwrap();
+        status.protocol_version = 4;
+        // Only the named sample providers, so the Codex group is in view.
+        status.models.truncate(6);
+        plait.inject_harnesses(Some(sample_harnesses("ready", Some(NEWER))));
+        plait.open_model_picker(ModelPurpose::NewThread, window, cx);
+    });
+    harness.capture(&format!("new-thread-harnesses-{suffix}"));
+    harness.update(|plait, window, cx| {
+        plait.close_overlay(true, window, cx);
+        plait.inject_harnesses(Some(sample_harnesses(
+            "not_installed",
+            Some("Install Codex, or choose its executable in Settings → Agent."),
+        )));
+        plait.open_model_picker(ModelPurpose::NewThread, window, cx);
+    });
+    harness.capture(&format!("new-thread-harness-unready-{suffix}"));
+    harness.update(|plait, window, cx| {
+        plait.close_overlay(true, window, cx);
+        plait.inject_harnesses(Some(sample_harnesses("ready", Some(NEWER))));
+    });
+    harness.change_snapshot(|snapshot| {
+        snapshot.model = codex_choice();
+        snapshot.thinking_level = Some(ThinkingLevel::Medium);
+        snapshot.harness = Some(ThreadHarness {
+            id: HarnessId::Codex,
+            version: Some("0.169.0".into()),
+        });
+    });
+    harness.update(|plait, _, cx| {
+        plait.host.threads[0].model = codex_choice();
+        plait.host.threads[0].harness = Some(HarnessId::Codex);
+        plait.sync_composer(cx);
+    });
+    harness.capture(&format!("composer-codex-thread-{suffix}"));
+    harness.update(|plait, window, cx| {
+        assert!(plait.can_submit(), "a ready Codex model can send");
+        plait.open_thread_models(window, cx);
+    });
+    harness.capture(&format!("thread-models-codex-{suffix}"));
+    harness.update(|plait, window, cx| {
+        plait.close_overlay(true, window, cx);
+        plait.inject_harnesses(Some(sample_harnesses(
+            "signed_out",
+            Some("Run codex login in a terminal, then Refresh in Settings → Agent."),
+        )));
+        plait.sync_composer(cx);
+        assert!(!plait.can_submit(), "a signed-out Codex cannot send");
+    });
+    harness.capture(&format!("composer-codex-signed-out-{suffix}"));
+    harness.update(|plait, _, cx| {
+        plait.inject_harnesses(Some(sample_harnesses("ready", Some(NEWER))));
+        plait.settings_open = true;
+        plait.settings_section = 3;
+        plait.sync_composer(cx);
+    });
+    harness.capture(&format!("harness-settings-{suffix}"));
+    let forced = harness
+        .window
+        .update(&mut harness.cx, |plait, _, _| plait.themes.forced)
+        .expect("window update");
+    harness.update(|plait, _, cx| {
+        plait.themes.forced = Some(true);
+        plait.apply_theme(cx);
+    });
+    harness.capture(&format!("light-harness-settings-{suffix}"));
+    harness.update(move |plait, _, cx| {
+        plait.themes.forced = forced;
+        plait.apply_theme(cx);
+        plait.inject_harnesses(Some(sample_harnesses(
+            "unsupported_version",
+            Some("Codex 0.150.0 is older than Plait supports. Update Codex to 0.169.0 or newer."),
+        )));
+    });
+    harness.capture(&format!("harness-settings-unready-{suffix}"));
+    harness.update(|plait, _, _| {
+        plait.host.status.as_mut().unwrap().protocol_version = 3;
+    });
+    harness.capture(&format!("harness-settings-old-host-{suffix}"));
+    harness.update(|plait, window, cx| {
+        plait.inject_harnesses(None);
+        plait.show_settings(false, window, cx);
+        plait.settings_section = 0;
+    });
+    harness.connect(repository, false);
+}
+
+#[core::prelude::v1::test]
+fn a_codex_model_starts_a_codex_thread_and_pi_stays_the_default() {
+    if !isolated("a_codex_model_starts_a_codex_thread_and_pi_stays_the_default") {
+        return;
+    }
+    use plait_core::host::harness::HarnessId;
+    let scratch = std::env::temp_dir().join(format!("plait-harness-ui-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.update(|plait, window, cx| {
+        plait.host.status.as_mut().unwrap().protocol_version = 4;
+        plait.inject_harnesses(Some(sample_harnesses("ready", None)));
+        // Pi's saved default is unchanged by a ready harness.
+        assert_eq!(plait.new_thread_harness(&choice()), HarnessId::Pi);
+        // A Pi model is never offered as Codex, nor a Codex model as Pi.
+        assert!(!plait.usable_in(HarnessId::Codex, &choice()));
+        assert!(!plait.usable_in(HarnessId::Pi, &codex_choice()));
+        plait.new_thread_in(HarnessId::Codex, Some(codex_choice()), window, cx);
+        assert!(plait.host.creating);
+        assert_eq!(plait.pending_harness(), HarnessId::Codex);
+        assert_eq!(
+            plait.host.pending_create.as_ref().unwrap().1,
+            codex_choice()
+        );
+    });
+    // No host runs here, so the creation stays unconfirmed; its retry keeps the harness.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while harness
+        .window
+        .update(&mut harness.cx, |plait, _, _| plait.host.creating)
+        .expect("window update")
+    {
+        assert!(Instant::now() < deadline, "creation did not finish");
+        std::thread::sleep(Duration::from_millis(5));
+        harness.settle();
+    }
+    harness.update(|plait, window, cx| {
+        plait.new_thread(None, window, cx);
+        assert_eq!(plait.pending_harness(), HarnessId::Codex);
+        assert_eq!(
+            plait.host.pending_create.as_ref().unwrap().1,
+            codex_choice()
+        );
+    });
+    // An unready harness offers nothing.
+    harness.update(|plait, _, _| {
+        plait.inject_harnesses(Some(sample_harnesses("signed_out", None)));
+        assert!(!plait.usable_in(HarnessId::Codex, &codex_choice()));
+        // An older host lists no harnesses, so only Pi is offered.
+        plait.inject_harnesses(Some(sample_harnesses("ready", None)));
+        plait.host.status.as_mut().unwrap().protocol_version = 3;
+        assert!(!plait.usable_in(HarnessId::Codex, &codex_choice()));
+        assert!(plait.harness_rows().is_empty());
+    });
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
 }
 
 /// The Git inspector hidden. A narrow window has no inspector, so the toggle
@@ -3147,6 +3348,7 @@ fn navigation_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
                     updated_at: Some(now - index as u64 * 180_000),
                     archived: Some(index == 3),
                     pending_approval: Some(index % 6 == 2),
+                    harness: None,
                 }
             })
             .collect();

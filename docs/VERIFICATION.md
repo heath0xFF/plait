@@ -349,6 +349,39 @@ a real Pi setup with 66 skills (29 turned off in settings) took 7–20 ms per ru
 A live model choosing and following a skill in the installed app has not been
 checked.
 
+## Agent harnesses and Codex
+
+Protocol tests accept the version 4 operations and fields only with version 4,
+keep version 3 snapshots and summaries free of the harness, and read threads
+saved earlier as Pi. Runtime tests list harnesses against a scripted check
+(ready, not installed, too old, signed out), reuse a recent check, check again
+after a new path, and close the server started only to ask. They refuse a
+model from the other harness at creation and in `configure_thread`, and map
+thinking levels to Codex's efforts. The Codex adapter's own tests check
+version parsing and grading, the JSON line transport (handshake, replies,
+refused server requests, exit, oversized frames, bounded diagnostics),
+translation of scripted turns through the same `update()` Pi threads use, and
+approval wording and replies.
+
+End-to-end runtime tests drive Codex threads through a scripted fake
+app-server: an asked command approval, a declined edit that lists no changed
+file, a second run that resumes the same Codex thread, auto mode sending
+`never`, a steering message joining the running turn, Stop sending
+`turn/interrupt`, Codex exiting mid-turn ending the run with a fixed error,
+history read live and again after a restart without starting Codex, and every
+server closing once idle. The adapter's message types were checked against
+`codex app-server` 0.169.0 with a handshake that starts no thread or turn
+(initialize, model list, account state, and refusals). A real Codex turn, the
+order of a real turn's events, and `clientId` echoing have not been checked
+against a live model; nothing in the tests reaches one.
+
+Measured on a replayed stream of 7,081 Codex events (20 answers and 20
+commands, after 100 earlier entries): translation cost 0.6 µs per event, and
+rebuilding the snapshot cost 0.16 ms on average and 0.71 ms at worst, under the
+5 ms per event target even if every event rebuilt it. Streaming updates are
+also coalesced to one per 16 ms and are not written to disk. Frame cost in the
+desktop while a Codex thread streams has not been measured.
+
 ## Files
 
 Core tests read text, binary, non-UTF-8, and oversized files; refuse symlinks,

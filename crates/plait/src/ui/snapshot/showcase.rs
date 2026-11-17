@@ -400,6 +400,7 @@ fn threads(checkout: &Path, current: ThreadStatus) -> Vec<ThreadSummary> {
         updated_at: Some(now - minutes * 60_000),
         archived: Some(false),
         pending_approval: Some(status == ThreadStatus::AwaitingApproval),
+        harness: None,
     };
     vec![
         summary(

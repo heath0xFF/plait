@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import type { ModelChoice, Snapshot, InputRecord, Summary } from './protocol.ts';
+import type { HarnessId, ModelChoice, Snapshot, InputRecord, Summary } from './protocol.ts';
 import { fail, inputMessage, queuedView, readsAsTyped } from './protocol.ts';
 import { boundSnapshot, pushMessage } from './transcript.ts';
 import { title } from './text.ts';
@@ -19,11 +19,14 @@ const columns = [
   ['threads', 'archived', 'INTEGER NOT NULL DEFAULT 0'], ['threads', 'pending', 'INTEGER NOT NULL DEFAULT 0'],
   ['threads', 'created_at', 'INTEGER'], ['threads', 'updated_at', 'INTEGER'],
   ['requests', 'state', 'TEXT'], ['requests', 'queue', 'TEXT'],
+  // Null for Pi, so threads saved before version 4 need no backfill.
+  ['threads', 'harness', 'TEXT'],
 ];
 const summary = (row: Row): Summary => ({
   id: String(row.id), checkout: String(row.checkout), model: JSON.parse(String(row.model)), status: String(row.status),
   title: String(row.title ?? ''), created_at: Number(row.created_at ?? 0), updated_at: Number(row.updated_at ?? 0),
   archived: row.archived === 1, pending_approval: row.pending === 1,
+  ...(typeof row.harness === 'string' ? { harness: row.harness as HarnessId } : {}),
 });
 const input = (row: Row): InputRecord => ({
   request_id: String(row.id), text: JSON.parse(String(row.input)), entry: row.entry === null ? null : Number(row.entry), anchor: Number(row.anchor ?? 0),
@@ -86,7 +89,7 @@ export class Store {
       const [updated, rowid] = options.cursor.split(':').map(Number);
       where.push('(updated_at<? OR (updated_at=? AND rowid<?))'); values.push(updated, updated, rowid);
     }
-    const rows = this.db.prepare(`SELECT rowid,id,checkout,model,status,title,archived,pending,created_at,updated_at FROM threads WHERE ${where.join(' AND ')} ORDER BY updated_at DESC, rowid DESC LIMIT ?`)
+    const rows = this.db.prepare(`SELECT rowid,id,checkout,model,status,title,archived,pending,created_at,updated_at,harness FROM threads WHERE ${where.join(' AND ')} ORDER BY updated_at DESC, rowid DESC LIMIT ?`)
       .all(...values, options.limit + 1);
     const page = rows.slice(0, options.limit); const last = page.at(-1);
     return { threads: page.map(summary), next_cursor: rows.length > options.limit && last ? `${last.updated_at}:${last.rowid}` : null };
@@ -107,10 +110,12 @@ export class Store {
       status: snapshot.status, title: snapshot.title ?? '', archived: snapshot.archived ? 1 : 0, pending: snapshot.pending_approval ? 1 : 0,
       model: JSON.stringify(snapshot.model), updated_at: snapshot.updated_at,
     };
-    this.db.prepare(`INSERT INTO threads (id,snapshot,head,checkout,status,model,title,archived,pending,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+    // A thread never changes harness, so its column is written once and never compared.
+    const harness = snapshot.harness && snapshot.harness.id !== 'pi' ? snapshot.harness.id : null;
+    this.db.prepare(`INSERT INTO threads (id,snapshot,head,checkout,status,model,title,archived,pending,created_at,updated_at,harness) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET snapshot=excluded.snapshot,head=MAX(threads.head,excluded.head),checkout=excluded.checkout,status=excluded.status,
-      model=excluded.model,title=excluded.title,archived=excluded.archived,pending=excluded.pending,created_at=excluded.created_at,updated_at=excluded.updated_at`)
-      .run(snapshot.id, JSON.stringify(boundSnapshot(snapshot)), head, snapshot.checkout, next.status, next.model, next.title, next.archived, next.pending, snapshot.created_at, next.updated_at);
+      model=excluded.model,title=excluded.title,archived=excluded.archived,pending=excluded.pending,created_at=excluded.created_at,updated_at=excluded.updated_at,harness=excluded.harness`)
+      .run(snapshot.id, JSON.stringify(boundSnapshot(snapshot)), head, snapshot.checkout, next.status, next.model, next.title, next.archived, next.pending, snapshot.created_at, next.updated_at, harness);
     return !previous || (Object.keys(next) as (keyof typeof next)[]).some(key => previous[key] !== next[key]);
   }
   inputs(id: string): InputRecord[] {
@@ -185,6 +190,10 @@ export class Store {
   }
   changedPaths(id: string): string[] {
     return this.db.prepare('SELECT path FROM postimages WHERE thread_id=? ORDER BY path LIMIT 500').all(id).map(row => String(row.path));
+  }
+  /** A file another harness wrote. It lists in changed files; it has no postimage, so no Pi run can claim it. */
+  recordWrite(id: string, path: string) {
+    this.db.prepare("INSERT INTO postimages VALUES (?,?,'null') ON CONFLICT(thread_id,path) DO NOTHING").run(id, path);
   }
   record(id: string, image: Postimage) {
     // FULL synchronous commits provenance before a tool reports completion.

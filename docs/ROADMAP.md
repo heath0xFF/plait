@@ -4,7 +4,8 @@ These are planned milestones, not a list of shipped features. See the
 [README](../README.md) for the current preview and [Verification](VERIFICATION.md)
 for acceptance evidence and open checks. **M2.5 shipped in v0.1.0-preview.8.
 M8 steps 1 and 2 (skills, prompt templates, and user instructions) shipped in
-v0.1.0-preview.9. Current work is M7, Codex first; M8 steps 3 and 4 follow it.**
+v0.1.0-preview.9. M7 step 1 (choosing a harness, and Codex) is on `main`,
+not yet released; M8 steps 3 and 4 follow M7.**
 
 ## Milestones
 
@@ -17,7 +18,7 @@ v0.1.0-preview.9. Current work is M7, Codex first; M8 steps 3 and 4 follow it.**
 | M4 — Development tools | Git staging, commits and history; file browser/editor; review feedback; process and log views | Git shipped ahead of M3 (staging, hunks, commits, history, push, fetch, fast-forward pull); a read-only file viewer shipped in v0.1.0-preview.8; the rest planned |
 | M5 — Previews | Live HTML, Markdown and MDX, automatic refresh, and selected-content feedback to the agent | Planned |
 | M6 — Multiple machines | Unified project navigation across independent hosts, including disconnected/reconnecting states | Planned |
-| M7 — Any agent harness | Threads run by other agent harnesses (Claude Code, Codex, Pi, omp, Antigravity, and others) beside Pi, with the same conversation, approval, Git, and navigation views | Current work. Direction agreed; does not depend on M3. Protocol details need agreement before implementation |
+| M7 — Any agent harness | Threads run by other agent harnesses (Claude Code, Codex, Pi, omp, Antigravity, and others) beside Pi, with the same conversation, approval, Git, and navigation views | Current work. Step 1 (harness choice and Codex, protocol version 4) is on `main`, not yet released; Claude Code and an ACP client follow, each agreed first |
 | M8 — Skills, tools, and CLIs | Pi threads use the skills, prompt templates, global instructions, MCP servers, and command-line tools the person already set up for their agent, with each one visible in Settings and every call under Plait's approvals | Steps 1 (skills and user instructions) and 2 (prompt templates, Settings → Agent, and `/` completion) shipped in v0.1.0-preview.9; steps 3 (named CLIs) and 4 (MCP) follow M7 |
 
 Do not build the whole roadmap at once. Each change must compile, run, and have
@@ -142,6 +143,41 @@ Before implementation: agree the protocol additions (harness choice when a
 thread starts, capability flags, increments), the order of harnesses, and how
 installs are found and pinned. Compare other agent workspaces by outcomes
 only, per the originality policy.
+
+**Agreed for M7 step 1, choosing a harness and Codex:** protocol version 4,
+additive: older clients' replies are unchanged. A version 4 `harnesses`
+request lists each harness with its state (ready, not installed, unsupported
+version, signed out) and how to fix it, its version and supported range, its
+capabilities (whether a message sent during a run joins it or waits, per-call
+approvals, thinking levels, usage), and its models; Pi is always listed.
+`create_thread` takes an optional `harness`, Pi by default; a thread stays in
+its harness and records the harness and version of each run. Codex runs
+through the person's installed `codex` (login-shell PATH or a path set in
+Settings), checked against the version Plait's message types are generated
+from: older is refused, newer runs with an untested note. One
+`codex app-server` runs while any Codex thread runs, and none when all are
+idle. Codex keeps its own sign-in, configuration, MCP servers, and
+instructions; Plait reads none of its credentials. Plait sets Codex's sandbox
+from the project's command policy (sandboxed: Codex workspace-write with no
+network, so commands can write the checkout; trusted: full access) and its
+approvals from the approval mode (ask: each request is a Plait approval;
+auto: never asks), and says plainly that Plait's guard on already-modified
+files does not apply. Streaming text, reasoning, tool rows, approvals, Stop,
+steering, usage, model, and thinking level map to the same thread view. The
+host stores translated events as they finish, so history, full text, and
+changed files work as for Pi; an interrupted Codex run is never resumed or
+repeated automatically. Clients keep today's snapshot updates; a replayed
+Codex event stream is measured against the 5 ms per event and frame-cost
+targets, and updates become increments only if those miss. The desktop groups
+models by harness when a thread starts, names the harness, version, and
+protection in the composer line, and lists harnesses in Settings. A scripted
+fake app-server tests runs, approvals, steering, Stop, version checks, and
+restart without a paid model.
+
+Next, each agreed before it starts: step 2, Claude Code through the pinned
+Agent SDK and the person's installed `claude`, after checking Anthropic's terms
+for the SDK with the person's own sign-in; step 3, an ACP client, Antigravity
+first.
 
 **Direction for M8, skills, tools, and CLIs:** today a Pi thread in Plait sees
 only Plait's five tools (read, read_output, edit, write, command) and the

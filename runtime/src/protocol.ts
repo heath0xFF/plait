@@ -24,6 +24,11 @@ export type ApprovalMode = 'ask' | 'auto';
 export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type ThinkingLevel = typeof THINKING_LEVELS[number];
 export type Queued = { id: string; request_id: string; text: string; mode: QueueMode; approval: ApprovalMode };
+/** Agent harnesses a thread can run in. Pi is built in; the others are the person's installs. */
+export const HARNESSES = ['pi', 'codex'] as const;
+export type HarnessId = typeof HARNESSES[number];
+/** The harness that runs a thread, and the version of its latest run (null before one, and for Pi). */
+export type ThreadHarness = { id: HarnessId; version: string | null };
 export type Usage = {
   input: number; output: number; cache_read: number; cache_write: number; reasoning: number | null; total: number;
   context_used: number | null; context_window: number | null;
@@ -48,16 +53,21 @@ export type Snapshot = {
   title?: string; renamed?: boolean; created_at?: number; updated_at?: number; archived?: boolean;
   thinking_level?: ThinkingLevel; queued?: Queued[]; usage?: Usage | null;
   live_reasoning?: string; retry?: { attempt: number; at: number } | null;
+  /** Absent for Pi threads, including every thread saved before version 4. */
+  harness?: ThreadHarness;
 };
 export type Summary = {
   id: string; checkout: string; model: ModelChoice; status: string;
   title: string; created_at: number; updated_at: number; archived: boolean; pending_approval: boolean;
+  /** Version 4 only. */
+  harness?: HarnessId;
 };
-export const PROTOCOL_VERSIONS = [1, 2, 3] as const;
+export const PROTOCOL_VERSIONS = [1, 2, 3, 4] as const;
 export type Protocol = typeof PROTOCOL_VERSIONS[number];
 export type Request = Record<string, string | boolean | number> & { op: string };
 export function version(request: Request): Protocol {
-  return request.protocol_version === 3 ? 3 : request.protocol_version === 2 ? 2 : 1;
+  const asked = request.protocol_version;
+  return asked === 4 ? 4 : asked === 3 ? 3 : asked === 2 ? 2 : 1;
 }
 const TURN_LIMIT = 'Agent ended without an answer (turn_limit). Inspect the transcript before retrying.';
 /**
@@ -85,7 +95,7 @@ export function view(snapshot: Snapshot, protocol: Protocol) {
   if (protocol === 1) return { ...rest, tools: tools.map(({ after: _after, ...tool }) => tool) };
   // Tools saved before version 2 keep no `after`; clients show them in the old order.
   if (protocol === 2) return { ...rest, tools, approval_mode: approval_mode ?? 'ask' };
-  return {
+  const third = {
     ...rest, error: snapshot.error,
     messages: snapshot.messages.map(({ id, role, text, reasoning }) => ({ id, role, text, reasoning: reasoning ?? '' })),
     tools: snapshot.tools.map(({ after3, ...tool }) => after3 === undefined ? tool : { ...tool, after: after3 }),
@@ -95,6 +105,13 @@ export function view(snapshot: Snapshot, protocol: Protocol) {
     queued: snapshot.queued ?? [], usage: snapshot.usage ?? null,
     live_reasoning: snapshot.live_reasoning ?? '', retry: snapshot.retry ?? null,
   };
+  // Version 4 adds the harness; Pi threads saved earlier have none recorded.
+  return protocol === 3 ? third : { ...third, harness: snapshot.harness ?? { id: 'pi', version: null } };
+}
+/** A thread summary in the negotiated shape: the harness is a version 4 field. */
+export function summaryView(summary: Summary, protocol: Protocol): Summary {
+  const { harness, ...rest } = summary;
+  return protocol >= 4 ? { ...rest, harness: harness ?? 'pi' } : rest;
 }
 export const queuedView = (input: InputRecord): Queued => ({
   id: `request-${input.request_id}`, request_id: input.request_id, text: clipTail(input.text, 4096),
@@ -123,6 +140,9 @@ const fields3: Record<string, string[]> = {
   configure_thread: ['thread_id'], cancel_queued: ['thread_id', 'request_id'], changed_files: ['thread_id'],
   agent_resources: ['checkout'],
 };
+// Version 4 adds harnesses: an operation to list them and a choice when a thread starts.
+const fields4: Record<string, string[]> = { harnesses: [], set_harness_path: ['harness'] };
+const optional4: Record<string, string[]> = { create_thread: ['harness'], set_harness_path: ['path'] };
 const optional3: Record<string, string[]> = {
   submit: ['when_busy'], list_threads: ['checkout', 'limit', 'cursor', 'archived'], history: ['before', 'limit'],
   watch_threads: ['archived'], configure_thread: ['provider', 'model_id', 'thinking'],
@@ -153,11 +173,14 @@ function validate3(request: Request) {
 export function validate(value: unknown): Request {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail('invalid_request', 'Expected an object.');
   const request = value as Request;
-  const third = version(request) === 3;
+  const third = version(request) >= 3;
+  const fourth = version(request) === 4;
   const known = typeof request.op === 'string' ? request.op : '';
-  const expected = third && Object.hasOwn(fields3, known) ? fields3[known] : Object.hasOwn(fields, known) ? fields[known] : undefined;
+  const expected = fourth && Object.hasOwn(fields4, known) ? fields4[known]
+    : third && Object.hasOwn(fields3, known) ? fields3[known] : Object.hasOwn(fields, known) ? fields[known] : undefined;
   // `approval` stays allowed on every version so version 1 keeps its specific error.
-  const allowed = expected && [...expected, 'protocol_version', ...(known === 'submit' ? ['approval'] : []), ...(third ? optional3[known] ?? [] : [])];
+  const allowed = expected && [...expected, 'protocol_version', ...(known === 'submit' ? ['approval'] : []), ...(third ? optional3[known] ?? [] : []),
+    ...(fourth ? optional4[known] ?? [] : [])];
   if (!allowed || Object.keys(request).some(key => key !== 'op' && !allowed.includes(key))) fail('invalid_request', 'Unknown operation or field.');
   if (request.protocol_version !== undefined && !PROTOCOL_VERSIONS.includes(request.protocol_version as Protocol)) {
     fail('invalid_request', 'Unsupported protocol_version.');
@@ -173,6 +196,10 @@ export function validate(value: unknown): Request {
     } else if (!text(request[key])) fail('invalid_request', `${key} must be a nonempty string.`);
   }
   if (third) validate3(request);
+  if (request.harness !== undefined && !HARNESSES.includes(request.harness as HarnessId)) fail('invalid_request', `harness must be one of ${HARNESSES.join(', ')}.`);
+  if (request.path !== undefined && (typeof request.path !== 'string' || !request.path.startsWith('/') || request.path.length > 4096)) {
+    fail('invalid_request', 'path must be an absolute path.');
+  }
   for (const key of ['request_id', 'thread_id', 'approval_id']) {
     if (request[key] !== undefined && !/^[A-Za-z0-9_-]{1,128}$/.test(request[key] as string)) fail('invalid_request', `Invalid ${key}.`);
   }

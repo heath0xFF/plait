@@ -10,7 +10,7 @@ import { createRegistry, Harness, ROOT_CONVERSATION_ID } from '@earendil-works/p
 import type { Conversation, ConversationRetryPolicy, ConversationWatch, Cursor, EntryQuery, EntryRecord, Submission, SubmissionDraft } from '@earendil-works/pi-durable';
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
 import { openNodeSqliteDatabase } from '@earendil-works/pi-durable/storage/sqlite/node';
-import { fail, failure, queuedView, validate, version, view } from './protocol.ts';
+import { fail, failure, queuedView, summaryView, THINKING_LEVELS, validate, version, view } from './protocol.ts';
 import type { ApprovalMode, ModelChoice, Protocol, QueueMode, Snapshot, InputRecord, ThinkingLevel } from './protocol.ts';
 import { Store } from './store.ts';
 import { checkout, dirtyPaths, fileAction, identities, acquireCheckout, rootIdentity, checkRoot, pathKey } from './safety.ts';
@@ -27,6 +27,10 @@ import { InteractiveApproval, automaticApproval } from './approval.ts';
 import type { Providers } from './providers.ts';
 import { commandPolicy, commandPolicyOperation, TRUSTED_INSTRUCTIONS } from './command/policy.ts';
 import type { TemplateEntry } from './templates.ts';
+import { CODEX_PROVIDER, CodexHarness, PI_ENTRY, codexEffort, codexLevels } from './harness.ts';
+import type { Lease } from './harness.ts';
+import { CodexEntries } from './codex/entries.ts';
+import { CodexRun } from './codex/run.ts';
 
 type Session = ToolState & {
   harness?: Harness; root?: Conversation; watch?: ConversationWatch; finished?: Promise<void>;
@@ -36,12 +40,22 @@ type Session = ToolState & {
   steered: Map<string, Submission>;
   /** The person's prompt templates, found when the run started. */
   templates?: TemplateEntry[];
+  /** A Codex thread's turn, its server lease, and its transcript store. */
+  codex?: { run?: CodexRun; lease?: Lease; entries?: CodexEntries };
 };
 type Query = { minEntryId?: number; maxEntryId?: number; order: 'ascending' | 'descending' };
 /** Inputs one thread may hold behind its run. */
 const QUEUE_LIMIT = 16;
 /** Marks a steering input in the conversation store, apart from the ID a later run of its own would use. */
 const steerKey = (requestId: string) => `steer:${requestId}`;
+/** Stands for a steering message Codex took; it has no submission to withdraw. */
+const JOINED = { abort: async () => 'already_placed' } as unknown as Submission;
+/** The supported level closest to `wanted`, preferring the lower one; `undefined` when there are none. */
+function nearest(levels: ThinkingLevel[], wanted: ThinkingLevel): ThinkingLevel | undefined {
+  if (levels.includes(wanted)) return wanted;
+  const rank = (level: ThinkingLevel) => THINKING_LEVELS.indexOf(level);
+  return [...levels].sort((a, b) => Math.abs(rank(a) - rank(wanted)) - Math.abs(rank(b) - rank(wanted)) || rank(a) - rank(b))[0];
+}
 function capabilities(model: Model<Api>) {
   return { reasoning: model.reasoning === true, thinking_levels: getSupportedThinkingLevels(model), context_window: model.contextWindow ?? null, input: [...model.input] };
 }
@@ -57,6 +71,8 @@ export class Runtime {
   /** Bounded backoff for transient provider failures of a model request. Tool calls are never retried. */
   retry: ConversationRetryPolicy = { enabled: true, maxRetries: 3, baseDelayMs: 2000 };
   maxTurns = MAX_TURNS;
+  /** The person's Codex; a test runtime gives it a scripted app-server. */
+  codex: CodexHarness;
   private closing = false;
   private gates = new Map<string, Promise<unknown>>();
   private listeners = new Set<(id: string) => void>();
@@ -79,12 +95,18 @@ export class Runtime {
   constructor(directory: string, models: Models, authenticated: Set<string>) {
     this.directory = directory; this.models = models; this.authenticated = authenticated;
     this.store = new Store(directory);
+    this.codex = new CodexHarness(this.store);
   }
   catalog(protocol: Protocol = 1) {
     return this.models.getModels().map(model => ({
       provider: model.provider, model_id: model.id, name: model.name, authenticated: this.authenticated.has(model.provider),
-      ...(protocol === 3 ? capabilities(model) : {}),
+      ...(protocol >= 3 ? capabilities(model) : {}),
     }));
+  }
+  /** Refuses a model the thread's harness cannot run now. Synchronous, so admission timing is the same for both harnesses. */
+  usable(snapshot: Snapshot) {
+    if (snapshot.harness?.id === 'codex') this.codex.refuse(snapshot.model.model_id);
+    else this.model(snapshot.model);
   }
   model(choice: ModelChoice) {
     if (!this.models.getModel(choice.provider, choice.model_id) || !this.authenticated.has(choice.provider)) {
@@ -109,28 +131,44 @@ export class Runtime {
         this.model(choice); this.store.setDefault(choice); return { default_model: choice };
       }
       case 'list_threads': {
-        if (protocol !== 3) return { threads: this.store.list(await checkout(String(request.checkout))) };
+        if (protocol < 3) return { threads: this.store.list(await checkout(String(request.checkout))) };
         const root = request.checkout === undefined ? undefined : await checkout(String(request.checkout));
-        return this.store.summaries({ checkout: root, limit: Number(request.limit ?? 100), cursor: request.cursor as string | undefined, archived: request.archived === true });
+        const page = this.store.summaries({ checkout: root, limit: Number(request.limit ?? 100), cursor: request.cursor as string | undefined, archived: request.archived === true });
+        return { ...page, threads: page.threads.map(summary => summaryView(summary, protocol)) };
       }
       // The host repeats this read after each summary change and sends what differs.
-      case 'watch_threads': return { threads: this.store.summaries({ limit: 200, archived: request.archived === true }).threads };
+      case 'watch_threads': {
+        const threads = this.store.summaries({ limit: 200, archived: request.archived === true }).threads;
+        return { threads: threads.map(summary => summaryView(summary, protocol)) };
+      }
       case 'create_thread': {
         const root = await checkout(String(request.checkout));
         const choice = { provider: String(request.provider), model_id: String(request.model_id) };
         const requested = request.thinking as ThinkingLevel | undefined;
+        const codex = request.harness === 'codex';
         // Appended only when given, so a retried request from an older client matches its record.
-        const input = [root, choice.provider, choice.model_id, ...(requested === undefined ? [] : [requested])];
+        const input = [root, choice.provider, choice.model_id, ...(requested === undefined ? [] : [requested]), ...(codex ? ['codex'] : [])];
         const duplicate = this.store.duplicate('create', String(request.request_id), input);
         if (duplicate !== undefined) return duplicate;
-        this.model(choice);
+        // A provider names its harness, so a model can never run in the other one.
+        if (codex !== (choice.provider === CODEX_PROVIDER)) fail('invalid_request', 'Choose a model from the harness that runs the thread.');
+        const levels = codex ? codexLevels((await this.codex.model(choice.model_id)).efforts) : (this.model(choice), undefined);
         const snapshot: Snapshot = { id: randomUUID(), checkout: root, model: choice, status: 'idle', messages: [], live_text: '', tools: [], pending_approval: null, error: null, truncated: false };
+        if (codex) snapshot.harness = { id: 'codex', version: null };
         // A starting level is a preference, not a demand: use the nearest one the model has.
-        if (requested !== undefined) snapshot.thinking_level = clampThinkingLevel(this.models.getModel(choice.provider, choice.model_id)!, requested);
+        if (requested !== undefined) {
+          snapshot.thinking_level = levels ? nearest(levels, requested) : clampThinkingLevel(this.models.getModel(choice.provider, choice.model_id)!, requested);
+        }
         const result = { thread: snapshot };
         this.store.admit('create', String(request.request_id), input, result, snapshot, await rootIdentity(root));
         this.changed('#');
         return result;
+      }
+      case 'harnesses': return { harnesses: [PI_ENTRY, await this.codex.entry()] };
+      case 'set_harness_path': {
+        if (request.harness !== 'codex') fail('invalid_request', 'Only Codex runs from a chosen path.');
+        this.codex.setPath(request.path as string | undefined);
+        return { harnesses: [PI_ENTRY, await this.codex.entry(true)] };
       }
       case 'watch': return { thread: this.snapshot(String(request.thread_id)) };
       case 'submit': return this.submit(String(request.thread_id), String(request.request_id), String(request.text),
@@ -174,7 +212,7 @@ export class Runtime {
         this.save(snapshot);
         return { thread: snapshot };
       }
-      case 'configure_thread': return { thread: this.configure(String(request.thread_id), request) };
+      case 'configure_thread': return { thread: await this.configure(String(request.thread_id), request) };
       case 'cancel_queued': return { thread: await this.cancelQueued(String(request.thread_id), String(request.request_id)) };
       case 'changed_files': {
         // Files this thread's tools wrote, as recorded for provenance: a list, not a diff.
@@ -193,10 +231,21 @@ export class Runtime {
     }
   }
   /** Changes apply from the next run, so a busy thread refuses them. */
-  private configure(id: string, request: ReturnType<typeof validate>) {
+  private async configure(id: string, request: ReturnType<typeof validate>) {
     const snapshot = this.snapshot(id);
     if (this.sessions.has(id)) fail('busy', 'Stop the run or wait for it before changing the model or thinking level.');
     const choice = request.provider === undefined ? snapshot.model : { provider: String(request.provider), model_id: String(request.model_id) };
+    const codex = snapshot.harness?.id === 'codex';
+    // A thread stays in its harness.
+    if (codex !== (choice.provider === CODEX_PROVIDER)) fail('invalid_request', 'Choose a model from the harness that runs the thread.');
+    if (codex) {
+      const levels = codexLevels((await this.codex.model(choice.model_id)).efforts);
+      const requested = request.thinking as ThinkingLevel | undefined;
+      if (requested !== undefined && !levels.includes(requested)) fail('invalid_request', `This model does not support thinking level ${requested}.`);
+      snapshot.model = choice; snapshot.thinking_level = requested ?? nearest(levels, snapshot.thinking_level ?? 'off');
+      this.save(snapshot);
+      return snapshot;
+    }
     this.model(choice);
     const model = this.models.getModel(choice.provider, choice.model_id)!;
     const requested = request.thinking as ThinkingLevel | undefined;
@@ -244,6 +293,14 @@ export class Runtime {
         journal: (rowid: number) => this.store.journal(id, rowid), active: !!session,
       };
       if (session?.root) return work({ ...base, entries: entries(session.root) });
+      // A Codex thread's translated transcript is its own store, read the same way.
+      const stored = (codex: CodexEntries) => async (query: Query, limit: number) => codex.entries(query, limit) as unknown as EntryRecord[];
+      if (session?.codex?.entries) return work({ ...base, entries: stored(session.codex.entries) });
+      const codexPath = join(this.directory, `${id}.codex.sqlite`);
+      if (existsSync(codexPath)) {
+        const codex = new CodexEntries(codexPath, { readOnly: true });
+        try { return await work({ ...base, entries: stored(codex) }); } finally { codex.close(); }
+      }
       const path = join(this.directory, `${id}.sqlite`);
       if (!existsSync(path)) return work(base);
       // A read-only harness recovers nothing and can never schedule a task, a tool, or a model request.
@@ -306,7 +363,7 @@ export class Runtime {
     const snapshot = this.snapshot(id);
     const duplicate = this.store.duplicate(id, requestId, text);
     if (duplicate !== undefined) return duplicate;
-    this.model(snapshot.model);
+    this.usable(snapshot);
     const result = { thread_id: id, request_id: requestId, accepted: true };
     const session = this.sessions.get(id);
     if (whenBusy && (session || this.store.queue(id).length)) {
@@ -363,6 +420,7 @@ export class Runtime {
   }
   /** Offers queued steering inputs to the run that is active now, under that run's authorization. */
   private async steer(session: Session) {
+    if (session.codex) return this.steerCodex(session);
     if (!session.started || !session.root || session.authorization.signal.aborted) return;
     for (const input of session.inputs) {
       if (input.queued?.mode !== 'steer' || session.steered.has(input.request_id)) continue;
@@ -370,6 +428,17 @@ export class Runtime {
         session.steered.set(input.request_id, await session.root.submit(
           { type: 'input', requestId: steerKey(input.request_id), content: await expandInput(input.text, session), whenBusy: 'steer', whenIdle: 'reject' }, context));
       } catch { /* The run is ending. The input stays queued and starts a run of its own. */ }
+    }
+  }
+  /** Codex takes a steering message into the running turn at once, so it cannot be withdrawn afterwards. */
+  private async steerCodex(session: Session) {
+    const run = session.codex?.run;
+    if (!session.started || !run) return;
+    for (const input of session.inputs) {
+      if (input.queued?.mode !== 'steer' || session.steered.has(input.request_id)) continue;
+      // Marked first, so a second submit during the request does not send it twice.
+      session.steered.set(input.request_id, JOINED);
+      if (!await run.steer(input.request_id, input.text)) session.steered.delete(input.request_id);
     }
   }
   /** Starts the next queued input as a new run with a new authorization in its own mode. */
@@ -381,7 +450,7 @@ export class Runtime {
     const next = this.store.queue(id)[0];
     if (!next) return;
     const begin = async () => {
-      this.model(snapshot.model);
+      this.usable(snapshot);
       await this.start(snapshot, next.request_id, next.text, next.queued!.approval, () => this.store.dequeue(next, snapshot));
     };
     void begin().catch(error => {
@@ -400,6 +469,11 @@ export class Runtime {
     return { type: 'continue' };
   }
   private async release(session: Session) {
+    if (session.codex) {
+      session.codex.run?.close(); session.codex.entries?.close(); session.codex.lease?.release();
+      session.codex = undefined;
+      return;
+    }
     await session.watch?.stop();
     // A steering input the run never took must not wait in the conversation store: it starts its own run later.
     if (session.harness && session.root && session.steered.size) {
@@ -412,6 +486,7 @@ export class Runtime {
   async run(session: Session, requestId: string, text: string) {
     const snapshot = session.snapshot;
     try {
+      if (snapshot.harness?.id === 'codex') return await this.runCodex(session, requestId, text);
       const baseline = await dirtyPaths(snapshot.checkout);
       session.owned = await restoreOwned(snapshot.checkout, baseline, this.store.owned(snapshot.id), session.rootIdentity, session.lease?.fd);
       session.baseline = baseline.filter(path => !session.owned.has(pathKey(path)));
@@ -459,6 +534,39 @@ export class Runtime {
       this.drain(snapshot.id);
     }
   }
+  /** A Codex thread's run: one Codex turn, under Codex's own sandbox and Plait's approvals. */
+  private async runCodex(session: Session, requestId: string, text: string) {
+    const snapshot = session.snapshot;
+    const id = snapshot.id;
+    // Shown on edit approvals only; Codex does not honor Plait's guard on these files.
+    const dirty = new Set(await dirtyPaths(snapshot.checkout).catch(() => [] as string[]));
+    const lease = await this.codex.acquire();
+    session.codex = { lease };
+    const model = lease.models.find(candidate => candidate.id === snapshot.model.model_id);
+    if (!model) fail('model_unavailable', 'This Codex model is no longer offered by your Codex. Choose another.');
+    snapshot.harness = { id: 'codex', version: lease.install.version ?? null };
+    const entries = await this.gate(id, async () => new CodexEntries(join(this.directory, `${id}.codex.sqlite`)));
+    session.codex.entries = entries;
+    const placed = (requestId: string, entry: number) => {
+      this.store.place(id, requestId, entry);
+      session.inputs = this.store.inputs(id);
+      snapshot.queued = this.store.queue(id).map(queuedView);
+    };
+    const run = new CodexRun({
+      snapshot, mode: snapshot.approval_mode ?? 'ask', policy: session.commandPolicy ?? 'sandboxed', lease, entries,
+      approvals: session.approvals, signal: session.authorization.signal, dirty,
+      inputs: () => session.inputs, place: placed, persist: head => this.save(snapshot, head), publish: () => this.changed(id),
+      changed: path => this.store.recordWrite(id, path),
+    });
+    session.codex.run = run;
+    this.save(snapshot);
+    if (session.authorization.signal.aborted) return;
+    session.authorization.activate();
+    const turn = run.run(requestId, text, model.id, codexEffort(snapshot.thinking_level, model.efforts));
+    session.started = true;
+    await this.steer(session);
+    await turn;
+  }
   async close() {
     this.closing = true;
     for (const session of this.sessions.values()) {
@@ -474,6 +582,7 @@ export class Runtime {
       await session.harness?.close(context);
     }
     await this.providers?.close();
+    await this.codex.close();
     this.store.close();
   }
   async reply(input: unknown) {

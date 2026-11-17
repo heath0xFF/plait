@@ -49,8 +49,13 @@ impl Plait {
         self.thread_controls.note = Some((id, message, failed));
     }
 
+    /// The open thread's model, from its harness's list when it does not run in Pi.
     fn thread_model(&self) -> Option<&Model> {
         let snapshot = self.host.snapshot.as_ref()?;
+        let harness = super::harnesses::harness_of(snapshot);
+        if harness != host::harness::HarnessId::Pi {
+            return self.harness_model(harness, &snapshot.model);
+        }
         self.host
             .status
             .as_ref()?
@@ -224,6 +229,7 @@ impl Plait {
             .usage
             .as_ref()
             .and_then(|u| ContextUsage::new(u, model));
+        let harness = self.thread_harness_line();
         let mut controls = row()
             .flex_wrap()
             .gap_x_2()
@@ -232,6 +238,14 @@ impl Plait {
             .min_w_0()
             .text_size(px(11.))
             .text_color(rgb(colors().muted))
+            .when_some(harness.map(|line| line.label.clone()), |el, label| {
+                el.child(
+                    div()
+                        .flex_shrink_0()
+                        .px_1()
+                        .child(text!(id = "thread-harness", label)),
+                )
+            })
             .child(
                 button("thread-model", "")
                     .max_w(px(240.))
@@ -284,6 +298,9 @@ impl Plait {
             .mx_auto()
             .gap_1()
             .child(controls);
+        if let Some(protection) = harness.and_then(|line| line.protection.clone()) {
+            content = content.child(tag(protection, colors().subtle).line_height(px(16.)));
+        }
         if snapshot.status.busy() {
             let approval = if snapshot.approval_mode == Some(host::ApprovalMode::Auto) {
                 "automatic approval"

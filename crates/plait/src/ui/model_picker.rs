@@ -13,7 +13,7 @@ use super::{
 };
 use gpui::{prelude::*, *};
 use plait_core::{
-    host::{Model, ModelChoice},
+    host::{Model, ModelChoice, harness::HarnessId},
     preferences::{ModelKey, Preferences},
 };
 use std::collections::{HashMap, HashSet};
@@ -39,6 +39,8 @@ pub(super) struct PickerStamp {
     saving: bool,
     message: Option<String>,
     favorites: Vec<ModelKey>,
+    /// The harness list generation, so a new list or state shows at once.
+    harnesses: u64,
 }
 
 /// Equality over every catalog field a picker row displays, including availability.
@@ -56,7 +58,7 @@ pub(super) fn model_label(choice: &ModelChoice) -> String {
 
 /// Identity of a model across sections. The separator cannot occur in an identifier
 /// the way a slash can.
-fn model_key(model: &Model) -> String {
+pub(super) fn model_key(model: &Model) -> String {
     format!("{}\u{1f}{}", model.provider, model.model_id)
 }
 
@@ -152,15 +154,37 @@ pub(super) fn picker_items(
 }
 
 impl Plait {
-    fn picker_items(&self) -> Vec<Item> {
+    /// The harness whose models a picker lists: the open thread's for its own menu, else Pi.
+    fn picker_harness(&self, purpose: Option<ModelPurpose>) -> HarnessId {
+        if purpose == Some(ModelPurpose::ThreadModel) {
+            self.thread_harness()
+        } else {
+            HarnessId::Pi
+        }
+    }
+
+    /// Pi's catalog as today. A new thread can also start in any other ready
+    /// harness, and a thread in one can switch only among its models.
+    fn picker_items(&self, purpose: Option<ModelPurpose>) -> Vec<Item> {
         let Some(status) = self.host.status.as_ref().filter(|_| self.host.connected) else {
             return Vec::new();
         };
-        picker_items(
+        let harness = self.picker_harness(purpose);
+        if harness != HarnessId::Pi {
+            return self
+                .harness_row(harness)
+                .map(super::harnesses::thread_items)
+                .unwrap_or_default();
+        }
+        let mut items = picker_items(
             &status.models,
             &self.preferences.value,
             status.default_model.as_ref(),
-        )
+        );
+        if purpose == Some(ModelPurpose::NewThread) {
+            items.extend(super::harnesses::new_thread_items(self.harness_rows()));
+        }
+        items
     }
 
     pub(super) fn picker_stamp(&self) -> PickerStamp {
@@ -173,6 +197,7 @@ impl Plait {
             saving: self.host.saving,
             message: self.host.save_message.clone(),
             favorites: self.preferences.value.favorite_models.clone(),
+            harnesses: self.harnesses.generation,
         }
     }
 
@@ -194,8 +219,9 @@ impl Plait {
         }
         overlay.stamp = Some(stamp);
         let palette = overlay.palette.clone();
-        let items = self.picker_items();
-        let note = self.picker_note();
+        let purpose = overlay.purpose;
+        let items = self.picker_items(purpose);
+        let note = self.picker_note(purpose);
         palette.update(cx, |palette, cx| {
             palette.set_items(items, cx);
             palette.set_note(note, cx);
@@ -223,6 +249,7 @@ impl Plait {
         let models = self.host.status.as_ref().map(|status| &status.models);
         models
             .and_then(|models| models.iter().find(|model| model.choice() == *choice))
+            .or_else(|| self.harness_model(self.thread_harness(), choice))
             .map_or_else(|| model_label(choice), |model| model.name.clone())
     }
 
@@ -254,8 +281,11 @@ impl Plait {
             .map(|message| (message, colors().muted))
     }
 
-    fn picker_note(&self) -> Option<SharedString> {
+    fn picker_note(&self, purpose: Option<ModelPurpose>) -> Option<SharedString> {
         let status = self.host.status.as_ref().filter(|_| self.host.connected)?;
+        if self.picker_harness(purpose) != HarnessId::Pi {
+            return Some("Threads stay in the harness they started in.".into());
+        }
         if !status.models.iter().any(|model| model.authenticated) {
             return Some("No model is signed in. Sign in to a provider on the host.".into());
         }
@@ -295,12 +325,17 @@ impl Plait {
         } else {
             status.and_then(|status| status.default_model.as_ref())
         };
+        let harness = self.picker_harness(Some(purpose));
         let default = status.and_then(|status| {
             let default = preferred?;
-            let model = status
-                .models
-                .iter()
-                .find(|model| model.choice() == *default)?;
+            let model = if harness == HarnessId::Pi {
+                status
+                    .models
+                    .iter()
+                    .find(|model| model.choice() == *default)?
+            } else {
+                self.harness_model(harness, default)?
+            };
             Some(model_key(model))
         });
         let options = Options {
@@ -310,9 +345,9 @@ impl Plait {
             initial: default.map(Into::into),
             mark: Some("Favorite".into()),
             aside: Some("Set default".into()),
-            note: self.picker_note(),
+            note: self.picker_note(Some(purpose)),
         };
-        let items = self.picker_items();
+        let items = self.picker_items(Some(purpose));
         let palette = cx.new(|cx| Palette::new(options, items, window, cx));
         self.present(palette, Some(purpose), window, cx);
     }
@@ -339,6 +374,17 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.new_thread_in(HarnessId::Pi, model, window, cx)
+    }
+
+    /// As `new_thread`, in harness `harness`. Only Pi has a saved default.
+    pub(super) fn new_thread_in(
+        &mut self,
+        harness: HarnessId,
+        model: Option<ModelChoice>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.close_overlay(true, window, cx);
         // An unconfirmed creation keeps its request ID. Retry it; a second
         // request could create a second thread.
@@ -348,12 +394,16 @@ impl Plait {
             return;
         }
         let default = || self.host.status.as_ref()?.default_model.clone();
-        let choice = model
-            .or_else(default)
-            .filter(|choice| self.host.available(Some(choice)));
+        let choice = if harness == HarnessId::Pi {
+            model.or_else(default)
+        } else {
+            model
+        }
+        .filter(|choice| self.usable_in(harness, choice));
         let Some(choice) = choice else {
             return self.open_model_picker(ModelPurpose::NewThread, window, cx);
         };
+        self.choose_new_harness(harness, &choice);
         self.host.new_model = Some(choice);
         self.new_thread_open = true;
         self.settings_open = false;

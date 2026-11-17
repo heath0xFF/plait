@@ -372,24 +372,27 @@ impl Plait {
             let Some(choice) = self.host.new_model.clone() else {
                 return;
             };
-            if !self.host.available(Some(&choice)) {
+            let harness = self.new_thread_harness(&choice);
+            if !self.usable_in(harness, &choice) {
                 return;
             }
             self.host.pending_create = Some((request_id(), choice));
             self.host.pending_thinking = Some(self.preferences.value.default_thinking());
+            self.set_pending_harness(harness);
         }
         let (id, choice) = self.host.pending_create.clone().unwrap();
         let thinking = self.host.pending_thinking;
+        let harness = self.pending_harness();
         let protocol = self.host.protocol();
         self.host.creating = true;
         self.host.error = None;
         let selection_epoch = self.host.watch_epoch;
         self.host_request::<host::ThreadReply>(Request::create_thread(
-            self.host.checkout.clone(), &choice, id, thinking, protocol,
+            self.host.checkout.clone(), &choice, id, thinking, harness, protocol,
         ), window, cx, move |this, result, window, cx| {
             this.host.creating = false;
             match result {
-                Ok(reply) if reply.thread.model == choice => {
+                Ok(reply) if reply.thread.model == choice && super::harnesses::harness_of(&reply.thread) == harness => {
                     this.host.pending_create = None;
                     if !this.host.threads.iter().any(|thread| thread.id == reply.thread.id) {
                         this.host.threads.insert(0, host::ThreadSummary::from(&reply.thread));
@@ -398,10 +401,13 @@ impl Plait {
                         this.select_host_thread(reply.thread.id, window, cx);
                         this.focus_composer(window, cx);
                     }
-                    this.record_recent_model(&choice, cx);
+                    // Recent models are Pi's catalog; another harness's would crowd them out.
+                    if harness == host::harness::HarnessId::Pi {
+                        this.record_recent_model(&choice, cx);
+                    }
                     this.load_threads(window, cx);
                 }
-                Ok(_) => this.host.error = Some("Host returned a different model. Creation is unconfirmed; reconnect before retrying.".into()),
+                Ok(_) => this.host.error = Some("Host returned a different model or harness. Creation is unconfirmed; reconnect before retrying.".into()),
                 Err(error) => {
                     if matches!(error, host::Error::Rejected(_)) {
                         this.host.pending_create = None;
@@ -620,7 +626,7 @@ impl Plait {
         cx.notify();
     }
 
-    fn can_submit(&self) -> bool {
+    pub(super) fn can_submit(&self) -> bool {
         self.session.ready()
             && self.navigation.available.get(&self.host.checkout) != Some(&false)
             && self.host.connected
@@ -631,12 +637,14 @@ impl Plait {
                     || (!snapshot.status.busy()
                         && self.host.submissions.pending(&snapshot.id).is_none()))
                     && self.session_accepts_thread(&snapshot.id)
-                    && self.host.available(Some(&snapshot.model))
+                    && self.harness_reason().is_none()
+                    && self.usable_in(super::harnesses::harness_of(snapshot), &snapshot.model)
                     && snapshot.queued.len() + self.host.submissions.all(&snapshot.id).len() < 16
             })
     }
 
     pub(super) fn sync_composer(&mut self, cx: &mut Context<Self>) {
+        self.sync_thread_harness();
         let Some(id) = self.host.selected.as_ref() else {
             return;
         };
@@ -662,10 +670,11 @@ impl Plait {
             && (self.host.submitting || self.host.submissions.pending(id).is_some())
         {
             Some("Message unconfirmed · Retry safely above.".into())
-        } else if !self
-            .host
-            .available(self.host.snapshot.as_ref().map(|snapshot| &snapshot.model))
-        {
+        } else if let Some(reason) = self.harness_reason() {
+            Some(reason)
+        } else if !self.host.snapshot.as_ref().is_some_and(|snapshot| {
+            self.usable_in(super::harnesses::harness_of(snapshot), &snapshot.model)
+        }) {
             Some(
                 if self.host.protocol() >= 3 {
                     "Model unavailable · choose another model below."

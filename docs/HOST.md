@@ -469,6 +469,93 @@ When it starts or is taken, it leaves `queued` and appears in `messages` and
 - The host and its runtime sidecar are one update unit, as before. The internal
   notification channel gained one reserved name for thread-list changes.
 
+## Protocol version 4
+
+Version 4 adds agent harnesses: a thread may be run by Codex instead of Pi. It
+is negotiated as version 3 is, and every operation accepts
+`"protocol_version":4`. Replies to version 1, 2, and 3 requests are unchanged,
+and the operations and fields below are rejected there with `invalid_request`.
+A client that steps down from 4 to 3 sees only Pi.
+
+```json
+{"op":"harnesses","protocol_version":4}
+{"op":"set_harness_path","protocol_version":4,"harness":"codex","path":"/absolute/path/to/codex"}
+{"op":"create_thread","protocol_version":4,"checkout":"/absolute/checkout","provider":"codex","model_id":"MODEL","request_id":"CLIENT_UUID","harness":"codex","thinking":"high"}
+```
+
+- **`harnesses`** lists every harness, Pi first:
+
+  ```json
+  {"harnesses":[{"id":"codex","name":"Codex","state":"ready","note":null,"version":"0.169.0","supported":{"min":"0.169.0","tested":"0.169.0"},"path":"/absolute/path/to/codex","capabilities":{"steer":true,"approvals":true,"thinking":true,"usage":true},"protection":"One line","models":[{"provider":"codex","model_id":"MODEL","name":"Name","authenticated":true,"reasoning":true,"thinking_levels":["low","medium","high"],"context_window":null,"input":["text"]}]}]}
+  ```
+
+  `state` is `ready`, `not_installed`, `unsupported_version`, `signed_out`, or
+  `unavailable`; `note` says how to fix anything but `ready`, or gives a caveat
+  for a ready harness newer than tested. `supported.min` is the oldest version
+  Plait runs and `supported.tested` the one its message types come from. Pi
+  has `version`, `supported`, and `path` null and `models` null: its models are
+  the `status` catalog. `protection` says in one line what protects the
+  checkout in that harness's threads. Clients must accept harness IDs, states,
+  and fields they do not know.
+- **`set_harness_path`** runs Codex from `path` instead of the login shell's
+  `PATH`; omit `path` to return to `PATH`. It replies with the whole list,
+  checked again. The path is a host setting in `host.sqlite`.
+- **`create_thread`** takes an optional `harness`, `pi` when absent. A Codex
+  thread's model has provider `codex` and a model ID from Codex's list, and a
+  model from the other harness is rejected with `invalid_request`. `thinking`
+  goes to the nearest level the Codex model offers. A thread stays in its
+  harness: `configure_thread` accepts only models of the same harness.
+- **Snapshots and summaries.** A version 4 snapshot adds
+  `"harness":{"id":"codex","version":"0.169.0"}`, the harness and the version
+  of its latest run (`null` before the first). Pi threads, including every
+  thread saved earlier, report `{"id":"pi","version":null}`. Version 4 thread
+  summaries in `list_threads` and `watch_threads` add `"harness":"pi"` or
+  `"harness":"codex"`.
+
+### Codex
+
+The host never installs, updates, or configures Codex, and reads none of its
+files or credentials. It finds `codex` on the login shell's `PATH` (or the path
+set above), reads `codex --version`, and refuses versions older than
+`supported.min`. It asks Codex itself, through `codex app-server`, whether it
+is signed in and which models it offers; that answer is reused for a minute,
+and `set_harness_path` asks again at once. Codex keeps its own sign-in,
+configuration, MCP servers, and instructions.
+
+One `codex app-server` runs, in the login environment, while any Codex thread
+runs; it closes 30 seconds after the last run ends, so an idle host holds no
+Codex process. A run still holds the checkout as a Pi run does, so one checkout
+has one active run across both harnesses.
+
+Each run is one Codex turn. The first run starts a Codex thread and later runs
+resume it; if Codex no longer has it, the run fails and asks for a new thread.
+What protects the checkout is Codex's own sandbox, set from the project's
+command policy:
+
+- **Sandboxed** projects run Codex in `workspace-write` with no network: its
+  commands and edits can write the checkout.
+- **Trusted** projects give Codex full access.
+- **Ask** mode sets Codex's approval policy to `untrusted`, and each request
+  Codex makes (a command, an edit) is a Plait approval; denying it declines the
+  request. **Auto** mode sets `never`, so Codex does not ask.
+- Plait's guard on files that had changes before the run does not apply to
+  Codex. Edit approvals list such files in `dirty_paths` so the person can see
+  them, but nothing stops Codex writing them.
+- Requests Plait does not present (extra permissions, questions for the
+  person, MCP forms) are declined.
+
+Codex's events are translated into the same transcript entries Pi threads
+keep, in `<thread>.codex.sqlite` beside the host store, written as each item
+finishes. Streaming text and reasoning reach watchers at most every 16 ms and
+are not written to disk. History, full text, and usage work as for Pi. Changed
+files lists the checkout files Codex's completed edits wrote; files that
+Codex's commands wrote are not listed. A message sent with `"when_busy":"steer"`
+joins the running turn at once, so it cannot be cancelled after that. Stop asks
+Codex to end the turn and waits up to 10 seconds. A run interrupted by a host
+restart is never resumed or repeated. Codex's own error text and diagnostics
+can quote the provider or the machine, so a failed run reports a fixed message
+instead.
+
 ## Internal authorization boundary
 
 Each accepted run gets a new in-memory authorization object. Its policy is either

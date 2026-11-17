@@ -33,9 +33,16 @@ export class InteractiveApproval implements AuthorizationPolicy {
   }
 
   async authorize(call: EffectCall, signal: AbortSignal): Promise<void> {
+    if (!await this.ask(describeApproval(call), signal)) fail('permission_denied', 'Tool permission denied or revoked.');
+  }
+
+  /**
+   * Shows one approval and waits for the person's answer. False when denied or
+   * when `signal` ends the wait. Another harness's own requests come through here.
+   */
+  async ask(approval: Approval, signal: AbortSignal): Promise<boolean> {
     if (signal.aborted) fail('permission_denied', 'Tool permission denied or revoked.');
     if (this.pending) fail('busy', 'Another tool is awaiting approval.');
-    const approval = describeApproval(call);
     const allowed = await new Promise<boolean>((resolve, reject) => {
       const clear = () => {
         signal.removeEventListener('abort', cancel);
@@ -72,7 +79,7 @@ export class InteractiveApproval implements AuthorizationPolicy {
         reject(error);
       }
     });
-    if (!allowed || signal.aborted) fail('permission_denied', 'Tool permission denied or revoked.');
+    return allowed && !signal.aborted;
   }
 
   answer(id: string, allow: boolean): void {

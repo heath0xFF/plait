@@ -7,6 +7,7 @@ mod commits;
 mod composer;
 mod conversation;
 mod file_view;
+mod harnesses;
 mod history;
 mod host;
 mod jump;
@@ -126,6 +127,7 @@ pub struct Plait {
     keyboard: settings_keyboard::KeyboardState,
     policy: settings_policy::PolicyState,
     agent: settings_agent::AgentState,
+    harnesses: harnesses::HarnessesState,
     providers: settings_providers::ProviderState,
     /// A new thread was requested: open it when the host confirms creation,
     /// unless the user has gone elsewhere in the meantime.
@@ -202,6 +204,7 @@ impl Plait {
             keyboard: Default::default(),
             policy: Default::default(),
             agent: Default::default(),
+            harnesses: Default::default(),
             providers: Default::default(),
             new_thread_open: false,
             worktree_busy: false,
@@ -252,6 +255,7 @@ impl Plait {
             this.sync_picker(cx);
             this.sync_policy(cx);
             this.sync_agent(cx);
+            this.sync_harnesses(cx);
             this.sync_provider_settings(cx);
         })
         .detach();

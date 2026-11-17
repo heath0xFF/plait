@@ -12,7 +12,7 @@ use super::{
     theme::*,
 };
 use gpui::{prelude::*, *};
-use plait_core::host::ModelChoice;
+use plait_core::host::{ModelChoice, harness::HarnessId};
 use std::{collections::HashMap, time::Instant};
 
 pub(super) enum Command {
@@ -24,6 +24,10 @@ pub(super) enum Command {
     NewThread(ModelChoice),
     /// A model chosen in the model picker. The picker's purpose gives it meaning.
     Model(ModelChoice),
+    /// A model of a harness other than Pi, chosen in the model picker.
+    HarnessModel(HarnessId, ModelChoice),
+    /// Open Settings → Agent, where harnesses are listed.
+    HarnessSettings,
     Thinking {
         thread_id: String,
         epoch: u64,
@@ -52,6 +56,8 @@ impl Clone for Command {
             Self::OpenProject(path) => Self::OpenProject(path.clone()),
             Self::NewThread(choice) => Self::NewThread(choice.clone()),
             Self::Model(choice) => Self::Model(choice.clone()),
+            Self::HarnessModel(id, choice) => Self::HarnessModel(*id, choice.clone()),
+            Self::HarnessSettings => Self::HarnessSettings,
             Self::Thinking {
                 thread_id,
                 epoch,
@@ -75,7 +81,7 @@ impl Clone for Command {
 pub(super) struct Overlay {
     pub palette: Entity<Palette>,
     /// What a chosen model is for. `None` is the command palette.
-    purpose: Option<ModelPurpose>,
+    pub purpose: Option<ModelPurpose>,
     /// Where keyboard focus was, to put it back on Escape.
     restore: Option<FocusHandle>,
     /// The host state a model picker's rows were built from.
@@ -407,6 +413,15 @@ impl Plait {
                 self.show_settings(true, window, cx);
                 self.settings_section = 2;
             }
+            Command::HarnessSettings => {
+                self.show_settings(true, window, cx);
+                self.settings_section = 3;
+            }
+            Command::HarnessModel(id, choice) => match purpose {
+                Some(ModelPurpose::NewThread) => self.new_thread_in(id, Some(choice), window, cx),
+                Some(ModelPurpose::ThreadModel) => self.choose_thread_model(choice, window, cx),
+                _ => {}
+            },
             Command::OpenProject(path) => {
                 if self.host.pending_create.is_none() && !self.host.creating {
                     self.change_checkout(path, window, cx);

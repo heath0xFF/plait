@@ -245,7 +245,7 @@ impl Plait {
             page = page.child(tag(note.clone(), colors().amber).line_height(px(16.)));
         }
         let Some(view) = self.agent.view.as_ref() else {
-            return page.when(self.agent.note.is_none(), |el| {
+            let page = page.when(self.agent.note.is_none(), |el| {
                 el.child(tag(
                     if self.host.connected {
                         "Reading your agent setup…"
@@ -255,6 +255,10 @@ impl Plait {
                     colors().subtle,
                 ))
             });
+            return column()
+                .gap_4()
+                .child(self.harness_settings(cx))
+                .child(page);
         };
         if !view.trusted {
             page = page.child(tag(
@@ -271,6 +275,7 @@ impl Plait {
         };
         column()
             .gap_4()
+            .child(self.harness_settings(cx))
             .child(page)
             .child(settings::section("Instructions").child(instructions))
             .child(self.list(
