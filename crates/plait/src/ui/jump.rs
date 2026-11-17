@@ -123,6 +123,11 @@ impl Plait {
                 }
                 super::actions::install(cx, &this.preferences.value.keymap);
                 this.apply_theme(cx);
+                // The system's font needs no check; a chosen one is drawn
+                // only after the installed families have been read.
+                if this.preferences.value.code_font().is_some() {
+                    this.load_fonts(cx);
+                }
                 this.pump_preferences(cx);
                 let mut value = this.preferences.value.clone();
                 value.navigation.observe(&this.host.threads, None, true);

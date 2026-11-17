@@ -120,6 +120,9 @@ pub struct Preferences {
     /// Theme names for each appearance; `None` is the default (Plait Light, Stillwater).
     pub light_theme: Option<String>,
     pub dark_theme: Option<String>,
+    /// The font family code, paths, and commands are drawn in; `None` is the
+    /// system's monospaced font. Read it through `code_font`.
+    pub code_font: Option<String>,
     /// The harness a new thread's draft starts in, when it is ready. Never `Other`:
     /// one this client does not know reads, and is written, as Pi.
     #[serde(deserialize_with = "lenient_harness", serialize_with = "known_harness")]
@@ -174,6 +177,15 @@ impl Preferences {
     /// and that should not be what a new thread gets without asking.
     pub fn default_thinking(&self) -> ThinkingLevel {
         self.default_thinking.unwrap_or(ThinkingLevel::Medium)
+    }
+
+    /// The chosen code font family, or `None` for the system's. A blank name
+    /// is no choice.
+    pub fn code_font(&self) -> Option<&str> {
+        self.code_font
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
     }
 
     pub fn is_favorite(&self, choice: &ModelChoice) -> bool {
@@ -460,6 +472,22 @@ mod tests {
             serde_json::from_str(r#"{"appearance":"dusk","hide_inspector":true}"#).unwrap();
         assert_eq!(newer.appearance, Appearance::System);
         assert!(newer.hide_inspector);
+    }
+
+    #[test]
+    fn code_font_is_the_systems_until_a_family_is_named() {
+        // A file saved before the setting existed keeps the system font.
+        let older: Preferences = serde_json::from_str(r#"{"hide_inspector":true}"#).unwrap();
+        assert_eq!(older.code_font(), None);
+        let saved: Preferences =
+            serde_json::from_str(r#"{"code_font":" JetBrains Mono "}"#).unwrap();
+        assert_eq!(saved.code_font(), Some("JetBrains Mono"));
+        // A blank name is no choice.
+        let blank: Preferences = serde_json::from_str(r#"{"code_font":"  "}"#).unwrap();
+        assert_eq!(blank.code_font(), None);
+        let written = serde_json::to_string(&saved).unwrap();
+        let read: Preferences = serde_json::from_str(&written).unwrap();
+        assert_eq!(read.code_font(), Some("JetBrains Mono"));
     }
 
     #[test]

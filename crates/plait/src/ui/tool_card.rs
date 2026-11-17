@@ -266,7 +266,7 @@ impl Plait {
                                 .min_w_0()
                                 // The opened call shows the whole command.
                                 .line_clamp(SUBJECT_LINES)
-                                .font_family(MONO)
+                                .font_family(mono())
                                 .text_size(px(12.))
                                 .text_color(rgb(colors().muted))
                                 .child(subject),
@@ -373,7 +373,7 @@ impl Plait {
                 .items_start()
                 .w_full()
                 .min_w_0()
-                .font_family(MONO)
+                .font_family(mono())
                 .text_size(px(12.))
                 .line_height(px(19.))
                 .child(

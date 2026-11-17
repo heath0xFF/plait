@@ -474,6 +474,18 @@ other scene draws in Stillwater, and one draws Plait Dark. Following a
 live macOS appearance switch, the native titlebar in each appearance, and
 reading a user's themes folder have not been checked in the installed app.
 
+The code font is covered by a core test (an older preferences file keeps the
+system font, a named family round-trips, a blank name is no choice), by
+desktop tests of the name matching (a family is found whatever its case;
+offered names lead with those that start with what was typed, and leave out
+system families), and by a desktop test that types into the setting on a Mac:
+a family that is not installed is not drawn or saved, `menlo` is drawn and
+saved as Menlo, a half-typed name keeps the last choice, and an empty field
+returns to the system's font. Every scene draws code in the system's
+monospaced font, and the Appearance scene shows the empty field. The offered
+names as drawn, a saved family being applied at launch, and the setting in
+the installed app have not been checked.
+
 ## Measuring frame cost
 
 ```sh

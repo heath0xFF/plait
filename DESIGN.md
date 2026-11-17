@@ -161,8 +161,10 @@ a `+` or `−` gutter mark with a faint mint or rose line tint. Selected
 text is main text at low opacity, so it reads the same on every surface. Inline
 code is main text on the panel color.
 
-System sans-serif at 11–15 points, with 13 points for body and navigation; Menlo
-at 12 points for code. Conversation content, the composer, and settings pages
+System sans-serif at 11–15 points, with 13 points for body and navigation. Code,
+file paths, and commands use the system's monospaced font (SF Mono) at 12
+points, or an installed family named in Settings → Appearance; a family that
+is not installed is never drawn, so code cannot fall back to a proportional face. Conversation content, the composer, and settings pages
 are capped at 760 points; the turn line hangs 15 points left of that column.
 Spacing follows a 4-point base. Preserve gradients inside the supplied brand artwork
 only. Avoid new chrome gradients, shadows, animation, and decorative dashboard

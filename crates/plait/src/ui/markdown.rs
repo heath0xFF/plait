@@ -87,7 +87,7 @@ impl Plait {
         let code: Vec<_> = spans
             .iter()
             .filter(|(_, style)| style.code)
-            .map(|(range, _)| (range.clone(), SharedString::from(MONO)))
+            .map(|(range, _)| (range.clone(), mono()))
             .collect();
         let mut runs: Vec<_> = spans
             .iter()
@@ -110,7 +110,7 @@ impl Plait {
             .id(id)
             .w_full()
             .overflow_x_scroll()
-            .font_family(MONO)
+            .font_family(mono())
             .text_size(px(12.))
             .line_height(px(19.))
             .whitespace_nowrap()
@@ -320,7 +320,7 @@ impl Plait {
             .w_full()
             .overflow_x_scroll()
             .py_1()
-            .font_family(MONO)
+            .font_family(mono())
             .text_size(px(12.))
             .line_height(px(19.))
             .whitespace_nowrap()

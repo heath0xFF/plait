@@ -1233,6 +1233,74 @@ fn a_worktree_thread_is_created_in_a_new_worktree_listed_under_its_project() {
     std::fs::remove_dir_all(scratch).unwrap();
 }
 
+/// Menlo ships with every Mac, so it stands in for a font the person chose.
+#[cfg(target_os = "macos")]
+#[core::prelude::v1::test]
+fn a_typed_code_font_is_drawn_only_when_it_is_installed() {
+    use super::theme::{SYSTEM_MONO, mono};
+    // Choosing a font saves a preference; only a scratch home may receive it.
+    if !isolated("a_typed_code_font_is_drawn_only_when_it_is_installed") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-font-ui-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 1380., 860.);
+    harness.settle();
+    harness.update(|plait, _, cx| plait.prepare_code_font(cx));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        harness.settle();
+        let read = harness
+            .window
+            .update(&mut harness.cx, |plait, _, _| {
+                plait.code_font.installed.is_some()
+            })
+            .unwrap();
+        if read {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the installed fonts were not read"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let type_name = |harness: &mut Harness, name: &'static str| {
+        harness.update(move |plait, _, cx| {
+            let field = plait.code_font.field.clone().expect("the field");
+            field.update(cx, |field, cx| field.set_text(name, cx));
+        });
+        harness.settle();
+    };
+    assert_eq!(mono().as_ref(), SYSTEM_MONO);
+    // A family that is not installed is never handed to the text system.
+    type_name(&mut harness, "No Such Font Family");
+    harness.update(|plait, _, _| {
+        assert_eq!(mono().as_ref(), SYSTEM_MONO);
+        assert_eq!(plait.preferences.value.code_font(), None);
+    });
+    // An installed one is found whatever its case, drawn, and saved by its own name.
+    type_name(&mut harness, "menlo");
+    harness.update(|plait, _, _| {
+        assert_eq!(mono().as_ref(), "Menlo");
+        assert_eq!(plait.preferences.value.code_font(), Some("Menlo"));
+    });
+    // A half-typed name keeps the last choice.
+    type_name(&mut harness, "men");
+    harness.update(|plait, _, _| {
+        assert_eq!(mono().as_ref(), "Menlo");
+        assert_eq!(plait.preferences.value.code_font(), Some("Menlo"));
+    });
+    // An empty field is the system's font again.
+    type_name(&mut harness, "");
+    harness.update(|plait, _, _| {
+        assert_eq!(mono().as_ref(), SYSTEM_MONO);
+        assert_eq!(plait.preferences.value.code_font(), None);
+    });
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
 #[core::prelude::v1::test]
 fn changed_files_count_with_git_hide_on_request_and_open_in_changes() {
     // Hiding saves a preference; only a scratch home may receive it.

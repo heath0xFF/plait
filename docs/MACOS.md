@@ -308,6 +308,12 @@ with **Plait Light**, the default. Both lists continue with shipped Base16 schem
 Solarized, and Tokyo Night. A choice applies at once and is saved in the
 desktop preferences.
 
+**Code font** sets the font for code, file paths, and commands. Left empty, it
+is the system's monospaced font, SF Mono. Type the name of an installed font
+family, such as `JetBrains Mono`; matching installed names are offered as you
+type, and the font changes as soon as the name matches one. A name that is not
+installed changes nothing, and the line beneath the field says so.
+
 More themes come from Base16 scheme files: put `.yaml` files (for example from
 [tinted-theming/schemes](https://github.com/tinted-theming/schemes)) in
 `~/Library/Application Support/Plait/themes/`, then choose **Reload**. **Open

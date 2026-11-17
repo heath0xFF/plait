@@ -724,7 +724,7 @@ impl Plait {
                                             .w_full()
                                             .h(px(DIFF_LINE_HEIGHT))
                                             .bg(rgb(if picked { mix(c.bg, c.blue, 0.22) } else { bg }))
-                                            .font_family(MONO)
+                                            .font_family(mono())
                                             .text_size(px(12.))
                                             .line_height(px(DIFF_LINE_HEIGHT))
                                             .child(numbers)

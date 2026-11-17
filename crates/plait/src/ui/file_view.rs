@@ -539,7 +539,7 @@ impl Plait {
                         row()
                             .id(("file-line", index))
                             .h(px(LINE_HEIGHT))
-                            .font_family(MONO)
+                            .font_family(mono())
                             .text_size(px(12.))
                             .line_height(px(LINE_HEIGHT))
                             .child(

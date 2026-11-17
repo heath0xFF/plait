@@ -374,7 +374,12 @@ paths and operational limits.
 ## UI and performance
 
 Use GPUI's native macOS platform, Metal renderer, system sans-serif font, and
-Menlo for code. SVG assets are embedded strings, not runtime file reads. The
+the system's monospaced font for code. That font is SF Mono, which macOS does
+not install under a public name, so it is asked for by its Core Text family
+name, `.AppleSystemUIFontMonospaced`. A family chosen in Settings → Appearance
+replaces it only after the installed families have been read, in the
+background: GPUI draws a missing family in a proportional fallback, so a name
+that is not installed is never handed to it. SVG assets are embedded strings, not runtime file reads. The
 app shows no in-window logo; category glyphs use GPUI's tinted SVG path. Brand
 files live in `assets/branding`. The development bundle and icon build are
 described in [MACOS.md](MACOS.md).
@@ -772,7 +777,7 @@ renderer and writes one PNG per scene, at twice the logical size.
 
 | | Renderer | Text |
 |-|-|-|
-| macOS | GPUI's Metal renderer, drawing into an offscreen texture | Core Text, with the system font and Menlo |
+| macOS | GPUI's Metal renderer, drawing into an offscreen texture | Core Text, with the system font and the system's monospaced font |
 | Linux | GPUI's wgpu renderer on a software Vulkan driver | cosmic-text, with the fonts installed there |
 
 On macOS the scene is drawn by the same renderer and shaped by the same text

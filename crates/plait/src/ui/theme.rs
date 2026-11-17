@@ -34,10 +34,37 @@ pub const CHROME_HEIGHT: f32 = 44.;
 /// Compact row for navigation, changed files, and model choices.
 pub const ROW_HEIGHT: f32 = 28.;
 
+/// The system's own monospaced font: SF Mono on macOS, asked for by the
+/// family name Core Text gives it, since it is not installed under a public one.
 #[cfg(target_os = "macos")]
-pub const MONO: &str = "Menlo";
+pub const SYSTEM_MONO: &str = ".AppleSystemUIFontMonospaced";
 #[cfg(not(target_os = "macos"))]
-pub const MONO: &str = "DejaVu Sans Mono";
+pub const SYSTEM_MONO: &str = "DejaVu Sans Mono";
+
+thread_local! {
+    /// The family code, paths, and commands are drawn in. Per thread, like
+    /// the palette, so parallel UI tests do not see each other's choice.
+    static CODE_FONT: std::cell::RefCell<SharedString> =
+        const { std::cell::RefCell::new(SharedString::new_static(SYSTEM_MONO)) };
+}
+
+/// The code font's family. Read during render; cheap.
+pub fn mono() -> SharedString {
+    CODE_FONT.with(|font| font.borrow().clone())
+}
+
+/// Draw code in `family` from now on. False when it is already in use.
+/// Callers pass only a family that is installed: GPUI draws a missing one in
+/// a proportional fallback.
+pub fn set_mono(family: SharedString) -> bool {
+    CODE_FONT.with(|font| {
+        if *font.borrow() == family {
+            return false;
+        }
+        *font.borrow_mut() = family;
+        true
+    })
+}
 
 pub fn row() -> Div {
     div().flex().items_center().gap_2()
@@ -311,7 +338,7 @@ pub fn code_block() -> Div {
         .py_1()
         .border_l_1()
         .border_color(rgb(colors().border))
-        .font_family(MONO)
+        .font_family(mono())
         .text_size(px(12.))
         .line_height(px(19.))
         .text_color(rgb(colors().muted))

@@ -168,6 +168,7 @@ pub struct Plait {
     diagnostics: bool,
     preferences: jump::PreferenceState,
     themes: appearance::Themes,
+    code_font: appearance::CodeFont,
     file_viewer: file_view::FileViewer,
     updates: update::UpdateState,
     session: session::SessionState,
@@ -236,6 +237,7 @@ impl Plait {
             diagnostics: false,
             preferences: jump::PreferenceState::default(),
             themes: Default::default(),
+            code_font: Default::default(),
             file_viewer: Default::default(),
             updates: update::UpdateState::default(),
             session: session::SessionState::default(),
@@ -442,6 +444,7 @@ impl Plait {
         self.cancel_recording(cx);
         if open {
             self.prepare_keyboard(cx);
+            self.prepare_code_font(cx);
             self.prepare_providers(cx);
         } else {
             self.close_provider_form(cx);

@@ -333,7 +333,7 @@ impl Plait {
             .h(px(RECORD_LINE))
             .px_1()
             .aria_label(format!("Show {} in Changes", target.display()))
-            .child(div().font_family(MONO).child(name))
+            .child(div().font_family(mono()).child(name))
             .on_activate(cx, move |this, window, cx| {
                 this.open_thread_file(target.clone(), window, cx)
             })
@@ -719,7 +719,7 @@ impl Plait {
                             .bg(rgb(colors().bg))
                             .border_1()
                             .border_color(rgb(colors().border))
-                            .font_family(MONO)
+                            .font_family(mono())
                             .line_height(px(19.))
                             .child(approval.details.clone()),
                     )

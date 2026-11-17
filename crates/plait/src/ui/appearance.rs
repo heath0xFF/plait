@@ -2,10 +2,53 @@
 //! appearance follows macOS unless one is chosen. Scheme files in the themes
 //! folder are read in the background at launch and on request.
 
-use super::{Plait, jump::PreferenceGroup, theme::*, thread_controls::TextTooltip};
+use super::{
+    Plait,
+    jump::PreferenceGroup,
+    text_field::{TextField, TextFieldEvent},
+    theme::*,
+    thread_controls::TextTooltip,
+};
 use gpui::{prelude::*, *};
 use plait_core::theme::{self as themes, Appearance, DEFAULT_DARK, DEFAULT_LIGHT, Theme};
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
+
+/// The code font choice: the families installed on this Mac, read in the
+/// background, and the field in Settings → Appearance that names one.
+#[derive(Default)]
+pub(super) struct CodeFont {
+    /// Installed family names, sorted. `None` until they have been read.
+    pub installed: Option<Arc<Vec<String>>>,
+    loading: bool,
+    pub field: Option<Entity<TextField>>,
+    _changed: Option<Subscription>,
+}
+
+/// The installed family that `wanted` names, whatever its case.
+fn installed_family<'a>(installed: &'a [String], wanted: &str) -> Option<&'a str> {
+    installed
+        .iter()
+        .find(|name| name.eq_ignore_ascii_case(wanted))
+        .map(String::as_str)
+}
+
+/// Up to `limit` installed families whose name contains `typed`, those that
+/// start with it first. Nothing for an empty or an exactly matching name.
+fn family_suggestions<'a>(installed: &'a [String], typed: &str, limit: usize) -> Vec<&'a str> {
+    if typed.is_empty() || installed_family(installed, typed).is_some() {
+        return Vec::new();
+    }
+    let typed = typed.to_ascii_lowercase();
+    let matching = |start: bool| {
+        let typed = typed.clone();
+        installed.iter().map(String::as_str).filter(move |name| {
+            let name = name.to_ascii_lowercase();
+            // System families begin with a dot and are not for choosing.
+            !name.starts_with('.') && name.contains(&typed) && name.starts_with(&typed) == start
+        })
+    };
+    matching(true).chain(matching(false)).take(limit).collect()
+}
 
 pub(super) struct Themes {
     built_in: Vec<Theme>,
@@ -126,6 +169,175 @@ impl Plait {
         .detach();
     }
 
+    /// Read the installed font families in the background, once, then apply
+    /// the saved choice: a family is drawn only once it is known to be here.
+    pub(super) fn load_fonts(&mut self, cx: &mut Context<Self>) {
+        if self.code_font.installed.is_some() || self.code_font.loading {
+            return;
+        }
+        self.code_font.loading = true;
+        let text_system = cx.text_system().clone();
+        let task = cx
+            .background_executor()
+            .spawn(async move { text_system.all_font_names() });
+        cx.spawn(async move |this, cx| {
+            let names = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.code_font.loading = false;
+                this.code_font.installed = Some(Arc::new(names));
+                this.apply_code_font(cx);
+                // A name typed while the families were being read counts now.
+                if this.code_font.field.is_some() {
+                    this.code_font_typed(cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Draw code in the saved family when it is installed, else in the
+    /// system's monospaced font.
+    pub(super) fn apply_code_font(&mut self, cx: &mut Context<Self>) {
+        let chosen = self.preferences.value.code_font().and_then(|wanted| {
+            let installed = self.code_font.installed.as_deref()?;
+            installed_family(installed, wanted)
+        });
+        let family = match chosen {
+            Some(name) => SharedString::from(name.to_owned()),
+            None => SharedString::new_static(SYSTEM_MONO),
+        };
+        if set_mono(family) {
+            // Another font has other widths and heights.
+            self.live_scroll.remeasure();
+            cx.refresh_windows();
+        }
+    }
+
+    /// Settings is opening: make the field that names a family, and learn
+    /// which families are installed.
+    pub(super) fn prepare_code_font(&mut self, cx: &mut Context<Self>) {
+        if self.code_font.field.is_none() {
+            let chosen = self
+                .preferences
+                .value
+                .code_font()
+                .unwrap_or_default()
+                .to_owned();
+            let field = cx.new(|cx| {
+                let mut field = TextField::new("Code font", "System monospaced", cx);
+                field.set_text(&chosen, cx);
+                field
+            });
+            self.code_font._changed =
+                Some(cx.subscribe(&field, |this, _, _: &TextFieldEvent, cx| {
+                    this.code_font_typed(cx)
+                }));
+            self.code_font.field = Some(field);
+        }
+        self.load_fonts(cx);
+    }
+
+    /// What is typed in the field, without the space around it.
+    fn typed_code_font(&self, cx: &App) -> String {
+        self.code_font
+            .field
+            .as_ref()
+            .map(|field| field.read(cx).text().trim().to_owned())
+            .unwrap_or_default()
+    }
+
+    /// The field changed. An empty field means the system's font; an
+    /// installed family's name is saved and drawn at once; anything else
+    /// leaves the choice as it was.
+    fn code_font_typed(&mut self, cx: &mut Context<Self>) {
+        let typed = self.typed_code_font(cx);
+        let chosen = if typed.is_empty() {
+            None
+        } else {
+            let Some(installed) = self.code_font.installed.as_deref() else {
+                return;
+            };
+            match installed_family(installed, &typed) {
+                Some(name) => Some(name.to_owned()),
+                None => {
+                    cx.notify();
+                    return;
+                }
+            }
+        };
+        if chosen.as_deref() != self.preferences.value.code_font() {
+            let mut value = self.preferences.value.clone();
+            value.code_font = chosen;
+            self.set_preferences(value, PreferenceGroup::View, cx);
+        }
+        self.apply_code_font(cx);
+        cx.notify();
+    }
+
+    /// Settings → Appearance: the font code, paths, and commands are drawn in.
+    fn code_font_setting(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        /// Installed families offered while a name is being typed.
+        const OFFERED: usize = 5;
+        let typed = self.typed_code_font(cx);
+        let installed = self.code_font.installed.clone();
+        let known = installed
+            .as_deref()
+            .and_then(|names| installed_family(names, &typed));
+        let (tint, note) = if typed.is_empty() {
+            (
+                colors().mint,
+                "Using the system's monospaced font.".to_owned(),
+            )
+        } else if let Some(name) = known {
+            (colors().mint, format!("Using {name}."))
+        } else if installed.is_none() {
+            (colors().subtle, "Reading the installed fonts…".to_owned())
+        } else {
+            (
+                colors().amber,
+                format!("No installed font is named “{typed}”. The last choice stays in use."),
+            )
+        };
+        let offered: Vec<String> = installed
+            .as_deref()
+            .map(|names| family_suggestions(names, &typed, OFFERED))
+            .unwrap_or_default()
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let control = column()
+            .w(px(260.))
+            .flex_shrink_0()
+            .gap(px(6.))
+            .when_some(self.code_font.field.clone(), |el, field| el.child(field))
+            .child(
+                row()
+                    .gap(px(6.))
+                    .child(dot(tint))
+                    .child(tag(note, colors().subtle).line_height(px(16.))),
+            )
+            .when(!offered.is_empty(), |el| {
+                el.child(row().flex_wrap().gap(px(4.)).children(
+                    offered.into_iter().enumerate().map(|(index, name)| {
+                        let family = name.clone();
+                        button(("code-font-offer", index), name.clone())
+                            .aria_label(format!("Use {name} for code"))
+                            .on_activate(cx, move |this, _, cx| {
+                                if let Some(field) = this.code_font.field.clone() {
+                                    field.update(cx, |field, cx| field.set_text(&family, cx));
+                                }
+                            })
+                    }),
+                ))
+            });
+        super::settings::setting(
+            "Code font",
+            "Code, file paths, and commands. Type the name of an installed font, or leave it empty for the system's monospaced font.",
+            control,
+        )
+    }
+
     fn set_appearance(&mut self, appearance: Appearance, cx: &mut Context<Self>) {
         let mut value = self.preferences.value.clone();
         value.appearance = appearance;
@@ -174,7 +386,8 @@ impl Plait {
         .detach();
     }
 
-    /// Settings → Appearance: light or dark, a theme for each, and the themes folder.
+    /// Settings → Appearance: light or dark, a theme for each, the themes
+    /// folder, and the code font.
     pub(super) fn theme_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let chosen = self.preferences.value.appearance;
         let mut choices = segmented();
@@ -242,6 +455,7 @@ impl Plait {
                             .map(|error| tag(error.clone(), colors().amber).line_height(px(16.))),
                     ),
             )
+            .child(self.code_font_setting(cx))
     }
 
     fn theme_list(&self, light: bool, cx: &mut Context<Self>) -> impl IntoElement {
@@ -324,4 +538,50 @@ fn swatch(palette: &themes::Palette) -> Div {
         .child(mark(palette.mint))
         .child(mark(palette.amber))
         .child(mark(palette.red))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{family_suggestions, installed_family};
+
+    fn installed() -> Vec<String> {
+        [
+            ".AppleSystemUIFontMonospaced",
+            "Courier New",
+            "JetBrains Mono",
+            "JetBrains Mono NL",
+            "Menlo",
+            "SF Compact Rounded",
+        ]
+        .map(String::from)
+        .to_vec()
+    }
+
+    #[test]
+    fn a_family_is_found_by_its_name_whatever_the_case() {
+        let installed = installed();
+        assert_eq!(installed_family(&installed, "menlo"), Some("Menlo"));
+        assert_eq!(installed_family(&installed, "Menlo Bold"), None);
+        assert_eq!(installed_family(&installed, ""), None);
+    }
+
+    #[test]
+    fn suggestions_lead_with_names_that_start_with_what_was_typed() {
+        let installed = installed();
+        assert_eq!(
+            family_suggestions(&installed, "mono", 5),
+            ["JetBrains Mono", "JetBrains Mono NL"]
+        );
+        // Names that start with the text come before those that only contain it.
+        assert_eq!(
+            family_suggestions(&installed, "co", 5),
+            ["Courier New", "SF Compact Rounded"]
+        );
+        assert_eq!(family_suggestions(&installed, "jet", 1), ["JetBrains Mono"]);
+        // Nothing to offer for an empty field or a name that is already whole,
+        // and system families are not offered.
+        assert!(family_suggestions(&installed, "", 5).is_empty());
+        assert!(family_suggestions(&installed, "Menlo", 5).is_empty());
+        assert!(family_suggestions(&installed, "apple", 5).is_empty());
+    }
 }
