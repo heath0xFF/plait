@@ -4,7 +4,7 @@
 //! choices that belong to one desktop installation, so it never leaves the Mac.
 
 use crate::{
-    host::{ModelChoice, ThinkingLevel},
+    host::{ModelChoice, ThinkingLevel, harness::HarnessId},
     model::Project,
 };
 use serde::{Deserialize, Serialize};
@@ -120,6 +120,10 @@ pub struct Preferences {
     /// Theme names for each appearance; `None` is the default (Plait Light, Stillwater).
     pub light_theme: Option<String>,
     pub dark_theme: Option<String>,
+    /// The harness a new thread's draft starts in, when it is ready. Never `Other`:
+    /// one this client does not know reads, and is written, as Pi.
+    #[serde(deserialize_with = "lenient_harness", serialize_with = "known_harness")]
+    pub default_harness: HarnessId,
 }
 
 /// A value this client does not know (written by a newer one) reads as the
@@ -140,6 +144,29 @@ fn lenient_level<'de, D: serde::Deserializer<'de>>(
 ) -> Result<Option<ThinkingLevel>, D::Error> {
     let value = Option::<serde_json::Value>::deserialize(deserializer)?;
     Ok(value.and_then(|value| serde_json::from_value(value).ok()))
+}
+
+/// A harness this client cannot run (from a newer one) reads as Pi rather
+/// than failing the whole file.
+fn lenient_harness<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<HarnessId, D::Error> {
+    let id: HarnessId = lenient(deserializer)?;
+    Ok(if id == HarnessId::Other {
+        HarnessId::Pi
+    } else {
+        id
+    })
+}
+
+/// `Other` has no name to write, and a failed encode would block every save.
+fn known_harness<S: serde::Serializer>(id: &HarnessId, serializer: S) -> Result<S::Ok, S::Error> {
+    let id = if *id == HarnessId::Other {
+        HarnessId::Pi
+    } else {
+        *id
+    };
+    id.serialize(serializer)
 }
 
 impl Preferences {
@@ -435,6 +462,56 @@ mod tests {
         assert!(newer.hide_inspector);
     }
 
+    #[test]
+    fn default_harness_is_pi_until_chosen_and_survives_unknown_harnesses() {
+        assert_eq!(Preferences::default().default_harness, HarnessId::Pi);
+        let saved: Preferences = serde_json::from_str(r#"{"default_harness":"codex"}"#).unwrap();
+        assert_eq!(saved.default_harness, HarnessId::Codex);
+        // A harness from a newer client, or a malformed value, leaves the rest intact.
+        for value in [r#""someday""#, "7", "null"] {
+            let newer: Preferences = serde_json::from_str(&format!(
+                r#"{{"default_harness":{value},"hide_inspector":true}}"#
+            ))
+            .unwrap();
+            assert_eq!(newer.default_harness, HarnessId::Pi, "{value}");
+            assert!(newer.hide_inspector);
+        }
+        // `Other` is never written, so saving cannot fail on it.
+        let other = Preferences {
+            default_harness: HarnessId::Other,
+            ..Default::default()
+        };
+        let written = serde_json::to_value(&other).unwrap();
+        assert_eq!(written["default_harness"], "pi");
+    }
+
+    #[test]
+    fn a_default_harness_chosen_at_startup_merges_with_the_saved_one() {
+        let loaded = Preferences {
+            default_harness: HarnessId::Codex,
+            ..Default::default()
+        };
+        // An edit elsewhere keeps the saved harness.
+        let edited = Preferences {
+            hide_inspector: true,
+            ..Default::default()
+        };
+        let merged = merge_startup(loaded.clone(), &edited).unwrap();
+        assert_eq!(merged.default_harness, HarnessId::Codex);
+        assert!(merged.hide_inspector);
+        // Choosing one before loading finished wins.
+        let mut chose = Preferences {
+            default_harness: HarnessId::Codex,
+            ..Default::default()
+        };
+        let merged = merge_startup(Preferences::default(), &chose).unwrap();
+        assert_eq!(merged.default_harness, HarnessId::Codex);
+        // Choosing Pi again matches the default, so the saved choice stays.
+        chose.default_harness = HarnessId::Pi;
+        let merged = merge_startup(loaded, &chose).unwrap();
+        assert_eq!(merged.default_harness, HarnessId::Codex);
+    }
+
     fn choice(provider: &str, model_id: &str) -> ModelChoice {
         ModelChoice {
             provider: provider.into(),
@@ -513,6 +590,7 @@ mod tests {
         chosen.toggle_favorite(&choice("openai-codex", "gpt-5.6-luna"));
         chosen.record_recent(&choice("openrouter", "anthropic/claude-fable-5"));
         chosen.set_keymap(keymap(&[("thread.new", "cmd-t"), ("app.quit", "")]));
+        chosen.default_harness = HarnessId::Codex;
         save(&path, &chosen).unwrap();
         assert_eq!(load(&path), Ok(chosen));
         // No temporary file is left beside the saved one.
@@ -565,6 +643,7 @@ mod tests {
         assert!(loaded.favorite_models.is_empty());
         assert!(loaded.recent_models.is_empty());
         assert!(loaded.keymap.is_empty());
+        assert_eq!(loaded.default_harness, HarnessId::Pi);
         // Saving it again keeps the old settings and adds the new fields.
         save(&path, &loaded).unwrap();
         assert_eq!(load(&path), Ok(loaded));

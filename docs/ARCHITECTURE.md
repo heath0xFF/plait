@@ -384,8 +384,10 @@ desktop installation live in `plait_core::preferences`, saved as JSON at
 `~/Library/Application Support/Plait/desktop.json` on macOS
 (`$XDG_CONFIG_HOME/plait/desktop.json` or `~/.config/plait/desktop.json`
 elsewhere). It holds what Cmd-1 to Cmd-9 select, the approval default, whether
-the Git inspector is hidden, favorite and recently used models, and shortcut
-overrides by stable action ID. `PLAIT_DESKTOP_PREFERENCES_FILE` selects an
+the Git inspector is hidden, favorite and recently used models, shortcut
+overrides by stable action ID, and the harness new threads start in (Pi unless
+chosen; a harness this client does not know reads as Pi). A draft starts in
+that harness while the host lists it as ready, and in Pi otherwise. `PLAIT_DESKTOP_PREFERENCES_FILE` selects an
 absolute preferences path for an isolated development instance. The model
 lists are provider and model identifiers only, bounded in length and count; the
 file never holds a credential. The navigation section also stores opened and

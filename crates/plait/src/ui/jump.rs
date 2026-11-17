@@ -20,6 +20,8 @@ pub(super) enum PreferenceGroup {
     Models,
     Approvals,
     Keyboard,
+    /// Settings → Agent: the harness new threads start in.
+    Agent,
     /// Layout choices made outside Settings, such as hiding the Git inspector.
     View,
 }

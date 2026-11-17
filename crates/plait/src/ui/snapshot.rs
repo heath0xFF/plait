@@ -2424,6 +2424,18 @@ fn draft_scenes_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         modifiers: Modifiers::default(),
     }));
     harness.capture(&format!("sidebar-project-hover-{suffix}"));
+    // With Codex as the default in Settings → Agent, a new draft opens on it.
+    harness.update(|plait, window, cx| {
+        // In memory only: the scene does not write a preferences file.
+        plait.preferences.value.default_harness = HarnessId::Codex;
+        plait.open_draft(window, cx);
+        assert_eq!(plait.draft_harness(), HarnessId::Codex);
+    });
+    harness.capture(&format!("draft-default-codex-{suffix}"));
+    harness.update(|plait, window, cx| {
+        plait.discard_draft(window, cx);
+        plait.preferences.value.default_harness = HarnessId::Pi;
+    });
     harness.update(|plait, _, cx| {
         plait.inject_harnesses(None);
         let mut preferences = plait.preferences.value.clone();
@@ -2569,6 +2581,8 @@ fn harnesses_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.capture(&format!("composer-codex-signed-out-{suffix}"));
     harness.update(|plait, _, cx| {
         plait.inject_harnesses(Some(sample_harnesses("ready", Some(NEWER))));
+        // Codex is the default for new threads. In memory only.
+        plait.preferences.value.default_harness = HarnessId::Codex;
         plait.settings_open = true;
         plait.settings_section = 3;
         plait.sync_composer(cx);
@@ -2598,6 +2612,7 @@ fn harnesses_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.capture(&format!("harness-settings-old-host-{suffix}"));
     harness.update(|plait, window, cx| {
         plait.inject_harnesses(None);
+        plait.preferences.value.default_harness = HarnessId::Pi;
         plait.show_settings(false, window, cx);
         plait.settings_section = 0;
     });
@@ -2620,7 +2635,7 @@ fn a_codex_draft_starts_a_codex_thread_in_its_mode() {
         plait.inject_harnesses(Some(sample_harnesses("ready", None)));
         plait.open_draft(window, cx);
         // Pi and its saved default first.
-        assert_eq!(plait.draft.harness, HarnessId::Pi);
+        assert_eq!(plait.draft_harness(), HarnessId::Pi);
         assert_eq!(plait.draft_model(), Some(choice()));
         assert_eq!(plait.draft_mode(), None);
         // A Pi model is never offered as Codex, nor a Codex model as Pi.
@@ -2673,13 +2688,83 @@ fn a_codex_draft_starts_a_codex_thread_in_its_mode() {
         // An unready harness cannot be chosen.
         plait.inject_harnesses(Some(sample_harnesses("signed_out", None)));
         plait.choose_draft_harness(HarnessId::Codex, cx);
-        assert_eq!(plait.draft.harness, HarnessId::Pi);
+        assert_eq!(plait.draft_harness(), HarnessId::Pi);
         // An older host lists no harnesses, so only Pi is offered.
         plait.inject_harnesses(Some(sample_harnesses("ready", None)));
         plait.host.status.as_mut().unwrap().protocol_version = 3;
         plait.choose_draft_harness(HarnessId::Codex, cx);
-        assert_eq!(plait.draft.harness, HarnessId::Pi);
+        assert_eq!(plait.draft_harness(), HarnessId::Pi);
         assert!(plait.harness_rows().is_empty());
+    });
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+/// A draft starts in the default harness from Settings → Agent while it is
+/// ready, else Pi; a harness chosen in one draft leaves the default alone.
+#[core::prelude::v1::test]
+fn a_draft_starts_in_the_default_harness_while_it_is_ready() {
+    if !isolated("a_draft_starts_in_the_default_harness_while_it_is_ready") {
+        return;
+    }
+    let scratch =
+        std::env::temp_dir().join(format!("plait-default-harness-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    let mini = ModelChoice {
+        provider: "codex".into(),
+        model_id: "sample-codex-mini".into(),
+    };
+    harness.update(|plait, window, cx| {
+        plait.host.status.as_mut().unwrap().protocol_version = 4;
+        plait.inject_harnesses(Some(sample_harnesses("ready", None)));
+        // `Other` has no name to save, so it is never the default.
+        plait.set_default_harness(HarnessId::Other, cx);
+        assert_eq!(plait.preferences.value.default_harness, HarnessId::Pi);
+        plait.set_default_harness(HarnessId::Codex, cx);
+        assert_eq!(plait.preferences.value.default_harness, HarnessId::Codex);
+        plait.open_draft(window, cx);
+        // Codex's first model and its default mode.
+        assert_eq!(plait.draft_harness(), HarnessId::Codex);
+        assert_eq!(plait.draft_model(), Some(codex_choice()));
+        assert_eq!(plait.draft_mode().as_deref(), Some("full_access"));
+        // The sidebar's New thread row names the model the draft starts with.
+        let named = plait.new_thread_model().map(|model| model.choice());
+        assert_eq!(named, Some(codex_choice()));
+        // The model of Codex used most recently, once there is one.
+        plait.preferences.value.record_recent(&mini);
+        assert_eq!(plait.draft_model(), Some(mini.clone()));
+        // Choosing Pi in this draft keeps the default, and Pi's own defaults apply.
+        plait.choose_draft_harness(HarnessId::Pi, cx);
+        assert_eq!(plait.draft_harness(), HarnessId::Pi);
+        assert_eq!(plait.draft_model(), Some(choice()));
+        assert_eq!(plait.draft_mode(), None);
+        assert_eq!(plait.preferences.value.default_harness, HarnessId::Codex);
+        // The next draft starts in the default again.
+        plait.discard_draft(window, cx);
+        plait.open_draft(window, cx);
+        assert_eq!(plait.draft_harness(), HarnessId::Codex);
+        // A choice made in the draft keeps its harness when the default changes.
+        plait.choose_draft_mode(HarnessId::Codex, "ask".into(), cx);
+        plait.set_default_harness(HarnessId::Pi, cx);
+        assert_eq!(plait.draft_harness(), HarnessId::Codex);
+        assert_eq!(plait.draft_mode().as_deref(), Some("ask"));
+        plait.set_default_harness(HarnessId::Codex, cx);
+        plait.discard_draft(window, cx);
+        plait.open_draft(window, cx);
+        // Not ready: the draft starts in Pi, and the saved default stays.
+        plait.inject_harnesses(Some(sample_harnesses("signed_out", None)));
+        assert_eq!(plait.draft_harness(), HarnessId::Pi);
+        assert_eq!(plait.draft_model(), Some(choice()));
+        assert_eq!(plait.preferences.value.default_harness, HarnessId::Codex);
+        // Ready again before anything was chosen: the draft follows the default.
+        plait.inject_harnesses(Some(sample_harnesses("ready", None)));
+        assert_eq!(plait.draft_harness(), HarnessId::Codex);
+        // An older host lists no harnesses, so Pi.
+        plait.host.status.as_mut().unwrap().protocol_version = 3;
+        assert_eq!(plait.draft_harness(), HarnessId::Pi);
     });
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();

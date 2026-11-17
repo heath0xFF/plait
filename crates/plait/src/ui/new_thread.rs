@@ -4,7 +4,8 @@
 //!
 //! The draft lands in the active checkout. Its harness, model, and permissions
 //! are chosen in the row above its composer; until then each follows its
-//! default. Leaving the draft keeps its text; Escape or Discard clears it.
+//! default, and the harness follows Settings → Agent. Leaving the draft keeps
+//! its text; Escape or Discard clears it.
 
 use super::{
     Plait, Workspace,
@@ -19,7 +20,9 @@ pub(super) struct Draft {
     pub(super) open: bool,
     /// Made when the draft first opens; it becomes the thread's composer once created.
     pub(super) composer: Option<Entity<Composer>>,
-    pub(super) harness: HarnessId,
+    /// Chosen in the header; `None` follows the default harness, which can
+    /// change while the draft is open as the host's list arrives.
+    pub(super) harness: Option<HarnessId>,
     /// Chosen in the header; `None` follows the harness's default.
     pub(super) model: Option<ModelChoice>,
     /// A harness's own mode; `None` follows its default. Pi has none.
@@ -131,12 +134,26 @@ impl Plait {
         cx.notify();
     }
 
+    /// The harness the draft starts its thread in: the one chosen, else the default.
+    pub(super) fn draft_harness(&self) -> HarnessId {
+        self.draft.harness.unwrap_or_else(|| self.default_harness())
+    }
+
+    /// The harness from Settings → Agent when it can start a thread now, else Pi.
+    pub(super) fn default_harness(&self) -> HarnessId {
+        let id = self.preferences.value.default_harness;
+        let startable = self
+            .harness_row(id)
+            .is_some_and(super::harnesses::HarnessRow::startable);
+        if startable { id } else { HarnessId::Pi }
+    }
+
     /// The model the draft starts with: the one chosen, else the harness's default.
     pub(super) fn draft_model(&self) -> Option<ModelChoice> {
         self.draft
             .model
             .clone()
-            .or_else(|| self.default_model_for(self.draft.harness))
+            .or_else(|| self.default_model_for(self.draft_harness()))
     }
 
     /// Pi's saved default. Another harness: the model of it used most
@@ -161,7 +178,7 @@ impl Plait {
 
     /// The harness mode the thread starts in; `None` for Pi.
     pub(super) fn draft_mode(&self) -> Option<String> {
-        let row = self.harness_row(self.draft.harness)?;
+        let row = self.harness_row(self.draft_harness())?;
         self.draft
             .mode
             .clone()
@@ -179,13 +196,14 @@ impl Plait {
     /// The display name of the draft's model, from its harness's list.
     pub(super) fn draft_model_name(&self) -> Option<SharedString> {
         let choice = self.draft_model()?;
-        let model = if self.draft.harness == HarnessId::Pi {
+        let harness = self.draft_harness();
+        let model = if harness == HarnessId::Pi {
             self.host
                 .status
                 .as_ref()
                 .and_then(|status| status.models.iter().find(|model| model.choice() == choice))
         } else {
-            self.harness_model(self.draft.harness, &choice)
+            self.harness_model(harness, &choice)
         };
         Some(model.map_or_else(
             || super::model_picker::model_label(&choice).into(),
@@ -222,7 +240,7 @@ impl Plait {
             // Sending again retries the same creation.
             return None;
         }
-        let harness = self.draft.harness;
+        let harness = self.draft_harness();
         if harness != HarnessId::Pi {
             match self.harness_row(harness) {
                 None => {
@@ -298,10 +316,10 @@ impl Plait {
             let Some(choice) = self.draft_model() else {
                 return;
             };
-            self.choose_new_harness(self.draft.harness, &choice, self.draft_mode());
+            self.choose_new_harness(self.draft_harness(), &choice, self.draft_mode());
             self.host.new_model = Some(choice);
         }
-        let pi = self.draft.harness == HarnessId::Pi;
+        let pi = self.draft_harness() == HarnessId::Pi;
         let approval = (pi && self.host.protocol() >= 2).then(|| self.draft_approval());
         let choice = self.draft.approval.filter(|_| pi);
         self.draft.error = None;
@@ -403,19 +421,25 @@ impl Plait {
         }
     }
 
-    /// Choose the draft's harness. Its model and permissions return to that harness's defaults.
+    /// Choose the draft's harness. Its model and permissions return to that
+    /// harness's defaults. The default harness in Settings stays as it is.
     pub(super) fn choose_draft_harness(&mut self, id: HarnessId, cx: &mut Context<Self>) {
-        if self.draft_locked().is_some() || id == self.draft.harness {
+        if self.draft_locked().is_some() {
+            return;
+        }
+        if id == self.draft_harness() {
+            // Chosen now, so a later change to the default leaves it in place.
+            self.draft.harness = Some(id);
             return;
         }
         let usable = id == HarnessId::Pi
             || self
                 .harness_row(id)
-                .is_some_and(|row| row.ready && !row.models.is_empty());
+                .is_some_and(super::harnesses::HarnessRow::startable);
         if !usable {
             return;
         }
-        self.draft.harness = id;
+        self.draft.harness = Some(id);
         self.draft.model = None;
         self.draft.mode = None;
         self.draft.approval = None;
@@ -431,7 +455,7 @@ impl Plait {
         choice: ModelChoice,
         cx: &mut Context<Self>,
     ) {
-        if self.draft_locked().is_some() || harness != self.draft.harness {
+        if self.draft_locked().is_some() || harness != self.draft_harness() {
             return;
         }
         let listed = if harness == HarnessId::Pi {
@@ -445,6 +469,8 @@ impl Plait {
         if !listed {
             return;
         }
+        // The model belongs to this harness, so the draft keeps both.
+        self.draft.harness = Some(harness);
         self.draft.model = Some(choice);
         self.draft.error = None;
         self.sync_composer(cx);
@@ -458,7 +484,7 @@ impl Plait {
         mode: String,
         cx: &mut Context<Self>,
     ) {
-        if self.draft_locked().is_some() || harness != self.draft.harness {
+        if self.draft_locked().is_some() || harness != self.draft_harness() {
             return;
         }
         if self
@@ -467,6 +493,7 @@ impl Plait {
         {
             return;
         }
+        self.draft.harness = Some(harness);
         self.draft.mode = Some(mode);
         cx.notify();
     }
@@ -477,9 +504,10 @@ impl Plait {
         mode: Option<ApprovalMode>,
         cx: &mut Context<Self>,
     ) {
-        if self.draft_locked().is_some() || self.draft.harness != HarnessId::Pi {
+        if self.draft_locked().is_some() || self.draft_harness() != HarnessId::Pi {
             return;
         }
+        self.draft.harness = Some(HarnessId::Pi);
         self.draft.approval = mode;
         cx.notify();
     }

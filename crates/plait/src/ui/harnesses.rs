@@ -97,6 +97,8 @@ pub(super) struct HarnessRow {
     pub(super) default_mode: Option<String>,
     /// Settings → Agent: what the default mode lets the harness do.
     pub(super) default_detail: SharedString,
+    /// Settings → Agent: why the harness cannot be the default now, as hover text.
+    pub(super) unstartable: Option<SharedString>,
 }
 
 pub(super) struct HarnessesView {
@@ -149,6 +151,19 @@ impl HarnessRow {
             let fix = note.as_deref().unwrap_or("See Settings → Agent.");
             SharedString::from(format!("{}: {}. {fix}", harness.name, state.to_lowercase()))
         });
+        let models = harness.models.unwrap_or_default();
+        let unstartable = if harness.id == HarnessId::Other {
+            Some(format!("{}: update Plait to use it.", harness.name))
+        } else if !ready {
+            Some(match note.as_deref() {
+                Some(note) => format!("{state}. {note}"),
+                None => state.to_owned(),
+            })
+        } else if harness.id != HarnessId::Pi && models.is_empty() {
+            Some(format!("{} lists no models.", harness.name))
+        } else {
+            None
+        };
         Self {
             id: harness.id,
             version,
@@ -162,11 +177,18 @@ impl HarnessRow {
             note: note.map(Into::into),
             protection: harness.protection.into(),
             blocked,
-            models: harness.models.unwrap_or_default(),
+            models,
             modes,
             default_mode: harness.default_mode,
             default_detail,
+            unstartable: unstartable.map(Into::into),
         }
+    }
+
+    /// Whether a new thread can start in this harness now: ready, known to
+    /// this client, and with a model to run.
+    pub(super) fn startable(&self) -> bool {
+        self.unstartable.is_none()
     }
 
     pub(super) fn mode(&self, id: &str) -> Option<&ModeRow> {
@@ -257,10 +279,9 @@ fn harness_item(
     item: &impl Fn(HarnessId, SharedString, SharedString) -> Item,
     current: &impl Fn(Item, HarnessId) -> Item,
 ) -> Item {
-    let usable = row.ready && (row.id == HarnessId::Pi || !row.models.is_empty());
     let detail = row.note.clone().unwrap_or_else(|| row.version.clone());
     let listed = item(row.id, row.name.clone(), detail);
-    if usable && row.id != HarnessId::Other {
+    if row.startable() {
         return current(listed, row.id);
     }
     let badge = if row.ready {
@@ -629,11 +650,17 @@ impl Plait {
         .when(usable && !busy, |el| {
             el.on_activate(cx, |this, _, cx| this.refresh_harnesses(cx))
         });
-        let mut page = settings::section("Agent harnesses").child(settings::setting(
-            "What can run a thread",
-            "Pi is built in. Codex runs through your own install, with its own sign-in and settings. Choose the harness above a new thread's message box; the thread stays in it.",
-            refresh,
-        ));
+        let mut page = settings::section("Agent harnesses")
+            .child(settings::setting(
+                "What can run a thread",
+                "Pi is built in. Codex runs through your own install, with its own sign-in and settings. A new thread starts in the default below; choose another above its message box, and the thread stays in it.",
+                refresh,
+            ))
+            .child(self.default_harness_setting(cx))
+            .when_some(
+                self.preference_note(Some(super::jump::PreferenceGroup::Agent)),
+                |el, note| el.child(tag(note, colors().subtle)),
+            );
         if !self.host.connected {
             return page.child(tag(
                 "Connect the host to list agent harnesses.",
@@ -754,6 +781,90 @@ impl Plait {
             Some(modes) => column().gap_3().child(entry).child(modes),
             None => column().child(entry),
         }
+    }
+
+    /// The harness a new thread's draft starts in: Pi, then each harness the host
+    /// lists. One that cannot start a thread now is shown, not offered.
+    fn default_harness_setting(&self, cx: &mut Context<Self>) -> Div {
+        let saved = self.preferences.value.default_harness;
+        let rows = self.harness_rows();
+        let mut options: Vec<(HarnessId, SharedString, Option<SharedString>)> = Vec::new();
+        if !rows.iter().any(|row| row.id == HarnessId::Pi) {
+            options.push((HarnessId::Pi, HarnessId::Pi.label().into(), None));
+        }
+        options.extend(
+            rows.iter()
+                .map(|row| (row.id, row.name.clone(), row.unstartable.clone())),
+        );
+        // Kept in view while the host does not list it, so the choice is not lost from sight.
+        if !options.iter().any(|(id, ..)| *id == saved) {
+            options.push((
+                saved,
+                saved.label().into(),
+                Some("Not listed by this host now.".into()),
+            ));
+        }
+        let mut choices = segmented();
+        for (index, (id, name, unstartable)) in options.into_iter().enumerate() {
+            let selected = id == saved;
+            let tip = unstartable.clone();
+            let enabled = unstartable.is_none() && !selected;
+            choices = choices.child(
+                toned_button(
+                    ("default-harness", index),
+                    "",
+                    if selected {
+                        Tone::Selected
+                    } else {
+                        Tone::Ghost
+                    },
+                )
+                .h(px(24.))
+                .gap(px(6.))
+                .role(Role::RadioButton)
+                .aria_toggled(if selected {
+                    Toggled::True
+                } else {
+                    Toggled::False
+                })
+                .aria_label(format!("Default harness for new threads: {name}"))
+                .children(harness_logo(id).map(|logo| {
+                    logo.size(px(13.)).text_color(rgb(if selected {
+                        colors().text
+                    } else {
+                        colors().muted
+                    }))
+                }))
+                .child(name)
+                .disabled(unstartable.is_some())
+                .when_some(tip, |el, tip| {
+                    el.aria_description(tip.clone()).tooltip(move |_, cx| {
+                        cx.new(|_| super::thread_controls::TextTooltip(tip.to_string()))
+                            .into()
+                    })
+                })
+                .when(enabled, |el| {
+                    el.on_activate(cx, move |this, _, cx| this.set_default_harness(id, cx))
+                }),
+            );
+        }
+        settings::setting(
+            "Default harness for new threads",
+            "New threads start here when it is ready, otherwise in Pi, with its default model and permissions.",
+            choices,
+        )
+    }
+
+    /// Save the harness new drafts start in. A draft that chose its own keeps it.
+    pub(super) fn set_default_harness(&mut self, id: HarnessId, cx: &mut Context<Self>) {
+        if id == HarnessId::Other {
+            return;
+        }
+        let mut value = self.preferences.value.clone();
+        value.default_harness = id;
+        self.set_preferences(value, super::jump::PreferenceGroup::Agent, cx);
+        // A draft following the default now starts elsewhere.
+        self.sync_composer(cx);
     }
 
     /// The mode new threads in a harness with its own modes start in.

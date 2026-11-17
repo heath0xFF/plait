@@ -69,7 +69,7 @@ impl Plait {
     fn draft_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let locked = self.draft_locked();
         let project = self.active_project();
-        let harness = self.draft.harness;
+        let harness = self.draft_harness();
         let harness_name = self.harness_row(harness).map_or_else(
             || SharedString::from(harness.label()),
             |row| row.name.clone(),
@@ -142,7 +142,7 @@ impl Plait {
 
     /// A harness's own modes, or Plait's Ask and Auto for Pi, in the same place.
     fn draft_permissions(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
-        let harness = self.draft.harness;
+        let harness = self.draft_harness();
         let locked = self.draft_locked();
         if harness != HarnessId::Pi {
             let row = self.harness_row(harness)?;
@@ -258,7 +258,7 @@ impl Plait {
                     .into_any_element(),
             );
         }
-        let harness = self.draft.harness;
+        let harness = self.draft_harness();
         let row = self
             .harness_row(harness)
             .filter(|_| harness != HarnessId::Pi)?;
@@ -354,7 +354,7 @@ impl Plait {
         if self.draft_locked().is_some() {
             return;
         }
-        let items = super::harnesses::harness_items(self.harness_rows(), self.draft.harness);
+        let items = super::harnesses::harness_items(self.harness_rows(), self.draft_harness());
         let note = if self.host.connected && self.host.protocol() < 4 {
             "This host runs every thread in Pi. Update the host to choose another harness."
         } else {
@@ -364,7 +364,7 @@ impl Plait {
             name: "Harness for the new thread".into(),
             placeholder: "Search harnesses…".into(),
             empty: "No harness matches.".into(),
-            initial: Some(format!("harness\u{1f}{}", self.draft.harness.label()).into()),
+            initial: Some(format!("harness\u{1f}{}", self.draft_harness().label()).into()),
             mark: None,
             aside: None,
             note: Some(note.into()),

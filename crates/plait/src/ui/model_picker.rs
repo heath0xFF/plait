@@ -158,7 +158,7 @@ impl Plait {
     fn picker_harness(&self, purpose: Option<ModelPurpose>) -> HarnessId {
         match purpose {
             Some(ModelPurpose::ThreadModel) => self.thread_harness(),
-            Some(ModelPurpose::NewThread) => self.draft.harness,
+            Some(ModelPurpose::NewThread) => self.draft_harness(),
             _ => HarnessId::Pi,
         }
     }
@@ -223,8 +223,16 @@ impl Plait {
         });
     }
 
-    /// The model a new thread starts with unless another is chosen.
+    /// The model a new thread starts with unless another is chosen, in the
+    /// default harness from Settings → Agent.
     pub(super) fn new_thread_model(&self) -> Option<&Model> {
+        let harness = self.default_harness();
+        if harness != HarnessId::Pi {
+            let choice = self.default_model_for(harness)?;
+            return self
+                .harness_model(harness, &choice)
+                .filter(|model| model.authenticated);
+        }
         let status = self.host.status.as_ref()?;
         let default = status.default_model.as_ref()?;
         let usable = self.host.available(Some(default));
