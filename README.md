@@ -38,8 +38,9 @@ thread and draft.
   Quit, update, or reboot the app; threads, drafts, and pending approvals are
   there when you come back.
 - **Approvals you can read.** Let the agent work, or ask before each edit and
-  command. Commands run in a macOS sandbox that cannot write your checkout or
-  reach the network, unless you opt a project into trusted commands.
+  command. Commands run as you, as they would in your terminal, or opt a
+  project into a macOS sandbox that cannot write your checkout or reach the
+  network.
 - **Git review built in.** Stage and discard by file or hunk (with undo),
   commit, push, fetch, and fast-forward pull. Click diff line numbers to ask the
   agent about exactly those lines.

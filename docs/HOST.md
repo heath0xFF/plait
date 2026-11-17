@@ -697,8 +697,8 @@ Stop and shutdown revoke it. Answers after cancellation or consumption return
 Authorization and tool execution are separate. Argument limits, dirty-path and
 ignored-path protection, checked file helpers, and the command sandbox still
 apply in both modes. Automatic approval removes the prompt, not those checks.
-The sandbox is the default [command policy](#command-policy); approval mode
-never changes which policy a run uses.
+Trusted is the default [command policy](#command-policy) and the sandbox is
+opt-in per checkout; approval mode never changes which policy a run uses.
 
 A version 3 [queued input](#messages-during-a-run) is the only deferred start. The
 host saves its text and the approval mode its user submitted it with; that is a
@@ -917,11 +917,13 @@ name the field at fault and never repeat its value.
 
 ## Command policy
 
-Each canonical checkout has a command policy: `sandboxed`, the default, or
-`trusted`. It decides how the `command` tool runs for runs in that checkout.
-Trusted mode is opt-in per project. Source builds expose it under Settings →
-Approvals → Command policy, with explicit confirmation of its consequences.
-The host keeps sandboxed mode until a client sends the operation.
+Each canonical checkout has a command policy: `trusted`, the default, or
+`sandboxed`. It decides how the `command` tool runs for runs in that checkout.
+Trusted matches how Codex and Claude Code run out of the box: commands run as
+the user, with Git writes and the network. The sandbox is opt-in per project
+under Settings → Approvals → Command policy; returning to Trusted asks for
+explicit confirmation of its consequences. Hosts through v0.1.0-preview.10
+defaulted to `sandboxed`.
 
 ```json
 {"op":"command_policy","checkout":"/absolute/checkout"}
@@ -938,11 +940,13 @@ every version. A host without them rejects the unknown operation with
 or reply changes: `create_thread`, `submit`, and snapshots carry no policy. A
 snapshot does not yet report the policy its run used.
 
-- **Storage.** `host.sqlite` keeps one `settings` row per trusted checkout, keyed
-  by the canonical path and holding the checkout root's device and inode. There
-  is no schema change. `sandboxed` removes the row. A missing or unreadable
-  row, or a directory that is no longer the one that was trusted, is
-  `sandboxed`. Another host store never shares the setting.
+- **Storage.** `host.sqlite` keeps one `settings` row per sandboxed checkout,
+  keyed by the canonical path and holding the checkout root's device and inode.
+  There is no schema change. `trusted` removes the row. A missing row, or a
+  directory that is no longer the one that was sandboxed, is `trusted`, and so
+  is a row a host before the change wrote for a trusted checkout. A row that
+  cannot be read is `sandboxed`, rather than a guess. Another host store never
+  shares the setting.
 - **Who can set it.** Only this operation, sent by a local client as an explicit
   user action. No tool, model output, thread, run, or snapshot carries or
   changes the policy, and a thread cannot take it to another checkout.
@@ -1170,8 +1174,8 @@ history reads never restart model work automatically.
 
 ## Safety boundary
 
-Command rules in this section describe the default `sandboxed` policy. A
-project set to `trusted` replaces them as described in
+Command rules in this section describe the opt-in `sandboxed` policy. A
+project left at `trusted`, the default, replaces them as described in
 [Command policy](#command-policy). File-tool rules apply to both.
 
 Load checkout `AGENTS.md` explicitly before execution, after the user-level

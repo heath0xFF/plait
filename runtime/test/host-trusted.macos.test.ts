@@ -51,8 +51,10 @@ async function pids(f: Fixture, id: string) {
   return [Number(match[1]), Number(match[2])];
 }
 
-test('the default policy is sandboxed: same prompts, no checkout or Git writes', { timeout: 60000 }, async t => {
-  const f = await setup(t, 'trusted-work');
+test('trusted is the default; a sandboxed project gets the same prompts but no checkout or Git writes', { timeout: 60000 }, async t => {
+  const f = await setup(t, 'trusted-work', false, false);
+  assert.deepEqual((await policy(f)).result, { checkout: f.repo, policy: 'trusted' });
+  await policy(f, 'sandboxed');
   await writeFile(join(f.repo, 'dirty.txt'), 'dirty\n');
   assert.deepEqual((await policy(f)).result, { checkout: f.repo, policy: 'sandboxed' });
   const thread = await f.create();
@@ -210,6 +212,7 @@ test('the model is told the mode in force, and the sandboxed wording is unchange
   const f = await setup(t, 'record-context');
   const other = join(f.base, 'other'); await exec('/usr/bin/git', ['init', '-q', other]);
   await policy(f, 'trusted');
+  await policy(f, 'sandboxed', other);
   const trusted = await f.create();
   const sandboxed = (await request(f.store, { op: 'create_thread', checkout: other, provider: 'faux', model_id: 'faux-1', request_id: 'create-other' })).result.thread;
   for (const thread of [trusted, sandboxed]) {

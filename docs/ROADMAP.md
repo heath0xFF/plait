@@ -32,6 +32,11 @@ byte-for-byte unchanged and existing stores keep loading. The trusted command
 mode is opt-in per project; the current sandbox stays the default. The
 [host contract](HOST.md) records each addition when it lands.
 
+**Changed after M7 step 2:** Pi's commands are trusted by default, as Codex
+and Claude Code run out of the box with Full access. The sandbox is opt-in per
+project in Settings → Approvals. Existing stores keep their trusted projects;
+projects at the old default become trusted. No protocol or schema change.
+
 M2.5's self-hosting work is done in source and host tests: ranged file reads,
 retained command output with explicit limits (`read_output`), automatic
 compaction that keeps full history across a host restart, and the

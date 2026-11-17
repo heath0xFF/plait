@@ -77,6 +77,8 @@ test('production runtime edits Plait source, runs Cargo, reconnects and resumes 
     return host;
   };
   let host = await start();
+  // This suite proves the sandboxed path end to end; trusted is the default.
+  assert.equal((await request(store, { op: 'set_command_policy', checkout: repo, policy: 'sandboxed' })).ok, true);
   const created = await request(store, { op: 'create_thread', checkout: repo, provider: 'plait-replay', model_id: replayModel, request_id: 'dogfood-create' });
   assert.equal(created.ok, true, JSON.stringify(created));
   const id = created.result.thread.id;

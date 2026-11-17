@@ -47,7 +47,7 @@ export function raw(store: string, input: string): Promise<Reply> {
     socket.once('end', () => reject(new Error('Connection closed before reply')));
   });
 }
-export async function setup(t: { after: (fn: () => Promise<void>) => void }, scenario = 'answer', storeAlias = false) {
+export async function setup(t: { after: (fn: () => Promise<void>) => void }, scenario = 'answer', storeAlias = false, sandboxed = true) {
   const base = await realpath(await mkdtemp(join(storeAlias ? '/tmp' : tmpdir(), 'plait-host-test-')));
   const repo = join(base, 'repo'); const store = join(storeAlias ? base.replace('/private/tmp/', '/tmp/') : base, 'store');
   await exec('/bin/mkdir', ['-p', repo, store]);
@@ -72,6 +72,8 @@ export async function setup(t: { after: (fn: () => Promise<void>) => void }, sce
     await delay(400); await rm(base, { recursive: true, force: true });
   });
   const host = await start();
+  // Most suites test the sandbox, which is now opt-in; trusted suites switch per test.
+  if (sandboxed) assert.equal((await request(store, { op: 'set_command_policy', checkout: repo, policy: 'sandboxed' })).ok, true);
   const create = async (id = 'create-1') => {
     const reply = await request(store, { op: 'create_thread', checkout: repo, provider: 'faux', model_id: 'faux-1', request_id: id });
     assert.equal(reply.ok, true, JSON.stringify(reply)); return reply.result.thread;

@@ -37,19 +37,19 @@ so it works on its own branch and files. Worktrees are optional.
 
 ## Choose the development command policy
 
-**Sandboxed** is the default. File tools can make approved edits, and commands
-can run offline locked Cargo builds using a persistent per-thread build cache.
-Commands cannot format source files, install dependencies from the network,
-write the checkout, or run every test that probes network/process boundaries.
-Run those steps externally when keeping this policy.
+**Trusted** is the default. Trusted commands run as your user, with the login
+shell environment, network access, and checkout/home writes. This covers the
+full development loop: formatting, package installation, generation, commits,
+and the full runtime test suite. It also permits commands to alter
+pre-existing work; file-tool dirty-path checks do not constrain a trusted shell.
 
-For the full development loop, explicitly select **Trusted** for this project
-in **Settings → Approvals**. Trusted commands run as your user, with the login
-shell environment, network access, and checkout/home writes. This enables
-formatting, package installation, generation, and the full runtime test suite.
-It also permits commands to alter pre-existing work; file-tool dirty-path
-checks do not constrain a trusted shell. The app shows a confirmation before
-changing this policy. Other projects keep their own policy.
+To contain a project, select **Sandboxed** in **Settings → Approvals**. File
+tools can still make approved edits, and commands can run offline locked Cargo
+builds using a persistent per-thread build cache. Commands cannot format source
+files, install dependencies from the network, write the checkout, or run every
+test that probes network/process boundaries. Run those steps externally when
+keeping this policy. The app asks for confirmation before returning a project
+to Trusted. Other projects keep their own policy.
 
 Approval mode is a separate choice. **Ask each time** reviews every effect;
 automatic approval allows tools to proceed within the selected command policy.

@@ -624,8 +624,8 @@ notarized.
 
 This per-user install trades one protection for convenience: the system-wide
 package keeps host code owned by root, so processes running as you cannot change
-it. Sandboxed agent commands cannot write there; commands in a project set to
-the opt-in [trusted command mode](HOST.md#command-policy) run as you and can.
+it. Commands under the default [trusted command mode](HOST.md#command-policy)
+run as you and can write there; a project set to sandboxed commands cannot.
 
 ### Installer packages
 

@@ -11,9 +11,9 @@ use std::path::PathBuf;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandPolicy {
-    /// The default: no checkout or Git writes, no network.
+    /// Opt-in per checkout: no checkout or Git writes, no network.
     Sandboxed,
-    /// Commands run as the user, outside the sandbox.
+    /// The default: commands run as the user, outside the sandbox.
     Trusted,
 }
 

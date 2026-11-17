@@ -185,11 +185,11 @@ newer draft or change a retry’s authorization. Each thread has its own compose
 
 Each run is submitted with an approval mode. In `ask` mode every file change and
 command needs a one-call approval with full arguments; in `auto` mode, the
-desktop default with a version 2 host, they run without a prompt. File helpers own checkout writes; command execution reads the checkout and uses
-private scratch space for build output. A project can instead be set to the
-opt-in trusted [command policy](HOST.md#command-policy), in which commands run
-as the user and may write the checkout. Settings → Approvals offers the policy
-with a deliberate confirmation of Trusted access. Stop revokes pending approvals and
+desktop default with a version 2 host, they run without a prompt. File helpers own checkout writes. By default a project uses the trusted
+[command policy](HOST.md#command-policy), in which commands run as the user and
+may write the checkout. A project can instead be sandboxed, in which commands
+read the checkout and use private scratch space for build output. Settings →
+Approvals offers the policy, with a deliberate confirmation of Trusted access. Stop revokes pending approvals and
 cancels work. Interrupted work must not replay automatically after host failure.
 These boundaries need the tests listed in HOST.md before valuable-repository use.
 
