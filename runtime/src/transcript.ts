@@ -1,6 +1,6 @@
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { Snapshot, SnapshotMessage, SnapshotTool, InputRecord } from './protocol.ts';
-import { inputMessage, legacy } from './protocol.ts';
+import { inputMessage, legacy, readsAsTyped } from './protocol.ts';
 import { clipTail } from './text.ts';
 
 export type Part = { type?: string; text?: string; thinking?: string; redacted?: boolean; id?: string; name?: string; arguments?: unknown };
@@ -108,9 +108,9 @@ export function update(snapshot: Snapshot, view: ConversationView, inputs: Input
     if (entry.kind === 'pi.compaction') continue;
     for (const [index, message] of ((entry.model ?? []) as readonly Message[]).entries()) {
       if (message.role === 'user' || message.role === 'assistant') {
-        // A placed input reads as typed; the model may have received it expanded.
+        // A placed `/skill:` input reads as typed; the model received it expanded.
         const typed = message.role === 'user' ? placed.get(Number(entry.id))?.text : undefined;
-        const text = typed ?? messageText(message);
+        const text = readsAsTyped(typed) ? typed : messageText(message);
         const reasoning = message.role === 'assistant' ? clipTail(reasoningText(message), 4096) : '';
         if (text || reasoning) push({
           id: message.role === 'user' && placed.has(Number(entry.id)) ? `request-${placed.get(Number(entry.id))!.request_id}` : `${entry.id}-${index}`,

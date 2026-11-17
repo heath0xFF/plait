@@ -18,7 +18,7 @@ M7.**
 | M5 — Previews | Live HTML, Markdown and MDX, automatic refresh, and selected-content feedback to the agent | Planned |
 | M6 — Multiple machines | Unified project navigation across independent hosts, including disconnected/reconnecting states | Planned |
 | M7 — Any agent harness | Threads run by other agent harnesses (Claude Code, Codex, Pi, omp, Antigravity, and others) beside Pi, with the same conversation, approval, Git, and navigation views | Direction agreed; does not depend on M3. Protocol details need agreement before implementation |
-| M8 — Skills, tools, and CLIs | Pi threads use the skills, prompt templates, global instructions, MCP servers, and command-line tools the person already set up for their agent, with each one visible in Settings and every call under Plait's approvals | Current work. Step 1 (skills and user instructions in the runtime) is in source; the Settings list, prompt templates, CLIs, and MCP follow |
+| M8 — Skills, tools, and CLIs | Pi threads use the skills, prompt templates, global instructions, MCP servers, and command-line tools the person already set up for their agent, with each one visible in Settings and every call under Plait's approvals | Current work. Step 1 (skills and user instructions) shipped in builds after preview.8; step 2 (prompt templates, Settings → Agent, and `/` completion) is in source; CLIs and MCP follow |
 
 Do not build the whole roadmap at once. Each change must compile, run, and have
 its own checks. Protocol, storage, and shared-contract changes need agreement
@@ -194,10 +194,21 @@ no-symlink helper; sandboxed commands may read skill folders and never write
 them. `/skill:name` sends Pi's block. Recorded in the
 [host contract](HOST.md#skills-and-user-instructions).
 
-Next, each agreed before it starts: step 2 reports what was found (a version 3
-request listing skills, templates, and problems) for a Settings list and
-composer completion, and adds prompt templates; step 3 adds named CLIs for
-sandboxed projects; step 4 adds MCP servers.
+**Agreed for M8 step 2, show what was found, and prompt templates:** a
+version 3 `agent_resources` request returns, for one checkout, each skill and
+template with its source and path, the user instructions file's path and
+size, problems, and whether the project is trusted, never file contents, with
+bounded lists and descriptions. It uses the same discovery as runs. `/name`
+expands a prompt template with Plait's own expander following Pi's documented
+argument rules; project templates need a trusted project, and the expanded
+text is what the conversation shows, as in Pi. Typing `/` in the composer
+lists skills and templates after Plait's own commands, which win a name
+clash; choosing one inserts its text and runs nothing. Settings → Agent lists
+them read-only, with Open folder and Refresh; turning one off stays in Pi's
+settings. Recorded in the [host contract](HOST.md#skills-and-user-instructions).
+
+Next, each agreed before it starts: step 3 adds named CLIs for sandboxed
+projects; step 4 adds MCP servers.
 
 Use existing tools for interactive shells and debugging. A future Open in Rex
 integration and native mobile companion are possibilities, not current features.

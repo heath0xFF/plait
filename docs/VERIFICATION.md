@@ -335,7 +335,16 @@ scratch `~/.ssh` only its own file, and skip skill folders inside a credential
 folder or at the host store. A protocol test shows an expanded message in
 history as typed. A real-sandbox test reads a skill folder only when it is
 passed, and cannot write it. Test runtimes ignore the machine's own skills.
-Discovery on
+Template tests check Plait's argument parser and substitution against Pi's own
+functions over a set of quoting and placeholder cases, load project templates
+only for a trusted project, refuse a template swapped for a link after
+discovery and links to non-Markdown or credential files, and keep the
+`agent_resources` reply free of file contents and under the 1 MiB frame with
+oversized lists. A host test sends `agent_resources` and sees trust follow the
+command policy. Desktop tests cover agent command ranking and clashes, and
+scenes render Settings → Agent and the `/` list from sample state; choosing a
+command inserts it. A live model receiving an expanded template in the
+installed app has not been checked. Discovery on
 a real Pi setup with 66 skills (29 turned off in settings) took 7–20 ms per run.
 A live model choosing and following a skill in the installed app has not been
 checked.

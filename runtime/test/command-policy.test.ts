@@ -91,3 +91,18 @@ test('the policy is per canonical checkout and per store, durable, and sandboxed
   assert.deepEqual((await set(f, 'sandboxed')).result, { checkout: f.repo, policy: 'sandboxed' });
   assert.equal((await read(f)).result.policy, 'sandboxed');
 });
+
+test('agent_resources reports under the checkout\'s current policy, only for version 3', { timeout: 60000 }, async t => {
+  const f = await setup(t);
+  const resources = () => request(f.store, { op: 'agent_resources', checkout: join(f.repo, '.'), protocol_version: 3 }) as Promise<{ ok: boolean; result: Record<string, unknown> }>;
+  // The test runtime offers none of the machine's own setup; the shape and trust are what matter here.
+  assert.deepEqual(await resources(), { ok: true, result: { checkout: f.repo, trusted: false, instructions: null, skills: [], templates: [], problems: [] } });
+  await set(f, 'trusted');
+  assert.equal((await resources()).result.trusted, true);
+  for (const invalid of [
+    { op: 'agent_resources', checkout: f.repo },
+    { op: 'agent_resources', protocol_version: 3 },
+    { op: 'agent_resources', checkout: f.repo, thread_id: 't', protocol_version: 3 },
+    { op: 'agent_resources', checkout: join(f.base, 'missing'), protocol_version: 3 },
+  ]) assert.equal((await send(f.store, invalid)).error?.code, 'invalid_request', JSON.stringify(invalid));
+});

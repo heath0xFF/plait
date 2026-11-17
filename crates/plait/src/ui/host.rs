@@ -689,7 +689,9 @@ impl Plait {
         } else {
             None
         };
+        let agent = self.agent_commands();
         composer.update(cx, |composer, cx| {
+            composer.set_agent_commands(agent, cx);
             composer.set_send_blocked(send_blocked, cx);
             composer.set_enabled(reason.is_none() && !self.host.controlling, reason, cx);
             composer.set_busy(busy, cx);

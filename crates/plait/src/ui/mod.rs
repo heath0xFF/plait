@@ -20,6 +20,7 @@ mod panels;
 mod selection;
 mod session;
 mod settings;
+mod settings_agent;
 mod settings_keyboard;
 mod settings_policy;
 mod settings_providers;
@@ -124,6 +125,7 @@ pub struct Plait {
     settings_scroll: ScrollHandle,
     keyboard: settings_keyboard::KeyboardState,
     policy: settings_policy::PolicyState,
+    agent: settings_agent::AgentState,
     providers: settings_providers::ProviderState,
     /// A new thread was requested: open it when the host confirms creation,
     /// unless the user has gone elsewhere in the meantime.
@@ -199,6 +201,7 @@ impl Plait {
             settings_scroll: ScrollHandle::new(),
             keyboard: Default::default(),
             policy: Default::default(),
+            agent: Default::default(),
             providers: Default::default(),
             new_thread_open: false,
             worktree_busy: false,
@@ -248,6 +251,7 @@ impl Plait {
         cx.observe_self(|this, cx| {
             this.sync_picker(cx);
             this.sync_policy(cx);
+            this.sync_agent(cx);
             this.sync_provider_settings(cx);
         })
         .detach();

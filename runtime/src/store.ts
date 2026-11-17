@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { ModelChoice, Snapshot, InputRecord, Summary } from './protocol.ts';
-import { fail, inputMessage, queuedView } from './protocol.ts';
+import { fail, inputMessage, queuedView, readsAsTyped } from './protocol.ts';
 import { boundSnapshot, pushMessage } from './transcript.ts';
 import { title } from './text.ts';
 import { CommandOutputs } from './tool-output.ts';
@@ -166,12 +166,15 @@ export class Store {
       .map(row => ({ rowid: Number(row.rowid), request_id: String(row.id), text: JSON.parse(String(row.input)), anchor: Number(row.anchor) }));
   }
   /**
-   * The inputs placed at the given conversation entries: request ID and the text as
-   * typed, which the model may have received expanded (a `/skill:` command, say).
+   * The inputs placed at the given conversation entries: request ID and, for an input
+   * that reads as typed (a `/skill:` command), that text rather than its expansion.
    */
   placed(id: string, low: number, high: number): Map<number, Placed> {
     return new Map(this.db.prepare('SELECT id,entry,input FROM requests WHERE scope=? AND entry BETWEEN ? AND ?').all(id, low, high)
-      .map(row => [Number(row.entry), { request_id: String(row.id), text: row.input === null ? undefined : JSON.parse(String(row.input)) }]));
+      .map(row => {
+        const text = row.input === null ? undefined : JSON.parse(String(row.input)) as string;
+        return [Number(row.entry), { request_id: String(row.id), ...(readsAsTyped(text) ? { text } : {}) }];
+      }));
   }
   journal(id: string, rowid: number): string | undefined {
     const row = this.db.prepare('SELECT input FROM requests WHERE scope=? AND rowid=? AND input IS NOT NULL AND entry IS NULL AND state IS NULL').get(id, rowid);

@@ -909,9 +909,42 @@ failing it.
   rest of the message. Unknown names are sent unchanged. The model receives the
   expanded message, while snapshots and `history` give the text as typed, so a
   client shows and recalls the `/skill:` command whatever the skill's length.
+- A message that starts with `/name` for a prompt template (Pi's agent
+  `prompts` folder, Pi settings and packages, and, for a trusted project, the
+  checkout's `.pi/prompts`) is sent as the template's body with its arguments
+  filled in: `$1`, `$@`, `$ARGUMENTS`, `${N:-default}`, `${@:-default}`,
+  `${@:N}`, and `${@:N:L}`, split with Pi's quoting rules. Pi does not export
+  its expander, so Plait has its own, tested against Pi's. The first template
+  of a name wins. A linked template is followed once, at discovery, and only to
+  a Markdown file outside credential folders; the body (at most 65536
+  characters) is read through the no-symlink helper rooted where the link led,
+  with that folder's identity checked. Unlike a skill, the expanded text is
+  what snapshots and `history` show, as Pi shows it. Runs read no template file
+  until one is used.
 
-Not yet included: prompt templates, extensions, MCP servers, and skill
-discovery reported to the client. See the [roadmap](ROADMAP.md).
+`agent_resources` (version 3) with `checkout` reports what a run there would
+be offered now, under the checkout's current command policy, with the same
+discovery. It never returns file contents:
+
+```json
+{"checkout":"/repo","trusted":false,
+ "instructions":{"path":"/home/.pi/agent/AGENTS.md","bytes":2150},
+ "skills":[{"name":"release-notes","description":"…","origin":"user","path":"…/SKILL.md","model_invocation":true}],
+ "templates":[{"name":"review","description":"Review a change","argument_hint":"<path>","origin":"user","path":"…/review.md"}],
+ "problems":[{"path":"…/SKILL.md","message":"description is required"}]}
+```
+
+`origin` is `user` (the Pi agent folder or `~/.agents`), `project`, `package`,
+or `path` (named in Pi settings). `model_invocation` is false for a skill only
+`/skill:name` loads. Problems include Pi's own diagnostics, skipped folders,
+refused links, name clashes, and an oversized context file, which fails a run
+but is only reported here. Each list holds at most 500 entries and each
+description at most 1024 characters, and the whole reply stays under the
+client's 1 MiB frame; anything left out is said first in `problems`. Hosts
+from before this operation reject it as `invalid_request`.
+
+Not yet included: extensions, MCP servers, and named CLIs. See the
+[roadmap](ROADMAP.md).
 
 Automatic model-context compaction keeps all original history entries. Its
 internal summary entries are omitted from displayed messages. If a required

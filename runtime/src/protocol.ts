@@ -1,6 +1,11 @@
 import { clipTail } from './text.ts';
 
 export type QueueMode = 'follow_up' | 'steer';
+/**
+ * A `/skill:` input reads back as typed, since the skill's instructions are not the
+ * person's words; a prompt template reads back expanded, as Pi shows it.
+ */
+export const readsAsTyped = (text: string | undefined): text is string => text?.startsWith('/skill:') === true;
 export type InputRecord = {
   request_id: string; text: string; entry: number | null; anchor: number;
   /** Set while the input waits behind a run; it is not part of the conversation yet. */
@@ -116,6 +121,7 @@ const fields3: Record<string, string[]> = {
   list_threads: [], history: ['thread_id'], history_text: ['thread_id', 'ref', 'offset'],
   rename_thread: ['thread_id', 'title'], archive_thread: ['thread_id', 'archived'], watch_threads: [],
   configure_thread: ['thread_id'], cancel_queued: ['thread_id', 'request_id'], changed_files: ['thread_id'],
+  agent_resources: ['checkout'],
 };
 const optional3: Record<string, string[]> = {
   submit: ['when_busy'], list_threads: ['checkout', 'limit', 'cursor', 'archived'], history: ['before', 'limit'],

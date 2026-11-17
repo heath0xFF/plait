@@ -13,7 +13,7 @@ mod mentions;
 mod parent;
 mod trigger;
 
-pub use commands::CommandId;
+pub use commands::{AgentCommand, CommandId};
 pub use completion::{Completion, CompletionEvent, CompletionItem};
 
 use super::theme::{self, ButtonAction, DisabledControl, colors};
@@ -155,6 +155,8 @@ pub enum MentionFiles {
 enum Pick {
     File(String),
     Command(CommandId),
+    /// An agent command: its text replaces the draft, ready for arguments.
+    Insert(SharedString),
 }
 
 struct Popup {
@@ -227,6 +229,8 @@ pub struct Composer {
     ranking: Latest,
     rank_task: Option<Task<()>>,
     stop: StopGesture,
+    /// Skills and templates of the person's Pi setup, offered after local commands.
+    agent: Arc<[AgentCommand]>,
 }
 
 impl Composer {
@@ -255,6 +259,7 @@ impl Composer {
             ranking: Latest::default(),
             rank_task: None,
             stop: StopGesture::default(),
+            agent: Arc::from([]),
         }
     }
 
@@ -310,6 +315,16 @@ impl Composer {
             self.fill_commands();
             cx.notify();
         }
+    }
+
+    /// Supply the person's skills and templates. Cheap when the list is the same one.
+    pub fn set_agent_commands(&mut self, commands: Arc<[AgentCommand]>, cx: &mut Context<Self>) {
+        if Arc::ptr_eq(&self.agent, &commands) {
+            return;
+        }
+        self.agent = commands;
+        self.fill_commands();
+        cx.notify();
     }
 
     /// Supply the prompts already sent in this thread, oldest first, for
@@ -718,7 +733,8 @@ impl Composer {
         else {
             return;
         };
-        let items = commands::matching(COMMANDS, &popup.trigger.query, self.busy)
+        let query = &popup.trigger.query;
+        let local = commands::matching(COMMANDS, query, self.busy)
             .into_iter()
             .map(|found| CompletionItem {
                 label: format!("/{}", found.command.name).into(),
@@ -728,9 +744,20 @@ impl Composer {
                 detail_matches: found.detail_matches,
                 name: format!("/{}: {}", found.command.name, found.command.detail).into(),
                 value: Pick::Command(found.command.id),
-            })
-            .collect();
-        popup.completion.set_items(items);
+            });
+        // The person's own commands come after the app's, and only the best few.
+        let agent = commands::matching_agent(&self.agent, query)
+            .into_iter()
+            .take(SUGGESTION_LIMIT)
+            .map(|found| CompletionItem {
+                label: found.command.label.clone(),
+                detail: found.command.detail.clone(),
+                label_matches: found.name_matches.iter().map(|at| at + 1).collect(),
+                detail_matches: found.detail_matches,
+                name: found.command.spoken.clone(),
+                value: Pick::Insert(found.command.label.clone()),
+            });
+        popup.completion.set_items(local.chain(agent).collect());
     }
 
     /// Start ranking files for the open mention. Results arrive through
@@ -847,6 +874,16 @@ impl Composer {
                     cx,
                 );
                 cx.emit(ComposerEvent::Command(id));
+            }
+            Pick::Insert(label) => {
+                // Nothing runs: the text waits for arguments, and the runtime expands it on send.
+                let text = format!("{label} ");
+                self.close_popup();
+                self.edit(
+                    |draft| draft.replace(0..draft.value.text.len(), &text, false),
+                    window,
+                    cx,
+                );
             }
         }
         true

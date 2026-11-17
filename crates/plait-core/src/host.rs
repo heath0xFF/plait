@@ -858,6 +858,7 @@ pub use history::{HistoryField, HistoryItem, HistoryPage, HistoryText, More};
 pub use threads::ThreadWatch;
 pub use watch::{CancelWatch, Snapshots, ThreadLists, Updates};
 
+pub mod agent;
 pub mod policy;
 pub mod providers;
 pub mod sign_in;

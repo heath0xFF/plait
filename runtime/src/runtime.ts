@@ -15,7 +15,7 @@ import type { ApprovalMode, ModelChoice, Protocol, QueueMode, Snapshot, InputRec
 import { Store } from './store.ts';
 import { checkout, dirtyPaths, fileAction, identities, acquireCheckout, rootIdentity, checkRoot, pathKey } from './safety.ts';
 import { registry } from './tools.ts';
-import { discover, expandSkill, skillsPrompt } from './skills.ts';
+import { discover, expandInput, report, skillsPrompt } from './skills.ts';
 import type { ToolState } from './tools.ts';
 import { MAX_TURNS, update } from './transcript.ts';
 import { historyPage, historyText } from './history.ts';
@@ -26,6 +26,7 @@ import { RunAuthorization } from './authorization.ts';
 import { InteractiveApproval, automaticApproval } from './approval.ts';
 import type { Providers } from './providers.ts';
 import { commandPolicy, commandPolicyOperation, TRUSTED_INSTRUCTIONS } from './command/policy.ts';
+import type { TemplateEntry } from './templates.ts';
 
 type Session = ToolState & {
   harness?: Harness; root?: Conversation; watch?: ConversationWatch; finished?: Promise<void>;
@@ -33,6 +34,8 @@ type Session = ToolState & {
   /** Set once the run's own input is in the conversation store; steering needs a run to join. */
   started?: boolean;
   steered: Map<string, Submission>;
+  /** The person's prompt templates, found when the run started. */
+  templates?: TemplateEntry[];
 };
 type Query = { minEntryId?: number; maxEntryId?: number; order: 'ascending' | 'descending' };
 /** Inputs one thread may hold behind its run. */
@@ -151,6 +154,12 @@ export class Runtime {
         return { thread: session.snapshot };
       }
       case 'command_policy': case 'set_command_policy': return commandPolicyOperation(this.store, request);
+      case 'agent_resources': {
+        // The same discovery a run in this checkout would make, under its current policy.
+        const root = await checkout(String(request.checkout));
+        const trusted = commandPolicy(this.store, root, await rootIdentity(root)) === 'trusted';
+        return report(root, trusted, await this.resources(root, trusted, true));
+      }
       case 'rename_thread': {
         const snapshot = this.snapshot(String(request.thread_id));
         const title = customTitle(String(request.title));
@@ -246,8 +255,8 @@ export class Runtime {
     });
   }
   registry(state: ToolState) { return registry(state); }
-  /** The person's Pi skills and instructions; a test runtime overrides it to stay independent of the machine. */
-  resources(checkout: string, trusted: boolean) { return discover(checkout, trusted, { protect: [this.directory] }); }
+  /** The person's Pi setup; a test runtime overrides it to stay independent of the machine. */
+  resources(checkout: string, trusted: boolean, describe = false) { return discover(checkout, trusted, { protect: [this.directory], describe }); }
   async syncInputs(session: Session, all = false) {
     for (const input of session.inputs) {
       const steered = session.steered.has(input.request_id);
@@ -359,7 +368,7 @@ export class Runtime {
       if (input.queued?.mode !== 'steer' || session.steered.has(input.request_id)) continue;
       try {
         session.steered.set(input.request_id, await session.root.submit(
-          { type: 'input', requestId: steerKey(input.request_id), content: await expandSkill(input.text, session.skills ?? []), whenBusy: 'steer', whenIdle: 'reject' }, context));
+          { type: 'input', requestId: steerKey(input.request_id), content: await expandInput(input.text, session), whenBusy: 'steer', whenIdle: 'reject' }, context));
       } catch { /* The run is ending. The input stays queued and starts a run of its own. */ }
     }
   }
@@ -385,7 +394,7 @@ export class Runtime {
   /** The run's own input, or a continuation when a crash hid that an earlier run already took it as steering. */
   private async draft(session: Session, requestId: string, text: string): Promise<SubmissionDraft> {
     const earlier = await session.harness!.commit(tx => tx.submissionByRequest(session.root!.id, steerKey(requestId)), context);
-    if (earlier?.type !== 'input' || earlier.entry === undefined) return { type: 'input', requestId, content: await expandSkill(text, session.skills ?? []) };
+    if (earlier?.type !== 'input' || earlier.entry === undefined) return { type: 'input', requestId, content: await expandInput(text, session) };
     this.store.place(session.snapshot.id, requestId, Number(earlier.entry));
     session.inputs = this.store.inputs(session.snapshot.id);
     return { type: 'continue' };
@@ -412,7 +421,7 @@ export class Runtime {
       // The person's own Pi setup: user-level instructions, then the project's, then skills.
       // Project skills need the trust that trusted command mode already expresses.
       const resources = await this.resources(snapshot.checkout, session.commandPolicy === 'trusted');
-      session.skills = resources.skills;
+      session.skills = resources.skills; session.templates = resources.templates;
       if (resources.instructions) instructions += `\nUser instructions (${resources.instructions.path}):\n` + resources.instructions.text;
       try {
         await lstat(join(snapshot.checkout, 'AGENTS.md'));

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { ConversationView, EntryRecord } from '@earendil-works/pi-durable';
-import { legacy, validate, view } from '../src/protocol.ts';
+import { legacy, readsAsTyped, validate, view } from '../src/protocol.ts';
 import type { Snapshot } from '../src/protocol.ts';
 import { boundSnapshot, update } from '../src/transcript.ts';
 import { historyPage, historyText, INLINE_UNITS } from '../src/history.ts';
@@ -274,4 +274,9 @@ test('a placed input reads as typed in history, though the model received it exp
   assert.equal(item.id, 'request-typed');
   assert.equal(item.type === 'message' && item.text, '/skill:notes for v1.2');
   assert.equal((await historyText(from, 'p1', 0)).text, '/skill:notes for v1.2');
+});
+
+test('a /skill: input reads back as typed; a template reads back as the model received it', () => {
+  assert.ok(readsAsTyped('/skill:notes for v1.2'));
+  for (const text of ['/review src/main.rs', 'plain', '', undefined]) assert.ok(!readsAsTyped(text), String(text));
 });

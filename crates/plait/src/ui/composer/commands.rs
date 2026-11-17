@@ -1,9 +1,12 @@
-//! Local commands offered when a draft starts with `/`.
+//! Commands offered when a draft starts with `/`: the app's own, then the
+//! skills and prompt templates of the person's Pi setup.
 //!
-//! A command names something the app already does. The composer only reports
-//! the choice; its parent performs it. To add one: add a `CommandId`, a row in
-//! `COMMANDS`, and an arm where the parent handles `ComposerEvent::Command`.
+//! A local command names something the app already does. The composer only
+//! reports the choice; its parent performs it. To add one: add a `CommandId`, a
+//! row in `COMMANDS`, and an arm where the parent handles `ComposerEvent::Command`.
+//! An agent command only inserts its text; the runtime expands it on send.
 
+use gpui::SharedString;
 use plait_core::fuzzy::fuzzy_match;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -64,26 +67,82 @@ pub const COMMANDS: &[Command] = &[
     },
 ];
 
-/// A command that matches the typed query.
-pub(super) struct CommandMatch {
-    pub command: &'static Command,
+/// A skill or prompt template from the person's Pi setup, with every string
+/// the list draws made once, when the setup is read, not per keystroke.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentCommand {
+    /// What is typed after `/`: `skill:name`, or a template's name.
+    pub name: SharedString,
+    /// The name with its slash, as drawn and inserted.
+    pub label: SharedString,
+    /// One short line: a template's argument hint and the description.
+    pub detail: SharedString,
+    /// What assistive technology reads for the row.
+    pub spoken: SharedString,
+}
+
+impl AgentCommand {
+    pub fn new(name: String, detail: String) -> Self {
+        let label = format!("/{name}");
+        Self {
+            spoken: format!("{label}: {detail}").into(),
+            label: label.into(),
+            name: name.into(),
+            detail: detail.into(),
+        }
+    }
+}
+
+/// An item that matches the typed query.
+pub(super) struct CommandMatch<'a, T> {
+    pub command: &'a T,
     /// Matched byte offsets in the name, or in the detail when only it matched.
     pub name_matches: Vec<usize>,
     pub detail_matches: Vec<usize>,
 }
 
-/// Commands matching `query`, best first; ties keep the table's order. A name
-/// match always ranks above a match found only in the description.
-pub(super) fn matching(commands: &'static [Command], query: &str, busy: bool) -> Vec<CommandMatch> {
-    let mut found: Vec<(bool, i32, CommandMatch)> = commands
-        .iter()
-        .filter(|command| busy || !command.needs_run)
+/// Local commands matching `query`, best first; ties keep the table's order.
+pub(super) fn matching(
+    commands: &'static [Command],
+    query: &str,
+    busy: bool,
+) -> Vec<CommandMatch<'static, Command>> {
+    rank(
+        commands.iter().filter(|command| busy || !command.needs_run),
+        query,
+        |command| (command.name, command.detail),
+    )
+}
+
+/// Agent commands matching `query`, best first, leaving out any name a local
+/// command already has: the app's own command wins a clash.
+pub(super) fn matching_agent<'a>(
+    commands: &'a [AgentCommand],
+    query: &str,
+) -> Vec<CommandMatch<'a, AgentCommand>> {
+    rank(
+        commands
+            .iter()
+            .filter(|command| COMMANDS.iter().all(|local| local.name != &*command.name)),
+        query,
+        |command| (&command.name, &command.detail),
+    )
+}
+
+/// A name match always ranks above a match found only in the description.
+fn rank<'a, T>(
+    items: impl Iterator<Item = &'a T>,
+    query: &str,
+    text: impl Fn(&T) -> (&str, &str),
+) -> Vec<CommandMatch<'a, T>> {
+    let mut found: Vec<(bool, i32, CommandMatch<'a, T>)> = items
         .filter_map(|command| {
-            let by_name = fuzzy_match(query, command.name);
+            let (name, detail) = text(command);
+            let by_name = fuzzy_match(query, name);
             // A description is prose: only an unbroken run in it is a real match.
             let by_detail = by_name
                 .is_none()
-                .then(|| fuzzy_match(query, command.detail))
+                .then(|| fuzzy_match(query, detail))
                 .flatten()
                 .filter(|found| {
                     found
@@ -146,6 +205,29 @@ mod tests {
         let by_detail = &matching(COMMANDS, "git", false)[0];
         assert!(by_detail.name_matches.is_empty());
         assert_eq!(by_detail.detail_matches, [8, 9, 10]);
+    }
+
+    #[test]
+    fn agent_commands_follow_the_same_ranking_and_never_shadow_a_local_one() {
+        let agent = [
+            AgentCommand::new("skill:release-notes".into(), "Write release notes".into()),
+            AgentCommand::new("review".into(), "<path> · Review a change".into()),
+            AgentCommand::new("new".into(), "A template named like a local command".into()),
+        ];
+        let names = |query: &str| -> Vec<String> {
+            matching_agent(&agent, query)
+                .iter()
+                .map(|found| found.command.name.to_string())
+                .collect()
+        };
+        assert_eq!(names(""), ["skill:release-notes", "review"]);
+        assert_eq!(names("rev"), ["review"]);
+        assert_eq!(names("rel"), ["skill:release-notes"]);
+        assert_eq!(names("skill:"), ["skill:release-notes"]);
+        assert_eq!(names("change"), ["review"]);
+        assert!(names("new").is_empty());
+        assert_eq!(agent[0].label, "/skill:release-notes");
+        assert_eq!(agent[1].spoken, "/review: <path> · Review a change");
     }
 
     #[test]

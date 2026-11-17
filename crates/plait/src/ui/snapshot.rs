@@ -1949,6 +1949,46 @@ fn composer_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         assert_eq!(composer.suggestion_names()[0], "/settings: Open settings");
     });
     harness.capture(&format!("composer-command-filtered-{suffix}"));
+
+    // Sample skills and templates follow the app's own commands and only insert text.
+    harness.composer(|composer, window, cx| {
+        use super::composer::AgentCommand;
+        composer.set_agent_commands(
+            std::sync::Arc::from([
+                AgentCommand::new(
+                    "skill:release-notes".into(),
+                    "Write release notes from merged changes".into(),
+                ),
+                AgentCommand::new("review".into(), "<path> · Review a change".into()),
+                AgentCommand::new("new".into(), "Shadowed by the app's own /new".into()),
+            ]),
+            cx,
+        );
+        composer.restore_draft(String::new(), 7, None, cx);
+        composer.type_text("/", window, cx);
+    });
+    let listed = harness.suggestions();
+    assert_eq!(
+        listed.len(),
+        7,
+        "five local commands, then two of the person's"
+    );
+    assert!(listed[5].starts_with("/skill:release-notes") && listed[6].starts_with("/review"));
+    harness.capture(&format!("composer-agent-commands-{suffix}"));
+    harness.composer(|composer, window, cx| {
+        composer.type_text("revi", window, cx);
+        assert_eq!(
+            composer.suggestion_names(),
+            ["/review: <path> · Review a change"]
+        );
+        assert!(composer.accept_suggestion(window, cx));
+        assert_eq!(
+            composer.text(),
+            "/review ",
+            "choosing inserts the command and runs nothing"
+        );
+        assert!(composer.suggestion_names().is_empty());
+    });
     harness.update(|plait, window, cx| window.focus(&plait.focus, cx));
     harness.connect(repository, false);
 }
@@ -1968,7 +2008,7 @@ fn theme_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.capture(&format!("light-changes-{suffix}"));
     harness.update(|plait, _, _| {
         plait.settings_open = true;
-        plait.settings_section = 4;
+        plait.settings_section = 5;
     });
     harness.capture(&format!("light-settings-view-{suffix}"));
     force(harness, false);
@@ -2162,7 +2202,7 @@ fn settings_controls_walk(harness: &mut Harness, repository: &Path, suffix: &str
     harness.connect(repository, false);
     harness.update(|plait, window, cx| {
         plait.show_settings(true, window, cx);
-        plait.settings_section = 3;
+        plait.settings_section = 4;
         plait
             .keyboard
             .search
@@ -2461,6 +2501,49 @@ fn settings_controls_walk(harness: &mut Harness, repository: &Path, suffix: &str
         plait.policy.value = Some(CommandPolicy::Trusted);
     });
     harness.capture(&format!("policy-trusted-{suffix}"));
+    harness.update(|plait, _, _| {
+        use plait_core::host::agent::*;
+        let skill = |name: &str, description: &str, origin, model_invocation| Skill {
+            name: name.into(),
+            description: description.into(),
+            origin,
+            path: format!("/opt/sample-agent/skills/{name}/SKILL.md").into(),
+            model_invocation,
+        };
+        let sample = AgentResources {
+            checkout: plait.host.checkout.clone(),
+            trusted: false,
+            instructions: Some(Instructions {
+                path: "/opt/sample-agent/AGENTS.md".into(),
+                bytes: 2150,
+            }),
+            skills: (0..14)
+                .map(|index| {
+                    skill(
+                        &format!("sample-skill-{index:02}"),
+                        "A sample skill description, long enough to show how one line is cut short when a description runs on past the width of the settings column.",
+                        Origin::User,
+                        index != 1,
+                    )
+                })
+                .chain([skill("packaged", "From an installed Pi package.", Origin::Package, true)])
+                .collect(),
+            templates: vec![Template {
+                name: "review".into(),
+                description: "Review a change".into(),
+                argument_hint: Some("<path> [focus]".into()),
+                origin: Origin::User,
+                path: "/opt/sample-agent/prompts/review.md".into(),
+            }],
+            problems: vec![Problem {
+                path: Some("/opt/sample-agent/skills/broken/SKILL.md".into()),
+                message: "description is required".into(),
+            }],
+        };
+        plait.settings_section = 3;
+        plait.agent.view = Some(std::sync::Arc::new(super::settings_agent::AgentView::new(sample)));
+    });
+    harness.capture(&format!("agent-settings-{suffix}"));
     harness.update(|plait, window, cx| {
         plait.show_settings(false, window, cx);
         plait.settings_section = 0;

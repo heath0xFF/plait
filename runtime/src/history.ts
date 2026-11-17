@@ -57,7 +57,7 @@ function entryUnit(entry: EntryRecord, placed: Map<number, Placed>): Unit {
   for (const [index, message] of ((entry.model ?? []) as readonly Message[]).entries()) {
     const ref = `e${id}.${index}`;
     if (message.role === 'user' || message.role === 'assistant') {
-      // A placed input reads as typed; the model may have received it expanded.
+      // A placed `/skill:` input reads as typed (the store gives no text for others).
       const input = message.role === 'user' ? placed.get(id) : undefined;
       const typed = input?.text !== undefined;
       const text = typed ? input!.text! : messageText(message); const reasoning = message.role === 'assistant' ? reasoningText(message) : '';

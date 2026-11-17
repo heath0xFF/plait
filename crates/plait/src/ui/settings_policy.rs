@@ -86,6 +86,9 @@ impl Plait {
                 this.policy.busy = false;
                 match result {
                     Ok(reply) => {
+                        if value.is_some() {
+                            this.forget_agent();
+                        }
                         this.policy.value = Some(reply.policy);
                         this.policy.note =
                             value.map(|_| "Saved. Active runs keep their original policy.".into());

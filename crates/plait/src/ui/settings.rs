@@ -1,5 +1,5 @@
-//! The Settings page: host status first, then Models, Providers, Approvals, Keyboard,
-//! and About and updates.
+//! The Settings page: host status first, then Models, Providers, Approvals, Agent,
+//! Keyboard, View, and About and updates.
 
 use super::{
     Plait,
@@ -336,6 +336,7 @@ impl Plait {
                         "Models",
                         "Providers",
                         "Approvals",
+                        "Agent",
                         "Keyboard",
                         "View",
                         "About",
@@ -361,6 +362,9 @@ impl Plait {
                                     this.close_provider_form(cx);
                                 }
                                 this.settings_section = index;
+                                if index == 3 {
+                                    this.refresh_agent(cx);
+                                }
                                 this.settings_scroll.set_offset(point(px(0.), px(0.)));
                                 cx.notify();
                             }),
@@ -380,9 +384,10 @@ impl Plait {
                                 })
                                 .child(self.policy_settings(cx))
                                 .into_any_element(),
-                            3 => self.keyboard_settings(cx).into_any_element(),
-                            4 => self.view_settings(cx).into_any_element(),
-                            5 => self.build_details(cx).into_any_element(),
+                            3 => self.agent_settings(cx).into_any_element(),
+                            4 => self.keyboard_settings(cx).into_any_element(),
+                            5 => self.view_settings(cx).into_any_element(),
+                            6 => self.build_details(cx).into_any_element(),
                             _ => self.model_settings(cx).into_any_element(),
                         }),
                 ),
