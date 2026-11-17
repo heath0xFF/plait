@@ -11,7 +11,7 @@ import type { Conversation, ConversationRetryPolicy, ConversationWatch, Cursor, 
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
 import { openNodeSqliteDatabase } from '@earendil-works/pi-durable/storage/sqlite/node';
 import { fail, failure, queuedView, summaryView, THINKING_LEVELS, validate, version, view } from './protocol.ts';
-import type { ApprovalMode, ModelChoice, Protocol, QueueMode, Snapshot, InputRecord, ThinkingLevel } from './protocol.ts';
+import type { ApprovalMode, HarnessId, ModelChoice, Protocol, QueueMode, Snapshot, InputRecord, ThinkingLevel } from './protocol.ts';
 import { Store } from './store.ts';
 import { checkout, dirtyPaths, fileAction, identities, acquireCheckout, rootIdentity, checkRoot, pathKey } from './safety.ts';
 import { registry } from './tools.ts';
@@ -31,6 +31,9 @@ import { CODEX_MODES, CODEX_PROVIDER, CodexHarness, PI_ENTRY, codexEffort, codex
 import type { Lease } from './harness.ts';
 import { CodexEntries } from './codex/entries.ts';
 import { CodexRun } from './codex/run.ts';
+import { CLAUDE_MODES, CLAUDE_PROVIDER, ClaudeHarness } from './claude/harness.ts';
+import { ClaudeRun } from './claude/run.ts';
+import { sdkDirectory } from './claude/sdk.ts';
 
 type Session = ToolState & {
   harness?: Harness; root?: Conversation; watch?: ConversationWatch; finished?: Promise<void>;
@@ -42,13 +45,15 @@ type Session = ToolState & {
   templates?: TemplateEntry[];
   /** A Codex thread's turn, its server lease, and its transcript store. */
   codex?: { run?: CodexRun; lease?: Lease; entries?: CodexEntries };
+  /** A Claude Code thread's run and its transcript store. */
+  claude?: { run?: ClaudeRun; entries?: CodexEntries };
 };
 type Query = { minEntryId?: number; maxEntryId?: number; order: 'ascending' | 'descending' };
 /** Inputs one thread may hold behind its run. */
 const QUEUE_LIMIT = 16;
 /** Marks a steering input in the conversation store, apart from the ID a later run of its own would use. */
 const steerKey = (requestId: string) => `steer:${requestId}`;
-/** Stands for a steering message Codex took; it has no submission to withdraw. */
+/** Stands for a steering message Codex or Claude Code took; it has no submission to withdraw. */
 const JOINED = { abort: async () => 'already_placed' } as unknown as Submission;
 /** The supported level closest to `wanted`, preferring the lower one; `undefined` when there are none. */
 function nearest(levels: ThinkingLevel[], wanted: ThinkingLevel): ThinkingLevel | undefined {
@@ -73,6 +78,8 @@ export class Runtime {
   maxTurns = MAX_TURNS;
   /** The person's Codex; a test runtime gives it a scripted app-server. */
   codex: CodexHarness;
+  /** The person's Claude Code; a test runtime points it at the fake and the dev copy of the SDK. */
+  claude: ClaudeHarness;
   private closing = false;
   private gates = new Map<string, Promise<unknown>>();
   private listeners = new Set<(id: string) => void>();
@@ -96,6 +103,25 @@ export class Runtime {
     this.directory = directory; this.models = models; this.authenticated = authenticated;
     this.store = new Store(directory);
     this.codex = new CodexHarness(this.store);
+    this.claude = new ClaudeHarness(this.store, { sdk: sdkDirectory(directory), cwd: directory });
+  }
+  /** Every harness, Pi first. */
+  private async harnesses(fresh?: HarnessId) {
+    const [codex, claude] = await Promise.all([this.codex.entry(fresh === 'codex'), this.claude.entry(fresh === 'claude')]);
+    return { harnesses: [PI_ENTRY, codex, claude] };
+  }
+  /** The mode list of a harness that has its own modes; Pi has none. */
+  private modes(harness: HarnessId | undefined) {
+    return harness === 'codex' ? CODEX_MODES : harness === 'claude' ? CLAUDE_MODES : undefined;
+  }
+  private checkMode(harness: HarnessId | undefined, mode: unknown) {
+    const modes = this.modes(harness);
+    if (!modes) fail('invalid_request', "Pi threads use Plait's approval mode, not a harness mode.");
+    if (!modes.some(candidate => candidate.id === mode)) fail('invalid_request', `${harness === 'codex' ? 'Codex' : 'Claude Code'} has no such mode.`);
+  }
+  /** A harness's thinking levels for one of its models. */
+  private async levels(harness: HarnessId, modelId: string) {
+    return harness === 'codex' ? codexLevels((await this.codex.model(modelId)).efforts) : (await this.claude.model(modelId)).levels;
   }
   catalog(protocol: Protocol = 1) {
     return this.models.getModels().map(model => ({
@@ -106,6 +132,7 @@ export class Runtime {
   /** Refuses a model the thread's harness cannot run now. Synchronous, so admission timing is the same for both harnesses. */
   usable(snapshot: Snapshot) {
     if (snapshot.harness?.id === 'codex') this.codex.refuse(snapshot.model.model_id);
+    else if (snapshot.harness?.id === 'claude') this.claude.refuse(snapshot.model.model_id);
     else this.model(snapshot.model);
   }
   model(choice: ModelChoice) {
@@ -145,19 +172,18 @@ export class Runtime {
         const root = await checkout(String(request.checkout));
         const choice = { provider: String(request.provider), model_id: String(request.model_id) };
         const requested = request.thinking as ThinkingLevel | undefined;
-        const codex = request.harness === 'codex';
+        const harness = (request.harness ?? 'pi') as HarnessId;
         // Appended only when given, so a retried request from an older client matches its record.
         const mode = request.mode as string | undefined;
-        const input = [root, choice.provider, choice.model_id, ...(requested === undefined ? [] : [requested]), ...(codex ? ['codex'] : []), ...(mode === undefined ? [] : [`mode:${mode}`])];
+        const input = [root, choice.provider, choice.model_id, ...(requested === undefined ? [] : [requested]), ...(harness === 'pi' ? [] : [harness]), ...(mode === undefined ? [] : [`mode:${mode}`])];
         const duplicate = this.store.duplicate('create', String(request.request_id), input);
         if (duplicate !== undefined) return duplicate;
-        // A provider names its harness, so a model can never run in the other one.
-        if (codex !== (choice.provider === CODEX_PROVIDER)) fail('invalid_request', 'Choose a model from the harness that runs the thread.');
-        const levels = codex ? codexLevels((await this.codex.model(choice.model_id)).efforts) : (this.model(choice), undefined);
+        // A provider names its harness, so a model can never run in another one.
+        if (harness !== providerHarness(choice.provider)) fail('invalid_request', 'Choose a model from the harness that runs the thread.');
+        const levels = harness === 'pi' ? (this.model(choice), undefined) : await this.levels(harness, choice.model_id);
         const snapshot: Snapshot = { id: randomUUID(), checkout: root, model: choice, status: 'idle', messages: [], live_text: '', tools: [], pending_approval: null, error: null, truncated: false };
-        if (mode !== undefined && !codex) fail('invalid_request', "Pi threads use Plait's approval mode, not a harness mode.");
-        if (mode !== undefined && !CODEX_MODES.some(candidate => candidate.id === mode)) fail('invalid_request', 'Codex has no such mode.');
-        if (codex) snapshot.harness = { id: 'codex', version: null, mode: mode ?? this.codex.defaultMode(), reported: null };
+        if (mode !== undefined) this.checkMode(harness, mode);
+        if (harness !== 'pi') snapshot.harness = { id: harness, version: null, mode: mode ?? (harness === 'codex' ? this.codex : this.claude).defaultMode(), reported: null };
         // A starting level is a preference, not a demand: use the nearest one the model has.
         if (requested !== undefined) {
           snapshot.thinking_level = levels ? nearest(levels, requested) : clampThinkingLevel(this.models.getModel(choice.provider, choice.model_id)!, requested);
@@ -167,16 +193,22 @@ export class Runtime {
         this.changed('#');
         return result;
       }
-      case 'harnesses': return { harnesses: [PI_ENTRY, await this.codex.entry()] };
+      case 'harnesses': return this.harnesses();
       case 'set_harness_path': {
-        if (request.harness !== 'codex') fail('invalid_request', 'Only Codex runs from a chosen path.');
-        this.codex.setPath(request.path as string | undefined);
-        return { harnesses: [PI_ENTRY, await this.codex.entry(true)] };
+        if (request.harness === 'pi') fail('invalid_request', 'Pi runs inside the host, not from a chosen path.');
+        (request.harness === 'codex' ? this.codex : this.claude).setPath(request.path as string | undefined);
+        return this.harnesses(request.harness as HarnessId);
       }
       case 'set_harness_mode': {
-        if (request.harness !== 'codex') fail('invalid_request', "Pi threads use Plait's approval mode, not a harness mode.");
-        this.codex.setDefaultMode(String(request.mode));
-        return { harnesses: [PI_ENTRY, await this.codex.entry()] };
+        if (request.harness === 'pi') fail('invalid_request', "Pi threads use Plait's approval mode, not a harness mode.");
+        (request.harness === 'codex' ? this.codex : this.claude).setDefaultMode(String(request.mode));
+        return this.harnesses();
+      }
+      // The only operation that reaches the network for a harness: it downloads the pinned Agent SDK.
+      case 'set_up_harness': {
+        if (request.harness !== 'claude') fail('invalid_request', 'Only Claude Code threads need setting up.');
+        await this.claude.setUp();
+        return this.harnesses('claude');
       }
       case 'watch': return { thread: this.snapshot(String(request.thread_id)) };
       case 'submit': return this.submit(String(request.thread_id), String(request.request_id), String(request.text),
@@ -242,24 +274,24 @@ export class Runtime {
   private async configure(id: string, request: ReturnType<typeof validate>) {
     const snapshot = this.snapshot(id);
     if (request.mode !== undefined) {
-      if (snapshot.harness?.id !== 'codex') fail('invalid_request', "Pi threads use Plait's approval mode, not a harness mode.");
-      if (!CODEX_MODES.some(candidate => candidate.id === request.mode)) fail('invalid_request', 'Codex has no such mode.');
-      // A mode alone may change while a turn runs; Codex takes it from the next turn. What Codex
-      // reported was for the old mode, so it is cleared until the next turn reports again.
+      this.checkMode(snapshot.harness?.id, request.mode);
+      // A mode alone may change while a run goes on: Codex takes it from the next turn, Claude Code
+      // at once. What the harness reported was for the old mode, so it is cleared until it reports again.
       if (request.provider === undefined && request.thinking === undefined) {
-        snapshot.harness = { ...snapshot.harness, mode: String(request.mode), reported: null };
+        snapshot.harness = { ...snapshot.harness!, mode: String(request.mode), reported: null };
         this.save(snapshot);
+        void this.sessions.get(id)?.claude?.run?.setMode(String(request.mode));
         return snapshot;
       }
     }
     if (this.sessions.has(id)) fail('busy', 'Stop the run or wait for it before changing the model or thinking level.');
     if (request.mode !== undefined) snapshot.harness = { ...snapshot.harness!, mode: String(request.mode), reported: null };
     const choice = request.provider === undefined ? snapshot.model : { provider: String(request.provider), model_id: String(request.model_id) };
-    const codex = snapshot.harness?.id === 'codex';
+    const harness = snapshot.harness?.id ?? 'pi';
     // A thread stays in its harness.
-    if (codex !== (choice.provider === CODEX_PROVIDER)) fail('invalid_request', 'Choose a model from the harness that runs the thread.');
-    if (codex) {
-      const levels = codexLevels((await this.codex.model(choice.model_id)).efforts);
+    if (harness !== providerHarness(choice.provider)) fail('invalid_request', 'Choose a model from the harness that runs the thread.');
+    if (harness !== 'pi') {
+      const levels = await this.levels(harness, choice.model_id);
       const requested = request.thinking as ThinkingLevel | undefined;
       if (requested !== undefined && !levels.includes(requested)) fail('invalid_request', `This model does not support thinking level ${requested}.`);
       snapshot.model = choice; snapshot.thinking_level = requested ?? nearest(levels, snapshot.thinking_level ?? 'off');
@@ -316,10 +348,13 @@ export class Runtime {
       // A Codex thread's translated transcript is its own store, read the same way.
       const stored = (codex: CodexEntries) => async (query: Query, limit: number) => codex.entries(query, limit) as unknown as EntryRecord[];
       if (session?.codex?.entries) return work({ ...base, entries: stored(session.codex.entries) });
-      const codexPath = join(this.directory, `${id}.codex.sqlite`);
-      if (existsSync(codexPath)) {
-        const codex = new CodexEntries(codexPath, { readOnly: true });
-        try { return await work({ ...base, entries: stored(codex) }); } finally { codex.close(); }
+      const claude = session?.claude?.entries;
+      if (claude) return work({ ...base, entries: stored(claude) });
+      for (const kind of ['codex', 'claude']) {
+        const storedPath = join(this.directory, `${id}.${kind}.sqlite`);
+        if (!existsSync(storedPath)) continue;
+        const file = new CodexEntries(storedPath, { readOnly: true });
+        try { return await work({ ...base, entries: stored(file) }); } finally { file.close(); }
       }
       const path = join(this.directory, `${id}.sqlite`);
       if (!existsSync(path)) return work(base);
@@ -441,6 +476,7 @@ export class Runtime {
   /** Offers queued steering inputs to the run that is active now, under that run's authorization. */
   private async steer(session: Session) {
     if (session.codex) return this.steerCodex(session);
+    if (session.claude) return this.steerClaude(session);
     if (!session.started || !session.root || session.authorization.signal.aborted) return;
     for (const input of session.inputs) {
       if (input.queued?.mode !== 'steer' || session.steered.has(input.request_id)) continue;
@@ -459,6 +495,15 @@ export class Runtime {
       // Marked first, so a second submit during the request does not send it twice.
       session.steered.set(input.request_id, JOINED);
       if (!await run.steer(input.request_id, input.text)) session.steered.delete(input.request_id);
+    }
+  }
+  /** Claude Code takes a steering message at its next step, or as the next turn; either way it cannot be withdrawn. */
+  private steerClaude(session: Session) {
+    const run = session.claude?.run;
+    if (!session.started || !run) return;
+    for (const input of session.inputs) {
+      if (input.queued?.mode !== 'steer' || session.steered.has(input.request_id)) continue;
+      if (run.steer(input.request_id, input.text)) session.steered.set(input.request_id, JOINED);
     }
   }
   /** Starts the next queued input as a new run with a new authorization in its own mode. */
@@ -494,6 +539,11 @@ export class Runtime {
       session.codex = undefined;
       return;
     }
+    if (session.claude) {
+      session.claude.run?.close(); session.claude.entries?.close();
+      session.claude = undefined;
+      return;
+    }
     await session.watch?.stop();
     // A steering input the run never took must not wait in the conversation store: it starts its own run later.
     if (session.harness && session.root && session.steered.size) {
@@ -507,6 +557,7 @@ export class Runtime {
     const snapshot = session.snapshot;
     try {
       if (snapshot.harness?.id === 'codex') return await this.runCodex(session, requestId, text);
+      if (snapshot.harness?.id === 'claude') return await this.runClaude(session, requestId, text);
       const baseline = await dirtyPaths(snapshot.checkout);
       session.owned = await restoreOwned(snapshot.checkout, baseline, this.store.owned(snapshot.id), session.rootIdentity, session.lease?.fd);
       session.baseline = baseline.filter(path => !session.owned.has(pathKey(path)));
@@ -588,6 +639,39 @@ export class Runtime {
     await this.steer(session);
     await turn;
   }
+  /** A Claude Code thread's run: one Claude Code process, in the thread's mode, with Plait's approvals. */
+  private async runClaude(session: Session, requestId: string, text: string) {
+    const snapshot = session.snapshot;
+    const id = snapshot.id;
+    // Shown on edit approvals only; Claude Code does not honor Plait's guard on these files.
+    const dirty = new Set(await dirtyPaths(snapshot.checkout).catch(() => [] as string[]));
+    const launch = await this.claude.launch();
+    const mode = snapshot.harness?.mode ?? this.claude.defaultMode();
+    snapshot.harness = { ...snapshot.harness, id: 'claude', version: launch.install.version ?? null, mode };
+    const entries = await this.gate(id, async () => new CodexEntries(join(this.directory, `${id}.claude.sqlite`)));
+    session.claude = { entries };
+    const run = new ClaudeRun({
+      snapshot, mode, launch, model: snapshot.model.model_id, level: snapshot.thinking_level, entries,
+      approvals: session.approvals, signal: session.authorization.signal, dirty,
+      inputs: () => session.inputs,
+      place: (request, entry) => {
+        this.store.place(id, request, entry);
+        session.inputs = this.store.inputs(id);
+        snapshot.queued = this.store.queue(id).map(queuedView);
+      },
+      persist: head => this.save(snapshot, head), publish: () => this.changed(id),
+      changed: path => this.store.recordWrite(id, path),
+      initialized: init => this.claude.observe(launch, init),
+      opened: () => void this.steer(session),
+    });
+    session.claude.run = run;
+    this.save(snapshot);
+    if (session.authorization.signal.aborted) return;
+    session.authorization.activate();
+    const turn = run.run(requestId, text);
+    session.started = true;
+    await turn;
+  }
   async close() {
     this.closing = true;
     for (const session of this.sessions.values()) {
@@ -610,4 +694,9 @@ export class Runtime {
     try { return { ok: true, result: await this.handle(input) }; }
     catch (error) { return { ok: false, error: failure(error) }; }
   }
+}
+
+/** The harness a model's provider belongs to: Codex and Claude Code each have one provider name. */
+function providerHarness(provider: string): HarnessId {
+  return provider === CODEX_PROVIDER ? 'codex' : provider === CLAUDE_PROVIDER ? 'claude' : 'pi';
 }

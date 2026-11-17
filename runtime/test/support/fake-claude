@@ -1,0 +1,3 @@
+#!/bin/sh
+# Runs the scripted fake Claude Code. Tests set FAKE_CLAUDE_NODE to their Node executable.
+exec "${FAKE_CLAUDE_NODE:-node}" "$(dirname "$0")/fake-claude.ts" "$@"

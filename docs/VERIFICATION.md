@@ -394,6 +394,61 @@ rebuilding the snapshot cost 0.16 ms on average and 0.71 ms at worst, under the
 also coalesced to one per 16 ms and are not written to disk. Frame cost in the
 desktop while a Codex thread streams has not been measured.
 
+## Claude Code
+
+Protocol tests accept `set_up_harness`, the `claude` harness, and its modes
+only with version 4, and refuse setting up any other harness. Setup tests
+build archives in the test and serve them through a stand-in for `fetch`, so
+nothing is downloaded: a hash mismatch, a registry error, a truncated archive,
+a path that climbs out with `..`, a link, an archive missing the license, and
+a compression bomb each install nothing; a good archive leaves exactly the
+four kept files in place with no staging folder; a second setup downloads
+nothing; and a changed `sdk.mjs` is refused at load and replaced by setting
+up again. A test checks that the pinned URL and `integrity` are the ones
+`package-lock.json` records, that the SDK is a development dependency only,
+and that the dev copy's `sdk.mjs` has the pinned SHA-256. The tar reader was
+also run on the real 0.3.326 tarball, whose SHA-512 matched the pin, and setup
+with that tarball finished in about 20 ms.
+
+Runtime tests drive Claude Code threads through the SDK's dev copy and a
+scripted stand-in for `claude` that follows the SDK's control protocol and,
+like Claude Code, asks nothing in Auto or Bypass and nothing for edits in
+Accept edits. They cover: the entry listed as `setup_required` before setup
+with nothing looked for or started, threads refused then, and a run refused
+once the copy is gone; setup through the operation, then the normal checks;
+an Ask turn's command approval, its transcript, usage, and reported mode, and
+history read again after a restart without starting Claude Code; Auto, the
+default, never asking; a second run resuming the same session; a mode change
+during a run reaching Claude Code and `reported` following it; a steering
+message placed once in the same process; Stop interrupting, cancelling what
+was queued, and running nothing after; an edit listed as changed; Claude Code
+exiting mid-turn and a lost session each failing with a fixed message; and a
+signed-out Claude Code, a model it does not offer, and another harness's model
+or mode refused. The adapter's own tests check version grading, sign-in
+parsing, the model list, approvals and their replies, the transcript
+translation through the same `update()` Pi threads use, and the session
+against the stand-in.
+
+Checked against a real Claude Code 2.1.326 without sending any message: the
+version and sign-in checks, the harness entry (ready, 14 models, about 0.26
+seconds including the SDK load), every flag a run starts it with, mode changes
+in every mode, and interrupting with no turn running. Opt-in live tests
+(`PLAIT_LIVE=claude npm run test:live` in `runtime/`) run real turns through
+the runtime on the smallest model Claude Code lists, with its own sign-in:
+Ask asking before a command and the approved command running, a second run
+recalling the first, a steering message placed and answered, a mode change
+during a run that Claude Code reports, Stop ending a turn within 15 seconds,
+and history reading after a restart without starting Claude Code. They passed
+against Claude Code 2.1.326, signed in with a Claude subscription, on
+2026-11-17. On one earlier run the model answered the Stop case without
+starting its command; the test now says so instead of timing out. Plan, the auto mode's own safety decisions, and MCP tool
+approvals are not covered by any live test.
+
+Measured on a replayed stream of 4,202 Claude Code events: translation cost
+about 0.15 µs per event, and translating and rebuilding the snapshot on every
+event about 52 µs per event, under the 5 ms target. Streaming updates are
+coalesced to one per 16 ms and are not written to disk.
+
 ## Files
 
 Core tests read text, binary, non-UTF-8, and oversized files; refuse symlinks,

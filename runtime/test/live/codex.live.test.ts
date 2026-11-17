@@ -71,8 +71,8 @@ test('Read only asks before writing; an approved edit lands and is listed as cha
   assert.ok(asked >= 1, 'Read only asked before the write');
   assert.match(await readFile(join(h.root, 'note.txt'), 'utf8'), /hello/);
   // An edit Codex makes with its edit tool is listed; one made by a shell command is not (docs/HOST.md).
-  const changed = (await h.call({ op: 'changed_files', thread_id: thread.id })).result.files as { path: string }[];
-  if (done.tools.some(tool => tool.name === 'edit')) assert.ok(changed.some(file => file.path === 'note.txt'), 'the edit is a changed file');
+  const changed = (await h.call({ op: 'changed_files', thread_id: thread.id })).result.files as string[];
+  if (done.tools.some(tool => tool.name === 'edit')) assert.ok(changed.includes('note.txt'), 'the edit is a changed file');
 });
 
 test('a steering message joins the running turn, and Stop ends a long one', live('codex'), async t => {

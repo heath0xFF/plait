@@ -25,11 +25,19 @@ test('version 4 operations and fields validate only with version 4', () => {
     { op: 'configure_thread', protocol_version: 4, thread_id: 't', mode: 'read_only' },
     { op: 'create_thread', protocol_version: 4, checkout: '/r', provider: 'codex', model_id: 'm', request_id: 'r', harness: 'codex' },
     { op: 'history', protocol_version: 4, thread_id: 't' },
+    { op: 'set_up_harness', protocol_version: 4, harness: 'claude' },
+    { op: 'create_thread', protocol_version: 4, checkout: '/r', provider: 'claude', model_id: 'default', request_id: 'r', harness: 'claude', mode: 'accept_edits' },
+    { op: 'set_harness_path', protocol_version: 4, harness: 'claude', path: '/opt/claude' },
+    { op: 'set_harness_mode', protocol_version: 4, harness: 'claude', mode: 'bypass' },
   ]) assert.doesNotThrow(() => validate(input), JSON.stringify(input));
   for (const input of [
     { op: 'harnesses', protocol_version: 3 }, { op: 'harnesses' },
     { op: 'create_thread', protocol_version: 3, checkout: '/r', provider: 'p', model_id: 'm', request_id: 'r', harness: 'pi' },
-    { op: 'create_thread', protocol_version: 4, checkout: '/r', provider: 'p', model_id: 'm', request_id: 'r', harness: 'claude' },
+    { op: 'create_thread', protocol_version: 4, checkout: '/r', provider: 'p', model_id: 'm', request_id: 'r', harness: 'gemini' },
+    { op: 'set_up_harness', protocol_version: 3, harness: 'claude' },
+    { op: 'set_up_harness', protocol_version: 4 },
+    { op: 'set_up_harness', protocol_version: 4, harness: 'claude', path: '/opt/sdk' },
+    { op: 'set_up_harness', protocol_version: 4, harness: 'antigravity' },
     { op: 'set_harness_path', protocol_version: 4, harness: 'codex', path: 'relative/codex' },
     { op: 'set_harness_path', protocol_version: 4, harness: 'codex', path: 7 },
     { op: 'set_harness_path', protocol_version: 4 },
@@ -97,7 +105,7 @@ test('the harness list checks Codex once and closes the server it started to ask
     find: async () => { finds++; return { state: 'ready', path: '/opt/codex', version: '0.169.0', message: 'ready' }; },
   });
   const reply = await host.handle({ op: 'harnesses', protocol_version: 4 }) as { harnesses: { id: string; state: string; models: { model_id: string; thinking_levels: string[] }[] | null }[] };
-  assert.deepEqual(reply.harnesses.map(entry => [entry.id, entry.state]), [['pi', 'ready'], ['codex', 'ready']]);
+  assert.deepEqual(reply.harnesses.map(entry => [entry.id, entry.state]), [['pi', 'ready'], ['codex', 'ready'], ['claude', 'setup_required']]);
   assert.equal(reply.harnesses[0].models, null);
   assert.deepEqual(reply.harnesses[1].models!.map(model => [model.model_id, model.thinking_levels]), [['gpt-test', ['low', 'medium']]]);
   assert.deepEqual(fake.servers, [{ closed: true }], 'a check leaves no Codex process behind');

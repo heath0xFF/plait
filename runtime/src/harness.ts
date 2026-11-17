@@ -3,7 +3,8 @@
 //
 // Pi ships with the host. Codex is the person's own install: Plait finds it,
 // checks its version, and asks it for its models and whether it is signed in.
-// Plait reads none of Codex's files or credentials.
+// Plait reads none of Codex's files or credentials. Claude Code is in
+// ./claude/harness.ts.
 import { hostAccount, loginEnvironment } from './command/login-environment.ts';
 import { codexAccount, codexModels, findCodex } from './codex/install.ts';
 import type { CodexInstall, CodexModel } from './codex/install.ts';
@@ -15,7 +16,8 @@ import type { HarnessId, HarnessMode, ThinkingLevel } from './protocol.ts';
 import type { ApprovalsReviewer, AskForApproval, SandboxMode, SandboxPolicy } from './codex/protocol.ts';
 import type { Store } from './store.ts';
 
-export type HarnessState = 'ready' | 'not_installed' | 'unsupported_version' | 'signed_out' | 'unavailable';
+/** `setup_required`: the harness needs a one-time download the person starts (Claude Code's Agent SDK). */
+export type HarnessState = 'ready' | 'not_installed' | 'unsupported_version' | 'signed_out' | 'unavailable' | 'setup_required';
 export type WireModel = {
   provider: string; model_id: string; name: string; authenticated: boolean;
   reasoning: boolean; thinking_levels: ThinkingLevel[]; context_window: number | null; input: string[];

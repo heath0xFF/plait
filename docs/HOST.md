@@ -471,7 +471,8 @@ When it starts or is taken, it leaves `queued` and appears in `messages` and
 
 ## Protocol version 4
 
-Version 4 adds agent harnesses: a thread may be run by Codex instead of Pi. It
+Version 4 adds agent harnesses: a thread may be run by Codex or Claude Code
+instead of Pi. It
 is negotiated as version 3 is, and every operation accepts
 `"protocol_version":4`. Replies to version 1, 2, and 3 requests are unchanged,
 and the operations and fields below are rejected there with `invalid_request`.
@@ -481,6 +482,7 @@ A client that steps down from 4 to 3 sees only Pi.
 {"op":"harnesses","protocol_version":4}
 {"op":"set_harness_path","protocol_version":4,"harness":"codex","path":"/absolute/path/to/codex"}
 {"op":"set_harness_mode","protocol_version":4,"harness":"codex","mode":"ask"}
+{"op":"set_up_harness","protocol_version":4,"harness":"claude"}
 {"op":"create_thread","protocol_version":4,"checkout":"/absolute/checkout","provider":"codex","model_id":"MODEL","request_id":"CLIENT_UUID","harness":"codex","thinking":"high","mode":"ask"}
 {"op":"configure_thread","protocol_version":4,"thread_id":"THREAD_ID","mode":"read_only"}
 ```
@@ -491,8 +493,9 @@ A client that steps down from 4 to 3 sees only Pi.
   {"harnesses":[{"id":"codex","name":"Codex","state":"ready","note":null,"version":"0.169.0","supported":{"min":"0.169.0","tested":"0.169.0"},"path":"/absolute/path/to/codex","capabilities":{"steer":true,"approvals":true,"thinking":true,"usage":true},"protection":"One line","models":[{"provider":"codex","model_id":"MODEL","name":"Name","authenticated":true,"reasoning":true,"thinking_levels":["low","medium","high"],"context_window":null,"input":["text"]}],"modes":[{"id":"ask","label":"Ask","detail":"One sentence"}],"default_mode":"full_access"}]}
   ```
 
-  `state` is `ready`, `not_installed`, `unsupported_version`, `signed_out`, or
-  `unavailable`; `note` says how to fix anything but `ready`, or gives a caveat
+  `state` is `ready`, `not_installed`, `unsupported_version`, `signed_out`,
+  `unavailable`, or `setup_required` (the harness needs a download the person
+  starts with `set_up_harness`); `note` says how to fix anything but `ready`, or gives a caveat
   for a ready harness newer than tested. `supported.min` is the oldest version
   Plait runs and `supported.tested` the one its message types come from. Pi
   has `version`, `supported`, and `path` null and `models` null: its models are
@@ -501,20 +504,30 @@ A client that steps down from 4 to 3 sees only Pi.
   modes and `default_mode` the one new threads start in; Pi has `modes` empty
   and `default_mode` null, because its threads use Plait's approval mode.
   Clients must accept harness IDs, states, modes, and fields they do not know.
-- **`set_harness_path`** runs Codex from `path` instead of the login shell's
-  `PATH`; omit `path` to return to `PATH`. It replies with the whole list,
-  checked again. The path is a host setting in `host.sqlite`.
+- **`set_harness_path`** runs Codex or Claude Code from `path` instead of the
+  login shell's `PATH`; omit `path` to return to `PATH`. It replies with the
+  whole list, that harness checked again. The path is a host setting in
+  `host.sqlite`; Pi is `invalid_request`.
 - **`set_harness_mode`** sets a harness's `default_mode`, also a host setting,
   and replies with the whole list. A mode the harness does not list, or Pi,
   is `invalid_request`.
+- **`set_up_harness`** sets up a harness that needs it; only `claude` does
+  (see [Claude Code](#claude-code)), and any other harness is
+  `invalid_request`. It is the only operation that reaches the network for a
+  harness. It replies with the whole list, Claude Code checked again: a
+  finished setup shows whatever the normal checks find, and a failed one stays
+  `setup_required` with a `note` saying what went wrong. Setting up again
+  when the copy is already in place downloads nothing.
 - **`create_thread`** takes an optional `harness`, `pi` when absent. A Codex
   thread's model has provider `codex` and a model ID from Codex's list, and a
-  model from the other harness is rejected with `invalid_request`. `thinking`
-  goes to the nearest level the Codex model offers. `mode` is one of the
+  Claude Code thread's has provider `claude` and a model ID from Claude Code's
+  list; a model from another harness is rejected with `invalid_request`.
+  `thinking` goes to the nearest level the model offers. `mode` is one of the
   harness's modes, its `default_mode` when absent; Pi threads refuse it. A
   thread stays in its harness: `configure_thread` accepts only models of the
   same harness. `configure_thread` also takes `mode`; given alone, it is
-  accepted while the thread runs and applies from the next Codex turn.
+  accepted while the thread runs, and applies from the next Codex turn or at
+  once in Claude Code.
 - **Snapshots and summaries.** A version 4 snapshot adds
   `"harness":{"id":"codex","version":"0.169.0","mode":"ask","reported":"ask"}`:
   the harness, the version of its latest run (`null` before the first), the
@@ -523,8 +536,8 @@ A client that steps down from 4 to 3 sees only Pi.
   harness's own configuration overrides it, and is `custom` when it matches
   none of the modes. Pi threads, including every thread saved earlier, report
   `{"id":"pi","version":null,"mode":null,"reported":null}`. Version 4 thread
-  summaries in `list_threads` and `watch_threads` add `"harness":"pi"` or
-  `"harness":"codex"`.
+  summaries in `list_threads` and `watch_threads` add `"harness":"pi"`,
+  `"harness":"codex"`, or `"harness":"claude"`.
 
 ### Codex
 
@@ -577,6 +590,98 @@ Codex to end the turn and waits up to 10 seconds. A run interrupted by a host
 restart is never resumed or repeated. Codex's own error text and diagnostics
 can quote the provider or the machine, so a failed run reports a fixed message
 instead.
+
+### Claude Code
+
+Claude Code threads run the person's installed `claude` through Anthropic's
+Agent SDK, pinned at 0.3.326. Claude Code loads the person's own settings,
+`CLAUDE.md` files, skills, slash commands, hooks, and MCP servers, as `claude`
+does in a terminal. The host never installs, updates, configures, or signs in
+to Claude Code, and reads none of its files or credentials.
+
+**Setup.** Plait's releases do not include the SDK, whose license reserves all
+rights, so the Claude Code entry starts as `setup_required` and no Claude Code
+process is started before setup. `set_up_harness` downloads
+`claude-agent-sdk-0.3.326.tgz` from the npm registry and checks its SHA-512
+against the `integrity` the runtime's `package-lock.json` records, before
+anything is written. It unpacks only `sdk.mjs` (which imports only Node's
+built-in modules), `package.json`, and Anthropic's `LICENSE.md` and
+`README.md`, through a reader that refuses absolute paths, `..`, links,
+special files, oversized entries, and truncated or corrupt archives. The files
+are written into a new folder and renamed into place as
+`harnesses/claude-agent-sdk/0.3.326/` beside `host.sqlite`, so a failure
+leaves nothing behind. Each time the host loads `sdk.mjs`, its SHA-256 is
+checked against the pinned value; a changed file is refused, and setting up
+again replaces it. The SDK's per-platform Claude Code binaries are never
+downloaded: Plait always runs the installed `claude`. Because Plait does not
+ship the SDK, it is not listed in Plait's third-party notices; the person's
+copy keeps Anthropic's `LICENSE.md`.
+
+**Checks.** After setup the host finds `claude` on the login shell's `PATH`
+(or the path set above), reads `claude --version`, and refuses versions older
+than `supported.min`, 2.1.290: the first whose replayed messages wait until a
+turn takes them, which places steering messages. Releases on the tested 2.1
+line run without a note; a later line runs with one. Sign-in comes from
+`claude auth status --json`, of which only whether it is signed in and the
+provider kind are kept. Any sign-in the person's `claude` uses is accepted: a
+Claude subscription, an API key, or a cloud provider. `signed_out` means only
+that Claude Code says it is not signed in. Models and their thinking levels
+come from the answer to the SDK's `initialize` request, from a Claude Code
+started without any message, with hooks off and no MCP server loaded, and
+closed at once; no model is asked anything. That check takes about 0.2 seconds
+and is reused for a minute. A run does not repeat it: without a recent check,
+the run's own `initialize` answer checks the model.
+
+**Runs.** Each run starts one Claude Code process for the thread's checkout,
+which takes the run's message and any steering messages and ends when none is
+left. The first run starts a Claude session under an ID the host chooses, and
+later runs resume it; if Claude Code no longer has it, the run fails and asks
+for a new thread. What protects the checkout is the thread's Claude Code mode,
+together with the person's Claude Code settings, which may allow or deny tools
+on their own. It replaces Plait's approval mode and the project's command
+policy, which do not apply; a submission's `approval` is ignored.
+
+| Mode | Claude Code mode | What asks |
+|---|---|---|
+| `ask` | `default` | Each edit and command the person's settings do not already allow |
+| `accept_edits` | `acceptEdits` | Commands; edits in the checkout run without asking |
+| `plan` | `plan` | Leaving plan mode to start on a plan; nothing changes before |
+| `auto`, the default | `auto` | Only what Claude Code's own safety check cannot decide |
+| `bypass` | `bypassPermissions` | Nothing; no sandbox |
+
+- Each permission request Claude Code sends is a Plait approval for that one
+  call; denying it declines the call, and Claude Code tells the model. Plait
+  never saves a permission rule to the person's settings. Questions Claude Code
+  would ask the person (`AskUserQuestion`) are declined with a note asking the
+  model to put the question in its reply.
+- A mode change during a run is sent to Claude Code at once. `reported` is
+  cleared until Claude Code confirms the mode it is in; a mode Plait does not
+  offer, such as `dontAsk` from the person's settings, reports `custom`.
+- Plait's guard on files that had changes before the run does not apply.
+  Edit approvals list such files in `dirty_paths`, but nothing stops Claude
+  Code writing them.
+
+Claude Code's messages are translated into the same transcript entries Pi
+threads keep, in `<thread>.claude.sqlite` beside the host store, written as
+each message finishes; streaming text and reasoning reach watchers at most
+every 16 ms and are not written to disk. History, full text, and usage work as
+for Pi, and history reads the stored file without starting Claude Code.
+Changed files lists checkout files that Claude Code's edit and write tools
+changed; files that its commands wrote are not listed. A message sent with
+`"when_busy":"steer"` goes to Claude Code at once, which takes it at its next
+step or as the next turn, so it cannot be cancelled after that. Stop
+interrupts the turn, drops any message Claude Code has not taken yet, and ends
+the process if Claude Code does not answer within 10 seconds. A run
+interrupted by a host restart is never resumed or repeated. Claude Code's own
+error text can quote the provider, the account, or the machine, so a failed
+run reports a fixed message instead.
+
+What has been checked against a real Claude Code 2.1.326 without sending a
+message: version and sign-in parsing, the model list, every flag a run starts
+Claude Code with, mode changes in every mode, and interrupting with no turn
+running. What happens inside a turn has been tested only against a scripted
+stand-in so far; opt-in live tests for it are described in
+[Verification](VERIFICATION.md#claude-code).
 
 ## Internal authorization boundary
 

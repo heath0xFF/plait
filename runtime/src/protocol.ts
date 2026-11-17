@@ -25,7 +25,7 @@ export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhig
 export type ThinkingLevel = typeof THINKING_LEVELS[number];
 export type Queued = { id: string; request_id: string; text: string; mode: QueueMode; approval: ApprovalMode };
 /** Agent harnesses a thread can run in. Pi is built in; the others are the person's installs. */
-export const HARNESSES = ['pi', 'codex'] as const;
+export const HARNESSES = ['pi', 'codex', 'claude'] as const;
 export type HarnessId = typeof HARNESSES[number];
 /**
  * The harness that runs a thread, and the version of its latest run (null before one, and for Pi).
@@ -151,7 +151,7 @@ const fields3: Record<string, string[]> = {
   agent_resources: ['checkout'],
 };
 // Version 4 adds harnesses: an operation to list them and a choice when a thread starts.
-const fields4: Record<string, string[]> = { harnesses: [], set_harness_path: ['harness'], set_harness_mode: ['harness', 'mode'] };
+const fields4: Record<string, string[]> = { harnesses: [], set_harness_path: ['harness'], set_harness_mode: ['harness', 'mode'], set_up_harness: ['harness'] };
 const optional4: Record<string, string[]> = { create_thread: ['harness', 'mode'], set_harness_path: ['path'], configure_thread: ['mode'] };
 const optional3: Record<string, string[]> = {
   submit: ['when_busy'], list_threads: ['checkout', 'limit', 'cursor', 'archived'], history: ['before', 'limit'],
