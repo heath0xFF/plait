@@ -222,8 +222,9 @@ these tests.
   and a restore that refuses to write through a symlink). The native
   confirmation alert has not been exercised in the installed app.
 - Push, publish, and fetch are covered against a local bare repository
-  (publish, push, fetch revealing a remote commit, and a refused diverged
-  push). Pushing to GitHub over SSH or HTTPS with `gh` sign-in has been checked
+  (publish, push, fetch revealing a remote commit, a fast-forward pull, a pull
+  refused because it would overwrite an uncommitted edit, and refused diverged
+  push and pull). Pushing to GitHub over SSH or HTTPS with `gh` sign-in has been checked
   only by asking Git for credentials, not by a push from the installed app.
 
 ## Manual release acceptance

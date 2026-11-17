@@ -1070,11 +1070,42 @@ fn publish_push_and_fetch_move_commits_through_a_remote() {
     expected.behind = 1;
     assert_eq!(tracking(&work), Some(expected.clone()));
 
-    // Diverged: the push is refused and the reason says what to do.
+    // A pull moves the branch forward to what was fetched.
+    assert_eq!(
+        write(&work.0, &WriteOp::Pull).unwrap().summary,
+        "Pulled 1 commit"
+    );
+    expected.behind = 0;
+    assert_eq!(tracking(&work), Some(expected.clone()));
+    assert_eq!(
+        fs::read_to_string(work.0.join("b.txt")).unwrap(),
+        "theirs\n"
+    );
+    assert_eq!(
+        write(&work.0, &WriteOp::Pull).unwrap().summary,
+        "Already up to date"
+    );
+
+    // A pull that would overwrite an uncommitted edit is refused, and the edit stays.
+    fs::write(other.join("b.txt"), "theirs again\n").unwrap();
+    git_in(&other, &["commit", "-q", "-am", "again"]);
+    git_in(&other, &["push", "-q"]);
+    work.write("b.txt", "mine, uncommitted\n");
+    let error = write(&work.0, &WriteOp::Pull).unwrap_err();
+    assert!(error.contains("overwrite uncommitted"), "{error}");
+    assert_eq!(
+        fs::read_to_string(work.0.join("b.txt")).unwrap(),
+        "mine, uncommitted\n"
+    );
+    work.git(&["checkout", "--", "b.txt"]);
+
+    // Diverged: push and pull are both refused, and the reasons say what to do.
     work.write("a.txt", "c\n");
     work.commit();
     let error = write(&work.0, &WriteOp::Push).unwrap_err();
     assert!(error.contains("Pull them"), "{error}");
+    let error = write(&work.0, &WriteOp::Pull).unwrap_err();
+    assert!(error.contains("Merge or rebase"), "{error}");
 }
 
 #[test]

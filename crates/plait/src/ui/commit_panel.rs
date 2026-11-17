@@ -60,16 +60,21 @@ pub(super) fn sync(named: bool, tracking: Option<&Tracking>) -> Sync {
         (0, b) => format!("{b} to pull"),
         (a, b) => format!("{a} to push, {b} to pull"),
     };
-    let blocker = if ahead == 0 {
-        Some("Nothing to push.")
-    } else if behind > 0 {
-        Some("The remote has commits this branch does not. Pull them from Terminal first.")
-    } else {
-        None
+    // Only behind: the one useful move is a fast-forward pull.
+    let (op, blocker) = match (ahead, behind) {
+        (0, 0) => (WriteOp::Push, Some("Nothing to push.")),
+        (0, _) => (WriteOp::Pull, None),
+        (_, 0) => (WriteOp::Push, None),
+        _ => (
+            WriteOp::Push,
+            Some(
+                "This branch and its upstream have each moved on. Merge or rebase them in Terminal.",
+            ),
+        ),
     };
     Sync {
         label,
-        op: Some(WriteOp::Push),
+        op: Some(op),
         blocker,
         fetch: true,
         upstream,
@@ -223,7 +228,8 @@ impl Plait {
         self.confirm_discard(op, title, window, cx);
     }
 
-    /// Push, or publish a branch the remote does not have yet.
+    /// Push, pull, or publish, whichever the branch's state calls for.
+    /// The Push and Pull menu items each run only their own.
     pub(super) fn push(&mut self, cx: &mut Context<Self>) {
         let Some(sync) = self.state.repository.snapshot.ready().map(|s| sync_of(s)) else {
             return;
@@ -233,10 +239,30 @@ impl Plait {
         }
     }
 
+    /// The Pull menu item: only when the branch is behind and has not diverged.
+    pub(super) fn pull(&mut self, cx: &mut Context<Self>) {
+        let Some(sync) = self.state.repository.snapshot.ready().map(|s| sync_of(s)) else {
+            return;
+        };
+        if sync.op == Some(WriteOp::Pull) {
+            self.git_write(WriteOp::Pull, cx);
+        }
+    }
+
     /// The branch against its upstream, with Fetch and Push or Publish.
     fn sync_row(&self, busy: bool, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let sync = sync_of(self.state.repository.snapshot.ready()?);
-        let publish = sync.op == Some(WriteOp::Publish);
+        let (label, description) = match sync.op {
+            Some(WriteOp::Publish) => (
+                "Publish",
+                "Push this branch to its remote and track it there.",
+            ),
+            Some(WriteOp::Pull) => (
+                "Pull",
+                "Fetch and move this branch forward to its upstream. Never merges or rebases.",
+            ),
+            _ => ("Push", "Push commits to the remote. Hooks run."),
+        };
         Some(
             row()
                 .gap_1()
@@ -263,12 +289,8 @@ impl Plait {
                 })
                 .when(sync.op.is_some(), |el| {
                     el.child(
-                        button("push", if publish { "Publish" } else { "Push" })
-                            .aria_description(sync.blocker.unwrap_or(if publish {
-                                "Push this branch to its remote and track it there."
-                            } else {
-                                "Push commits to the remote. Hooks run."
-                            }))
+                        button("push", label)
+                            .aria_description(sync.blocker.unwrap_or(description))
                             .disabled(busy || sync.blocker.is_some())
                             .on_activate(cx, |this, _, cx| this.push(cx)),
                     )
@@ -441,8 +463,10 @@ mod tests {
         let ahead = sync(true, Some(&up(2, 0, false)));
         assert_eq!(ahead.label, "2 to push");
         assert_eq!((ahead.op, ahead.blocker), (Some(WriteOp::Push), None));
+        let behind = sync(true, Some(&up(0, 3, false)));
+        assert_eq!((behind.op, behind.blocker), (Some(WriteOp::Pull), None));
         let diverged = sync(true, Some(&up(1, 3, false)));
         assert_eq!(diverged.label, "1 to push, 3 to pull");
-        assert!(diverged.blocker.unwrap().contains("Pull"));
+        assert!(diverged.blocker.unwrap().contains("Merge or rebase"));
     }
 }

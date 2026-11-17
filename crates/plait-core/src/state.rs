@@ -549,7 +549,9 @@ impl RepositoryState {
                     }
                 }
             }
-            (Job::Write { root, .. }, Reply::Write(result)) => {
+            (Job::Write { root, op }, Reply::Write(result)) => {
+                // A pull moves HEAD without a commit of ours; history must reload.
+                let moved = matches!(op, git::WriteOp::Pull) && result.is_ok();
                 self.write.running = false;
                 if let Ok(outcome) = &result {
                     self.write.committed = outcome.commit.clone();
@@ -564,7 +566,7 @@ impl RepositoryState {
                 if self.root.as_ref().is_none_or(|known| *known == root) {
                     let reselect = self.write.reselect.take();
                     self.refresh_status();
-                    if self.write.committed.is_some() {
+                    if self.write.committed.is_some() || moved {
                         self.reset_history();
                     }
                     self.write.reselect = reselect;

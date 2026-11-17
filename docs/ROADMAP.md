@@ -72,7 +72,9 @@ timer. Ahead and behind counts come from the status read Plait already makes.
 Credentials stay with Git: the person's helpers and SSH keys apply, and the
 GitHub CLI's credential helper is offered after them for that command only,
 so Plait never reads a token or changes Git configuration. Discard always asks
-for confirmation first. Pull, merge, and rebase are not part of this step.
+for confirmation first. Pull is fast-forward only: Plait fetches, then moves
+the branch to its upstream, and refuses a diverged branch or a pull that would
+overwrite uncommitted changes. Merge and rebase are not part of this step.
 Use existing tools for interactive shells and debugging. A future Open in Rex
 integration and native mobile companion are possibilities, not current features.
 

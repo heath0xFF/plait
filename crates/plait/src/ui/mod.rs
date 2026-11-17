@@ -62,6 +62,7 @@ actions!(
         UnstageAll,
         CommitStaged,
         Push,
+        Pull,
         Fetch,
         NextThread,
         PreviousThread,
@@ -805,6 +806,10 @@ impl Render for Plait {
             .on_action(cx.listener(|this, _: &Push, _, cx| {
                 this.show_tab(Workspace::Changes, cx);
                 this.push(cx)
+            }))
+            .on_action(cx.listener(|this, _: &Pull, _, cx| {
+                this.show_tab(Workspace::Changes, cx);
+                this.pull(cx)
             }))
             .on_action(cx.listener(|this, _: &Fetch, _, cx| {
                 this.show_tab(Workspace::Changes, cx);

@@ -50,6 +50,9 @@ pub enum WriteOp {
     Publish,
     /// Fetch from the current branch's remote, or `origin`.
     Fetch,
+    /// Fetch, then move the branch forward to its upstream. Never merges or
+    /// rebases: diverged branches and conflicting local edits are refused.
+    Pull,
     /// Stage one hunk of a file's unstaged diff, or unstage one hunk of its
     /// staged diff. `header` is the hunk's `@@` line as shown; the write
     /// rereads the diff and refuses if hunk `index` no longer matches it.
@@ -139,6 +142,7 @@ pub fn write(root: &Path, op: &WriteOp) -> Result<WriteOutcome> {
             remote_git(root, &["fetch", "-q"])?;
             Ok(done("Fetched".into()))
         }
+        WriteOp::Pull => pull(root),
         WriteOp::Hunk {
             path,
             from,
@@ -400,6 +404,50 @@ fn has_filter(root: &Path, path: &Path) -> Result<bool> {
     Ok(!matches!(value, b"unspecified" | b"unset" | b""))
 }
 
+/// Two explicit steps instead of `git pull`, whose configuration may rebase.
+fn pull(root: &Path) -> Result<WriteOutcome> {
+    remote_git(root, &["fetch", "-q"])?;
+    let count = |range: &str| -> Result<usize> {
+        let mut command = write_command(root);
+        command.args(["rev-list", "--count", range]);
+        let raw = run(&mut command, None, STATUS_LIMIT, TIMEOUT)?;
+        if !raw.status.success() {
+            return Err(failure_text(&raw));
+        }
+        String::from_utf8_lossy(&raw.out.bytes)
+            .trim()
+            .parse()
+            .map_err(|_| "Git returned an unreadable commit count.".to_owned())
+    };
+    let behind = count("HEAD..@{upstream}")?;
+    if behind == 0 {
+        return Ok(done("Already up to date".into()));
+    }
+    if count("@{upstream}..HEAD")? > 0 {
+        return Err(DIVERGED.into());
+    }
+    let mut command = write_command(root);
+    command.args(["merge", "--ff-only", "-q", "@{upstream}"]);
+    let raw = run(&mut command, None, STATUS_LIMIT, NETWORK_TIMEOUT)?;
+    if !raw.status.success() {
+        let text = failure_text(&raw);
+        return Err(if text.contains("would be overwritten") {
+            format!(
+                "Pulling would overwrite uncommitted changes. Commit, stash, or discard them first.\n{text}"
+            )
+        } else {
+            text
+        });
+    }
+    Ok(done(format!(
+        "Pulled {behind} {}",
+        if behind == 1 { "commit" } else { "commits" }
+    )))
+}
+
+const DIVERGED: &str =
+    "This branch and its upstream have each moved on. Merge or rebase them in Terminal.";
+
 /// The ref a plain push updates, such as `origin/main`, for the summary.
 fn destination(root: &Path) -> Option<String> {
     let mut command = write_command(root);
@@ -520,9 +568,7 @@ pub(super) fn network_hint(text: &str) -> Option<&'static str> {
             "SSH does not know this remote's host key yet. Connect once from Terminal to confirm it.",
         )
     } else if has("[rejected]") || has("non-fast-forward") || has("fetch first") {
-        Some(
-            "The remote has commits this branch does not. Pull them from Terminal, then push again.",
-        )
+        Some("The remote has commits this branch does not. Pull them first, then push again.")
     } else if has("Could not resolve host")
         || has("Network is unreachable")
         || has("Connection timed out")

@@ -9,6 +9,7 @@ client state, local host client, and Git), and `crates/plait-host`
 Pi Durable TypeScript sidecar. There is no remote execution,
 embedded terminal, editor, or worktree manager. Git writes are limited to
 staging, unstaging, committing, pushing (or publishing a branch), fetching,
+fast-forward pulls,
 and discarding unstaged changes after saving a copy for undo.
 
 This remains an early local preview. Linux command execution and remote
@@ -86,7 +87,7 @@ diff.rs                 line diff of an edit's old and new text
 tool_view.rs            what each tool call shows, and grouping of long runs
 selection.rs            selection order, ranges, word bounds, and copied text
 git.rs                  synchronous Git adapter: hardened reads; background only
-  git/write.rs          stage, unstage, commit, push, publish, fetch, discard
+  git/write.rs          stage, unstage, commit, push, pull, fetch, discard
   git/log.rs            commit history and one commit's patch (read-only)
 fuzzy.rs                case-insensitive subsequence matching for pickers
 ```

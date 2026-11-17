@@ -422,16 +422,18 @@ stops it and says so.
 Above Stage all, Changes shows how the branch stands against its upstream (for
 example "2 to push") as of the last fetch, with **Fetch** and **Push**. A branch
 with no upstream offers **Publish** instead, which pushes it to `origin` (or
-`remote.pushDefault`, or the only remote) and tracks it there. Push is
-unavailable when the remote has commits the branch does not; pull those from
-Terminal first. Sign-in uses your existing Git setup: SSH keys, credential
+`remote.pushDefault`, or the only remote) and tracks it there. When the branch
+is only behind, the button reads **Pull**: Plait fetches and moves the branch
+forward, never merging or rebasing, and refuses if that would overwrite
+uncommitted changes. When both sides have new commits, Push and Pull are
+unavailable; merge or rebase in Terminal. Sign-in uses your existing Git setup: SSH keys, credential
 helpers, and, for HTTPS GitHub remotes, `gh auth login` if the GitHub CLI is
-installed. Plait never stores or reads the token. Push and fetch are also in
-the **Git** menu.
+installed. Plait never stores or reads the token. Push, Pull, and Fetch are
+also in the **Git** menu.
 
 **History** (Cmd-Shift-3) lists commits on the current branch, newest first, 100
 at a time. Select one to see its message and patch against its first parent.
-There is no pull, amend, or branch switching yet; use your own Git
+There is no merge, rebase, amend, or branch switching yet; use your own Git
 tools for those.
 
 ## Updates
