@@ -2041,6 +2041,24 @@ fn composer_v3_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.update(|plait, window, cx| plait.open_thinking(window, cx));
     harness.capture(&format!("composer-v3-thinking-picker-{suffix}"));
     harness.update(|plait, window, cx| plait.close_overlay(true, window, cx));
+    // A thread's own approval mode overrides the default for what it sends,
+    // and returning to the default follows Settings again.
+    harness.update(|plait, _, cx| {
+        let id = plait.host.selected.clone().expect("open thread");
+        let default = plait.default_approval();
+        let other = match default {
+            ApprovalMode::Ask => ApprovalMode::Auto,
+            ApprovalMode::Auto => ApprovalMode::Ask,
+        };
+        plait.set_thread_approval(id.clone(), Some(other), cx);
+        assert_eq!(plait.next_approval_mode(), Some(other));
+        plait.set_thread_approval(id.clone(), None, cx);
+        assert_eq!(plait.next_approval_mode(), Some(default));
+        plait.set_thread_approval(id, Some(ApprovalMode::Ask), cx);
+    });
+    harness.update(|plait, window, cx| plait.open_run_settings(window, cx));
+    harness.capture(&format!("composer-v3-run-settings-{suffix}"));
+    harness.update(|plait, window, cx| plait.close_overlay(true, window, cx));
     harness.change_snapshot(|snapshot| {
         snapshot.status = ThreadStatus::Running;
         snapshot.queued = [QueueMode::FollowUp, QueueMode::Steer]

@@ -31,13 +31,24 @@ fn banner(tint: u32) -> Div {
 const COPY_LIFT: f32 = 18.;
 
 impl Plait {
-    /// The mode the next submission requests. Version 1 hosts always ask.
-    pub(super) fn next_approval_mode(&self) -> Option<ApprovalMode> {
-        (self.host.protocol() >= 2).then_some(if self.preferences.value.ask_before_actions {
+    /// The desktop default from Settings → Approvals.
+    pub(super) fn default_approval(&self) -> ApprovalMode {
+        if self.preferences.value.ask_before_actions {
             ApprovalMode::Ask
         } else {
             ApprovalMode::Auto
-        })
+        }
+    }
+
+    /// The mode the next submission requests: the open thread's own choice,
+    /// else the default. Version 1 hosts always ask.
+    pub(super) fn next_approval_mode(&self) -> Option<ApprovalMode> {
+        let chosen = self
+            .host
+            .selected
+            .as_deref()
+            .and_then(|id| self.thread_approval(id));
+        (self.host.protocol() >= 2).then(|| chosen.unwrap_or_else(|| self.default_approval()))
     }
 
     /// A running thread reports its own mode; otherwise show what the next message uses.

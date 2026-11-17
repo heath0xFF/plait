@@ -2,7 +2,6 @@
 use super::{
     Plait,
     commands::Command,
-    jump::PreferenceGroup,
     model_picker::ModelPurpose,
     palette::{Item, Options, Palette},
     theme::*,
@@ -10,7 +9,7 @@ use super::{
 use gpui::{prelude::*, *};
 use plait_core::{
     compose::{ContextPressure, ContextUsage, thinking_levels},
-    host::{self, Model, ModelChoice, QueueMode, Request, ThinkingLevel},
+    host::{self, ApprovalMode, Model, ModelChoice, QueueMode, Request, ThinkingLevel},
 };
 use std::collections::HashMap;
 
@@ -23,6 +22,9 @@ pub(super) struct ThreadControls {
     note: Option<(String, String, bool)>,
     cancelling: HashMap<String, u64>,
     pub(super) usage_open: bool,
+    /// Approval choices made this session, by thread. `None` is an explicit
+    /// return to the default, so it shadows an older saved choice.
+    approvals: HashMap<String, Option<ApprovalMode>>,
 }
 
 /// Plain text shown on hover, for controls whose label is a summary.
@@ -226,7 +228,6 @@ impl Plait {
             .usage
             .as_ref()
             .and_then(|u| ContextUsage::new(u, model));
-        let ask = self.preferences.value.ask_before_actions;
         let mut controls = row()
             .flex_wrap()
             .gap_x_2()
@@ -262,36 +263,6 @@ impl Plait {
                 .on_activate(cx, |this, window, cx| this.open_thinking(window, cx)),
             );
         }
-        // These apply from the next message, so the label names the setting
-        // and the tooltip says when it takes effect.
-        let detail = plait_core::host::policy::approval_detail(ask, self.command_policy())
-            .trim_end_matches(" Applies from your next message.");
-        let approval_tip = format!(
-            "{detail} Click to switch. Applies from your next message; steering keeps the active run's mode."
-        );
-        controls = controls.child(
-            button(
-                "message-approval",
-                if ask {
-                    "Ask before actions"
-                } else {
-                    "Auto-approve actions"
-                },
-            )
-            .aria_label(if ask {
-                "Approvals: ask before each edit and command"
-            } else {
-                "Approvals: edits and commands run without asking"
-            })
-            .aria_description(approval_tip.clone())
-            .tooltip(move |_, cx| cx.new(|_| TextTooltip(approval_tip.clone())).into())
-            .disabled(self.host.protocol() < 2)
-            .on_activate(cx, |this, _, cx| {
-                let mut preferences = this.preferences.value.clone();
-                preferences.ask_before_actions = !preferences.ask_before_actions;
-                this.set_preferences(preferences, PreferenceGroup::Approvals, cx);
-            }),
-        );
         if let Some(usage) = &usage {
             let detail = usage.detail.clone();
             let tint = match usage.pressure {
@@ -310,23 +281,7 @@ impl Plait {
                     }),
             );
         }
-        let policy = self.command_policy();
-        let policy_label = plait_core::host::policy::context_label(policy);
-        let policy_tip = format!(
-            "{} Click to change in Settings. Applies from your next message; a running task keeps its policy.",
-            policy.map_or("", |policy| policy.meaning())
-        )
-        .trim_start()
-        .to_owned();
-        controls = controls.child(
-            button("thread-command-policy", policy_label)
-                .aria_description(policy_tip.clone())
-                .tooltip(move |_, cx| cx.new(|_| TextTooltip(policy_tip.clone())).into())
-                .on_activate(cx, |this, window, cx| {
-                    this.show_settings(true, window, cx);
-                    this.settings_section = 2;
-                }),
-        );
+        controls = controls.child(self.run_settings_button(snapshot.id.clone(), cx));
         let mut content = column()
             .w_full()
             .max_w(px(CONTENT_WIDTH))
@@ -552,5 +507,160 @@ impl Plait {
             );
         }
         Some(stack.into_any_element())
+    }
+}
+
+/// What the run-settings button and menu call an approval mode.
+fn approval_label(mode: ApprovalMode) -> &'static str {
+    match mode {
+        ApprovalMode::Ask => "Ask before actions",
+        ApprovalMode::Auto => "Auto-approve actions",
+    }
+}
+
+impl Plait {
+    /// Opens the run-settings menu. The label is this thread's approval mode,
+    /// and names trusted commands, since those reach beyond the sandbox.
+    fn run_settings_button(&self, id: String, cx: &mut Context<Self>) -> Stateful<Div> {
+        let own = self.thread_approval(&id);
+        let mode = own.unwrap_or_else(|| self.default_approval());
+        let policy = self.command_policy();
+        let mut label = approval_label(mode).to_owned();
+        if policy == Some(host::policy::CommandPolicy::Trusted) {
+            label.push_str(" · Trusted commands");
+        }
+        let source = if own.is_some() {
+            "Chosen for this thread."
+        } else {
+            "The default from Settings."
+        };
+        let tip = format!(
+            "{source} Commands: {}. Click to change how this thread runs; applies from your next message.",
+            plait_core::host::policy::context_label(policy).to_lowercase()
+        );
+        button("thread-run-settings", "")
+            .min_w_0()
+            .flex_shrink_1()
+            .aria_label(format!("Run settings: {label}"))
+            .aria_description(tip.clone())
+            .tooltip(move |_, cx| cx.new(|_| TextTooltip(tip.clone())).into())
+            .child(div().min_w_0().truncate().child(label))
+            .child(icon("down").size(px(12.)))
+            .on_activate(cx, |this, window, cx| this.open_run_settings(window, cx))
+    }
+
+    /// This thread's own approval choice, if it has one.
+    pub(super) fn thread_approval(&self, id: &str) -> Option<ApprovalMode> {
+        if let Some(chosen) = self.thread_controls.approvals.get(id) {
+            return *chosen;
+        }
+        let summary = self.host.threads.iter().find(|thread| thread.id == id)?;
+        self.saved_thread(summary)?.approval
+    }
+
+    /// Give a thread its own approval mode, or `None` to follow the default.
+    pub(super) fn set_thread_approval(
+        &mut self,
+        id: String,
+        mode: Option<ApprovalMode>,
+        cx: &mut Context<Self>,
+    ) {
+        self.thread_controls.approvals.insert(id, mode);
+        self.capture_session(cx);
+        cx.notify();
+    }
+
+    /// The menu under the message box for how this thread runs: its approval
+    /// mode, and the project's command policy, which is changed in Settings.
+    pub(super) fn open_run_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(thread_id) = self.host.selected.clone() else {
+            return;
+        };
+        let chosen = self.thread_approval(&thread_id);
+        let default = self.default_approval();
+        let protocol = self.host.protocol();
+        let approvals = "Approvals for this thread";
+        let choice = |key: &str, title: String, detail: &str, mode: Option<ApprovalMode>| {
+            let item = Item::new(
+                key.to_owned(),
+                title,
+                Command::Approval {
+                    thread_id: thread_id.clone(),
+                    mode,
+                },
+            )
+            .section(approvals)
+            .detail(detail.to_owned())
+            .enabled(protocol >= 2);
+            if chosen == mode {
+                item.badge("Current", BLUE)
+            } else {
+                item
+            }
+        };
+        let current = match chosen {
+            None => "approval-default",
+            Some(ApprovalMode::Ask) => "approval-ask",
+            Some(ApprovalMode::Auto) => "approval-auto",
+        };
+        let policy = self.command_policy();
+        let mut items = vec![
+            choice(
+                "approval-default",
+                format!("Use default ({})", approval_label(default)),
+                "Follow Settings → Approvals.",
+                None,
+            ),
+            choice(
+                "approval-ask",
+                approval_label(ApprovalMode::Ask).into(),
+                "Each edit and command waits for Allow once.",
+                Some(ApprovalMode::Ask),
+            ),
+            choice(
+                "approval-auto",
+                approval_label(ApprovalMode::Auto).into(),
+                "Edits and commands run without asking.",
+                Some(ApprovalMode::Auto),
+            ),
+        ];
+        items.push(
+            Item::new(
+                "command-policy",
+                plait_core::host::policy::context_label(policy),
+                Command::PolicySettings,
+            )
+            .section("Commands in this project")
+            .detail(
+                policy.map_or("Shared by every thread in this checkout.", |policy| {
+                    policy.meaning()
+                }),
+            )
+            .hint("Change in Settings"),
+        );
+        let palette = cx.new(|cx| {
+            Palette::new(
+                Options {
+                    name: "Thread run settings".into(),
+                    placeholder: "Choose how this thread runs…".into(),
+                    empty: "No run settings.".into(),
+                    initial: Some(current.into()),
+                    mark: None,
+                    aside: None,
+                    note: Some(
+                        if protocol < 2 {
+                            "This host asks before every edit and command. Update the host to choose."
+                        } else {
+                            "Applies from your next message. A running task keeps its settings."
+                        }
+                        .into(),
+                    ),
+                },
+                items,
+                window,
+                cx,
+            )
+        });
+        self.present(palette, None, window, cx);
     }
 }

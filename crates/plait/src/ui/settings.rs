@@ -368,7 +368,11 @@ impl Plait {
             plait_core::host::policy::approval_detail(ask, self.command_policy())
         };
         section("Approvals")
-            .child(setting("Edits and commands", detail, choices))
+            .child(setting("Default for edits and commands", detail, choices))
+            .child(tag(
+                "A thread can choose its own from the run settings under its message box.",
+                SUBTLE,
+            ))
             .when_some(
                 self.preference_note(Some(PreferenceGroup::Approvals)),
                 |el, note| el.child(tag(note, SUBTLE)),

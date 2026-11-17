@@ -92,7 +92,8 @@ flowchart TB
 ```
 
 Current builds run edits and commands without asking by default; choose
-**Ask each time** under Settings → Approvals to restore prompts. In both modes,
+**Ask each time** under Settings → Approvals to restore prompts, or choose for
+one thread from the run settings under its message box. In both modes,
 files you had already changed are protected, and sandboxed commands cannot
 write the checkout or use external networking. The desktop never receives
 provider credentials. Closing it does not stop accepted work; pending approvals

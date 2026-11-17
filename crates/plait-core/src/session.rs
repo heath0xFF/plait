@@ -40,6 +40,10 @@ pub struct Thread {
     pub pending_submissions: Vec<PendingSubmit>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub queued_submissions: Vec<PendingSubmit>,
+    /// This thread's approval choice. `None` follows the desktop default in
+    /// preferences. Omitted when unset, so journals stay readable by older builds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<crate::host::ApprovalMode>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -374,7 +378,28 @@ mod tests {
             }),
             pending_submissions: Vec::new(),
             queued_submissions: Vec::new(),
+            approval: None,
         }
+    }
+
+    #[test]
+    fn thread_approval_is_optional_and_round_trips() {
+        let plain = serde_json::to_string(&thread()).unwrap();
+        // An unset choice is not written, so the record matches older journals.
+        let fields: serde_json::Value = serde_json::from_str(&plain).unwrap();
+        assert!(fields.get("approval").is_none(), "{plain}");
+        assert!(
+            serde_json::from_str::<Thread>(&plain)
+                .unwrap()
+                .approval
+                .is_none()
+        );
+        let chosen = Thread {
+            approval: Some(crate::host::ApprovalMode::Ask),
+            ..thread()
+        };
+        let written = serde_json::to_string(&chosen).unwrap();
+        assert_eq!(serde_json::from_str::<Thread>(&written).unwrap(), chosen);
     }
 
     #[test]

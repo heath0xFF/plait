@@ -346,8 +346,15 @@ nothing. A held queue resumes from its oldest input on the next send.
 
 Choose the model beneath the composer, or Cmd-Shift-M, to change this thread's
 next run. The adjacent thinking control lists exactly the chosen model's
-supported levels. Both are locked during a run. The next-message approval
-control does not change an active run or previously queued messages.
+supported levels. Both are locked during a run.
+
+The run-settings menu beside them chooses this thread's approval mode: **Use
+default** follows Settings → Approvals, or pick **Ask before actions** or
+**Auto-approve actions** for this thread alone. The choice is saved with the
+thread's draft and applies from its next message; it does not change an active
+run or previously queued messages. The menu also shows this project's command
+policy, which every thread in the checkout shares and which changes in
+Settings. The button names trusted commands, since they run outside the sandbox.
 
 Context usage shows the latest response, not cumulative cost. Hover or activate
 it for exact token counts. At 75% it says high; at 90% it says nearly full. It

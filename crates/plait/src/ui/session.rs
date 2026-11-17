@@ -315,6 +315,7 @@ impl Plait {
                         .cloned()
                         .collect(),
                     queued_submissions: self.host.submissions.accepted(&summary.id).to_vec(),
+                    approval: self.thread_approval(&summary.id),
                 },
             ) {
                 self.session.note = Some(error);

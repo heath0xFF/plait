@@ -29,6 +29,13 @@ pub(super) enum Command {
         epoch: u64,
         level: plait_core::host::ThinkingLevel,
     },
+    /// A thread's own approval mode; `None` follows the default.
+    Approval {
+        thread_id: String,
+        mode: Option<plait_core::host::ApprovalMode>,
+    },
+    /// Open the project's command policy in Settings.
+    PolicySettings,
 }
 
 impl Clone for Command {
@@ -49,6 +56,11 @@ impl Clone for Command {
                 epoch: *epoch,
                 level: *level,
             },
+            Self::Approval { thread_id, mode } => Self::Approval {
+                thread_id: thread_id.clone(),
+                mode: *mode,
+            },
+            Self::PolicySettings => Self::PolicySettings,
         }
     }
 }
@@ -363,6 +375,21 @@ impl Plait {
                 if self.host.epoch == epoch && self.host.selected.as_ref() == Some(&thread_id) {
                     self.configure_selected(None, Some(level), window, cx);
                 }
+            }
+            Command::Approval { thread_id, mode } => {
+                // The thread may have closed while the menu was open.
+                if self
+                    .host
+                    .threads
+                    .iter()
+                    .any(|thread| thread.id == thread_id)
+                {
+                    self.set_thread_approval(thread_id, mode, cx);
+                }
+            }
+            Command::PolicySettings => {
+                self.show_settings(true, window, cx);
+                self.settings_section = 2;
             }
             Command::OpenProject(path) => {
                 if self.host.pending_create.is_none() && !self.host.creating {
