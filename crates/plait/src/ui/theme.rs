@@ -343,6 +343,22 @@ pub fn icon(name: &'static str) -> Svg {
         .text_color(rgb(colors().muted))
 }
 
+/// The logo of the harness that runs a thread, tinted like other icons. A
+/// harness without one in `assets/harnesses` has none, and callers show its name.
+pub fn harness_logo(id: plait_core::host::harness::HarnessId) -> Option<Svg> {
+    harness_glyph(id).map(icon)
+}
+
+/// The asset name of a harness's logo, for lists that take a glyph name.
+pub fn harness_glyph(id: plait_core::host::harness::HarnessId) -> Option<&'static str> {
+    use plait_core::host::harness::HarnessId;
+    match id {
+        HarnessId::Pi => Some("harness-pi"),
+        HarnessId::Codex => Some("harness-openai"),
+        HarnessId::Other => None,
+    }
+}
+
 pub fn empty(title: &'static str, detail: impl Into<SharedString>) -> Stateful<Div> {
     let detail = detail.into();
     column()
@@ -383,6 +399,9 @@ impl AssetSource for Assets {
             "plait-wordmark.svg" => {
                 include_str!("../../../../assets/branding/wordmarks/plait-wordmark-light.svg")
             }
+            // Harness makers' marks, only to name the harness; see assets/harnesses/README.md.
+            "harness-openai" => include_str!("../../../../assets/harnesses/openai.svg"),
+            "harness-pi" => include_str!("../../../../assets/harnesses/pi.svg"),
             "more" => {
                 r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><circle cx="3" cy="8" r="1"/><circle cx="8" cy="8" r="1"/><circle cx="13" cy="8" r="1"/></svg>"#
             }
@@ -503,6 +522,8 @@ mod tests {
             "bell-off",
             "up",
             "eye",
+            "harness-openai",
+            "harness-pi",
         ] {
             let bytes = Assets.load(name).unwrap().expect("embedded icon");
             let image = renderer.render_single_frame(&bytes, 1.0).unwrap();

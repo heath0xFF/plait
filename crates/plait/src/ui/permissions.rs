@@ -53,22 +53,7 @@ impl Plait {
         let blocked = permissions.blocked;
         let permissions = Rc::new(permissions);
         Some(
-            button(id, "")
-                .min_w_0()
-                .flex_shrink_1()
-                .gap_1()
-                .aria_label(format!("Permissions: {label}"))
-                .aria_description(blocked.map_or_else(|| tip.clone(), SharedString::from))
-                .tooltip(move |_, cx| cx.new(|_| TextTooltip(tip.to_string())).into())
-                .disabled(blocked.is_some())
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .text_color(rgb(colors().subtle))
-                        .child("Permissions"),
-                )
-                .child(div().min_w_0().truncate().child(label))
-                .child(icon("down").size(px(12.)))
+            menu_chip(id, Some("Permissions"), None, label, tip, blocked)
                 .on_activate(cx, move |this, window, cx| {
                     this.open_permissions(&permissions, window, cx)
                 }),
@@ -122,4 +107,40 @@ impl Plait {
         let palette = cx.new(|cx| Palette::new(options, items, window, cx));
         self.present(palette, None, window, cx);
     }
+}
+
+/// A chip that opens a menu: an optional caption or leading glyph, the current
+/// value, and a chevron. Disabled with `blocked`, which is then its description.
+pub(super) fn menu_chip(
+    id: impl Into<ElementId>,
+    caption: Option<&'static str>,
+    lead: Option<Svg>,
+    value: SharedString,
+    tip: SharedString,
+    blocked: Option<&'static str>,
+) -> Stateful<Div> {
+    let name = match caption {
+        Some(caption) => format!("{caption}: {value}"),
+        None => value.to_string(),
+    };
+    let hover = tip.clone();
+    button(id, "")
+        .min_w_0()
+        .flex_shrink_1()
+        .gap_1()
+        .aria_label(name)
+        .aria_description(blocked.map_or_else(|| tip.clone(), SharedString::from))
+        .tooltip(move |_, cx| cx.new(|_| TextTooltip(hover.to_string())).into())
+        .disabled(blocked.is_some())
+        .when_some(caption, |el, caption| {
+            el.child(
+                div()
+                    .flex_shrink_0()
+                    .text_color(rgb(colors().subtle))
+                    .child(caption),
+            )
+        })
+        .when_some(lead, |el, lead| el.child(lead))
+        .child(div().min_w_0().truncate().child(value))
+        .child(icon("down").size(px(12.)))
 }

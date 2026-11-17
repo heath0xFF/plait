@@ -250,6 +250,7 @@ impl Plait {
             .as_ref()
             .and_then(|u| ContextUsage::new(u, model));
         let harness = self.thread_harness_line();
+        let pi = harness_of(snapshot) == HarnessId::Pi;
         let mut controls = row()
             .flex_wrap()
             .gap_x_2()
@@ -258,14 +259,14 @@ impl Plait {
             .min_w_0()
             .text_size(px(11.))
             .text_color(rgb(colors().muted))
-            .when_some(harness.map(|line| line.label.clone()), |el, label| {
-                el.child(
-                    div()
-                        .flex_shrink_0()
-                        .px_1()
-                        .child(text!(id = "thread-harness", label)),
-                )
-            })
+            .when_some(
+                match harness {
+                    Some(line) => Some((line.label.clone(), line.tip.clone())),
+                    None if pi => Some(("Pi".into(), "Pi, built into the host".into())),
+                    None => None,
+                },
+                |el, (label, tip)| el.child(harness_mark(harness_of(snapshot), label, tip)),
+            )
             .child(
                 button("thread-model", "")
                     .max_w(px(240.))
@@ -312,7 +313,6 @@ impl Plait {
             );
         }
         // A harness thread runs under the harness's own mode; Plait's approvals are Pi's.
-        let pi = harness_of(snapshot) == HarnessId::Pi;
         let mode = harness.and_then(|line| line.mode.as_ref());
         if let Some(mode) = mode {
             let chip = self.thread_permissions(mode).and_then(|permissions| {
@@ -575,7 +575,7 @@ impl Plait {
 }
 
 /// What the run-settings button and menu call an approval mode.
-fn approval_label(mode: ApprovalMode) -> &'static str {
+pub(super) fn approval_label(mode: ApprovalMode) -> &'static str {
     match mode {
         ApprovalMode::Ask => "Ask before actions",
         ApprovalMode::Auto => "Auto-approve actions",
@@ -899,4 +899,25 @@ impl Plait {
         self.sync_composer(cx);
         cx.notify();
     }
+}
+
+/// The harness's logo where the composer row starts; its name and version are
+/// the hover text and what assistive technology reads. Without a logo, the name.
+fn harness_mark(id: HarnessId, label: SharedString, tip: SharedString) -> Stateful<Div> {
+    let hover = tip.clone();
+    div()
+        .id("thread-harness")
+        .flex_shrink_0()
+        .h(px(ROW_HEIGHT))
+        .px_1()
+        .flex()
+        .items_center()
+        .role(Role::Image)
+        .aria_label(label.clone())
+        .aria_description(tip)
+        .tooltip(move |_, cx| cx.new(|_| TextTooltip(hover.to_string())).into())
+        .map(|el| match harness_logo(id) {
+            Some(logo) => el.child(logo.text_color(rgb(colors().muted))),
+            None => el.child(label),
+        })
 }

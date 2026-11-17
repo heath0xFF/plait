@@ -82,8 +82,9 @@ stop; this preview provides no security-policy bypass.
 4. Start a real thread. Settings → Approvals selects automatic approval or
    asking for each action. Trusted commands require a separate explicit choice
    for each project. A Codex thread uses Codex's own permissions instead,
-   chosen with **Permissions** under its message box, with a default for new
-   threads in Settings → Agent. The app shows only real threads.
+   chosen with **Permissions** above a new thread's message box or under an
+   open thread's, with a default for new threads in Settings → Agent. The app
+   shows only real threads.
 
 The host is a **per-user LaunchAgent**, not a root daemon. It starts for the
 current graphical user when possible and at later graphical logins. If no
@@ -225,7 +226,11 @@ For a prepared development checkout and a first source-change task, see
 
 Source builds after v0.1.0-preview.2 list projects across the local host's checkouts.
 Opening a folder adds it to the sidebar. Selecting a thread in another project
-switches its conversation, draft, and Git workspace together. The local machine
+switches its conversation, draft, and Git workspace together. The **+** on a
+project row, shown on hover or keyboard focus, opens a new thread there.
+A thread that runs in a harness other than Pi shows that harness's logo beside
+its title; under an open thread's message box, the logo names its harness, with
+the version on hover. The local machine
 appears in workspace context without a redundant row beneath every project.
 Missing folders remain visible as **Missing**; their saved conversations can still
 be read.
@@ -334,9 +339,26 @@ path alongside separate `PLAIT_HOST_STORE` and `PLAIT_DESKTOP_STATE_DIR` paths.
 | Tab | Focus Next Control | `focus.next` |
 | Shift-Tab | Focus Previous Control | `focus.previous` |
 
-Cmd-N creates a thread with the saved default model and puts the cursor in its
-composer. When no default can be used, it opens the model picker and creates
-the thread on selection. Cmd-Shift-N always asks for the model. Cmd-1 to Cmd-9
+Cmd-N opens a new thread in the active project with the cursor in its message
+box. Nothing is created on the host until you send the first message; the
+thread is then created and the message submitted to it. If creation fails, the
+text stays with the reason, and an unconfirmed creation is retried with the
+same request ID, so it cannot make a second thread. Above the message box,
+choose the **project** (a filterable list of sidebar projects, most recently
+active first, and **Open repository…**), the **model** (only the chosen
+harness's models), the **harness** (Pi, and each harness the host lists; one
+that is not ready is listed with its state), and **Permissions** (Pi: Ask or
+Auto, defaulting to Settings → Approvals; another harness: its own modes,
+defaulting to its Settings → Agent default). Changing the harness returns the
+model and permissions to that harness's defaults: Pi's saved default model, or
+the harness's most recently used model, else its first. Switching project keeps
+the new thread open and shows that repository in the inspector. While it is
+open, a **New thread** row marks where it will land in the sidebar. Opening
+another thread sets it aside with its text, which Cmd-N brings back; Escape or
+**Discard** clears it. The text is kept while Plait is open, not across a
+restart. Cmd-Shift-N opens it with the model list open. A thread with no title
+yet reads **New thread**. Cmd-Option-N still creates a worktree thread at once,
+since its worktree is made for it. Cmd-1 to Cmd-9
 count threads in sidebar order; Settings can change this to machines or
 projects. Cmd-B hides or shows the sidebar on the left; Cmd-L hides or shows the
 Git inspector on the right, and that choice is remembered. On a window too narrow

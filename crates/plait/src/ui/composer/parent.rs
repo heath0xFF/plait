@@ -7,8 +7,12 @@ use gpui::*;
 use plait_core::{host::MessageRole, state::Load};
 
 impl Plait {
+    /// The open thread's composer, or the draft's when it is open instead.
     fn selected_composer(&self) -> Option<&Entity<Composer>> {
-        self.composers.get(self.host.selected.as_ref()?)
+        match &self.host.selected {
+            Some(id) => self.composers.get(id),
+            None => self.draft.composer.as_ref().filter(|_| self.draft.open),
+        }
     }
 
     /// Handle the composer events that are not a submission or Stop.
@@ -28,7 +32,7 @@ impl Plait {
     /// Each command is something a menu item or button already does.
     fn run_composer_command(&mut self, id: CommandId, window: &mut Window, cx: &mut Context<Self>) {
         match id {
-            CommandId::NewThread => self.new_thread(None, window, cx),
+            CommandId::NewThread => self.open_draft(window, cx),
             CommandId::ShowChanges => self.show_tab(super::super::Workspace::Changes, cx),
             CommandId::ShowConversation => self.show_tab(super::super::Workspace::Conversation, cx),
             CommandId::StopRun => self.control_thread(None, window, cx),

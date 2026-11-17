@@ -9,6 +9,9 @@ use plait_core::{
 };
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
+/// What a thread is called before it has a first message or a chosen name.
+pub(super) const UNTITLED: &str = "New thread";
+
 #[derive(Default)]
 pub(super) struct SessionState {
     pub required: bool,
@@ -17,7 +20,7 @@ pub(super) struct SessionState {
     pub journal: Option<Arc<Journal>>,
     pub data: Option<Session>,
     pub note: Option<String>,
-    restore_thread: Option<String>,
+    pub(super) restore_thread: Option<String>,
     save: Option<Task<()>>,
 }
 
@@ -167,6 +170,8 @@ impl Plait {
             cx.notify();
             return;
         }
+        // A draft on screen moves with the project; one set aside stays aside.
+        let drafting = self.draft_visible();
         self.capture_session(cx);
         let mut preferences = self.preferences.value.clone();
         preferences.navigation.open(&path);
@@ -198,6 +203,7 @@ impl Plait {
         self.navigation.menu = None;
         self.settings_open = false;
         self.new_thread_open = false;
+        self.draft.open = drafting;
         self.file_scroll = UniformListScrollHandle::new();
         self.notice = None;
         self.state.repository.open(path);
@@ -351,7 +357,8 @@ impl Plait {
         }));
     }
 
-    pub(super) fn summary_title(&self, summary: &ThreadSummary) -> String {
+    /// The host's title, else the one saved from its first message.
+    fn chosen_title(&self, summary: &ThreadSummary) -> Option<String> {
         summary
             .title
             .as_ref()
@@ -362,7 +369,11 @@ impl Plait {
                     .map(|thread| thread.title.clone())
                     .filter(|title| !title.is_empty())
             })
-            .unwrap_or_else(|| format!("Thread {}", summary.id.chars().take(8).collect::<String>()))
+    }
+
+    pub(super) fn summary_title(&self, summary: &ThreadSummary) -> String {
+        self.chosen_title(summary)
+            .unwrap_or_else(|| UNTITLED.to_owned())
     }
 
     pub(super) fn thread_title(&self, id: &str) -> String {
@@ -371,7 +382,32 @@ impl Plait {
             .iter()
             .find(|thread| thread.id == id)
             .map(|summary| self.summary_title(summary))
-            .unwrap_or_else(|| format!("Thread {}", id.chars().take(8).collect::<String>()))
+            .unwrap_or_else(|| UNTITLED.to_owned())
+    }
+
+    /// A thread's name in a control's label. Untitled threads all read "New
+    /// thread", so theirs adds the start of the ID to tell them apart.
+    pub(super) fn thread_name(&self, id: &str) -> String {
+        match self
+            .host
+            .threads
+            .iter()
+            .find(|thread| thread.id == id)
+            .and_then(|summary| self.chosen_title(summary))
+        {
+            Some(title) => title,
+            None => format!("{UNTITLED} {}", id.chars().take(8).collect::<String>()),
+        }
+    }
+
+    /// The name a rename starts from: empty for an untitled thread.
+    pub(super) fn rename_text(&self, id: &str) -> String {
+        self.host
+            .threads
+            .iter()
+            .find(|thread| thread.id == id)
+            .and_then(|summary| self.chosen_title(summary))
+            .unwrap_or_default()
     }
 
     pub(super) fn record_snapshot(&mut self, cx: &mut Context<Self>) {

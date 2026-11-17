@@ -16,6 +16,8 @@ mod markdown;
 mod model_picker;
 mod navigation;
 mod navigation_host;
+mod new_thread;
+mod new_thread_view;
 mod palette;
 mod panels;
 mod permissions;
@@ -130,9 +132,11 @@ pub struct Plait {
     agent: settings_agent::AgentState,
     harnesses: harnesses::HarnessesState,
     providers: settings_providers::ProviderState,
-    /// A new thread was requested: open it when the host confirms creation,
-    /// unless the user has gone elsewhere in the meantime.
+    /// A thread was created at once (a worktree thread): open it when the host
+    /// confirms creation, unless the user has gone elsewhere in the meantime.
     new_thread_open: bool,
+    /// The new thread being written, before anything exists on the host.
+    draft: new_thread::Draft,
     /// A worktree is being created or removed.
     worktree_busy: bool,
     /// Diff lines picked in Changes to ask the selected thread about.
@@ -208,6 +212,7 @@ impl Plait {
             harnesses: Default::default(),
             providers: Default::default(),
             new_thread_open: false,
+            draft: Default::default(),
             worktree_busy: false,
             line_pick: None,
             thread_files: Default::default(),
@@ -390,7 +395,7 @@ impl Plait {
         if self.picker_open {
             return;
         }
-        if self.host.pending_create.is_some() {
+        if self.host.pending_create.is_some() || self.host.creating {
             self.notice =
                 Some("Resolve the pending thread creation before changing checkout.".into());
             cx.notify();
@@ -746,10 +751,13 @@ impl Render for Plait {
         } else {
             ("Host disconnected".to_owned(), colors().amber)
         };
+        let drafting = !real && self.draft.open;
         let title = if self.settings_open {
             "Settings".to_owned()
         } else if real {
             self.thread_title(self.host.selected.as_deref().unwrap_or_default())
+        } else if drafting {
+            session::UNTITLED.to_owned()
         } else {
             project.name.clone()
         };
@@ -767,7 +775,7 @@ impl Render for Plait {
             connection
         };
         // With no thread open the title is already the project; don't repeat it.
-        let location = if real || self.settings_open {
+        let location = if real || drafting || self.settings_open {
             format!("{} / {}", project.name, machine.name)
         } else {
             machine.name.clone()
@@ -830,9 +838,7 @@ impl Render for Plait {
             .on_action(cx.listener(|this, _: &CommandPalette, window, cx| {
                 this.toggle_command_palette(window, cx)
             }))
-            .on_action(
-                cx.listener(|this, _: &NewThread, window, cx| this.new_thread(None, window, cx)),
-            )
+            .on_action(cx.listener(|this, _: &NewThread, window, cx| this.open_draft(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleChangedFiles, _, cx| {
                 let hidden = !this.preferences.value.hide_changed_files;
                 this.set_changed_files_hidden(hidden, cx)
@@ -841,6 +847,7 @@ impl Render for Plait {
                 this.new_worktree_thread(window, cx)
             }))
             .on_action(cx.listener(|this, _: &NewThreadWithModel, window, cx| {
+                this.open_draft(window, cx);
                 this.open_model_picker(model_picker::ModelPurpose::NewThread, window, cx)
             }))
             .on_action(cx.listener(|this, _: &SwitchThreadModel, window, cx| {
@@ -972,6 +979,8 @@ impl Render for Plait {
                                 self.changes(wide, cx).into_any_element()
                             } else if real {
                                 self.live_conversation(wide, cx).into_any_element()
+                            } else if drafting {
+                                self.draft_view(wide, cx).into_any_element()
                             } else {
                                 self.idle(wide, cx).into_any_element()
                             }),

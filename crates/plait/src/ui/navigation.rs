@@ -70,6 +70,8 @@ enum Row {
         folded: Option<usize>,
     },
     Thread(usize),
+    /// The new-thread draft, at the top of its project's threads.
+    Draft,
 }
 
 /// Left edge of the rail that joins a project's threads, under its chevron.
@@ -136,11 +138,17 @@ impl Plait {
                 .push(index);
         }
         let query = self.navigation.filter.read(cx).text().trim().to_lowercase();
+        // Where the draft will land stays in view, whatever the filter.
+        let drafted = self
+            .draft
+            .open
+            .then(|| self.project_of(&self.host.checkout));
         let mut rows = Vec::new();
         for (pi, project) in self.state.projects.iter().enumerate() {
             let matching = grouped.get(project.checkout.as_path());
             let project_matches = query.is_empty() || project.name.to_lowercase().contains(&query);
-            if matching.is_none() && (!project_matches || self.navigation.attention) {
+            let draft = drafted == Some(project.checkout.as_path());
+            if matching.is_none() && !draft && (!project_matches || self.navigation.attention) {
                 continue;
             }
             let open = !self.navigation.collapsed.contains(&project.checkout) || !query.is_empty();
@@ -151,6 +159,9 @@ impl Plait {
                     .then(|| matching.map_or(0, Vec::len))
                     .filter(|count| *count > 0),
             });
+            if draft {
+                rows.push(Row::Draft);
+            }
             if open && let Some(indices) = matching {
                 rows.extend(indices.iter().copied().map(Row::Thread));
             }
@@ -168,9 +179,12 @@ impl Plait {
         let project = &self.state.projects[pi];
         let checkout = project.checkout.clone();
         let hide = checkout.clone();
+        let start = checkout.clone();
+        let group = SharedString::from(format!("project-row-{pi}"));
         let expanded = !self.navigation.collapsed.contains(&checkout);
         let unavailable = self.navigation.available.get(&checkout) == Some(&false);
         row()
+            .group(group.clone())
             .w_full()
             .h(px(ROW_HEIGHT))
             .gap_0()
@@ -219,6 +233,21 @@ impl Plait {
                         this.navigation.collapsed.insert(checkout.clone());
                     }
                     cx.notify();
+                }),
+            )
+            // Out of the way until the row is hovered or the button has focus.
+            .child(
+                icon_button(
+                    ("project-new-thread", pi),
+                    "plus",
+                    format!("New thread in {}", project.name),
+                )
+                .opacity(0.)
+                .group_hover(group, |s| s.opacity(1.))
+                .focus_visible(|s| s.border_color(rgb(colors().blue)).opacity(1.))
+                .tooltip(|_, cx| cx.new(|_| TextTooltip("New thread here".into())).into())
+                .on_activate(cx, move |this, window, cx| {
+                    this.open_draft_in(start.clone(), window, cx)
                 }),
             )
             .child(
@@ -365,6 +394,14 @@ impl Plait {
                         .text_color(rgb(colors().text))
                         .when(unread, |el| el.font_weight(FontWeight::SEMIBOLD)),
                 )
+                // Pi needs no mark; another harness's logo says where the thread runs.
+                .when_some(
+                    thread
+                        .harness
+                        .filter(|harness| *harness != plait_core::host::harness::HarnessId::Pi)
+                        .and_then(harness_logo),
+                    |el, logo| el.child(logo.size(px(12.)).text_color(rgb(colors().subtle))),
+                )
                 // A glyph, not a word: the title needs the width more.
                 .when(worktree, |el| {
                     el.child(
@@ -400,7 +437,7 @@ impl Plait {
                     icon_button(
                         ("thread-actions", index),
                         "more",
-                        format!("Actions for {}", self.thread_title(&menu_id)),
+                        format!("Actions for {}", self.thread_name(&menu_id)),
                     )
                     .on_activate(cx, move |this, _, cx| {
                         this.navigation.menu = Some(menu_id.clone());
@@ -439,6 +476,7 @@ impl Plait {
                                         folded,
                                     } => this.project_row(index, after, folded, cx),
                                     Row::Thread(ti) => this.host_thread_row(ti, cx),
+                                    Row::Draft => this.draft_row(cx),
                                 })
                                 .collect::<Vec<_>>()
                         }),
@@ -637,7 +675,7 @@ impl Plait {
                 .scroll
                 .scroll_to_item(index, ScrollStrategy::Nearest);
         }
-        let title = self.thread_title(&id);
+        let title = self.rename_text(&id);
         let field = cx.new(|cx| {
             let mut field = TextField::new("Thread name", "Name this thread", cx);
             field.set_text(&title, cx);
@@ -765,6 +803,48 @@ impl Plait {
         cx.notify();
     }
 
+    /// The draft under its project: selected while on screen, and discardable here.
+    fn draft_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let selected = self.draft_visible();
+        row()
+            .w_full()
+            .h(px(ROW_HEIGHT))
+            .gap_0()
+            .relative()
+            .child(
+                div()
+                    .absolute()
+                    .left(px(RAIL_X))
+                    .top_0()
+                    .bottom_0()
+                    .w(px(1.))
+                    .bg(rgb(colors().border)),
+            )
+            .child(
+                nav_row(
+                    "draft-thread",
+                    "New thread, not started. Sending its first message creates it here.",
+                    selected,
+                )
+                .w_auto()
+                .flex_1()
+                .min_w_0()
+                .role(Role::TreeItem)
+                .aria_level(2)
+                .aria_selected(selected)
+                .pl(px(RAIL_X + 5.))
+                .child(icon("plus").size(px(12.)).text_color(rgb(colors().mint)))
+                .child(title(super::session::UNTITLED).text_color(rgb(colors().text)))
+                .child(tag("Draft", colors().subtle).flex_shrink_0())
+                .on_activate(cx, |this, window, cx| this.open_draft(window, cx)),
+            )
+            .child(
+                icon_button("draft-discard-row", "close", "Discard new thread")
+                    .on_activate(cx, |this, window, cx| this.discard_draft(window, cx)),
+            )
+            .into_any_element()
+    }
+
     /// New thread, the model it will start with, and a way to pick another.
     fn new_thread_row(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let model = self.new_thread_model().map(|model| model.name.clone());
@@ -795,12 +875,13 @@ impl Plait {
                             .text_color(rgb(colors().subtle))
                             .child(model.unwrap_or_else(|| "Choose a model…".into())),
                     )
-                    .on_activate(cx, |this, window, cx| this.new_thread(None, window, cx)),
+                    .on_activate(cx, |this, window, cx| this.open_draft(window, cx)),
             )
             .child(
                 icon_button("new-thread-model", "down", "New thread with another model…")
                     .aria_keyshortcuts(self.shortcut_aria("thread.new_with_model"))
                     .on_activate(cx, |this, window, cx| {
+                        this.open_draft(window, cx);
                         this.open_model_picker(ModelPurpose::NewThread, window, cx)
                     }),
             )

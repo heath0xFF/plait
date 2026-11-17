@@ -10,6 +10,15 @@ use plait_core::{
 };
 use serde::de::DeserializeOwned;
 
+/// What a creation request was sent with, to check its reply against.
+pub(super) struct Created {
+    pub(super) request_id: String,
+    pub(super) choice: host::ModelChoice,
+    pub(super) harness: host::harness::HarnessId,
+    /// The selection when it was sent; a direct creation opens only if it is unchanged.
+    pub(super) selection_epoch: u64,
+}
+
 pub(super) struct WatchLease {
     pub(super) cancel: Option<host::CancelWatch>,
     pub(super) executor: BackgroundExecutor,
@@ -167,31 +176,15 @@ impl Plait {
         self.history = Default::default();
         self.settings_open = false;
         self.new_thread_open = false;
+        // Leaving a new-thread draft keeps its text for the next New Thread.
+        self.draft.open = false;
         self.tab = super::Workspace::Conversation;
         self.refresh_live_list(None);
         self.formatted = Default::default();
         if !self.composers.contains_key(&id) {
             let composer = cx.new(|cx| Composer::new(window, cx));
             self.restore_composer(&id, &composer, cx);
-            cx.observe(&composer, |this, _, cx| this.capture_session(cx))
-                .detach();
-            let thread_id = id.clone();
-            cx.subscribe_in(&composer, window, move |this, _, event, window, cx| {
-                if this.host.selected.as_ref() != Some(&thread_id) {
-                    return;
-                }
-                match event {
-                    ComposerEvent::Submit {
-                        text,
-                        revision,
-                        steer,
-                    } => this.submit_message(text.clone(), *revision, *steer, window, cx),
-                    ComposerEvent::Stop => this.control_thread(None, window, cx),
-                    other => this.composer_event(other, window, cx),
-                }
-            })
-            .detach();
-            self.composers.insert(id.clone(), composer);
+            self.attach_composer(id.clone(), composer, window, cx);
         }
         self.capture_session(cx);
         self.sync_composer(cx);
@@ -199,6 +192,36 @@ impl Plait {
             self.watch_thread(id, window, cx);
         }
         cx.notify();
+    }
+
+    /// Make `composer` thread `id`'s: its edits are saved, and its events act
+    /// on the thread while it is open.
+    pub(super) fn attach_composer(
+        &mut self,
+        id: String,
+        composer: Entity<Composer>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.observe(&composer, |this, _, cx| this.capture_session(cx))
+            .detach();
+        let thread_id = id.clone();
+        cx.subscribe_in(&composer, window, move |this, _, event, window, cx| {
+            if this.host.selected.as_ref() != Some(&thread_id) {
+                return;
+            }
+            match event {
+                ComposerEvent::Submit {
+                    text,
+                    revision,
+                    steer,
+                } => this.submit_message(text.clone(), *revision, *steer, window, cx),
+                ComposerEvent::Stop => this.control_thread(None, window, cx),
+                other => this.composer_event(other, window, cx),
+            }
+        })
+        .detach();
+        self.composers.insert(id, composer);
     }
 
     fn watch_thread(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -376,9 +399,10 @@ impl Plait {
             if !self.usable_in(harness, &choice) {
                 return;
             }
+            let mode = self.new_thread_mode(&choice);
             self.host.pending_create = Some((request_id(), choice));
             self.host.pending_thinking = Some(self.preferences.value.default_thinking());
-            self.set_pending_harness(harness);
+            self.set_pending_harness(harness, mode);
         }
         let (id, choice) = self.host.pending_create.clone().unwrap();
         let thinking = self.host.pending_thinking;
@@ -387,38 +411,95 @@ impl Plait {
         self.host.creating = true;
         self.host.error = None;
         let selection_epoch = self.host.watch_epoch;
-        self.host_request::<host::ThreadReply>(Request::create_thread(
-            self.host.checkout.clone(), &choice, id, thinking, harness, protocol,
-        ), window, cx, move |this, result, window, cx| {
-            this.host.creating = false;
-            match result {
-                Ok(reply) if reply.thread.model == choice && super::harnesses::harness_of(&reply.thread) == harness => {
-                    this.host.pending_create = None;
-                    if !this.host.threads.iter().any(|thread| thread.id == reply.thread.id) {
-                        this.host.threads.insert(0, host::ThreadSummary::from(&reply.thread));
-                    }
-                    if this.new_thread_open && this.host.watch_epoch == selection_epoch {
-                        this.select_host_thread(reply.thread.id, window, cx);
-                        this.focus_composer(window, cx);
-                    }
-                    // Recent models are Pi's catalog; another harness's would crowd them out.
-                    if harness == host::harness::HarnessId::Pi {
-                        this.record_recent_model(&choice, cx);
-                    }
-                    this.load_threads(window, cx);
+        let request = Request::create_thread(
+            self.host.checkout.clone(),
+            &choice,
+            id.clone(),
+            thinking,
+            harness,
+            protocol,
+        )
+        .with_mode(self.pending_mode());
+        self.host_request::<host::ThreadReply>(
+            request,
+            window,
+            cx,
+            move |this, result, window, cx| {
+                let created = Created {
+                    request_id: id,
+                    choice,
+                    harness,
+                    selection_epoch,
+                };
+                this.finish_create(created, result, window, cx)
+            },
+        );
+        self.sync_composer(cx);
+        cx.notify();
+    }
+
+    /// The host answered a thread creation. A draft's reply delivers its first
+    /// message; any other opens the thread if the person is still waiting for it.
+    pub(super) fn finish_create(
+        &mut self,
+        created: Created,
+        result: Result<host::ThreadReply, host::Error>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Created {
+            request_id,
+            choice,
+            harness,
+            selection_epoch,
+        } = created;
+        // Only the creation still pending; the host answers each request once.
+        if self.host.pending_create.as_ref().map(|(id, _)| id) != Some(&request_id) {
+            return;
+        }
+        self.host.creating = false;
+        let drafted = self.draft_sent(&request_id);
+        match result {
+            Ok(reply)
+                if reply.thread.model == choice
+                    && super::harnesses::harness_of(&reply.thread) == harness =>
+            {
+                self.host.pending_create = None;
+                let id = reply.thread.id.clone();
+                if !self.host.threads.iter().any(|thread| thread.id == id) {
+                    self.host
+                        .threads
+                        .insert(0, host::ThreadSummary::from(&reply.thread));
+                    self.rebuild_projects(cx);
                 }
-                Ok(_) => this.host.error = Some("Host returned a different model or harness. Creation is unconfirmed; reconnect before retrying.".into()),
-                Err(error) => {
-                    if matches!(error, host::Error::Rejected(_)) {
-                        this.host.pending_create = None;
-                        this.host.error = Some(error.to_string());
+                if drafted {
+                    self.deliver_draft(id, window, cx);
+                } else if self.new_thread_open && self.host.watch_epoch == selection_epoch {
+                    self.select_host_thread(id, window, cx);
+                    self.focus_composer(window, cx);
+                }
+                self.record_recent_model(&choice, cx);
+                self.load_threads(window, cx);
+            }
+            Ok(_) => {
+                self.host.error = Some("Host returned a different model or harness. Creation is unconfirmed; reconnect before retrying.".into())
+            }
+            Err(error) => {
+                if matches!(error, host::Error::Rejected(_)) {
+                    self.host.pending_create = None;
+                    if drafted {
+                        self.draft_rejected(error.to_string());
                     } else {
-                        this.host.error = Some(format!("{error} Retry creation to reuse the same request ID."));
+                        self.host.error = Some(error.to_string());
                     }
+                } else {
+                    self.host.error = Some(format!(
+                        "{error} Retry creation to reuse the same request ID."
+                    ));
                 }
             }
-        });
-        cx.notify();
+        }
+        self.sync_composer(cx);
     }
 
     fn submit_message(
@@ -645,6 +726,7 @@ impl Plait {
 
     pub(super) fn sync_composer(&mut self, cx: &mut Context<Self>) {
         self.sync_thread_harness();
+        self.sync_draft_composer(cx);
         let Some(id) = self.host.selected.as_ref() else {
             return;
         };

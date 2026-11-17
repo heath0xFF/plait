@@ -1,5 +1,4 @@
-//! The model picker: the host's catalog as palette items, what a choice does,
-//! and starting a thread without an intermediate page.
+//! The model picker: the host's catalog as palette items, and what a choice does.
 //!
 //! The picker shows availability the host reported. Favorites and recently
 //! used models are desktop preferences: identifiers only, never credentials.
@@ -21,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 /// What the chosen model is for. A per-thread switch would be a third purpose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ModelPurpose {
-    /// Create a thread with the chosen model.
+    /// The new-thread draft's model, from its harness's list.
     NewThread,
     /// Save the chosen model as the host's default for new threads.
     DefaultModel,
@@ -154,17 +153,17 @@ pub(super) fn picker_items(
 }
 
 impl Plait {
-    /// The harness whose models a picker lists: the open thread's for its own menu, else Pi.
+    /// The harness whose models a picker lists: the open thread's for its own
+    /// menu, the draft's for a new thread, else Pi.
     fn picker_harness(&self, purpose: Option<ModelPurpose>) -> HarnessId {
-        if purpose == Some(ModelPurpose::ThreadModel) {
-            self.thread_harness()
-        } else {
-            HarnessId::Pi
+        match purpose {
+            Some(ModelPurpose::ThreadModel) => self.thread_harness(),
+            Some(ModelPurpose::NewThread) => self.draft.harness,
+            _ => HarnessId::Pi,
         }
     }
 
-    /// Pi's catalog as today. A new thread can also start in any other ready
-    /// harness, and a thread in one can switch only among its models.
+    /// Pi's catalog, or only the models of the harness the thread runs in.
     fn picker_items(&self, purpose: Option<ModelPurpose>) -> Vec<Item> {
         let Some(status) = self.host.status.as_ref().filter(|_| self.host.connected) else {
             return Vec::new();
@@ -176,15 +175,11 @@ impl Plait {
                 .map(super::harnesses::thread_items)
                 .unwrap_or_default();
         }
-        let mut items = picker_items(
+        picker_items(
             &status.models,
             &self.preferences.value,
             status.default_model.as_ref(),
-        );
-        if purpose == Some(ModelPurpose::NewThread) {
-            items.extend(super::harnesses::new_thread_items(self.harness_rows()));
-        }
-        items
+        )
     }
 
     pub(super) fn picker_stamp(&self) -> PickerStamp {
@@ -310,20 +305,20 @@ impl Plait {
         cx: &mut Context<Self>,
     ) {
         let (name, placeholder) = match purpose {
-            ModelPurpose::NewThread => (
-                "Choose a model for the new thread",
-                "Search models to start a thread…",
-            ),
+            ModelPurpose::NewThread => ("Model for the new thread", "Search models…"),
             ModelPurpose::DefaultModel => {
                 ("Choose the default model", "Search models for the default…")
             }
             ModelPurpose::ThreadModel => ("Change thread model", "Search models for this thread…"),
         };
         let status = self.host.status.as_ref().filter(|_| self.host.connected);
-        let preferred = if purpose == ModelPurpose::ThreadModel {
-            self.host.snapshot.as_ref().map(|snapshot| &snapshot.model)
-        } else {
-            status.and_then(|status| status.default_model.as_ref())
+        let drafted = self.draft_model();
+        let preferred = match purpose {
+            ModelPurpose::ThreadModel => {
+                self.host.snapshot.as_ref().map(|snapshot| &snapshot.model)
+            }
+            ModelPurpose::NewThread => drafted.as_ref(),
+            ModelPurpose::DefaultModel => status.and_then(|status| status.default_model.as_ref()),
         };
         let harness = self.picker_harness(Some(purpose));
         let default = status.and_then(|status| {
@@ -359,66 +354,21 @@ impl Plait {
         self.set_preferences(value, PreferenceGroup::Models, cx);
     }
 
-    /// Called once the host confirms a thread was created with `choice`.
+    /// Called once the host confirms a thread was created with `choice`, in any
+    /// harness. Each list shows only its own models, and a new thread in a
+    /// harness other than Pi starts with the one used most recently.
     pub(super) fn record_recent_model(&mut self, choice: &ModelChoice, cx: &mut Context<Self>) {
         let mut value = self.preferences.value.clone();
         value.record_recent(choice);
         self.set_preferences(value, PreferenceGroup::Models, cx);
     }
 
-    /// Start a thread at once with `model`, or with the saved default. When
-    /// neither can be used, ask with the picker and create on selection.
-    pub(super) fn new_thread(
-        &mut self,
-        model: Option<ModelChoice>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.new_thread_in(HarnessId::Pi, model, window, cx)
-    }
-
-    /// As `new_thread`, in harness `harness`. Only Pi has a saved default.
-    pub(super) fn new_thread_in(
-        &mut self,
-        harness: HarnessId,
-        model: Option<ModelChoice>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.close_overlay(true, window, cx);
-        // An unconfirmed creation keeps its request ID. Retry it; a second
-        // request could create a second thread.
-        if self.host.pending_create.is_some() {
-            self.new_thread_open = true;
-            self.create_host_thread(window, cx);
-            return;
-        }
-        let default = || self.host.status.as_ref()?.default_model.clone();
-        let choice = if harness == HarnessId::Pi {
-            model.or_else(default)
-        } else {
-            model
-        }
-        .filter(|choice| self.usable_in(harness, choice));
-        let Some(choice) = choice else {
-            return self.open_model_picker(ModelPurpose::NewThread, window, cx);
-        };
-        self.choose_new_harness(harness, &choice);
-        self.host.new_model = Some(choice);
-        self.new_thread_open = true;
-        self.settings_open = false;
-        self.tab = super::Workspace::Conversation;
-        self.create_host_thread(window, cx);
-        cx.notify();
-    }
-
-    /// Put the keyboard in the selected thread's composer.
+    /// Put the keyboard in the selected thread's composer, or the draft's.
     pub(super) fn focus_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let composer = self
-            .host
-            .selected
-            .as_ref()
-            .and_then(|id| self.composers.get(id));
+        let composer = match &self.host.selected {
+            Some(id) => self.composers.get(id),
+            None => self.draft.composer.as_ref().filter(|_| self.draft.open),
+        };
         if let Some(composer) = composer {
             window.focus(&composer.focus_handle(cx), cx);
         }
@@ -471,6 +421,10 @@ impl Plait {
                     .into_any_element(),
             );
         }
+        // The draft says how its own creation stands, under its composer.
+        if self.draft_visible() && self.draft_pending() {
+            return None;
+        }
         if self.host.creating {
             let model = self.host.pending_create.as_ref().map(|(_, model)| model);
             let label = model.map_or_else(
@@ -503,7 +457,7 @@ impl Plait {
                     )
                     .child(if connected {
                         toned_button("retry-create-thread", "Retry thread creation", Tone::Filled)
-                            .on_activate(cx, |this, window, cx| this.new_thread(None, window, cx))
+                            .on_activate(cx, |this, window, cx| this.retry_create(window, cx))
                     } else {
                         toned_button("reconnect-to-create", "Reconnect", Tone::Filled)
                             .disabled(self.host.connecting)

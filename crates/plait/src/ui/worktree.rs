@@ -17,7 +17,7 @@ impl Plait {
         }
         // An unconfirmed creation is retried where it was asked for.
         if self.host.creating || self.host.pending_create.is_some() {
-            return self.new_thread(None, window, cx);
+            return self.retry_create(window, cx);
         }
         if !self.host.connected || self.host.protocol() < 3 {
             self.notice = Some("Connect to the host to start a thread in a worktree.".into());
@@ -53,7 +53,7 @@ impl Plait {
                             .remember_worktree(tree.path.clone(), main, tree.branch);
                         this.persist_navigation(value, cx);
                         this.change_checkout(tree.path, window, cx);
-                        this.new_thread(Some(choice), window, cx);
+                        this.create_now(choice, window, cx);
                     }
                     Err(error) => {
                         this.notice = Some(format!("Worktree not created. {error}"));

@@ -25,6 +25,8 @@ ui/                     GPUI layout, actions, focus, lists, theme
   commands.rs           command palette sources and the overlay above the workspace
   palette.rs            search field over a ranked list; ranking off the UI thread
   model_picker.rs       model catalog as a palette; default, favorites, new thread
+  new_thread.rs         the new-thread draft: created on its first send, reply guards
+  new_thread_view.rs    the draft's project, model, harness, permissions row, and menus
   text_field.rs         single-line input: IME, selection, clipboard, undo
   navigation.rs         virtualized projects and threads, filtering and management
   navigation_host.rs    cross-checkout listing, live summaries, and notifications

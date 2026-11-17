@@ -80,7 +80,7 @@ impl Plait {
                         if reconnect {
                             this.reconnect_host(window, cx);
                         } else {
-                            this.new_thread(None, window, cx);
+                            this.open_draft(window, cx);
                         }
                     }),
             );

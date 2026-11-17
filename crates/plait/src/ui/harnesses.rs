@@ -32,10 +32,11 @@ pub(super) struct HarnessesState {
     /// The latest request; an earlier reply that lands after it is dropped.
     serial: u64,
     note: Option<SharedString>,
-    /// The harness of the model last chosen for a new thread.
-    chosen: Option<(HarnessId, ModelChoice)>,
-    /// The harness `host.pending_create` was made for, so a retry repeats it.
+    /// The harness of the model last chosen for a new thread, and its permission mode.
+    chosen: Option<(HarnessId, ModelChoice, Option<String>)>,
+    /// The harness and mode `host.pending_create` was made for, so a retry repeats them.
     pending: HarnessId,
+    pending_mode: Option<String>,
     /// The open thread's harness, the list generation, and what its composer line says.
     line: Option<(ThreadHarness, u64, ThreadLine)>,
 }
@@ -44,6 +45,8 @@ pub(super) struct HarnessesState {
 pub(super) struct ThreadLine {
     /// The harness and the version of the thread's latest run, as "Codex 0.169.0".
     pub(super) label: SharedString,
+    /// The logo's hover text: `label`, and whether that version was tested.
+    pub(super) tip: SharedString,
     pub(super) protection: Option<SharedString>,
     /// The harness's own permission mode, when the host lists its modes.
     pub(super) mode: Option<ModeLine>,
@@ -211,36 +214,61 @@ pub(super) fn thread_items(row: &HarnessRow) -> Vec<Item> {
         .collect()
 }
 
-/// Rows the new-thread picker lists after Pi's catalog: each ready harness's
-/// models under its name, and one row saying what is wrong with each other one.
-pub(super) fn new_thread_items(rows: &[HarnessRow]) -> Vec<Item> {
-    let mut items = Vec::new();
-    for row in rows.iter().filter(|row| row.id != HarnessId::Pi) {
-        if row.ready && !row.models.is_empty() {
-            items.extend(thread_items(row));
-            continue;
+/// The harness list a new thread chooses from: Pi, then every harness the host
+/// lists. One that cannot start a thread is listed, disabled, with its state.
+pub(super) fn harness_items(rows: &[HarnessRow], current: HarnessId) -> Vec<Item> {
+    let item = |id: HarnessId, name: SharedString, detail: SharedString| {
+        let item = Item::new(
+            format!("harness\u{1f}{name}"),
+            name,
+            Command::DraftHarness(id),
+        )
+        .detail(detail)
+        .section("Agent harnesses");
+        match harness_glyph(id) {
+            Some(glyph) => item.glyph(glyph, colors().text),
+            None => item,
         }
-        let (badge, detail) = if row.ready {
-            (
-                "No models".into(),
-                SharedString::from("It listed no models."),
-            )
+    };
+    let current_badge = |item: Item, id: HarnessId| {
+        if id == current {
+            item.badge("Current", colors().blue)
         } else {
-            (row.state.clone(), row.note.clone().unwrap_or_default())
-        };
-        items.push(
-            Item::new(
-                format!("harness\u{1f}{}", row.name),
-                row.name.clone(),
-                Command::HarnessSettings,
-            )
-            .detail(detail)
-            .section(row.name.clone())
-            .badge(badge, colors().amber)
-            .enabled(false),
+            item
+        }
+    };
+    // An older host lists none; every thread runs in Pi.
+    if !rows.iter().any(|row| row.id == HarnessId::Pi) {
+        let pi = item(HarnessId::Pi, "Pi".into(), "Built into the host".into());
+        let mut items = vec![current_badge(pi, HarnessId::Pi)];
+        items.extend(
+            rows.iter()
+                .map(|row| harness_item(row, &item, &current_badge)),
         );
+        return items;
     }
-    items
+    rows.iter()
+        .map(|row| harness_item(row, &item, &current_badge))
+        .collect()
+}
+
+fn harness_item(
+    row: &HarnessRow,
+    item: &impl Fn(HarnessId, SharedString, SharedString) -> Item,
+    current: &impl Fn(Item, HarnessId) -> Item,
+) -> Item {
+    let usable = row.ready && (row.id == HarnessId::Pi || !row.models.is_empty());
+    let detail = row.note.clone().unwrap_or_else(|| row.version.clone());
+    let listed = item(row.id, row.name.clone(), detail);
+    if usable && row.id != HarnessId::Other {
+        return current(listed, row.id);
+    }
+    let badge = if row.ready {
+        SharedString::from("No models")
+    } else {
+        row.state.clone()
+    };
+    listed.badge(badge, colors().amber).enabled(false)
 }
 
 /// The harness a snapshot's thread runs in. Hosts before version 4 run only Pi.
@@ -365,25 +393,44 @@ impl Plait {
             .map_or(HarnessId::Pi, harness_of)
     }
 
-    /// Remember which harness a new thread's model came from.
-    pub(super) fn choose_new_harness(&mut self, id: HarnessId, choice: &ModelChoice) {
-        self.harnesses.chosen = Some((id, choice.clone()));
+    /// Remember which harness a new thread's model came from, and the
+    /// harness's own mode to start it in (`None`: the harness default).
+    pub(super) fn choose_new_harness(
+        &mut self,
+        id: HarnessId,
+        choice: &ModelChoice,
+        mode: Option<String>,
+    ) {
+        self.harnesses.chosen = Some((id, choice.clone(), mode));
     }
 
     /// The harness for a new thread with `choice`: the one it was chosen from, else Pi.
     pub(super) fn new_thread_harness(&self, choice: &ModelChoice) -> HarnessId {
         match &self.harnesses.chosen {
-            Some((id, chosen)) if chosen == choice => *id,
+            Some((id, chosen, _)) if chosen == choice => *id,
             _ => HarnessId::Pi,
         }
     }
 
-    pub(super) fn set_pending_harness(&mut self, id: HarnessId) {
+    /// The mode chosen with `choice`, for a harness other than Pi.
+    pub(super) fn new_thread_mode(&self, choice: &ModelChoice) -> Option<String> {
+        match &self.harnesses.chosen {
+            Some((id, chosen, mode)) if chosen == choice && *id != HarnessId::Pi => mode.clone(),
+            _ => None,
+        }
+    }
+
+    pub(super) fn set_pending_harness(&mut self, id: HarnessId, mode: Option<String>) {
         self.harnesses.pending = id;
+        self.harnesses.pending_mode = mode;
     }
 
     pub(super) fn pending_harness(&self) -> HarnessId {
         self.harnesses.pending
+    }
+
+    pub(super) fn pending_mode(&self) -> Option<String> {
+        self.harnesses.pending_mode.clone()
     }
 
     /// Why the open thread cannot send because of its harness, if it cannot.
@@ -418,6 +465,7 @@ impl Plait {
             serial: self.harnesses.serial,
             chosen: self.harnesses.chosen.take(),
             pending: self.harnesses.pending,
+            pending_mode: self.harnesses.pending_mode.take(),
             ..Default::default()
         };
         self.refresh_harnesses(cx);
@@ -537,9 +585,13 @@ impl Plait {
         }
         let row = self.harness_row(key.id);
         let name = row.map_or_else(|| key.id.label().into(), |row| row.name.clone());
-        let label = match &key.version {
+        let label: SharedString = match &key.version {
             Some(version) => format!("{name} {version}").into(),
             None => name,
+        };
+        let tip = match row.and_then(|row| row.note.as_ref()) {
+            Some(note) => format!("{label}. {note}").into(),
+            None => label.clone(),
         };
         let protection = row
             .map(|row| row.protection.clone())
@@ -550,6 +602,7 @@ impl Plait {
             generation,
             ThreadLine {
                 label,
+                tip,
                 protection,
                 mode,
             },
@@ -578,7 +631,7 @@ impl Plait {
         });
         let mut page = settings::section("Agent harnesses").child(settings::setting(
             "What can run a thread",
-            "Pi is built in. Codex runs through your own install, with its own sign-in and settings. Pick a model from any ready harness when you start a thread; the thread stays in that harness.",
+            "Pi is built in. Codex runs through your own install, with its own sign-in and settings. Choose the harness above a new thread's message box; the thread stays in it.",
             refresh,
         ));
         if !self.host.connected {
@@ -631,6 +684,9 @@ impl Plait {
             .child(
                 row()
                     .gap_2()
+                    .children(
+                        harness_logo(harness.id).map(|logo| logo.text_color(rgb(colors().text))),
+                    )
                     .child(
                         div()
                             .text_size(px(12.))
@@ -757,8 +813,7 @@ impl Plait {
 mod tests {
     // Named imports: a glob would bring in GPUI's own `test` attribute.
     use super::{
-        HarnessId, Harnesses, HarnessesView, ThreadHarness, mode_line, new_thread_items,
-        thread_items,
+        HarnessId, Harnesses, HarnessesView, ThreadHarness, harness_items, mode_line, thread_items,
     };
 
     fn sample() -> Harnesses {
@@ -811,45 +866,46 @@ mod tests {
     }
 
     #[test]
-    fn the_new_thread_picker_adds_ready_models_and_one_row_per_unready_harness() {
+    fn the_harness_list_offers_ready_harnesses_and_shows_the_rest_disabled() {
         let view = HarnessesView::new(sample());
-        let items = new_thread_items(&view.rows);
-        let listed = items
-            .iter()
-            .map(|item| {
-                (
-                    item.section.to_string(),
-                    item.title.to_string(),
-                    item.enabled,
-                    item.badge.as_ref().map(|(badge, _)| badge.to_string()),
-                )
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            listed,
-            vec![
-                ("Codex".into(), "A".into(), true, None),
-                (
-                    "Codex".into(),
-                    "B".into(),
-                    false,
-                    Some("Not signed in".into())
-                ),
-                (
-                    "Someday".into(),
-                    "Someday".into(),
-                    false,
-                    Some("Signed out".into())
-                ),
-            ]
-        );
-        // No favorite toggle or Set default: those are Pi's.
-        assert!(
+        let listed = |items: Vec<super::Item>| {
             items
                 .iter()
-                .all(|item| item.marked.is_none() && item.aside.is_none())
+                .map(|item| {
+                    (
+                        item.title.to_string(),
+                        item.enabled,
+                        item.badge.as_ref().map(|(badge, _)| badge.to_string()),
+                        item.glyph.map(|(glyph, _)| glyph),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            listed(harness_items(&view.rows, HarnessId::Codex)),
+            vec![
+                ("Pi".into(), true, None, Some("harness-pi")),
+                (
+                    "Codex".into(),
+                    true,
+                    Some("Current".into()),
+                    Some("harness-openai")
+                ),
+                ("Someday".into(), false, Some("Signed out".into()), None),
+            ]
         );
+        let items = harness_items(&view.rows, HarnessId::Pi);
         assert_eq!(items[2].detail.as_ref(), "Sign in first.");
+        // An older host lists nothing: Pi alone, current.
+        assert_eq!(
+            listed(harness_items(&[], HarnessId::Pi)),
+            vec![(
+                "Pi".into(),
+                true,
+                Some("Current".into()),
+                Some("harness-pi")
+            )]
+        );
         // A Codex thread's menu lists only Codex models.
         assert_eq!(thread_items(&view.rows[1]).len(), 2);
         assert!(thread_items(&view.rows[0]).is_empty());

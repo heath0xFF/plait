@@ -23,6 +23,10 @@ code. Keep them pinned, inspect their supported APIs, and retain their licenses
 and notices. Use the [Plait artwork](../assets/branding/README.md) for branding;
 retain its provenance and editing notes.
 
+Each agent harness is identified by its maker's logo, as other open-source agent
+clients do. The [harness logos](../assets/harnesses/README.md) name the harness
+only; they are never Plait branding. Keep their source, version, and license.
+
 ## Product boundaries
 
 - Native Rust + GPUI, not a web desktop shell.

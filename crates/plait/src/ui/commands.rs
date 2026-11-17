@@ -45,6 +45,10 @@ pub(super) enum Command {
     },
     /// Open the project's command policy in Settings.
     PolicySettings,
+    /// The new-thread draft's project, harness, and Pi approvals.
+    DraftProject(std::path::PathBuf),
+    DraftHarness(HarnessId),
+    DraftApproval(Option<plait_core::host::ApprovalMode>),
     /// The thinking level new threads start at.
     DefaultThinking(plait_core::host::ThinkingLevel),
     /// A checkout-relative path, from quick open.
@@ -81,6 +85,9 @@ impl Clone for Command {
                 select: select.clone(),
             },
             Self::PolicySettings => Self::PolicySettings,
+            Self::DraftProject(path) => Self::DraftProject(path.clone()),
+            Self::DraftHarness(id) => Self::DraftHarness(*id),
+            Self::DraftApproval(mode) => Self::DraftApproval(*mode),
             Self::DefaultThinking(level) => Self::DefaultThinking(*level),
         }
     }
@@ -427,8 +434,11 @@ impl Plait {
                 self.show_settings(true, window, cx);
                 self.settings_section = 3;
             }
+            Command::DraftProject(path) => self.choose_draft_project(path, window, cx),
+            Command::DraftHarness(id) => self.choose_draft_harness(id, cx),
+            Command::DraftApproval(mode) => self.choose_draft_approval(mode, cx),
             Command::HarnessModel(id, choice) => match purpose {
-                Some(ModelPurpose::NewThread) => self.new_thread_in(id, Some(choice), window, cx),
+                Some(ModelPurpose::NewThread) => self.choose_draft_model(id, choice, cx),
                 Some(ModelPurpose::ThreadModel) => self.choose_thread_model(choice, window, cx),
                 _ => {}
             },
@@ -437,9 +447,13 @@ impl Plait {
                     self.change_checkout(path, window, cx);
                 }
             }
-            Command::NewThread(choice) => self.new_thread(Some(choice), window, cx),
+            Command::NewThread(choice) => {
+                self.open_draft(window, cx);
+                self.choose_draft_harness(HarnessId::Pi, cx);
+                self.choose_draft_model(HarnessId::Pi, choice, cx);
+            }
             Command::Model(choice) => match purpose {
-                Some(ModelPurpose::NewThread) => self.new_thread(Some(choice), window, cx),
+                Some(ModelPurpose::NewThread) => self.choose_draft_model(HarnessId::Pi, choice, cx),
                 Some(ModelPurpose::DefaultModel) => self.choose_default_model(choice, window, cx),
                 Some(ModelPurpose::ThreadModel) => self.choose_thread_model(choice, window, cx),
                 None => {}
