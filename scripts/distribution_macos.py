@@ -54,6 +54,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 work=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/plait-app.XXXXXXXX")
 trap '/bin/rm -rf -- "$work"' EXIT
 /usr/bin/ditto -x -k "$here/Plait.zip" "$work"
+/usr/bin/codesign --verify --deep --strict "$work/Plait.app"
 /bin/bash "$work/Plait.app/Contents/Resources/install-user.sh" --app "$work/Plait.app"
 ''')
     command.chmod(0o755)
