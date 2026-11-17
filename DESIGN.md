@@ -132,7 +132,9 @@ keeps the same meaning. Plait Dark values:
 Main text is about 12:1 against the background: readable for long sessions
 without the glare of near-white on near-black. Plait Light uses a warm
 off-white background (#f7f7f5) with #2b2e33 text, white raised panels, and
-darker accents. Base16 themes are mapped onto the same roles: base00 behind
+darker accents. Stillwater is mapped by hand from its own palette: frost cyan takes the
+blue role (types, links, focus) and orchid the violet one (keywords). Base16
+themes are mapped onto the same roles: base00 behind
 base05 text, accents from base08–base0E, and grays mixed from background toward
 text. A contrast floor keeps body text at 7:1, secondary text at 4.5:1, and
 hints and accents at 3:1 or better whatever the scheme.

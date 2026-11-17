@@ -255,7 +255,8 @@ remain manual acceptance checks.
 
 **Settings → View → Appearance** follows macOS between light and dark by
 default, or keeps Light or Dark. Choose a theme for each: the light list and the
-dark list each start with Plait's own (**Plait Light**, **Plait Dark**),
+dark list each start with Plait's own (**Plait Light**, **Plait Dark**); the
+dark list then offers **Stillwater**, a quiet indigo-slate theme mapped by hand,
 followed by shipped Base16 schemes such as Catppuccin, Gruvbox, Nord, Rosé Pine,
 Solarized, and Tokyo Night. A choice applies at once and is saved in the
 desktop preferences.

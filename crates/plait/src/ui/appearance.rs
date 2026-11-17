@@ -271,6 +271,7 @@ impl Plait {
                 let name = theme.name.clone();
                 let tip = match &theme.source {
                     themes::Source::BuiltIn => "Plait's own theme".to_owned(),
+                    themes::Source::Included { credit } => (*credit).to_owned(),
                     themes::Source::Bundled { author } if !author.is_empty() => {
                         format!("Base16 scheme by {author}")
                     }

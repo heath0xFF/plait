@@ -118,6 +118,39 @@ pub const PLAIT_LIGHT: Palette = Palette {
     warn_fill: 0xf6ecd8,
 };
 
+/// Stillwater (github.com/heath0xFF/stillwater, MIT), a quiet indigo-slate dark
+/// theme, mapped by hand from its palette: frost cyan for types, links, and
+/// focus; orchid for keywords; its comment gray for hints.
+pub const STILLWATER: Palette = Palette {
+    light: false,
+    bg: 0x1f222e,
+    rail: 0x242835,
+    panel: 0x2b303f,
+    border: 0x313547,
+    text: 0xdfe3ed,
+    muted: 0xb0b7cb,
+    subtle: 0x9da5bf,
+    mint: 0x70d689,
+    blue: 0x74cde2,
+    violet: 0xec8ac7,
+    red: 0xec7368,
+    amber: 0xeec96e,
+    selected: 0x2e3243,
+    edge: 0x464d66,
+    focus_edge: 0x5a9aac,
+    hover: 0xffffff0b,
+    selection: 0x464d66c0,
+    text_selection: 0x74cde24d,
+    added_fill: 0x70d6891c,
+    removed_fill: 0xec73681c,
+    failed_edge: 0xec736866,
+    raised_hover: 0x32384a,
+    primary_hover: 0xeef0f6,
+    scrim: 0x00000066,
+    warn_edge: 0x675c44,
+    warn_fill: 0x3c3937,
+};
+
 pub const PLAIT_DARK_NAME: &str = "Plait Dark";
 pub const PLAIT_LIGHT_NAME: &str = "Plait Light";
 
@@ -159,6 +192,10 @@ pub enum Appearance {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Source {
     BuiltIn,
+    /// A theme made elsewhere and mapped by hand, with its credit.
+    Included {
+        credit: &'static str,
+    },
     /// Shipped Base16 scheme, with its credited author.
     Bundled {
         author: String,
@@ -194,6 +231,13 @@ pub fn built_in() -> Vec<Theme> {
             name: PLAIT_LIGHT_NAME.into(),
             palette: PLAIT_LIGHT,
             source: Source::BuiltIn,
+        },
+        Theme {
+            name: "Stillwater".into(),
+            palette: STILLWATER,
+            source: Source::Included {
+                credit: "Stillwater by heath0xFF (MIT)",
+            },
         },
     ];
     let mut bundled: Vec<Theme> = BUNDLED
@@ -493,7 +537,7 @@ mod tests {
         let themes = built_in();
         assert_eq!(
             themes.len(),
-            2 + BUNDLED.len(),
+            3 + BUNDLED.len(),
             "every bundled scheme parses"
         );
         for theme in themes {

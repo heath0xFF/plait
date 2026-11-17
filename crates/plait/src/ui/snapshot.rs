@@ -1862,6 +1862,16 @@ fn theme_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     force(harness, false);
     harness.capture(&format!("settings-view-{suffix}"));
     harness.update(|plait, _, _| plait.settings_open = false);
+    // In memory only: scenes never write the preferences file.
+    harness.update(|plait, _, cx| {
+        plait.preferences.value.dark_theme = Some("Stillwater".into());
+        plait.apply_theme(cx);
+    });
+    harness.capture(&format!("stillwater-{suffix}"));
+    harness.update(|plait, _, cx| {
+        plait.preferences.value.dark_theme = None;
+        plait.apply_theme(cx);
+    });
     harness.connect(repository, false);
 }
 
