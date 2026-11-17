@@ -117,7 +117,7 @@ pub struct Preferences {
     /// Follow macOS, or keep one appearance.
     #[serde(deserialize_with = "lenient")]
     pub appearance: crate::theme::Appearance,
-    /// Theme names for each appearance; `None` is Plait Light or Plait Dark.
+    /// Theme names for each appearance; `None` is the default (Plait Light, Stillwater).
     pub light_theme: Option<String>,
     pub dark_theme: Option<String>,
 }

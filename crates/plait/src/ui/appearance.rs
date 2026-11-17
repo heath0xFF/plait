@@ -4,7 +4,7 @@
 
 use super::{Plait, jump::PreferenceGroup, theme::*, thread_controls::TextTooltip};
 use gpui::{prelude::*, *};
-use plait_core::theme::{self as themes, Appearance, PLAIT_DARK, PLAIT_LIGHT, Theme};
+use plait_core::theme::{self as themes, Appearance, DEFAULT_DARK, DEFAULT_LIGHT, Theme};
 use std::path::PathBuf;
 
 pub(super) struct Themes {
@@ -45,11 +45,11 @@ impl Themes {
             .filter(move |theme| theme.palette.light == light)
     }
 
-    /// The palette for `name`, or the Plait default when it is gone.
+    /// The palette for `name`, or the default when it is gone.
     fn palette(&self, name: Option<&str>, light: bool) -> themes::Palette {
         name.and_then(|name| self.of(light).find(|theme| theme.name == name))
             .map(|theme| theme.palette)
-            .unwrap_or(if light { PLAIT_LIGHT } else { PLAIT_DARK })
+            .unwrap_or(if light { DEFAULT_LIGHT } else { DEFAULT_DARK })
     }
 }
 
@@ -137,9 +137,9 @@ impl Plait {
         let mut value = self.preferences.value.clone();
         // The default is stored as unset, so it follows future defaults.
         let default = if light {
-            themes::PLAIT_LIGHT_NAME
+            themes::DEFAULT_LIGHT_NAME
         } else {
-            themes::PLAIT_DARK_NAME
+            themes::DEFAULT_DARK_NAME
         };
         let name = (name != default).then_some(name);
         if light {
@@ -250,12 +250,12 @@ impl Plait {
             preferences
                 .light_theme
                 .as_deref()
-                .unwrap_or(themes::PLAIT_LIGHT_NAME)
+                .unwrap_or(themes::DEFAULT_LIGHT_NAME)
         } else {
             preferences
                 .dark_theme
                 .as_deref()
-                .unwrap_or(themes::PLAIT_DARK_NAME)
+                .unwrap_or(themes::DEFAULT_DARK_NAME)
         };
         let label = if light { "Light theme" } else { "Dark theme" };
         column()

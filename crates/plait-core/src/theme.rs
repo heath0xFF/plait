@@ -152,6 +152,12 @@ pub const STILLWATER: Palette = Palette {
 };
 
 pub const PLAIT_DARK_NAME: &str = "Plait Dark";
+pub const STILLWATER_NAME: &str = "Stillwater";
+/// What unset preferences draw with: Stillwater in the dark, Plait Light by day.
+pub const DEFAULT_DARK: Palette = STILLWATER;
+pub const DEFAULT_DARK_NAME: &str = STILLWATER_NAME;
+pub const DEFAULT_LIGHT: Palette = PLAIT_LIGHT;
+pub const DEFAULT_LIGHT_NAME: &str = PLAIT_LIGHT_NAME;
 pub const PLAIT_LIGHT_NAME: &str = "Plait Light";
 
 /// Base16 schemes shipped with the app, from tinted-theming/schemes (MIT);
@@ -221,7 +227,15 @@ pub struct Scheme {
 
 /// The two hand-tuned themes, then the bundled schemes by name.
 pub fn built_in() -> Vec<Theme> {
+    // Each list starts with its default.
     let mut themes = vec![
+        Theme {
+            name: STILLWATER_NAME.into(),
+            palette: STILLWATER,
+            source: Source::Included {
+                credit: "Stillwater by heath0xFF (MIT)",
+            },
+        },
         Theme {
             name: PLAIT_DARK_NAME.into(),
             palette: PLAIT_DARK,
@@ -231,13 +245,6 @@ pub fn built_in() -> Vec<Theme> {
             name: PLAIT_LIGHT_NAME.into(),
             palette: PLAIT_LIGHT,
             source: Source::BuiltIn,
-        },
-        Theme {
-            name: "Stillwater".into(),
-            palette: STILLWATER,
-            source: Source::Included {
-                credit: "Stillwater by heath0xFF (MIT)",
-            },
         },
     ];
     let mut bundled: Vec<Theme> = BUNDLED
@@ -558,9 +565,12 @@ mod tests {
     }
 
     #[test]
-    fn the_default_dark_text_is_softer_than_near_white() {
-        let ratio = contrast(PLAIT_DARK.text, PLAIT_DARK.bg);
-        assert!((10.0..13.5).contains(&ratio), "{ratio}");
+    fn the_dark_text_is_softer_than_near_white() {
+        for palette in [DEFAULT_DARK, PLAIT_DARK] {
+            let ratio = contrast(palette.text, palette.bg);
+            assert!((10.0..13.5).contains(&ratio), "{ratio}");
+        }
+        assert_eq!(built_in()[0].name, DEFAULT_DARK_NAME);
     }
 
     #[test]

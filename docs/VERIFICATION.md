@@ -305,7 +305,8 @@ Core tests parse both published Base16 layouts, name what is wrong with a broken
 file, read a themes folder, keep older preference files loading, and check every
 shipped theme against the contrast floors (text 7:1, secondary text 4.5:1, hints
 and accents 3:1). Snapshot scenes draw the conversation, Changes, and theme
-settings in Plait Light, and the settings again in Plait Dark. Following a
+settings in Plait Light, and the settings in the default Stillwater; every
+other scene draws in Stillwater, and one draws Plait Dark. Following a
 live macOS appearance switch, the native titlebar in each appearance, and
 reading a user's themes folder have not been checked in the installed app.
 

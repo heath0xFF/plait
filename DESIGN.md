@@ -120,20 +120,21 @@ conversation keeps a readable minimum width.
 
 ## Tokens
 Colors are roles in one palette (`plait_core::theme::Palette`), so every theme
-keeps the same meaning. Plait Dark values:
-- Background: #1c1d20. Navigation: #202124. Panel / user bubble: #292b2f.
-- Border: #33353b. Control outline: #3d4048. Selected row: #2e3035.
-- Main text: #d9dce3. Secondary text: #9ba2af. Labels and hints: #7d8492.
-- Mint #8fd3bc: local/read-only state, additions, the chosen option.
-- Blue #8fb2ec: running work, modifications, hunk headers, keyboard focus.
-- Violet #b9a8e8: thread identity.
-- Amber #dcbd88: attention/limits. Rose #e59ea5: errors/deletions.
+keeps the same meaning. The default dark theme is Stillwater:
+- Background: #1f222e. Navigation: #242835. Panel / user bubble: #2b303f.
+- Border: #313547. Control outline: #464d66. Selected row: #2e3243.
+- Main text: #dfe3ed. Secondary text: #b0b7cb. Labels and hints: #9da5bf.
+- Mint #70d689: local/read-only state, additions, the chosen option.
+- Frost #74cde2 (the blue role): running work, modifications, hunk headers,
+  links, keyboard focus.
+- Orchid #ec8ac7 (the violet role): thread identity and keywords.
+- Sand #eec96e: attention/limits. Coral #ec7368: errors/deletions.
 
 Main text is about 12:1 against the background: readable for long sessions
-without the glare of near-white on near-black. Plait Light uses a warm
+without the glare of near-white on near-black. Plait Dark is a neutral
+graphite alternative at the same contrast (#d9dce3 on #1c1d20). Plait Light uses a warm
 off-white background (#f7f7f5) with #2b2e33 text, white raised panels, and
-darker accents. Stillwater is mapped by hand from its own palette: frost cyan takes the
-blue role (types, links, focus) and orchid the violet one (keywords). Base16
+darker accents. Stillwater is mapped by hand from its own palette. Base16
 themes are mapped onto the same roles: base00 behind
 base05 text, accents from base08–base0E, and grays mixed from background toward
 text. A contrast floor keeps body text at 7:1, secondary text at 4.5:1, and

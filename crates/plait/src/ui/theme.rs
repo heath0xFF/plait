@@ -8,7 +8,7 @@ thread_local! {
     /// The palette every view draws with. Per thread, so parallel UI tests
     /// with different themes do not see each other's colors.
     static CURRENT: std::cell::Cell<&'static Palette> =
-        const { std::cell::Cell::new(&plait_core::theme::PLAIT_DARK) };
+        const { std::cell::Cell::new(&plait_core::theme::DEFAULT_DARK) };
 }
 
 /// The current theme's colors. Read during render; cheap.
