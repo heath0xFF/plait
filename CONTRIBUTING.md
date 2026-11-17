@@ -161,6 +161,12 @@ small function that builds or changes the sample state, set it on the harness,
 and call `harness.capture("name-{suffix}")` from `walk` or a `*_walk` helper.
 Sample state stays in that test module; no shipped view may contain it.
 
+The README images come from `crates/plait/src/ui/snapshot/showcase.rs`, which
+draws the same views over a disposable sample repository with hand-written
+threads. Run `bash scripts/readme-screenshots.sh` after a visible change to
+those views and commit the updated files in `docs/images`. Keep their captions
+saying the threads are sample data.
+
 ## Runtime probes and live acceptance
 
 The isolated, credential-free Pi integration probe is separate from host testing:

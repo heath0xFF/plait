@@ -293,7 +293,7 @@ impl Plait {
                                     .text_size(px(11.))
                                     .text_color(rgb(colors().subtle))
                                     .truncate()
-                                    .child(snapshot.root.to_string_lossy().into_owned()),
+                                    .child(home_relative(&snapshot.root)),
                             ),
                     )
                     .child(if count == 0 {

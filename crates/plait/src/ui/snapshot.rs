@@ -34,6 +34,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod showcase;
+
 const THREAD: &str = "thr_5791c2e4";
 
 /// Set in the child process that draws scenes. Names its scratch home.

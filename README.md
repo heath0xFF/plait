@@ -1,27 +1,119 @@
-# Plait
+<p align="center">
+  <img src="assets/branding/app-icon/plait-app-icon-1024.png" width="96" height="96" alt="Plait app icon" />
+</p>
 
-**A native macOS app for working with AI coding agents.**
+<h1 align="center">Plait</h1>
 
-Open a repository, start a conversation, approve edits and commands, and review
-what changed. An independent host runs the agent, so closing the desktop does
-not stop accepted work. Reopen it to return to the same thread and saved draft.
+<p align="center">
+  <strong>A native Mac app for working with coding agents.</strong><br/>
+  Start threads in your repositories, approve what the agent does, then review
+  and commit the result, all in one fast window.
+</p>
 
-[Download preview](https://github.com/heath0xFF/plait/releases) · [Documentation](docs/README.md) · [Contribute](CONTRIBUTING.md)
+<p align="center">
+  <a href="https://github.com/heath0xFF/plait/releases"><strong>Download</strong></a> ·
+  <a href="docs/MACOS.md">Mac guide</a> ·
+  <a href="docs/README.md">Docs</a> ·
+  <a href="docs/ROADMAP.md">Roadmap</a> ·
+  <a href="CONTRIBUTING.md">Contribute</a>
+</p>
 
-![Plait showing a completed coding task, native code block, tool results, and saved draft](https://github.com/heath0xFF/plait/releases/download/v0.1.0-preview.6/installed-client-coding.png)
+<p align="center">
+  <img src="docs/images/conversation.png" width="100%" alt="Plait with a finished thread that added retries to a sample Rust crate: the agent's plan, its file reads, edits, and test run, and the changed files beside it" />
+</p>
 
-*Installed Mac app. Scripted provider; real approved source edits and Cargo tests.*
+<p align="center"><sub>Plait's real views, drawn over a sample project. The thread is sample data, not a recorded agent run.</sub></p>
+
+Plait is written in Rust and drawn with [GPUI](https://www.gpui.rs/). There is no
+web view. Agents run in a separate host process on your Mac, so closing the
+window never stops accepted work, and reopening it returns you to the same
+thread and draft.
+
+## What you get
+
+- **Native and fast.** Long threads, large diffs, and 20,000-line files scroll
+  in virtualized views. Git and file reads run off the UI thread, and frame cost
+  is measured on every view.
+- **Work that outlives the window.** The host owns each run and its history.
+  Quit, update, or reboot the app; threads, drafts, and pending approvals are
+  there when you come back.
+- **Approvals you can read.** Let the agent work, or ask before each edit and
+  command. Commands run in a macOS sandbox that cannot write your checkout or
+  reach the network, unless you opt a project into trusted commands.
+- **Git review built in.** Stage and discard by file or hunk (with undo),
+  commit, push, fetch, and fast-forward pull. Click diff line numbers to ask the
+  agent about exactly those lines.
+- **Every project in one sidebar.** Threads across checkouts with live status,
+  a "Needs me" filter, notifications, rename and archive, and optional
+  per-thread worktrees.
+- **Keyboard first.** A command palette, quick open (Cmd-P), find in file, and
+  shortcuts you can rebind.
+- **Your models.** Sign in to a provider or add an API key or custom server from
+  Settings. The app never sees your credentials; the host keeps them.
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### Review and commit
+
+The Changes tab shows staged and unstaged changes side by side with the
+conversation that made them. Commit without leaving the thread.
+
+</td>
+<td width="50%">
+<img src="docs/images/changes.png" width="100%" alt="The Changes tab with four staged files and the diff of src/client.rs, ready to commit" />
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### Approve each step
+
+In Ask mode, every edit and command waits for you, with the exact call and
+what the sandbox allows. Threads that need you rise to the top of the sidebar.
+
+</td>
+<td width="50%">
+<img src="docs/images/approval.png" width="100%" alt="A thread waiting for approval to run cargo test in the command sandbox" />
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### Read any file
+
+Open any file in the checkout with Cmd-P, highlighted and searchable. It
+reloads when the agent changes it on disk.
+
+</td>
+<td width="50%">
+<img src="docs/images/files.png" width="100%" alt="The Files tab showing src/retry.rs with find open on the word delay" />
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### Light, dark, and your themes
+
+Follows macOS appearance. Stillwater is the default dark theme; Plait Light
+and Dark, bundled Base16 schemes, and any Base16 file you add are one click away.
+
+</td>
+<td width="50%">
+<img src="docs/images/conversation-light.png" width="100%" alt="The same thread in Plait Light" />
+</td>
+</tr>
+</table>
 
 ## Install
 
-The preview targets **Apple Silicon and macOS 15 or later**. You need Git and
-your own model-provider account. The installer includes the host and Node runtime.
+Plait runs on **Apple Silicon with macOS 15 or later**. You need Git and an
+account with a model provider. The installer includes the host and its Node
+runtime; you do not need Xcode, Rust, or Node.
 
-**This preview is unsigned and not notarized.** Review the
-[Mac setup guide](docs/MACOS.md) before installing. Do not disable Gatekeeper.
-
-Download the **DMG** from the [releases page](https://github.com/heath0xFF/plait/releases),
-open it, and run **Install Plait.command**. Or install from Terminal:
+Download the **DMG** from [Releases](https://github.com/heath0xFF/plait/releases),
+open it, and run **Install Plait.command**. Or from Terminal:
 
 ```sh
 curl --proto '=https' -fsSL \
@@ -29,51 +121,23 @@ curl --proto '=https' -fsSL \
   bash -s -- --allow-unsigned
 ```
 
-This installs the prebuilt app and bundled host. You do not need a source
-checkout, Xcode, Rust, or Node. Finish active tasks first; threads, drafts, and
-credentials are preserved. An older system-wide install needs administrator
-access once to move to the per-user layout. Initial downloads are checked
-against SHA-256 metadata over HTTPS; the flag accepts the unsigned preview.
+**Previews are unsigned and not notarized.** Read the [Mac guide](docs/MACOS.md)
+before installing, and do not disable Gatekeeper. After the first install,
+updates come from **Plait → Check for Updates…** and are checked against signed
+release manifests. Threads, drafts, and credentials are kept across updates.
 
-Future updates install from **Plait → Check for Updates…**, using signed release
-manifests. See [Mac setup and updates](docs/MACOS.md).
+## Get started
 
-## Start working
+1. Open Plait and choose **Open repository…** (Cmd-O).
+2. Open **Settings** (Cmd-comma) → **Providers** and sign in, or add an API key.
+3. Start a thread and describe the change. Watch it work, or approve each step.
+4. Review the result in **Changes**, commit, and keep going in the same thread.
 
-1. Open **Plait** and choose **Open repository…** (Cmd-O).
-2. Open **Settings** (Cmd-comma) and select an authenticated model. Current builds
-   offer **Providers** for sign-in, API keys, and custom servers; see
-   [authentication setup](docs/MACOS.md#authentication-and-status) for the preview.
-3. Start a thread. Review each edit and command before **Allow once**.
-4. Read the results, review and commit them in **Changes**, and continue in the
-   same conversation. **History** shows earlier commits.
-   Use **Stop** to cancel work; closing the desktop is not Stop.
-
-Current builds show projects across checkouts, live
-thread status, unread activity, search, rename, and archive. Opening another
-project keeps each thread's draft. See [project navigation](docs/MACOS.md#projects-and-threads)
-for live-list limits and notifications.
-
-Light and dark appearance follows macOS, with Plait's own themes, shipped
-Base16 schemes, and any Base16 scheme file you add; see
-[appearance and themes](docs/MACOS.md#appearance-and-themes).
-
-Code blocks, tool details, and message text have copy controls. Threads and drafts
-restore on reopening; no task is sent automatically. Drag either side panel's
-edge to resize it; Cmd-B and Cmd-L hide the sidebar and Git inspector. See
-[keyboard controls](docs/MACOS.md#keyboard-controls) and
-[Build Plait with Plait](docs/SELF-HOSTING.md) for the edit → test → review loop.
-
-Current builds with a version 3 host queue follow-ups and steering while an
-agent works, and let you change a thread's model and thinking level between
-runs. The composer shows waiting inputs and the latest context usage, and its
-run-settings menu sets the thread's approval mode. See
-[working during a run](docs/MACOS.md#working-during-a-run).
+The [Mac guide](docs/MACOS.md) covers every view and shortcut.
+[Build Plait with Plait](docs/SELF-HOSTING.md) shows the full edit, test,
+review loop on a real project.
 
 ## How it works
-
-The desktop and execution host run on your Mac. The desktop is a client;
-the independent host owns accepted work and its history.
 
 ```mermaid
 flowchart TB
@@ -98,64 +162,36 @@ flowchart TB
     sandbox -->|Write output| cache
 ```
 
-Current builds run edits and commands without asking by default; choose
-**Ask each time** under Settings → Approvals to restore prompts, or choose for
-one thread from the run settings under its message box. In both modes,
-files you had already changed are protected, and sandboxed commands cannot
-write the checkout or use external networking. The desktop never receives
-provider credentials. Closing it does not stop accepted work; pending approvals
-still wait for you.
+The desktop is a client. The host runs the agent, keeps every thread, and
+applies only the edits and commands you allowed. Files you had already changed
+are protected in both approval modes. See [host and sandbox rules](docs/HOST.md).
 
-## Current limits
+## Status
 
-This is the **M2.5 daily-driver preview** (v0.1.0-preview.8), not a complete
-IDE. Pi is the only agent harness today; other harnesses are
-[planned](docs/ROADMAP.md).
+Plait is an early preview, built in the open and used daily to build itself.
+The latest release is **v0.1.0-preview.8**.
 
-- Local macOS execution only. Remote hosts and Linux execution are not available.
-- Changes stages and discards (by file or hunk, with undo), commits, fetches,
-  pushes, and fast-forward pulls; History shows commits and their patches.
-  Click line numbers in a diff, then **Ask about this**, to quote those lines
-  into the selected thread's message. Above the message box, the files a
-  thread wrote and has not committed are listed with their line counts
-  (Settings → View hides them).
-  **New Thread in Worktree** (Cmd-Option-N) starts a thread on a new branch in
-  its own worktree beside the repository, listed under the same project;
-  the thread's menu removes it once its work is committed. Worktrees are never
-  required. **Files** (Cmd-P) shows any checkout file read-only, with find
-  (Cmd-F); source builds only, after preview.8. There is no merge, rebase,
-  branch switching, file editor, or embedded terminal. Updates are
-  installed explicitly; they never restart active work automatically.
-- Sandboxed commands cannot use external networking or write the checkout.
-  Approved file tools make edits; build output goes to private caches. The
-  opt-in, per-project [trusted command mode](docs/HOST.md#command-policy) lifts
-  these limits. Settings → Approvals explains the scope before confirmation.
-- With a version 3 host, complete stored messages and tools load on demand,
-  including earlier history and reasoning. A response still being generated
-  remains a live preview until saved; exceptionally large stored fields have
-  explicit text-part controls.
-
-Mac CI verifies the installed app, sandbox, and recovery with scripted providers.
-A live-model self-development cycle has also been exercised; broader provider
-and accessibility acceptance remain open. CI runs on macOS 26;
-older-system runtime coverage and other open checks are in
-[Verification](docs/VERIFICATION.md). Planned features are in the [roadmap](docs/ROADMAP.md).
+- **Mac only, local only.** Remote hosts and Linux execution are
+  [planned](docs/ROADMAP.md).
+- **One agent harness.** Threads run on Pi today. Claude Code, Codex, and other
+  harnesses are planned (M7).
+- **Not an IDE.** There is no file editor, embedded terminal, merge, rebase, or
+  branch switching. The Files tab is read-only.
+- **Verification is public.** What CI and installed-app checks cover, and what
+  they do not yet, is in [Verification](docs/VERIFICATION.md).
 
 ## Development
 
 The desktop is **Rust + GPUI**, the host is **Rust**, and the agent runtime is a
-**Pi Durable TypeScript sidecar**. Application code and design are original;
-declared dependencies stay pinned and retain their licenses.
-
-Start with [Contributing](CONTRIBUTING.md) for build requirements and checks.
-[Architecture](docs/ARCHITECTURE.md), [host and sandbox rules](docs/HOST.md), and
-[design principles](DESIGN.md) describe the implementation boundaries.
+**TypeScript sidecar** built on Pi Durable. Start with
+[Contributing](CONTRIBUTING.md) for build requirements and checks;
+[Architecture](docs/ARCHITECTURE.md) and [Design](DESIGN.md) describe the
+boundaries. `bash scripts/readme-screenshots.sh` regenerates the images above.
 
 ## License
 
 Plait's original code and documentation are [MIT licensed](LICENSE).
-Dependencies retain their own licenses, including GPUI's Apache-2.0 license.
-The bundled Base16 color schemes in `assets/themes/base16` are from
-tinted-theming/schemes under its MIT license, kept beside them. The Stillwater
-theme's colors come from [Stillwater](https://github.com/heath0xFF/stillwater)
-(MIT).
+Dependencies keep their own licenses, including GPUI's Apache-2.0 license. The
+bundled Base16 schemes in `assets/themes/base16` are from tinted-theming/schemes
+(MIT, license kept beside them). Stillwater's colors come from
+[Stillwater](https://github.com/heath0xFF/stillwater) (MIT).

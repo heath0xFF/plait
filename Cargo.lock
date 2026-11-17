@@ -3684,6 +3684,7 @@ dependencies = [
  "gpui_wgpu",
  "plait-core",
  "serde",
+ "serde_json",
  "unicode-segmentation",
 ]
 

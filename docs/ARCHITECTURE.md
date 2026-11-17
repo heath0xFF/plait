@@ -53,6 +53,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
   theme.rs              the current palette and the small original controls
   appearance.rs         light and dark themes, the themes folder, and their settings
   snapshot.rs           headless scene snapshots of the root view (tests only)
+  snapshot/showcase.rs  README screenshots over a sample project (tests only)
   composer/             native input, IME, clipboard, undo, and its events
     draft.rs            text, selection, undo, acceptance guard, prompt recall
     history.rs          prompts already sent in the thread

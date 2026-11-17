@@ -17,6 +17,10 @@ unicode-segmentation = "=1.13.3"
 # Scene snapshots (see src/ui/snapshot.rs). GPUI's headless renderers draw the
 # root view to PNG files without a window. `test-support` is a dev-dependency
 # feature, so `cargo build` and release builds do not compile it.
+[dev-dependencies]
+# Already pinned by plait-core; builds tool arguments in README scenes.
+serde_json = "=1.0.154"
+
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
 gpui_platform = { workspace = true, features = ["test-support"] }

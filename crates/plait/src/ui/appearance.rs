@@ -201,7 +201,7 @@ impl Plait {
         let folder_note = match &self.themes.folder {
             Some(folder) => format!(
                 "Add Base16 scheme files (.yaml) to {} and choose Reload. Hundreds are published at github.com/tinted-theming/schemes.",
-                home_relative(folder)
+                super::theme::home_relative(folder)
             ),
             None => "No themes folder: the home directory is unknown.".into(),
         };
@@ -324,13 +324,4 @@ fn swatch(palette: &themes::Palette) -> Div {
         .child(mark(palette.mint))
         .child(mark(palette.amber))
         .child(mark(palette.red))
-}
-
-/// `~/…` for a path under the home directory, so the note stays short.
-fn home_relative(path: &std::path::Path) -> String {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    match home.and_then(|home| path.strip_prefix(home).ok().map(PathBuf::from)) {
-        Some(rest) => format!("~/{}", rest.display()),
-        None => path.display().to_string(),
-    }
 }

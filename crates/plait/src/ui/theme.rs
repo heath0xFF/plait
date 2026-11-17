@@ -450,6 +450,28 @@ impl AssetSource for Assets {
     }
 }
 
+/// `~/…` for a path under the home directory, so paths stay short. The home
+/// directory is read and resolved once; this runs during render.
+pub fn home_relative(path: &std::path::Path) -> String {
+    static HOME: std::sync::OnceLock<Vec<std::path::PathBuf>> = std::sync::OnceLock::new();
+    let homes = HOME.get_or_init(|| {
+        let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+            return Vec::new();
+        };
+        // Checkouts are canonical, and HOME may not be (`/tmp` is `/private/tmp`).
+        let resolved = home
+            .canonicalize()
+            .ok()
+            .filter(|resolved| *resolved != home);
+        std::iter::once(home).chain(resolved).collect()
+    });
+    homes
+        .iter()
+        .find_map(|home| path.strip_prefix(home).ok())
+        .map(|rest| format!("~/{}", rest.display()))
+        .unwrap_or_else(|| path.display().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::Assets;

@@ -267,6 +267,8 @@ recorded here:
 - [ ] Pull fast-forwards from Changes and refuses a diverged branch.
 - [ ] The sidebar's filter chips, bell, and refresh controls work with the pointer
       and show their names on hover.
+- [ ] Cmd-P opens a file in the Files tab; Cmd-F, Cmd-G, and Cmd-Shift-G find
+      and step; a file an agent edits rereads when the window is focused again.
 
 ## Manual release acceptance
 
@@ -332,8 +334,8 @@ real file, finds in it, rereads it after an edit on disk, keeps the last version
 after deletion, describes a binary file, and lists files in quick open. Scenes
 draw the tab, find, and quick open. In the frame bench a 20,000-line highlighted
 file drew in 0.6 ms at rest and 1.2 ms per frame while wheel-scrolling. Native
-pointer use, find shortcuts, and reloading after an agent's edit have not been
-checked in the installed app.
+pointer use, find shortcuts, and reloading after an agent's edit are open in the
+[preview.8 acceptance](#v010-preview8-acceptance) list.
 
 ## Themes
 
