@@ -253,7 +253,7 @@ remain manual acceptance checks.
 
 ## Appearance and themes
 
-**Settings → View → Appearance** follows macOS between light and dark by
+**Settings → Appearance → Light or dark** follows macOS between light and dark by
 default, or keeps Light or Dark. Choose a theme for each. The dark list starts
 with **Stillwater**, the default: a quiet indigo-slate theme mapped by hand.
 **Plait Dark** follows it, a neutral graphite alternative. The light list starts
@@ -345,7 +345,7 @@ the default. Both shortcuts can be changed in Settings → Keyboard.
 Above the message box, a card lists the files the thread wrote that are not
 committed yet, with lines added and removed against HEAD. It updates as the
 thread's edits finish and as Git status refreshes. Click its header to fold it,
-or a file to see that file in Changes. Settings → View, or **Toggle Changed
+or a file to see that file in Changes. Settings → Appearance, or **Toggle Changed
 Files** in the View menu, hides it. Files changed only by commands are not
 listed, and the card needs a host from this release or later.
 

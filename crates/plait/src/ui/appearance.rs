@@ -174,7 +174,7 @@ impl Plait {
         .detach();
     }
 
-    /// Settings → View: appearance, a theme for each, and the themes folder.
+    /// Settings → Appearance: light or dark, a theme for each, and the themes folder.
     pub(super) fn theme_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let chosen = self.preferences.value.appearance;
         let mut choices = segmented();
@@ -194,7 +194,7 @@ impl Plait {
                     } else {
                         Toggled::False
                     })
-                    .aria_label(format!("Appearance: {label}"))
+                    .aria_label(format!("Light or dark: {label}"))
                     .on_activate(cx, move |this, _, cx| this.set_appearance(value, cx)),
             );
         }
@@ -208,7 +208,7 @@ impl Plait {
         column()
             .gap_4()
             .child(super::settings::setting(
-                "Appearance",
+                "Light or dark",
                 "System follows macOS between light and dark.",
                 choices,
             ))

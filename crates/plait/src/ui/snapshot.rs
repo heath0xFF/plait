@@ -2011,9 +2011,9 @@ fn theme_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         plait.settings_open = true;
         plait.settings_section = 5;
     });
-    harness.capture(&format!("light-settings-view-{suffix}"));
+    harness.capture(&format!("light-settings-appearance-{suffix}"));
     force(harness, false);
-    harness.capture(&format!("settings-view-{suffix}"));
+    harness.capture(&format!("settings-appearance-{suffix}"));
     harness.update(|plait, _, _| plait.settings_open = false);
     // In memory only: scenes never write the preferences file.
     harness.update(|plait, _, cx| {

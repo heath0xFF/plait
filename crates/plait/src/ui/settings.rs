@@ -338,7 +338,7 @@ impl Plait {
                         "Approvals",
                         "Agent",
                         "Keyboard",
-                        "View",
+                        "Appearance",
                         "About",
                     ]
                     .into_iter()
@@ -436,7 +436,7 @@ impl Plait {
                     }),
             );
         }
-        section("View")
+        section("Appearance")
             .child(self.theme_settings(cx))
             .child(setting(
                 "Changed files above the message box",

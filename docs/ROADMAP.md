@@ -83,7 +83,7 @@ overwrite uncommitted changes. Merge and rebase are not part of this step.
 **Agreed for M2.5 changed files:** a version 3 `changed_files` operation
 returns the paths a thread's file tools wrote, from the host's existing
 provenance records. The desktop counts their uncommitted lines with a hardened
-Git read and lists them above the composer; Settings → View hides the list.
+Git read and lists them above the composer; Settings → Appearance hides the list.
 Snapshots are unchanged, so older clients are unaffected.
 
 **Agreed for M2.5 appearance:** light and dark themes in the desktop only.

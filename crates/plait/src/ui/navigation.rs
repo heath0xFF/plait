@@ -63,9 +63,17 @@ pub(super) struct ThreadManagement {
 
 #[derive(Clone, Copy)]
 enum Row {
-    Project(usize),
+    /// A project, whether it follows another group, and its thread count when collapsed.
+    Project {
+        index: usize,
+        after: bool,
+        folded: Option<usize>,
+    },
     Thread(usize),
 }
+
+/// Left edge of the rail that joins a project's threads, under its chevron.
+const RAIL_X: f32 = 15.;
 
 /// One-line title that gives way to the trailing state.
 fn title(text: impl Into<SharedString>) -> Div {
@@ -135,17 +143,28 @@ impl Plait {
             if matching.is_none() && (!project_matches || self.navigation.attention) {
                 continue;
             }
-            rows.push(Row::Project(pi));
-            if (!self.navigation.collapsed.contains(&project.checkout) || !query.is_empty())
-                && let Some(indices) = matching
-            {
+            let open = !self.navigation.collapsed.contains(&project.checkout) || !query.is_empty();
+            rows.push(Row::Project {
+                index: pi,
+                after: !rows.is_empty(),
+                folded: (!open)
+                    .then(|| matching.map_or(0, Vec::len))
+                    .filter(|count| *count > 0),
+            });
+            if open && let Some(indices) = matching {
                 rows.extend(indices.iter().copied().map(Row::Thread));
             }
         }
         rows
     }
 
-    fn project_row(&self, pi: usize, cx: &mut Context<Self>) -> AnyElement {
+    fn project_row(
+        &self,
+        pi: usize,
+        after: bool,
+        folded: Option<usize>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let project = &self.state.projects[pi];
         let checkout = project.checkout.clone();
         let hide = checkout.clone();
@@ -155,6 +174,10 @@ impl Plait {
             .w_full()
             .h(px(ROW_HEIGHT))
             .gap_0()
+            // A hairline between groups; uniform rows leave no room for a gap.
+            .when(after, |el| {
+                el.border_t_1().border_color(rgb(colors().border))
+            })
             .child(
                 nav_row(
                     ("project", pi),
@@ -188,6 +211,9 @@ impl Plait {
                         .font_weight(FontWeight::MEDIUM),
                 )
                 .when(unavailable, |el| el.child(tag("Missing", colors().amber)))
+                .when_some(folded, |el, count| {
+                    el.child(tag(count.to_string(), colors().subtle).flex_shrink_0())
+                })
                 .on_activate(cx, move |this, _, cx| {
                     if !this.navigation.collapsed.remove(&checkout) {
                         this.navigation.collapsed.insert(checkout.clone());
@@ -282,6 +308,17 @@ impl Plait {
             .w_full()
             .h(px(ROW_HEIGHT))
             .gap_0()
+            .relative()
+            // Adjacent rows draw one continuous rail, so a project's threads read as its group.
+            .child(
+                div()
+                    .absolute()
+                    .left(px(RAIL_X))
+                    .top_0()
+                    .bottom_0()
+                    .w(px(1.))
+                    .bg(rgb(colors().border)),
+            )
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, _, _, cx| {
@@ -317,7 +354,7 @@ impl Plait {
                 .role(Role::TreeItem)
                 .aria_level(2)
                 .aria_selected(selected)
-                .pl(px(12.))
+                .pl(px(RAIL_X + 9.))
                 .child(dot(if unread {
                     colors().blue
                 } else {
@@ -396,7 +433,11 @@ impl Plait {
                         cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
                             range
                                 .map(|index| match rows[index] {
-                                    Row::Project(pi) => this.project_row(pi, cx),
+                                    Row::Project {
+                                        index,
+                                        after,
+                                        folded,
+                                    } => this.project_row(index, after, folded, cx),
                                     Row::Thread(ti) => this.host_thread_row(ti, cx),
                                 })
                                 .collect::<Vec<_>>()
