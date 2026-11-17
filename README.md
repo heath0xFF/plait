@@ -139,32 +139,15 @@ review loop on a real project.
 
 ## How it works
 
-```mermaid
-flowchart TB
-    accTitle: How Plait works today
-    accDescr: The native desktop connects to an independent local host. The host calls the configured model provider, saves run history, and runs approved file edits and sandboxed commands. Desktop drafts are saved separately.
-    desktop["Native desktop<br/>Rust + GPUI"]
-    drafts[("Drafts and<br/>recovery state")]
-    host["Independent local host<br/>Rust daemon + Pi runtime"]
-    history[("Threads and<br/>run history")]
-    provider["Configured<br/>model provider"]
-    sandbox["macOS command<br/>sandbox"]
-    checkout["Your repository"]
-    cache[("Private scratch<br/>and build cache")]
-    desktop <-->|Save / restore| drafts
-    desktop <-->|"Tasks, approvals, updates<br/>Local socket"| host
-    host <-->|Model API| provider
-    host <-->|Save / recover| history
-    desktop -->|"Git status, history,<br/>stage and commit"| checkout
-    host -->|File reads / approved edits| checkout
-    host -->|Approved commands| sandbox
-    sandbox -->|Read only| checkout
-    sandbox -->|Write output| cache
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-dark.svg">
+  <img alt="Architecture diagram. The Plait desktop, written in Rust with GPUI, has four views today: Conversation for agent threads and approvals, Changes for Git status, diffs, staging, commits, and history, a read-only Files viewer, and Settings for models, providers, approvals, and agent skills. An editor, logs and processes, and reviews are marked as planned for M4. The desktop saves its own drafts and recovery state. It talks to the host daemon on this Mac over a local socket for requests and streaming updates, and runs hardened Git on your repository itself. On this Mac, the Rust host daemon runs the Pi runtime with durable threads, applies approved file edits, runs sandboxed commands that can only read the repository, and calls your model providers. Pi is the only agent harness today; Codex and Claude Code are planned for M7. Two more machines, Studio and Build box, are drawn dashed as planned for M6, reached over an authenticated connection that is also planned." src="docs/images/architecture-light.svg" width="880">
+</picture>
 
 The desktop is a client. The host runs the agent, keeps every thread, and
 applies only the edits and commands you allowed. Files you had already changed
 are protected in both approval modes. See [host and sandbox rules](docs/HOST.md).
+Dashed boxes are planned, not shipped.
 
 ## Status
 
