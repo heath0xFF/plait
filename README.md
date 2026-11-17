@@ -54,13 +54,15 @@ project keeps each thread's draft. See [project navigation](docs/MACOS.md#projec
 for live-list limits and notifications.
 
 Code blocks, tool details, and message text have copy controls. Threads and drafts
-restore on reopening; no task is sent automatically. See
+restore on reopening; no task is sent automatically. Drag either side panel's
+edge to resize it; Cmd-B and Cmd-L hide the sidebar and Git inspector. See
 [keyboard controls](docs/MACOS.md#keyboard-controls) and
 [Build Plait with Plait](docs/SELF-HOSTING.md) for the edit → test → review loop.
 
 Current builds with a version 3 host queue follow-ups and steering while an
 agent works, and let you change a thread's model and thinking level between
-runs. The composer shows waiting inputs and the latest context usage. See
+runs. The composer shows waiting inputs and the latest context usage, and its
+run-settings menu sets the thread's approval mode. See
 [working during a run](docs/MACOS.md#working-during-a-run).
 
 ## How it works

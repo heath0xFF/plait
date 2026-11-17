@@ -12,6 +12,8 @@ measured responsiveness. Keep controls useful and state easy to inspect.
 ## Layout
 Compact Project → Machine → Thread rail; conversation or diff workspace;
 optional wide-window Git inspector. Keep machine and thread context visible.
+Both side panels resize from their inner edge (Cmd-B and Cmd-L hide them); the
+conversation keeps a readable minimum width.
 
 - **Chrome.** One 44-point header: sidebar toggle, thread title, a muted
   `project / machine` on wide windows, state dot with a text label, and the
@@ -66,7 +68,8 @@ optional wide-window Git inspector. Keep machine and thread context visible.
   the conversation column; raw protocol codes are not presentation.
 - **Tool calls.** One compact line each: disclosure chevron, tool name, the
   path or command, a short fact such as `+2 −1`, and a state label only when
-  the call did not simply finish. Opened in place, `edit` shows a line diff,
+  the call did not simply finish. A long command wraps (up to four lines
+  closed, in full when opened) rather than running past the column. Opened in place, `edit` shows a line diff,
   `write` the new file, `command` a `$` prompt line and its output, and `read`
   the first lines of the file. A failed command says "Failed" above output
   outlined in rose. A long run of calls folds under one line that names their
@@ -77,8 +80,10 @@ optional wide-window Git inspector. Keep machine and thread context visible.
   Option-Enter steers. The draft grows from one line to about a third of the
   window, then scrolls. Waiting and unconfirmed messages form a compact,
   scrollable stack above it, with explicit mode and Cancel or Retry controls.
-  Below it, wrapping controls show model, supported thinking level, approval for
-  the next message, and context use. Model names truncate; actions remain legible.
+  Below it, wrapping controls show model, the thinking level by name alone,
+  context use, and a run-settings menu labeled with the thread's approval mode
+  (and trusted commands, when on). Labels name the setting, not when it applies;
+  hover text says that. Model names truncate; actions remain legible.
   Project and machine stay in navigation and the header. A running turn names
   its own approval mode, distinct from the next-message choice.
 - **Suggestions.** `@` lists files and `/` lists local commands in one compact

@@ -203,7 +203,12 @@ these tests.
   text are not reachable from the keyboard.
 - The released preview has bounded conversation/tool previews. Source builds have
   a paged history view, with native and live-provider history acceptance still
-  open. There is no automatic updater or published ADEMark result.
+  open. There is no published ADEMark result.
+- v0.1.0-preview.7's desktop changes (wrapping tool rows, resizable side
+  panels, Cmd-L, the run-settings menu and per-thread approval) are covered by
+  development tests and headless scene snapshots. Dragging a panel edge, hover
+  text, and the menu have not been checked with a native pointer in the
+  installed app.
 
 ## Manual release acceptance
 

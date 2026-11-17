@@ -12,8 +12,8 @@ manifest, and publishes.
 3. Tag the merged commit and push the tag:
 
    ```sh
-   git tag v0.1.0-preview.6
-   git push origin v0.1.0-preview.6
+   git tag v0.1.0-preview.7
+   git push origin v0.1.0-preview.7
    ```
 
 4. The **macOS build** workflow builds from that tag and runs the installer
