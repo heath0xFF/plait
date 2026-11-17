@@ -278,3 +278,19 @@ permission checks or test assertions were weakened. This establishes a live
 project-development loop; it does not certify every provider, native input
 method, or long-running task. Automatic compaction remains covered by the
 scripted tests above rather than this live run.
+
+## Measuring frame cost
+
+```sh
+bash scripts/bench-frames.sh          # release profile
+bash scripts/bench-frames.sh --debug  # quick, unoptimized
+```
+
+The bench draws generated heavy scenes (2,000 changed files, 20,000-line
+patches, 5,000 commits, a 1,500-message thread) and times each frame and each
+action-to-next-frame switch, reporting min, median, p95, and max. A frame is
+`Window::draw` on GPUI's test platform with Core Text shaping: render, layout,
+prepaint, and paint into a scene. These are headless CPU measurements. They
+exclude GPU submission, presentation, real input latency, and the installed
+app's process, so they do not establish the 60 FPS or 50 ms targets in the
+[roadmap](ROADMAP.md) for the shipped app.

@@ -2952,3 +2952,27 @@ fn reconnect_releases_management_and_rejects_its_late_reply() {
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+#[path = "frame_bench.rs"]
+mod frame_bench;
+
+/// Heavy-scene frame cost. Run it with `bash scripts/bench-frames.sh`.
+#[core::prelude::v1::test]
+#[ignore = "timing run; use scripts/bench-frames.sh"]
+fn frame_bench() {
+    if !isolated("frame_bench") {
+        return;
+    }
+    let profile = if cfg!(debug_assertions) {
+        "debug (unoptimized)"
+    } else {
+        "release (optimized)"
+    };
+    let report = frame_bench::table(&frame_bench::run(), profile);
+    println!("{report}");
+    // The parent process discards the child's output, so the script reads a file.
+    let Some(path) = std::env::var_os("PLAIT_BENCH_OUT") else {
+        panic!("Set PLAIT_BENCH_OUT to a file for the table.");
+    };
+    std::fs::write(path, report).unwrap();
+}

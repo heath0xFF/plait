@@ -1,0 +1,546 @@
+//! Frame cost bench, a child of `snapshot` so it can use the headless harness.
+//!
+//! `bash scripts/bench-frames.sh` runs `snapshot::frame_bench`. A frame here is
+//! `Window::draw` on GPUI's test platform: root `render`, layout, prepaint, and
+//! paint into a scene, with the real Core Text shaping. No renderer is
+//! attached, so GPU submission and presentation are NOT included. Numbers are
+//! CPU frame cost from a headless process, not the installed app.
+
+use super::*;
+use crate::ui::Workspace;
+use plait_core::{
+    git::{Commit, History as CommitHistory},
+    model::{Diff, DiffKind, DiffLine},
+    state::DiffKey,
+};
+
+const WARMUP: usize = 5;
+
+pub struct Row {
+    pub name: String,
+    pub samples: Vec<Duration>,
+    /// Median of the root view's own `render()` call, from `last_render_us`.
+    pub render_ms: f64,
+}
+
+fn ms(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1000.
+}
+
+fn frames() -> usize {
+    std::env::var("PLAIT_BENCH_FRAMES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(30)
+}
+
+fn percentile(sorted: &[Duration], fraction: f64) -> Duration {
+    let rank = (sorted.len() as f64 * fraction).ceil() as usize;
+    sorted[rank.clamp(1, sorted.len()) - 1]
+}
+
+pub fn table(rows: &[Row], profile: &str) -> String {
+    let mut out = format!(
+        "profile: {profile}; CPU frame cost via Window::draw (render+layout+prepaint+paint), no GPU submission\n\
+         {:<76} {:>3} {:>8} {:>8} {:>8} {:>8} {:>11}\n",
+        "scenario", "n", "min ms", "med ms", "p95 ms", "max ms", "render() ms"
+    );
+    for row in rows {
+        let mut sorted = row.samples.clone();
+        sorted.sort();
+        out += &format!(
+            "{:<76} {:>3} {:>8.2} {:>8.2} {:>8.2} {:>8.2} {:>11.2}\n",
+            row.name,
+            sorted.len(),
+            ms(sorted[0]),
+            ms(percentile(&sorted, 0.5)),
+            ms(percentile(&sorted, 0.95)),
+            ms(*sorted.last().unwrap()),
+            row.render_ms,
+        );
+    }
+    out
+}
+
+fn row(name: &str, samples: Vec<Duration>, mut renders: Vec<u128>) -> Row {
+    renders.sort_unstable();
+    Row {
+        name: name.into(),
+        samples,
+        render_ms: renders[renders.len() / 2] as f64 / 1000.,
+    }
+}
+
+impl Harness {
+    fn render_us(&mut self) -> u128 {
+        self.window
+            .update(&mut self.cx, |plait, _, _| plait.last_render_us)
+            .expect("window update")
+    }
+
+    /// One timed frame, plus what the root `render()` call alone cost.
+    fn frame(&mut self) -> (Duration, u128) {
+        let start = Instant::now();
+        self.draw();
+        let elapsed = start.elapsed();
+        (elapsed, self.render_us())
+    }
+
+    /// Wheel scroll over `at`, delivered like the platform would.
+    fn wheel(&mut self, at: Point<Pixels>, dy: f32) {
+        let event = PlatformInput::Scroll(ScrollEvent {
+            position: at,
+            delta: ScrollDelta::Pixels(point(px(0.), px(dy))),
+            ..Default::default()
+        });
+        let window = self.window.into();
+        self.cx
+            .update_window(window, |_, window, cx| window.dispatch_event(event, cx))
+            .expect("scroll");
+    }
+
+    /// Steady state: the same frame redrawn, as after a plain `notify`.
+    fn steady(&mut self, name: &str) -> Row {
+        for _ in 0..WARMUP {
+            self.draw();
+        }
+        let (mut samples, mut renders) = (Vec::new(), Vec::new());
+        for _ in 0..frames() {
+            let (frame, render) = self.frame();
+            samples.push(frame);
+            renders.push(render);
+        }
+        row(name, samples, renders)
+    }
+
+    /// Each sample scrolls, then draws, so new rows are built every frame.
+    fn scrolling(&mut self, name: &str, at: Point<Pixels>, dy: f32) -> Row {
+        for _ in 0..WARMUP {
+            self.wheel(at, dy);
+            self.draw();
+        }
+        let (mut samples, mut renders) = (Vec::new(), Vec::new());
+        for _ in 0..frames() {
+            let start = Instant::now();
+            self.wheel(at, dy);
+            self.draw();
+            samples.push(start.elapsed());
+            renders.push(self.render_us());
+        }
+        row(name, samples, renders)
+    }
+
+    /// Action (with its queued work) to the end of the next frame.
+    fn switching(
+        &mut self,
+        name: &str,
+        rounds: usize,
+        mut action: impl FnMut(&mut Harness, usize),
+    ) -> Row {
+        let (mut samples, mut renders) = (Vec::new(), Vec::new());
+        for round in 0..rounds {
+            let start = Instant::now();
+            action(self, round);
+            self.draw();
+            samples.push(start.elapsed());
+            renders.push(self.render_us());
+        }
+        row(name, samples, renders)
+    }
+}
+
+/// A patch of `count` lines in the shape Git produces.
+fn big_diff(count: usize) -> Arc<Diff> {
+    let (mut old, mut new) = (0, 0);
+    let lines: Vec<DiffLine> = (0..count)
+        .map(|index| {
+            let (kind, text) = match index % 40 {
+                0 => (
+                    DiffKind::Hunk,
+                    format!("@@ -{old},38 +{new},40 @@ fn sample_{index}()"),
+                ),
+                r if r % 7 == 3 => (
+                    DiffKind::Removed,
+                    format!("-    let value_{index} = compute(&input[{index}..], {index} * 3);"),
+                ),
+                r if r % 5 == 2 => (
+                    DiffKind::Added,
+                    format!(
+                        "+    let value_{index} = compute_fast(&input[{index}..], {index} * 3, true);"
+                    ),
+                ),
+                _ => (
+                    DiffKind::Context,
+                    format!("     result.push(Entry::new({index}, \"sample text for line {index}\"));"),
+                ),
+            };
+            let (o, n) = match kind {
+                DiffKind::Hunk => (None, None),
+                DiffKind::Removed => {
+                    old += 1;
+                    (Some(old), None)
+                }
+                DiffKind::Added => {
+                    new += 1;
+                    (None, Some(new))
+                }
+                _ => {
+                    old += 1;
+                    new += 1;
+                    (Some(old), Some(new))
+                }
+            };
+            DiffLine {
+                text: text.into(),
+                kind,
+                old_line: o,
+                new_line: n,
+            }
+        })
+        .collect();
+    let widest = lines.iter().map(|line| line.text.len()).max().unwrap_or(0);
+    Arc::new(Diff {
+        lines,
+        widest_line: widest,
+        truncated: false,
+        elapsed: Duration::ZERO,
+    })
+}
+
+fn commits(count: usize) -> CommitHistory {
+    let commits = (0..count)
+        .map(|index| Commit {
+            id: format!("{index:040x}"),
+            short: format!("{index:07x}"),
+            author: format!("Author {}", index % 17),
+            time: 1_700_000_000 - index as i64 * 3_600,
+            subject: format!("Sample commit {index}: adjust the queue handling and notes"),
+        })
+        .collect();
+    CommitHistory {
+        commits,
+        more: false,
+    }
+}
+
+/// `messages` alternating turns; each reply carries prose and code and is
+/// followed by three tool calls.
+fn long_thread(id: &str, checkout: &Path, messages: usize) -> Snapshot {
+    let mut snapshot = thread_snapshot(checkout, false);
+    snapshot.id = id.into();
+    snapshot.status = ThreadStatus::Idle;
+    snapshot.live_text.clear();
+    snapshot.pending_approval = None;
+    snapshot.messages.clear();
+    snapshot.tools.clear();
+    for index in 0..messages {
+        let user = index % 2 == 0;
+        let message_id = format!("{id}-m{index}");
+        snapshot.messages.push(Message {
+            id: message_id.clone(),
+            role: if user {
+                MessageRole::User
+            } else {
+                MessageRole::Assistant
+            },
+            text: if user {
+                format!("Question {index}: please adjust the queue and explain the change.")
+            } else {
+                format!("{PROSE}\n\n{CODE}")
+            },
+            ..Default::default()
+        });
+        if user {
+            continue;
+        }
+        for step in 0..3 {
+            let (name, input, output) = if step == 1 {
+                (
+                    "command",
+                    "{\"command\":\"cargo test --workspace\"}",
+                    "Sample test output: 24 tests passed.",
+                )
+            } else {
+                (
+                    "read",
+                    "{\"path\":\"src/review.rs\"}",
+                    "pub fn sample() {}\n",
+                )
+            };
+            let mut made = tool(
+                &format!("{id}-t{index}-{step}"),
+                name,
+                ToolStatus::Done,
+                input,
+                output,
+            );
+            made.after = Some(Some(message_id.clone()));
+            snapshot.tools.push(made);
+        }
+    }
+    snapshot
+}
+
+fn rewrite(repository: &Path, text: &str, big: &str) {
+    for dir in 0..20 {
+        for file in 0..100 {
+            let path = repository.join(format!("gen/d{dir}/file_{file}.rs"));
+            std::fs::write(path, text).unwrap();
+        }
+    }
+    let lines: String = (0..15_000)
+        .map(|i| format!("line {i} {big} text here\n"))
+        .collect();
+    std::fs::write(repository.join("big.txt"), lines).unwrap();
+}
+
+/// The fixture plus 2,000 changed files (a third staged) and one 15k-line file.
+fn heavy_repository(root: &Path) -> PathBuf {
+    let repository = fixture_repository(root);
+    for dir in 0..20 {
+        std::fs::create_dir_all(repository.join(format!("gen/d{dir}"))).unwrap();
+    }
+    rewrite(&repository, "pub fn original() {}\n", "original");
+    git(&repository, &["add", "gen", "big.txt"]);
+    git(&repository, &["commit", "-qm", "bulk fixture"]);
+    rewrite(
+        &repository,
+        "pub fn changed() {\n    let value = 1;\n}\n",
+        "edited",
+    );
+    for dir in 0..7 {
+        git(&repository, &["add", &format!("gen/d{dir}")]);
+    }
+    repository
+}
+
+fn scroll_conversation(harness: &mut Harness, fraction: f32) {
+    harness.update(|plait, _, _| {
+        let item_ix = (plait.live_count as f32 * fraction) as usize;
+        plait.live_scroll.scroll_to(ListOffset {
+            item_ix,
+            offset_in_item: px(0.),
+        });
+    });
+    harness.draw();
+}
+
+fn show(harness: &mut Harness, tab: Workspace) {
+    harness.update(move |plait, _, cx| plait.show_tab(tab, cx));
+}
+
+fn select(harness: &mut Harness, index: usize) {
+    harness.update(move |plait, window, cx| {
+        plait.select_file(index, DiffMode::Unstaged, window, cx);
+    });
+}
+
+/// Mirrors `select_host_thread`; the app builds `formatted` on the background
+/// executor, so this includes work the real app does off the UI thread.
+fn install_thread(harness: &mut Harness, id: &'static str, snapshot: Snapshot) {
+    harness.update(move |plait, window, cx| {
+        plait.host.selected = Some(id.into());
+        plait.history = Default::default();
+        plait.host.snapshot = Some(Arc::new(snapshot));
+        plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
+            &Default::default(),
+            plait.host.snapshot.as_ref().unwrap(),
+        ));
+        plait.refresh_live_list(None);
+        if !plait.composers.contains_key(id) {
+            let composer = cx.new(|cx| Composer::new(window, cx));
+            plait.composers.insert(id.into(), composer);
+        }
+        plait.sync_composer(cx);
+    });
+}
+
+fn baseline(scratch: &Path, rows: &mut Vec<Row>) {
+    let small = fixture_repository(&scratch.join("small"));
+    let mut harness = Harness::new(&small, None, 1380., 860.);
+    rows.push(harness.steady("e1 idle redraw, default view (disconnected home)"));
+    harness.connect(&small, false);
+    rows.push(harness.steady("e2 idle redraw, small live conversation (3 msgs, 2 tools)"));
+}
+
+pub fn run() -> Vec<Row> {
+    let scratch = std::env::temp_dir().join(format!("plait-bench-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let mut rows = Vec::new();
+    baseline(&scratch, &mut rows);
+
+    let heavy = heavy_repository(&scratch.join("heavy"));
+    let mut harness = Harness::new(&heavy, None, 1380., 860.);
+    harness.connect(&heavy, false);
+    let changed = harness
+        .window
+        .update(&mut harness.cx, |plait, _, _| {
+            plait
+                .state
+                .repository
+                .snapshot
+                .ready()
+                .map_or(0, |s| s.changes.len())
+        })
+        .unwrap();
+    assert!(
+        changed >= 2000,
+        "expected 2000+ changed files, got {changed}"
+    );
+
+    // c. Long conversation, the open thread while the other tabs are measured.
+    let long = long_thread(THREAD, &heavy, 1500);
+    harness.change_snapshot(move |snapshot| *snapshot = long);
+    let count = harness
+        .window
+        .update(&mut harness.cx, |plait, _, _| plait.live_count)
+        .unwrap();
+    scroll_conversation(&mut harness, 1.0);
+    rows.push(harness.steady(&format!("c1 conversation, {count} rows, at bottom")));
+    scroll_conversation(&mut harness, 0.5);
+    rows.push(harness.steady("c2 conversation, middle (steady)"));
+    rows.push(harness.scrolling(
+        "c3 conversation, wheel-scrolling in the middle",
+        point(px(700.), px(400.)),
+        -60.,
+    ));
+    scroll_conversation(&mut harness, 1.0);
+
+    // a. Changes: 2,000 files, an injected 20k-line diff.
+    harness.update(|plait, _, cx| {
+        plait.tab = Workspace::Changes;
+        plait.state.repository.diff = Load::Ready(big_diff(20_000));
+        plait.state.repository.selected = Some(DiffKey {
+            file: 0,
+            mode: DiffMode::Unstaged,
+        });
+        plait.diff_scroll = UniformListScrollHandle::new();
+        cx.notify();
+    });
+    rows.push(harness.steady("a1 changes, 2000 files + 20k-line diff, top"));
+    harness.update(|plait, _, _| {
+        plait
+            .diff_scroll
+            .scroll_to_item(10_000, ScrollStrategy::Top);
+        plait.file_scroll.scroll_to_item(1_000, ScrollStrategy::Top);
+    });
+    rows.push(harness.steady("a2 changes, 2000 files + 20k-line diff, middle"));
+    rows.push(harness.scrolling(
+        "a3 changes, wheel-scrolling the diff",
+        point(px(900.), px(400.)),
+        -60.,
+    ));
+    rows.push(harness.scrolling(
+        "a4 changes, wheel-scrolling the file list",
+        point(px(120.), px(400.)),
+        -60.,
+    ));
+
+    // b. History: 5,000 commits, an injected 20k-line patch.
+    harness.update(|plait, _, cx| {
+        plait.tab = Workspace::History;
+        let log = &mut plait.state.repository.commits;
+        log.list = Load::Ready(commits(5_000));
+        log.selected = Some(format!("{:040x}", 0));
+        log.patch = Load::Ready(big_diff(20_000));
+        plait.commit_scroll = UniformListScrollHandle::new();
+        plait.history_scroll = UniformListScrollHandle::new();
+        cx.notify();
+    });
+    rows.push(harness.steady("b1 history, 5000 commits + 20k-line patch, top"));
+    harness.update(|plait, _, _| {
+        plait
+            .history_scroll
+            .scroll_to_item(2_500, ScrollStrategy::Top);
+        plait
+            .commit_scroll
+            .scroll_to_item(10_000, ScrollStrategy::Top);
+    });
+    rows.push(harness.steady("b2 history, middle of list and patch"));
+    rows.push(harness.scrolling(
+        "b3 history, wheel-scrolling the commit list",
+        point(px(150.), px(400.)),
+        -60.,
+    ));
+    rows.push(harness.scrolling(
+        "b4 history, wheel-scrolling the patch",
+        point(px(900.), px(400.)),
+        -60.,
+    ));
+
+    // d. Switching, all against the heavy state above.
+    show(&mut harness, Workspace::Conversation);
+    let tabs = [
+        Workspace::Changes,
+        Workspace::History,
+        Workspace::Conversation,
+    ];
+    rows.push(harness.switching(
+        "d1 tab switch Conversation>Changes>History>Conversation (heavy)",
+        12,
+        |h, round| show(h, tabs[round % 3]),
+    ));
+    show(&mut harness, Workspace::Changes);
+    let big_index = harness
+        .window
+        .update(&mut harness.cx, |plait, _, _| {
+            let snapshot = plait.state.repository.snapshot.ready().unwrap();
+            snapshot
+                .changes
+                .iter()
+                .position(|change| change.path.ends_with("big.txt"))
+                .unwrap()
+        })
+        .unwrap();
+    let files = [big_index, 5, 700, 1500, 9, big_index + 1];
+    rows.push(harness.switching(
+        "d2 select file, diff NOT cached (real git read, waits for it)",
+        files.len(),
+        |h, round| select(h, files[round]),
+    ));
+    rows.push(harness.switching(
+        "d3 select file, diff cached (incl. real 10k-line capped diff)",
+        18,
+        |h, round| select(h, files[round % files.len()]),
+    ));
+    // The cache holds 8 diffs and then clears, so stay inside it: both files were read in d2.
+    rows.push(
+        harness.switching("d4 step_file to next, cached", 20, |h, _| {
+            select(h, big_index);
+            h.update(|plait, window, cx| plait.step_file(true, window, cx));
+        }),
+    );
+
+    // Thread switch between the long thread and a small one.
+    show(&mut harness, Workspace::Conversation);
+    let small = long_thread("thr_0c44a9d1", &heavy, 40);
+    let long = long_thread(THREAD, &heavy, 1500);
+    let mut install = |h: &mut Harness, round: usize| {
+        if round.is_multiple_of(2) {
+            install_thread(h, "thr_0c44a9d1", small.clone());
+        } else {
+            install_thread(h, THREAD, long.clone());
+        }
+    };
+    rows.push(harness.switching(
+        "d5 thread switch 1500-msg <-> 40-msg (incl. markdown build on UI thread)",
+        8,
+        &mut install,
+    ));
+    let (mut firsts, mut renders) = (Vec::new(), Vec::new());
+    for round in 0..8 {
+        install(&mut harness, round);
+        let (frame, render) = harness.frame();
+        firsts.push(frame);
+        renders.push(render);
+    }
+    rows.push(row(
+        "d6 thread switch, first frame after install only",
+        firsts,
+        renders,
+    ));
+
+    drop(harness);
+    let _ = std::fs::remove_dir_all(&scratch);
+    rows
+}
