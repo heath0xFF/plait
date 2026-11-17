@@ -36,7 +36,7 @@ fn note(text: impl Into<SharedString>) -> Div {
     div()
         .text_size(px(12.))
         .line_height(px(19.))
-        .text_color(rgb(MUTED))
+        .text_color(rgb(colors().muted))
         .child(text.into())
 }
 
@@ -47,7 +47,7 @@ pub(super) fn section(title: &'static str) -> Div {
         .flex_shrink_0()
         .pt_4()
         .border_t_1()
-        .border_color(rgb(BORDER))
+        .border_color(rgb(colors().border))
         .child(
             div()
                 .text_size(px(13.))
@@ -72,12 +72,17 @@ pub(super) fn setting(
                 .flex_1()
                 .min_w_0()
                 .gap(px(2.))
-                .child(div().text_size(px(12.)).text_color(rgb(MUTED)).child(label))
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(colors().muted))
+                        .child(label),
+                )
                 .child(
                     div()
                         .text_size(px(11.))
                         .line_height(px(17.))
-                        .text_color(rgb(SUBTLE))
+                        .text_color(rgb(colors().subtle))
                         .child(detail.into()),
                 ),
         )
@@ -96,14 +101,14 @@ fn state_line(text: impl Into<SharedString>, tint: u32) -> Div {
 impl Plait {
     fn host_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (label, tint) = if self.host.connecting {
-            ("Connecting to local host…".to_owned(), MUTED)
+            ("Connecting to local host…".to_owned(), colors().muted)
         } else if self.host.connected {
             (
                 format!("Local host connected · protocol {}", self.host.protocol()),
-                MINT,
+                colors().mint,
             )
         } else {
-            ("Local host disconnected".to_owned(), AMBER)
+            ("Local host disconnected".to_owned(), colors().amber)
         };
         column()
             .gap_2()
@@ -112,8 +117,8 @@ impl Plait {
             .py_2()
             .rounded_lg()
             .border_1()
-            .border_color(rgb(BORDER))
-            .bg(rgb(RAIL))
+            .border_color(rgb(colors().border))
+            .bg(rgb(colors().rail))
             .child(
                 row()
                     .justify_between()
@@ -146,7 +151,7 @@ impl Plait {
                 el.child(
                     div()
                         .text_size(px(12.))
-                        .text_color(rgb(RED))
+                        .text_color(rgb(colors().red))
                         .child(text!(error)),
                 )
             })
@@ -203,7 +208,7 @@ impl Plait {
             .gap_2()
             .max_w(px(320.))
             .child(div().min_w_0().truncate().child(name))
-            .child(icon("down").text_color(rgb(MUTED)))
+            .child(icon("down").text_color(rgb(colors().muted)))
             .disabled(!can_choose)
             .when(can_choose, |el| {
                 el.on_activate(cx, |this, window, cx| {
@@ -217,12 +222,12 @@ impl Plait {
                 control,
             ))
             .when_some(saved, |el, choice| {
-                el.child(tag(model_label(choice), MUTED))
+                el.child(tag(model_label(choice), colors().muted))
             })
             .when(!usable && self.host.connected, |el| {
                 el.child(state_line(
                     "The saved default is not signed in on this host. New threads ask for a model until it is.",
-                    AMBER,
+                    colors().amber,
                 ))
             })
             .when_some(self.default_model_state(), |el, (state, tint)| {
@@ -230,15 +235,15 @@ impl Plait {
             })
             .child(self.default_thinking_setting(cx))
             .when_some(self.catalog_summary(), |el, summary| {
-                el.child(tag(summary, SUBTLE))
+                el.child(tag(summary, colors().subtle))
             })
             .child(tag(
                 "Authentication stays on the host. Keys and sign-in answers entered here are sent once and never saved in desktop preferences.",
-                SUBTLE,
+                colors().subtle,
             ))
             .when_some(
                 self.preference_note(Some(PreferenceGroup::Models)),
-                |el, note| el.child(tag(format!("Favorites and recent models: {note}"), SUBTLE)),
+                |el, note| el.child(tag(format!("Favorites and recent models: {note}"), colors().subtle)),
             )
     }
 
@@ -258,7 +263,7 @@ impl Plait {
             ))
             .gap_2()
             .child(level.label())
-            .child(icon("down").text_color(rgb(MUTED)))
+            .child(icon("down").text_color(rgb(colors().muted)))
             .on_activate(cx, |this, window, cx| {
                 this.open_default_thinking(window, cx)
             });
@@ -319,7 +324,10 @@ impl Plait {
                         ),
                 )
                 .when_some(self.preference_note(None), |el, note| {
-                    el.child(state_line(format!("Desktop preferences: {note}"), AMBER))
+                    el.child(state_line(
+                        format!("Desktop preferences: {note}"),
+                        colors().amber,
+                    ))
                 })
                 .child(self.host_status(cx))
                 .child({
@@ -398,9 +406,9 @@ impl Plait {
                     .gap_1()
                     .child(tag(
                         format!("Desktop {} · {revision}{built}", env!("CARGO_PKG_VERSION")),
-                        MUTED,
+                        colors().muted,
                     ))
-                    .child(tag(host, SUBTLE)),
+                    .child(tag(host, colors().subtle)),
             )
             .child(self.update_controls(cx))
     }
@@ -424,6 +432,7 @@ impl Plait {
             );
         }
         section("View")
+            .child(self.theme_settings(cx))
             .child(setting(
                 "Changed files above the message box",
                 "Files the thread wrote that are not committed yet, with lines added and removed. Click one to see it in Changes.",
@@ -431,7 +440,7 @@ impl Plait {
             ))
             .when_some(
                 self.preference_note(Some(PreferenceGroup::View)),
-                |el, note| el.child(tag(note, SUBTLE)),
+                |el, note| el.child(tag(note, colors().subtle)),
             )
     }
 
@@ -478,11 +487,11 @@ impl Plait {
             .child(setting("Default for edits and commands", detail, choices))
             .child(tag(
                 "A thread can choose its own from the run settings under its message box.",
-                SUBTLE,
+                colors().subtle,
             ))
             .when_some(
                 self.preference_note(Some(PreferenceGroup::Approvals)),
-                |el, note| el.child(tag(note, SUBTLE)),
+                |el, note| el.child(tag(note, colors().subtle)),
             )
     }
 }

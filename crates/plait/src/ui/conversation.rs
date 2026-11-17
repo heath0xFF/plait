@@ -10,8 +10,8 @@ impl Plait {
             .w(px(self.panel_width(Panel::Inspector)))
             .flex_shrink_0()
             .border_l_1()
-            .border_color(rgb(BORDER))
-            .bg(rgb(RAIL))
+            .border_color(rgb(colors().border))
+            .bg(rgb(colors().rail))
             .child(
                 row()
                     .h(px(36.))
@@ -19,7 +19,7 @@ impl Plait {
                     .flex_shrink_0()
                     .justify_between()
                     .child(section_label("Working tree"))
-                    .child(tag("Git · read-only", SUBTLE)),
+                    .child(tag("Git · read-only", colors().subtle)),
             )
             .child(self.file_panel(true, cx))
             .child(self.resize_handle(Panel::Inspector, cx))

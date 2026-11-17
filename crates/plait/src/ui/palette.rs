@@ -594,11 +594,15 @@ impl Palette {
             .items_center()
             .rounded_md()
             .border_1()
-            .border_color(rgb(EDGE))
+            .border_color(rgb(colors().edge))
             .cursor_pointer()
             .text_size(px(11.))
-            .text_color(rgb(MUTED))
-            .hover(|style| style.bg(rgba(HOVER)).text_color(rgb(TEXT)))
+            .text_color(rgb(colors().muted))
+            .hover(|style| {
+                style
+                    .bg(rgba(colors().hover))
+                    .text_color(rgb(colors().text))
+            })
             .child(label)
             .on_click(cx.listener(move |this, _, _, cx| {
                 // The row underneath would otherwise run the item.
@@ -640,12 +644,12 @@ impl Palette {
             .size(px(20.))
             .rounded_md()
             .cursor_pointer()
-            .hover(|style| style.bg(rgba(HOVER)))
+            .hover(|style| style.bg(rgba(colors().hover)))
             // Filled or outlined: the shape carries the state, not the tint.
             .child(
                 icon(if on { "star-filled" } else { "star" })
                     .size(px(12.))
-                    .text_color(rgb(if on { TEXT } else { SUBTLE })),
+                    .text_color(rgb(if on { colors().text } else { colors().subtle })),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
                 // The row underneath would otherwise run the item.
@@ -668,7 +672,7 @@ impl Palette {
         let selected = self.selected == Some(row);
         let hover = item.enabled && !selected;
         row_base(row, item, selected)
-            .when(hover, |el| el.hover(|style| style.bg(rgba(HOVER))))
+            .when(hover, |el| el.hover(|style| style.bg(rgba(colors().hover))))
             .when_some(item.glyph, |el, (glyph, tint)| {
                 el.child(icon(glyph).text_color(rgb(tint)))
             })
@@ -677,7 +681,11 @@ impl Palette {
                     .flex_shrink_0()
                     .max_w(relative(0.7))
                     .truncate()
-                    .text_color(rgb(if item.enabled { TEXT } else { MUTED }))
+                    .text_color(rgb(if item.enabled {
+                        colors().text
+                    } else {
+                        colors().muted
+                    }))
                     .child(emphasized(&item.title, title)),
             )
             .child(
@@ -686,7 +694,7 @@ impl Palette {
                     .min_w_0()
                     .truncate()
                     .text_size(px(11.))
-                    .text_color(rgb(SUBTLE))
+                    .text_color(rgb(colors().subtle))
                     .child(emphasized(&item.detail, detail)),
             )
             .when_some(item.badge.clone(), |el, (badge, tint)| {
@@ -699,7 +707,7 @@ impl Palette {
                 el.child(self.toggle(row, item, on, cx))
             })
             .when(!item.hint.is_empty(), |el| {
-                el.child(tag(item.hint.clone(), SUBTLE).flex_shrink_0())
+                el.child(tag(item.hint.clone(), colors().subtle).flex_shrink_0())
             })
             .when(item.enabled, |el| {
                 el.cursor_pointer()
@@ -778,14 +786,18 @@ impl Palette {
             .flex_shrink_0()
             .justify_between()
             .border_t_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(colors().border))
             .child(
                 div()
                     .min_w_0()
                     .truncate()
-                    .when_some(status, |el, status| el.child(tag(status, MUTED))),
+                    .when_some(status, |el, status| el.child(tag(status, colors().muted))),
             )
-            .child(tag(keys, SUBTLE).flex_shrink_0().whitespace_nowrap())
+            .child(
+                tag(keys, colors().subtle)
+                    .flex_shrink_0()
+                    .whitespace_nowrap(),
+            )
     }
 }
 
@@ -803,7 +815,7 @@ fn row_base(row: usize, item: &Item, selected: bool) -> Stateful<Div> {
         .px_2()
         .rounded_md()
         .text_size(px(13.))
-        .when(selected, |el| el.bg(rgb(SELECTED)))
+        .when(selected, |el| el.bg(rgb(colors().selected)))
         .disabled(!item.enabled)
 }
 
@@ -813,7 +825,7 @@ fn message(text: SharedString) -> AnyElement {
         .py_6()
         .text_size(px(12.))
         .line_height(px(19.))
-        .text_color(rgb(MUTED))
+        .text_color(rgb(colors().muted))
         .child(text!(text))
         .into_any_element()
 }
@@ -868,8 +880,8 @@ impl Render for Palette {
             .overflow_hidden()
             .rounded_xl()
             .border_1()
-            .border_color(rgb(EDGE))
-            .bg(rgb(RAIL))
+            .border_color(rgb(colors().edge))
+            .bg(rgb(colors().rail))
             .child(div().p_2().child(self.field.clone()))
             .child(self.list(cx))
             .child(self.footer(searching));
@@ -887,7 +899,7 @@ impl Render for Palette {
             .px_6()
             .pt(px(72.))
             .pb_6()
-            .bg(rgba(0x00000066))
+            .bg(rgba(colors().scrim))
             .child(panel)
     }
 }

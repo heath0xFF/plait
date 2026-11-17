@@ -1,4 +1,5 @@
 mod actions;
+mod appearance;
 mod changes;
 mod commands;
 mod commit_panel;
@@ -149,6 +150,7 @@ pub struct Plait {
     sidebar: bool,
     diagnostics: bool,
     preferences: jump::PreferenceState,
+    themes: appearance::Themes,
     updates: update::UpdateState,
     session: session::SessionState,
     picker_open: bool,
@@ -212,6 +214,7 @@ impl Plait {
             sidebar: true,
             diagnostics: false,
             preferences: jump::PreferenceState::default(),
+            themes: Default::default(),
             updates: update::UpdateState::default(),
             session: session::SessionState::default(),
             picker_open: false,
@@ -228,6 +231,9 @@ impl Plait {
         this.initialize_navigation(window, cx);
         this.pump(cx);
         this.load_preferences(cx);
+        this.observe_appearance(window, cx);
+        this.apply_theme(cx);
+        this.load_themes(cx);
         // An open picker shows host state; keep it current as replies land.
         cx.observe_self(|this, cx| {
             this.sync_picker(cx);
@@ -457,9 +463,9 @@ impl Plait {
             .py_2()
             .gap_3()
             .border_b_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(colors().border))
             .text_size(px(12.))
-            .child(div().flex_1().min_w_0().text_color(rgb(MUTED)).child(text!(
+            .child(div().flex_1().min_w_0().text_color(rgb(colors().muted)).child(text!(
                 format!(
                     "The Git inspector needs a window wider than {WIDE_WINDOW} points. Git status and diffs are in Changes."
                 )
@@ -528,7 +534,7 @@ impl Plait {
             .pr_3()
             .gap_3()
             .border_b_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(colors().border))
             .child(
                 icon_button("toggle-sidebar", "panel", "Toggle sidebar")
                     .aria_keyshortcuts(self.shortcut_aria("view.toggle_sidebar"))
@@ -548,7 +554,11 @@ impl Plait {
                     )
                     // The composer repeats this context; the header keeps it for Changes.
                     .when(wide, |el| {
-                        el.child(tag(location, SUBTLE).flex_shrink_0().whitespace_nowrap())
+                        el.child(
+                            tag(location, colors().subtle)
+                                .flex_shrink_0()
+                                .whitespace_nowrap(),
+                        )
                     }),
             )
             .child(
@@ -556,7 +566,7 @@ impl Plait {
                     .flex_shrink_0()
                     .gap(px(6.))
                     .child(dot(status.1))
-                    .child(tag(status.0, MUTED)),
+                    .child(tag(status.0, colors().muted)),
             )
             .child(
                 segmented()
@@ -581,7 +591,7 @@ impl Plait {
                                 el.child(
                                     div()
                                         .text_size(px(11.))
-                                        .text_color(rgb(SUBTLE))
+                                        .text_color(rgb(colors().subtle))
                                         .child(count.to_string()),
                                 )
                             })
@@ -632,7 +642,7 @@ impl Plait {
             row()
                 .gap(px(5.))
                 .min_w_0()
-                .child(icon(glyph).size(px(12.)).text_color(rgb(SUBTLE)))
+                .child(icon(glyph).size(px(12.)).text_color(rgb(colors().subtle)))
                 .child(div().truncate().child(text!(id = id, label)))
         };
         row()
@@ -642,7 +652,7 @@ impl Plait {
             .px_1()
             .gap_4()
             .text_size(px(11.))
-            .text_color(rgb(MUTED))
+            .text_color(rgb(colors().muted))
             .child(chip("environment-project", "folder", project.name.clone()))
             .child(chip("environment-machine", "machine", machine.name.clone()))
             .when_some(branch, |el, branch| {
@@ -653,7 +663,7 @@ impl Plait {
                     div()
                         .min_w_0()
                         .truncate()
-                        .text_color(rgb(SUBTLE))
+                        .text_color(rgb(colors().subtle))
                         .child(text!(id = "environment-model", model)),
                 )
             })
@@ -669,11 +679,11 @@ impl Plait {
             .px_3()
             .flex_shrink_0()
             .justify_end()
-            .bg(rgb(RAIL))
+            .bg(rgb(colors().rail))
             .border_t_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(colors().border))
             .text_size(px(11.))
-            .text_color(rgb(SUBTLE))
+            .text_color(rgb(colors().subtle))
             .child(text!(format!(
                 "UI {} µs · peak {} µs · switch {} µs · first {} ms",
                 self.last_render_us,
@@ -699,11 +709,11 @@ impl Render for Plait {
         let machine = &project.machines[0];
         let real = self.host.selected.is_some();
         let connection = if self.host.connecting {
-            ("Connecting…".to_owned(), MUTED)
+            ("Connecting…".to_owned(), colors().muted)
         } else if self.host.connected {
-            ("Host connected".to_owned(), MINT)
+            ("Host connected".to_owned(), colors().mint)
         } else {
-            ("Host disconnected".to_owned(), AMBER)
+            ("Host disconnected".to_owned(), colors().amber)
         };
         let title = if self.settings_open {
             "Settings".to_owned()
@@ -714,7 +724,7 @@ impl Render for Plait {
         };
         let status = if real && !self.settings_open {
             self.host.snapshot.as_ref().map_or_else(
-                || ("Loading".to_owned(), MUTED),
+                || ("Loading".to_owned(), colors().muted),
                 |snapshot| {
                     (
                         snapshot.status.label().to_owned(),
@@ -873,8 +883,8 @@ impl Render for Plait {
             .map(|root| self.on_panel_resize(root, cx))
             .size_full()
             .overflow_hidden()
-            .bg(rgb(BG))
-            .text_color(rgb(TEXT))
+            .bg(rgb(colors().bg))
+            .text_color(rgb(colors().text))
             .text_size(px(13.))
             .font_family(".SystemUIFont")
             .child(
@@ -896,7 +906,7 @@ impl Render for Plait {
                                         .px_4()
                                         .py_2()
                                         .text_size(px(12.))
-                                        .text_color(rgb(AMBER))
+                                        .text_color(rgb(colors().amber))
                                         .child(note),
                                 )
                             })
@@ -906,7 +916,7 @@ impl Render for Plait {
                                         .px_4()
                                         .py_2()
                                         .text_size(px(12.))
-                                        .text_color(rgb(RED))
+                                        .text_color(rgb(colors().red))
                                         .child(notice),
                                 )
                             })

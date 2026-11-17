@@ -669,5 +669,5 @@ impl Plait {
 
 /// The neutral background of selected text.
 pub(super) fn selection_fill() -> Hsla {
-    rgba(SELECTION).into()
+    rgba(colors().selection).into()
 }

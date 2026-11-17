@@ -273,7 +273,7 @@ impl Plait {
                         .min_w_0()
                         .truncate()
                         .text_size(px(12.))
-                        .text_color(rgb(MUTED))
+                        .text_color(rgb(colors().muted))
                         .when_some(sync.upstream, |el, up| {
                             el.aria_description(format!("Upstream {up}"))
                         })
@@ -338,7 +338,7 @@ impl Plait {
             .py_2()
             .gap_2()
             .border_t_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(colors().border))
             .children(self.sync_row(busy, cx))
             .child(
                 row()
@@ -388,10 +388,10 @@ impl Plait {
             .when(self.running_here(), |el| {
                 el.child(tag(
                     "A thread is running in this checkout; its edits may be unfinished.",
-                    AMBER,
+                    colors().amber,
                 ))
             })
-            .when(busy, |el| el.child(tag("Git is working…", SUBTLE)))
+            .when(busy, |el| el.child(tag("Git is working…", colors().subtle)))
             .when_some(note.filter(|_| !busy), |el, (note, failed)| {
                 el.child(
                     row()
@@ -401,7 +401,11 @@ impl Plait {
                                 .flex_1()
                                 .min_w_0()
                                 .text_size(px(11.))
-                                .text_color(rgb(if failed { RED } else { SUBTLE }))
+                                .text_color(rgb(if failed {
+                                    colors().red
+                                } else {
+                                    colors().subtle
+                                }))
                                 .child(note),
                         )
                         .when_some(write.undo.clone(), |el, backup| {

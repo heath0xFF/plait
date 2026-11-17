@@ -1260,6 +1260,7 @@ fn walk(output: Option<&Path>) {
         composer_v3_walk(&mut harness, &repository, suffix);
         settings_walk(&mut harness, &repository, suffix);
         settings_controls_walk(&mut harness, &repository, suffix);
+        theme_walk(&mut harness, &repository, suffix);
         palette_walk(&mut harness, &repository, suffix);
         picker_walk(&mut harness, &repository, suffix);
         new_thread_walk(&mut harness, &repository, suffix);
@@ -1837,6 +1838,30 @@ fn composer_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     });
     harness.capture(&format!("composer-command-filtered-{suffix}"));
     harness.update(|plait, window, cx| window.focus(&plait.focus, cx));
+    harness.connect(repository, false);
+}
+
+/// The light theme across the main views, and the theme settings in both.
+fn theme_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
+    let force = |harness: &mut Harness, light: bool| {
+        harness.update(move |plait, _, cx| {
+            plait.themes.forced = Some(light);
+            plait.apply_theme(cx);
+        })
+    };
+    harness.connect(repository, true);
+    force(harness, true);
+    harness.capture(&format!("light-conversation-{suffix}"));
+    harness.update(|plait, window, cx| plait.select_file(1, DiffMode::Unstaged, window, cx));
+    harness.capture(&format!("light-changes-{suffix}"));
+    harness.update(|plait, _, _| {
+        plait.settings_open = true;
+        plait.settings_section = 4;
+    });
+    harness.capture(&format!("light-settings-view-{suffix}"));
+    force(harness, false);
+    harness.capture(&format!("settings-view-{suffix}"));
+    harness.update(|plait, _, _| plait.settings_open = false);
     harness.connect(repository, false);
 }
 

@@ -22,21 +22,21 @@ const CELL_PADDING: f32 = 10.;
 /// Syntax classes drawn with the existing palette; see DESIGN.md.
 fn token_color(token: Token) -> u32 {
     match token {
-        Token::Comment => SUBTLE,
-        Token::Keyword => VIOLET,
-        Token::String | Token::Inserted => MINT,
-        Token::Number => AMBER,
-        Token::Type | Token::Property | Token::Meta => BLUE,
-        Token::Function | Token::Heading => TEXT,
-        Token::Punctuation => MUTED,
-        Token::Deleted => RED,
+        Token::Comment => colors().subtle,
+        Token::Keyword => colors().violet,
+        Token::String | Token::Inserted => colors().mint,
+        Token::Number => colors().amber,
+        Token::Type | Token::Property | Token::Meta => colors().blue,
+        Token::Function | Token::Heading => colors().text,
+        Token::Punctuation => colors().muted,
+        Token::Deleted => colors().red,
     }
 }
 
 fn highlight(style: &Style) -> HighlightStyle {
     let link = style.link.is_some();
     let color = if link {
-        Some(BLUE)
+        Some(colors().blue)
     } else {
         style.token.map(token_color)
     };
@@ -45,11 +45,11 @@ fn highlight(style: &Style) -> HighlightStyle {
         font_weight: (style.strong || style.token == Some(Token::Heading))
             .then_some(FontWeight::BOLD),
         font_style: style.emphasis.then_some(FontStyle::Italic),
-        background_color: style.code.then(|| rgb(PANEL).into()),
+        background_color: style.code.then(|| rgb(colors().panel).into()),
         // A link is underlined as well as tinted, so it never depends on color.
         underline: link.then(|| UnderlineStyle {
             thickness: px(1.),
-            color: Some(rgb(BLUE).into()),
+            color: Some(rgb(colors().blue).into()),
             wavy: false,
         }),
         strikethrough: style.strike.then(|| StrikethroughStyle {
@@ -132,9 +132,9 @@ impl Plait {
             .w_full()
             .min_w_0()
             .rounded_lg()
-            .bg(rgb(RAIL))
+            .bg(rgb(colors().rail))
             .border_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(colors().border))
             .overflow_hidden()
             .child(
                 row()
@@ -148,7 +148,7 @@ impl Plait {
                         } else {
                             SharedString::from(language.to_owned())
                         },
-                        SUBTLE,
+                        colors().subtle,
                     ))
                     .child(
                         quiet_button(
@@ -187,7 +187,7 @@ impl Plait {
                     .flex_shrink_0()
                     .min_w(px(LIST_STEP))
                     .pr(px(6.))
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(colors().muted))
                     .child(SharedString::from(
                         block.text[..marker].trim_end().to_owned(),
                     )),
@@ -244,9 +244,11 @@ impl Plait {
             div()
                 .flex()
                 .items_stretch()
-                .when(index > 0, |el| el.border_t_1().border_color(rgb(BORDER)))
+                .when(index > 0, |el| {
+                    el.border_t_1().border_color(rgb(colors().border))
+                })
                 .when(index == 0, |el| {
-                    el.bg(rgb(RAIL)).font_weight(FontWeight::MEDIUM)
+                    el.bg(rgb(colors().rail)).font_weight(FontWeight::MEDIUM)
                 })
                 .children(cells.iter().zip(&widths).zip(&table.columns).map(
                     |((cell, width), column)| {
@@ -268,7 +270,7 @@ impl Plait {
                     .overflow_x_scroll()
                     .rounded_md()
                     .border_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(colors().border))
                     .text_size(px(13.))
                     .line_height(px(20.))
                     .child(column().flex_none().w(px(total)).children(rows)),
@@ -286,9 +288,9 @@ impl Plait {
     ) -> AnyElement {
         let rows = lines.iter().map(|line| {
             let (mark, tint, fill) = match line.change {
-                Change::Context => (" ", MUTED, None),
-                Change::Removed => ("−", RED, Some(REMOVED_FILL)),
-                Change::Added => ("+", MINT, Some(ADDED_FILL)),
+                Change::Context => (" ", colors().muted, None),
+                Change::Removed => ("−", colors().red, Some(colors().removed_fill)),
+                Change::Added => ("+", colors().mint, Some(colors().added_fill)),
             };
             div()
                 .flex()
@@ -305,9 +307,9 @@ impl Plait {
                     div()
                         .pr_3()
                         .text_color(rgb(if line.change == Change::Context {
-                            MUTED
+                            colors().muted
                         } else {
-                            TEXT
+                            colors().text
                         }))
                         .child(self.block_text(site, block, line.range.clone(), false)),
                 )
@@ -335,7 +337,7 @@ impl Plait {
                 .w_full()
                 .my_1()
                 .border_b_1()
-                .border_color(rgb(BORDER))
+                .border_color(rgb(colors().border))
                 .into_any_element(),
             Kind::List { depth, marker } => self.list_item(site, block, *depth, *marker),
             Kind::Table(table) => self.table(site, block, table, key),
@@ -357,8 +359,8 @@ impl Plait {
                 .min_w_0()
                 .pl_3()
                 .border_l_2()
-                .border_color(rgb(EDGE))
-                .text_color(rgb(MUTED))
+                .border_color(rgb(colors().edge))
+                .text_color(rgb(colors().muted))
                 .child(self.block_text(site, block, whole, false))
                 .into_any_element(),
             Kind::Paragraph => prose()

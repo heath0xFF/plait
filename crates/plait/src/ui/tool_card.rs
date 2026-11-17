@@ -21,10 +21,10 @@ use std::{collections::HashMap, sync::Arc};
 
 fn tool_tint(status: ToolStatus) -> u32 {
     match status {
-        ToolStatus::Running => BLUE,
-        ToolStatus::Done => SUBTLE,
-        ToolStatus::Error => RED,
-        ToolStatus::Interrupted => AMBER,
+        ToolStatus::Running => colors().blue,
+        ToolStatus::Done => colors().subtle,
+        ToolStatus::Error => colors().red,
+        ToolStatus::Interrupted => colors().amber,
     }
 }
 
@@ -49,9 +49,9 @@ fn frame() -> Div {
         .w_full()
         .min_w_0()
         .rounded_md()
-        .bg(rgb(RAIL))
+        .bg(rgb(colors().rail))
         .border_1()
-        .border_color(rgb(BORDER))
+        .border_color(rgb(colors().border))
         .overflow_hidden()
 }
 
@@ -201,7 +201,7 @@ impl Plait {
                         .child(run.summary.clone()),
                 )
                 .when_some(failed, |el, failed| {
-                    el.child(tag(failed, RED).flex_shrink_0())
+                    el.child(tag(failed, colors().red).flex_shrink_0())
                 })
                 .on_activate(cx, move |this, _, cx| this.toggle_tool_group(&key, cx)),
             )
@@ -268,12 +268,16 @@ impl Plait {
                                 .line_clamp(SUBJECT_LINES)
                                 .font_family(MONO)
                                 .text_size(px(12.))
-                                .text_color(rgb(MUTED))
+                                .text_color(rgb(colors().muted))
                                 .child(subject),
                         )
                     })
                     .when_some(facts, |el, facts| {
-                        el.child(tag(facts, SUBTLE).flex_shrink_0().whitespace_nowrap())
+                        el.child(
+                            tag(facts, colors().subtle)
+                                .flex_shrink_0()
+                                .whitespace_nowrap(),
+                        )
                     })
                     // Completion is the normal case; only call out the others.
                     .when(tool.status != ToolStatus::Done, |el| {
@@ -322,7 +326,7 @@ impl Plait {
                     } else {
                         "Nothing to show."
                     },
-                    SUBTLE,
+                    colors().subtle,
                 ))
             })
             .when(!copy.is_empty(), |el| {
@@ -333,7 +337,7 @@ impl Plait {
                             "Copy",
                             group,
                         )
-                        .bg(rgb(PANEL))
+                        .bg(rgb(colors().panel))
                         .aria_label("Copy tool details")
                         .on_activate(cx, move |_, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()))
@@ -353,11 +357,14 @@ impl Plait {
         };
         // The state of a failed call is written out, not only tinted.
         let (caption, edge) = match (section.part, tool.status) {
-            (Part::Output, ToolStatus::Error) => (Some(("Failed", RED)), Some(FAILED_EDGE)),
-            (Part::Output, ToolStatus::Interrupted) => {
-                (Some(("Interrupted before it finished", AMBER)), None)
+            (Part::Output, ToolStatus::Error) => {
+                (Some(("Failed", colors().red)), Some(colors().failed_edge))
             }
-            (Part::Input, _) => (Some(("Arguments as received", SUBTLE)), None),
+            (Part::Output, ToolStatus::Interrupted) => (
+                Some(("Interrupted before it finished", colors().amber)),
+                None,
+            ),
+            (Part::Input, _) => (Some(("Arguments as received", colors().subtle)), None),
             _ => (None, None),
         };
         let body = match (section.part, &block.kind) {
@@ -373,7 +380,7 @@ impl Plait {
                     div()
                         .w(px(16.))
                         .flex_shrink_0()
-                        .text_color(rgb(SUBTLE))
+                        .text_color(rgb(colors().subtle))
                         .child("$"),
                 )
                 // A command is read as a line, not scanned like code; wrap it.
@@ -381,18 +388,22 @@ impl Plait {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .child(code(TEXT).whitespace_normal()),
+                        .child(code(colors().text).whitespace_normal()),
                 )
                 .into_any_element(),
             (Part::Diff, Kind::Diff(lines)) => frame()
                 .child(self.diff(site, block, lines, &key))
                 .into_any_element(),
-            (Part::Input, _) => frame().px_3().py_2().child(code(MUTED)).into_any_element(),
+            (Part::Input, _) => frame()
+                .px_3()
+                .py_2()
+                .child(code(colors().muted))
+                .into_any_element(),
             _ => frame()
                 .px_3()
                 .py_2()
                 .when_some(edge, |el, edge| el.border_color(rgba(edge)))
-                .child(code(TEXT))
+                .child(code(colors().text))
                 .into_any_element(),
         };
         column()
@@ -401,7 +412,9 @@ impl Plait {
             .gap_1()
             .when_some(caption, |el, (caption, tint)| el.child(tag(caption, tint)))
             .child(body)
-            .when_some(section.note.clone(), |el, note| el.child(tag(note, SUBTLE)))
+            .when_some(section.note.clone(), |el, note| {
+                el.child(tag(note, colors().subtle))
+            })
             .into_any_element()
     }
 }

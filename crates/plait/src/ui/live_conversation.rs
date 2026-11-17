@@ -43,7 +43,7 @@ fn banner(tint: u32) -> Div {
         .text_size(px(12.))
         .text_color(rgb(tint))
         .border_b_1()
-        .border_color(rgb(BORDER))
+        .border_color(rgb(colors().border))
 }
 
 /// How far the copy control of an agent reply sits above its first line. It
@@ -111,7 +111,7 @@ impl Plait {
                         div()
                             .pt_1()
                             .text_size(px(11.))
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(colors().muted))
                             .child(summary.clone()),
                     )
                 },
@@ -183,7 +183,7 @@ impl Plait {
                         .absolute()
                         .top(px(-COPY_LIFT))
                         .right_0()
-                        .child(copy.h(px(COPY_LIFT)).bg(rgb(BG))),
+                        .child(copy.h(px(COPY_LIFT)).bg(rgb(colors().bg))),
                 )
                 .into_any_element()
         }
@@ -236,8 +236,8 @@ impl Plait {
             .child(
                 row()
                     .gap(px(6.))
-                    .child(dot(BLUE))
-                    .child(tag("Writing…", MUTED)),
+                    .child(dot(colors().blue))
+                    .child(tag("Writing…", colors().muted)),
             )
             .into_any_element()
     }
@@ -302,7 +302,7 @@ impl Plait {
             });
         column()
             .gap_1()
-            .text_color(rgb(MUTED))
+            .text_color(rgb(colors().muted))
             .child(heading)
             .when(open, |el| {
                 el.child(
@@ -310,7 +310,7 @@ impl Plait {
                         .id(SharedString::from(format!("reasoning-body-{id}")))
                         .pl_3()
                         .border_l_1()
-                        .border_color(rgb(BORDER))
+                        .border_color(rgb(colors().border))
                         .when(live, |el| el.max_h(px(180.)).overflow_y_scroll())
                         .when_some(parsed, |el, parsed| {
                             let (whole, tail) = if live {
@@ -438,13 +438,13 @@ impl Plait {
                                         } else {
                                             "Jump to latest"
                                         })
-                                        .when(unseen, |el| el.child(dot(BLUE)))
+                                        .when(unseen, |el| el.child(dot(colors().blue)))
                                         .child(if unseen {
                                             "New activity · Jump to latest"
                                         } else {
                                             "Jump to latest"
                                         })
-                                        .child(icon("down").text_color(rgb(TEXT)))
+                                        .child(icon("down").text_color(rgb(colors().text)))
                                         .on_activate(cx, |this, window, cx| {
                                             this.jump_latest(window, cx)
                                         }),
@@ -462,11 +462,11 @@ impl Plait {
                         .px_2()
                         .py_1()
                         .rounded_md()
-                        .bg(rgb(PANEL))
+                        .bg(rgb(colors().panel))
                         .border_1()
-                        .border_color(rgb(EDGE))
+                        .border_color(rgb(colors().edge))
                         .text_size(px(11.))
-                        .text_color(rgb(MUTED))
+                        .text_color(rgb(colors().muted))
                         .truncate()
                         .child(text!(id = "link-destination", format!("Opens {url}"))),
                 )
@@ -493,11 +493,11 @@ impl Plait {
                 .gap_2()
                 .rounded_xl()
                 .border_1()
-                .border_color(rgb(0x5c4f38))
-                .bg(rgb(RAIL))
+                .border_color(rgb(colors().warn_edge))
+                .bg(rgb(colors().rail))
                 .text_size(px(12.))
                 .child(
-                    row().child(dot(AMBER)).child(
+                    row().child(dot(colors().amber)).child(
                         div()
                             .text_size(px(13.))
                             .font_weight(FontWeight::MEDIUM)
@@ -517,23 +517,27 @@ impl Plait {
                         .px_3()
                         .py_2()
                         .rounded_md()
-                        .bg(rgb(BG))
+                        .bg(rgb(colors().bg))
                         .border_1()
-                        .border_color(rgb(BORDER))
+                        .border_color(rgb(colors().border))
                         .font_family(MONO)
                         .line_height(px(19.))
                         .child(approval.details.clone()),
                 )
-                .child(div().text_color(rgb(AMBER)).child(approval.risk.clone()))
+                .child(
+                    div()
+                        .text_color(rgb(colors().amber))
+                        .child(approval.risk.clone()),
+                )
                 .when(!approval.dirty_paths.is_empty(), |el| {
                     el.child(
                         div()
-                            .text_color(rgb(MUTED))
+                            .text_color(rgb(colors().muted))
                             .child(format!("Protected dirty paths: {dirty}")),
                     )
                 })
                 .when(!exact, |el| {
-                    el.child(div().text_color(rgb(RED)).child(
+                    el.child(div().text_color(rgb(colors().red)).child(
                         "Exact arguments are unavailable. Approval is disabled; Stop this run.",
                     ))
                 })
@@ -555,7 +559,7 @@ impl Plait {
                         )
                         .child(
                             toned_button("allow-tool", "Allow once", Tone::Filled)
-                                .text_color(rgb(AMBER))
+                                .text_color(rgb(colors().amber))
                                 .disabled(!enabled)
                                 .when(enabled, |el| {
                                     el.on_activate(cx, move |this, window, cx| {
@@ -574,12 +578,12 @@ impl Plait {
     fn live_banners(&self, pending: bool, cx: &mut Context<Self>) -> Vec<Div> {
         let mut banners = Vec::new();
         if let Some(error) = self.host.error.clone() {
-            banners.push(banner(RED).child(text!(error)));
+            banners.push(banner(colors().red).child(text!(error)));
         }
         if !self.host.connected {
             let connecting = self.host.connecting;
             banners.push(
-                banner(AMBER)
+                banner(colors().amber)
                     .child(div().flex_1().min_w_0().child(
                         "Disconnected · displayed content may be stale. The host may still be running this thread.",
                     ))
@@ -599,7 +603,7 @@ Tone::Filled,
         if pending && self.host.protocol() < 3 {
             let ready = self.host.connected && !self.host.submitting && self.session.ready();
             banners.push(
-                banner(MUTED)
+                banner(colors().muted)
                     .child(div().flex_1().min_w_0().child(if self.host.submitting {
                         "Waiting for host acceptance…"
                     } else {
@@ -667,7 +671,7 @@ Tone::Filled,
             if snapshot.truncated && !self.history.enabled {
                 main = main.child(div().px_6().py_1().child(tag(
                     "Bounded preview · older messages or tool output have been clipped by the host.",
-                    AMBER,
+                    colors().amber,
                 )));
             }
             if let Some((state, failed)) = history::run_state(snapshot, self.history.now) {
@@ -678,13 +682,13 @@ Tone::Filled,
                             .max_w(px(CONTENT_WIDTH))
                             .mx_auto()
                             .text_size(px(12.))
-                            .text_color(rgb(if failed { RED } else { MUTED }))
+                            .text_color(rgb(if failed { colors().red } else { colors().muted }))
                             .child(dot(if failed {
-                                RED
+                                colors().red
                             } else if snapshot.status.busy() {
-                                BLUE
+                                colors().blue
                             } else {
-                                MUTED
+                                colors().muted
                             }))
                             .child(state),
                     ),
@@ -702,7 +706,7 @@ Tone::Filled,
                             .max_w(px(CONTENT_WIDTH))
                             .mx_auto()
                             .text_size(px(11.))
-                            .text_color(rgb(AMBER))
+                            .text_color(rgb(colors().amber))
                             .child(
                                 "Live preview · complete text loads when this response is saved.",
                             ),
@@ -741,7 +745,7 @@ Tone::Filled,
                 } else {
                     self.environment(
                         Some(model_label),
-                        Some((self.approval_note(snapshot.as_deref()), MUTED)),
+                        Some((self.approval_note(snapshot.as_deref()), colors().muted)),
                     )
                     .into_any_element()
                 }),

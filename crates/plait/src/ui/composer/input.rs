@@ -1,7 +1,7 @@
 //! The draft's text area: wrapped layout, auto-growing height, and painting.
 
 use super::Composer;
-use crate::ui::theme::{BLUE, EDGE, SUBTLE, TEXT};
+use crate::ui::theme::colors;
 use gpui::*;
 use std::{collections::HashMap, ops::Range, rc::Rc};
 
@@ -293,7 +293,7 @@ impl Element for InputElement {
                 }
                 if !input.draft.selection().is_empty() {
                     for rect in input.rectangles(input.draft.selection()) {
-                        window.paint_quad(fill(rect, rgba(0x93b8f54d)));
+                        window.paint_quad(fill(rect, rgba(colors().text_selection)));
                     }
                 }
                 // Only the rows inside the box are painted, whatever the draft's length.
@@ -320,7 +320,7 @@ impl Element for InputElement {
                                 point(rect.left(), rect.bottom() - px(1.)),
                                 size(rect.size.width, px(1.)),
                             ),
-                            rgb(TEXT),
+                            rgb(colors().text),
                         ));
                     }
                 }
@@ -329,7 +329,7 @@ impl Element for InputElement {
                     && input.draft.selection().is_empty()
                 {
                     for rect in input.rectangles(input.draft.selection()) {
-                        window.paint_quad(fill(rect, rgb(BLUE)));
+                        window.paint_quad(fill(rect, rgb(colors().blue)));
                     }
                 }
             });
@@ -339,8 +339,11 @@ impl Element for InputElement {
             {
                 let origin = point(bounds.right() + px(5.), bounds.top() + top);
                 window.paint_quad(
-                    fill(Bounds::new(origin, size(px(3.), length)), rgb(EDGE))
-                        .corner_radii(px(1.5)),
+                    fill(
+                        Bounds::new(origin, size(px(3.), length)),
+                        rgb(colors().edge),
+                    )
+                    .corner_radii(px(1.5)),
                 );
             }
             if input.paint_error != failure {
@@ -361,7 +364,7 @@ fn paint_placeholder(
     let run = TextRun {
         len: text.len(),
         font: style.font(),
-        color: rgb(SUBTLE).into(),
+        color: rgb(colors().subtle).into(),
         background_color: None,
         underline: None,
         strikethrough: None,

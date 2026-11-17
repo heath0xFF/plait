@@ -6,7 +6,7 @@
 //! `selected_value` when the user accepts. Rows report clicks and wheel
 //! scrolling through one callback. The owner positions the returned element.
 
-use crate::ui::theme::{self, EDGE, HOVER, RAIL, ROW_HEIGHT, SELECTED, SUBTLE, TEXT};
+use crate::ui::theme::{self, ROW_HEIGHT, colors};
 use gpui::{prelude::*, *};
 use std::{ops::Range, rc::Rc};
 
@@ -151,8 +151,8 @@ impl<T> Completion<T> {
             .p_1()
             .rounded_lg()
             .border_1()
-            .border_color(rgb(EDGE))
-            .bg(rgb(RAIL))
+            .border_color(rgb(colors().edge))
+            .bg(rgb(colors().rail))
             // The list floats over other content; clicks must not reach it.
             .occlude()
             .on_scroll(move |event: &ScrollEvent, window, cx| {
@@ -171,7 +171,7 @@ impl<T> Completion<T> {
                         .py_1()
                         .truncate()
                         .text_size(px(11.))
-                        .text_color(rgb(SUBTLE))
+                        .text_color(rgb(colors().subtle))
                         .child(text!(id = (id, usize::MAX), note)),
                 )
             });
@@ -200,9 +200,9 @@ impl<T> Completion<T> {
             // Selection is neutral, like every other list in the app.
             .map(|row| {
                 if selected {
-                    row.bg(rgb(SELECTED))
+                    row.bg(rgb(colors().selected))
                 } else {
-                    row.hover(|style| style.bg(rgba(HOVER)))
+                    row.hover(|style| style.bg(rgba(colors().hover)))
                 }
             })
             .child(
@@ -210,7 +210,7 @@ impl<T> Completion<T> {
                     .flex_shrink_0()
                     .max_w(relative(0.7))
                     .truncate()
-                    .text_color(rgb(theme::MUTED))
+                    .text_color(rgb(theme::colors().muted))
                     .child(emphasized(&item.label, &item.label_matches)),
             )
             .when(!item.detail.is_empty(), |row| {
@@ -220,7 +220,7 @@ impl<T> Completion<T> {
                         .min_w_0()
                         .truncate()
                         .text_size(px(12.))
-                        .text_color(rgb(SUBTLE))
+                        .text_color(rgb(colors().subtle))
                         .child(emphasized(&item.detail, &item.detail_matches)),
                 )
             })
@@ -235,7 +235,7 @@ impl<T> Completion<T> {
 /// accents are reserved for state.
 fn emphasized(text: &SharedString, matches: &[usize]) -> StyledText {
     let style = HighlightStyle {
-        color: Some(rgb(TEXT).into()),
+        color: Some(rgb(colors().text).into()),
         font_weight: Some(FontWeight::SEMIBOLD),
         ..HighlightStyle::default()
     };

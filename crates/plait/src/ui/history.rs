@@ -307,7 +307,11 @@ impl Plait {
                             .flex_1()
                             .min_w_0()
                             .text_size(px(11.))
-                            .text_color(rgb(if failed.is_some() { AMBER } else { MUTED }))
+                            .text_color(rgb(if failed.is_some() {
+                                colors().amber
+                            } else {
+                                colors().muted
+                            }))
                             .child(label),
                     )
                     .when_some(failed, |row, load| {
@@ -375,7 +379,7 @@ impl Plait {
                     .gap_2()
                     .flex_wrap()
                     .text_size(px(11.))
-                    .text_color(rgb(AMBER))
+                    .text_color(rgb(colors().amber))
                     .child(format!(
                         "{name} · part {}{}",
                         part.number,

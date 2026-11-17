@@ -88,10 +88,13 @@ impl Plait {
         let (note, color) = match &self.updates {
             UpdateState::Idle => (
                 "Updates install from signed GitHub releases.".to_owned(),
-                SUBTLE,
+                colors().subtle,
             ),
-            UpdateState::Checking => ("Checking for updates…".to_owned(), SUBTLE),
-            UpdateState::Current => ("No newer signed release is published.".to_owned(), SUBTLE),
+            UpdateState::Checking => ("Checking for updates…".to_owned(), colors().subtle),
+            UpdateState::Current => (
+                "No newer signed release is published.".to_owned(),
+                colors().subtle,
+            ),
             UpdateState::Available(offer) => {
                 let note = if busy > 0 {
                     "Finish or stop running threads first; the host restarts to update.".to_owned()
@@ -101,12 +104,13 @@ impl Plait {
                         offer.version
                     )
                 };
-                (note, MUTED)
+                (note, colors().muted)
             }
-            UpdateState::Installing(offer) => {
-                (format!("Installing Plait {}…", offer.version), MUTED)
-            }
-            UpdateState::Failed(error) => (error.clone(), AMBER),
+            UpdateState::Installing(offer) => (
+                format!("Installing Plait {}…", offer.version),
+                colors().muted,
+            ),
+            UpdateState::Failed(error) => (error.clone(), colors().amber),
         };
         let action = match &self.updates {
             UpdateState::Available(offer) => toned_button(

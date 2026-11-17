@@ -11,7 +11,6 @@ fn main() {
         .with_assets(ui::theme::Assets)
         .run(move |cx| {
             ui::menus(cx);
-            cx.set_window_appearance(Some(WindowAppearance::Dark));
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();

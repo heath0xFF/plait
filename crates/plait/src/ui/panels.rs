@@ -125,7 +125,7 @@ impl Plait {
                 Panel::Inspector => el.left_0(),
             })
             .cursor(CursorStyle::ResizeLeftRight)
-            .hover(|s| s.bg(rgba(HOVER)))
+            .hover(|s| s.bg(rgba(colors().hover)))
             .on_drag(Resize(panel), |_, _, _, cx| cx.new(|_| Empty))
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                 if event.click_count() == 2 {

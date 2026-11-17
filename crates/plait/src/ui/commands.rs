@@ -157,7 +157,7 @@ impl Plait {
                     plait_core::navigation::state_label(thread)
                 ))
                 .section("Threads")
-                .glyph("thread", VIOLET)
+                .glyph("thread", colors().violet)
                 .hint(
                     numbers
                         .get(&index)
@@ -165,7 +165,7 @@ impl Plait {
                         .unwrap_or_default(),
                 );
                 if self.host.selected.as_ref() == Some(&thread.id) {
-                    item.badge("Open", SUBTLE)
+                    item.badge("Open", colors().subtle)
                 } else {
                     item
                 }
@@ -191,9 +191,9 @@ impl Plait {
                 )
                 .detail(label)
                 .section("New thread")
-                .glyph("plus", MINT);
+                .glyph("plus", colors().mint);
                 if default {
-                    item.badge("Default", MINT)
+                    item.badge("Default", colors().mint)
                 } else {
                     item
                 }
@@ -220,7 +220,7 @@ impl Plait {
                 )
                 .detail(project.checkout.display().to_string())
                 .section("Projects")
-                .glyph("folder", MINT),
+                .glyph("folder", colors().mint),
             );
         }
         items.extend(action_items(window));

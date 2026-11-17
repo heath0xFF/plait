@@ -251,6 +251,26 @@ post macOS notifications, and delivery depends on system permission and Focus
 settings. The initial listing never posts alerts. Native delivery and activation
 remain manual acceptance checks.
 
+## Appearance and themes
+
+**Settings → View → Appearance** follows macOS between light and dark by
+default, or keeps Light or Dark. Choose a theme for each: the light list and the
+dark list each start with Plait's own (**Plait Light**, **Plait Dark**),
+followed by shipped Base16 schemes such as Catppuccin, Gruvbox, Nord, Rosé Pine,
+Solarized, and Tokyo Night. A choice applies at once and is saved in the
+desktop preferences.
+
+More themes come from Base16 scheme files: put `.yaml` files (for example from
+[tinted-theming/schemes](https://github.com/tinted-theming/schemes)) in
+`~/Library/Application Support/Plait/themes/`, then choose **Reload**. **Open
+themes folder** creates and shows it. Each file appears in the light or dark list
+by its own `variant`; a file that cannot be read is named beneath the lists with
+the reason. Plait keeps every theme's text readable: if a scheme's text, grays,
+or accents are too faint against its background, they are moved toward its text
+color until they meet a minimum contrast, so a few schemes look slightly crisper
+in Plait than elsewhere. A theme removed from the folder falls back to Plait's
+own.
+
 ## Keyboard controls
 
 When focus is in the conversation, Home or Cmd-Up goes to the beginning of the

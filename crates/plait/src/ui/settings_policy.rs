@@ -148,13 +148,13 @@ impl Plait {
             })
             .child(tag(
                 self.host.checkout.to_string_lossy().into_owned(),
-                SUBTLE,
+                colors().subtle,
             ))
             .when(self.policy.busy, |el| {
-                el.child(tag("Loading command policy…", MUTED))
+                el.child(tag("Loading command policy…", colors().muted))
             })
             .when_some(self.policy.note.clone(), |el, note| {
-                el.child(tag(note, AMBER))
+                el.child(tag(note, colors().amber))
             })
             .when(current.is_none() && enabled, |el| {
                 el.child(
@@ -168,7 +168,7 @@ impl Plait {
                         .gap_2()
                         .p_3()
                         .border_1()
-                        .border_color(rgb(AMBER))
+                        .border_color(rgb(colors().amber))
                         .rounded_md()
                         .child(
                             div()
@@ -178,9 +178,9 @@ impl Plait {
                         .children(
                             policy::TRUSTED_CONSEQUENCES
                                 .iter()
-                                .map(|line| tag(*line, MUTED).line_height(px(18.))),
+                                .map(|line| tag(*line, colors().muted).line_height(px(18.))),
                         )
-                        .child(tag(policy::TRUSTED_SCOPE, SUBTLE))
+                        .child(tag(policy::TRUSTED_SCOPE, colors().subtle))
                         .child(
                             row()
                                 .gap_2()

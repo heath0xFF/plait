@@ -8,8 +8,6 @@ use plait_core::{
 use std::path::Path;
 
 const DIFF_LINE_HEIGHT: f32 = 21.;
-/// Tint behind lines picked to ask about.
-const PICKED: u32 = 0x2a3550;
 
 /// Lines picked in the Changes diff by clicking line numbers. It applies only
 /// while the same file and side are shown; another file ignores it.
@@ -41,12 +39,12 @@ pub(super) struct DiffControls {
 /// One-letter state and its tint. The accessible name carries the full word.
 fn change_mark(label: &str) -> (&'static str, u32) {
     match label {
-        "New" => ("N", MINT),
-        "Added" => ("A", MINT),
-        "Deleted" => ("D", RED),
-        "Conflict" => ("!", RED),
-        "Renamed" => ("R", BLUE),
-        _ => ("M", BLUE),
+        "New" => ("N", colors().mint),
+        "Added" => ("A", colors().mint),
+        "Deleted" => ("D", colors().red),
+        "Conflict" => ("!", colors().red),
+        "Renamed" => ("R", colors().blue),
+        _ => ("M", colors().blue),
     }
 }
 
@@ -191,14 +189,14 @@ impl Plait {
             row()
                 .flex_1()
                 .min_w_0()
-                .child(div().truncate().text_color(rgb(TEXT)).child(name))
+                .child(div().truncate().text_color(rgb(colors().text)).child(name))
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
                         .truncate()
                         .text_size(px(11.))
-                        .text_color(rgb(SUBTLE))
+                        .text_color(rgb(colors().subtle))
                         .child(parent),
                 ),
         )
@@ -210,7 +208,7 @@ impl Plait {
             } else {
                 "worktree"
             },
-            SUBTLE,
+            colors().subtle,
         ))
         // Anything left in the worktree stages; otherwise the row unstages.
         // It overlays the state tag on hover, so the path keeps its width.
@@ -221,7 +219,7 @@ impl Plait {
                 .aria_label(format!("{verb} {}", change.display_path()))
                 .absolute()
                 .right(px(8.))
-                .bg(rgb(PANEL))
+                .bg(rgb(colors().panel))
                 .disabled(self.state.repository.write.busy())
                 .on_activate(cx, move |this, _, cx| {
                     this.stage_change(index, stage, cx);
@@ -272,7 +270,7 @@ impl Plait {
                             .flex_shrink_0()
                             .child(
                                 row()
-                                    .child(icon("branch").text_color(rgb(MUTED)))
+                                    .child(icon("branch").text_color(rgb(colors().muted)))
                                     .child(
                                         div()
                                             .flex_1()
@@ -287,13 +285,13 @@ impl Plait {
                                             count,
                                             if count == 1 { "file" } else { "files" }
                                         ),
-                                        SUBTLE,
+                                        colors().subtle,
                                     )),
                             )
                             .child(
                                 div()
                                     .text_size(px(11.))
-                                    .text_color(rgb(SUBTLE))
+                                    .text_color(rgb(colors().subtle))
                                     .truncate()
                                     .child(snapshot.root.to_string_lossy().into_owned()),
                             ),
@@ -338,7 +336,7 @@ impl Plait {
                     .px_2()
                     .flex_shrink_0()
                     .border_t_1()
-                    .border_color(rgb(BORDER))
+                    .border_color(rgb(colors().border))
                     .child(
                         button(
                             if compact {
@@ -353,11 +351,11 @@ impl Plait {
                             cx.listener(|this, _, window, cx| this.refresh(&Refresh, window, cx)),
                         ),
                     )
-                    .child(tag("⌘R", SUBTLE))
+                    .child(tag("⌘R", colors().subtle))
                     .child(div().flex_1())
                     .when_some(read, |el, elapsed| {
                         el.child(
-                            tag(format!("Read in {elapsed} ms"), SUBTLE)
+                            tag(format!("Read in {elapsed} ms"), colors().subtle)
                                 .pr_1()
                                 .truncate(),
                         )
@@ -382,7 +380,7 @@ impl Plait {
                 .gap_2()
                 .flex_shrink_0()
                 .border_b_1()
-                .border_color(rgb(BORDER))
+                .border_color(rgb(colors().border))
                 .child(
                     column()
                         .flex_1()
@@ -398,7 +396,7 @@ impl Plait {
                             el.child(
                                 tag(
                                     format!("Renamed from {}", original.to_string_lossy()),
-                                    SUBTLE,
+                                    colors().subtle,
                                 )
                                 .truncate(),
                             )
@@ -569,15 +567,15 @@ impl Plait {
             .gap_2()
             .flex_shrink_0()
             .border_t_1()
-            .border_color(rgb(BORDER))
-            .bg(rgb(RAIL))
+            .border_color(rgb(colors().border))
+            .bg(rgb(colors().rail))
             .text_size(px(12.))
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(colors().muted))
                     .child(if thread {
                         format!(
                             "{count} {} picked · Shift-click a line number to extend",
@@ -637,7 +635,7 @@ impl Plait {
                         .w(px(44.))
                         .flex_shrink_0()
                         .text_right()
-                        .text_color(rgb(SUBTLE))
+                        .text_color(rgb(colors().subtle))
                 };
                 column()
                     .flex_1()
@@ -648,8 +646,8 @@ impl Plait {
                                 .px_4()
                                 .py_2()
                                 .text_size(px(12.))
-                                .bg(rgb(0x3b3224))
-                                .text_color(rgb(AMBER))
+                                .bg(rgb(colors().warn_fill))
+                                .text_color(rgb(colors().amber))
                                 .child(text!(
                                     "Preview limited to 512 KiB / 10,000 lines. Repository files are unchanged."
                                 )),
@@ -663,12 +661,15 @@ impl Plait {
                                 range
                                     .map(|index| {
                                         let line = &diff.lines[index];
+                                        let c = colors();
+                                        // Line tints are the accent faintly over the background.
+                                        let tint = |accent| mix(c.bg, accent, 0.09);
                                         let (fg, bg) = match line.kind {
-                                            DiffKind::Added => (MINT, 0x1d2b27),
-                                            DiffKind::Removed => (RED, 0x30232a),
-                                            DiffKind::Hunk => (BLUE, 0x1f2733),
-                                            DiffKind::Header => (MUTED, RAIL),
-                                            DiffKind::Context => (TEXT, BG),
+                                            DiffKind::Added => (c.mint, tint(c.mint)),
+                                            DiffKind::Removed => (c.red, tint(c.red)),
+                                            DiffKind::Hunk => (c.blue, tint(c.blue)),
+                                            DiffKind::Header => (colors().muted, colors().rail),
+                                            DiffKind::Context => (colors().text, colors().bg),
                                         };
                                         let pickable = pick.is_some()
                                             && matches!(
@@ -693,10 +694,10 @@ impl Plait {
                                                 line.new_line
                                                     .map_or(String::new(), |n| n.to_string()),
                                             ))
-                                            .when(picked, |el| el.text_color(rgb(TEXT)))
+                                            .when(picked, |el| el.text_color(rgb(colors().text)))
                                             .when(pickable, |el| {
                                                 el.cursor_pointer()
-                                                    .hover(|el| el.text_color(rgb(TEXT)))
+                                                    .hover(|el| el.text_color(rgb(colors().text)))
                                                     .on_click(cx.listener(
                                                         move |this, event: &ClickEvent, _, cx| {
                                                             let extend = event.modifiers().shift;
@@ -711,7 +712,7 @@ impl Plait {
                                             .gap_0()
                                             .w_full()
                                             .h(px(DIFF_LINE_HEIGHT))
-                                            .bg(rgb(if picked { PICKED } else { bg }))
+                                            .bg(rgb(if picked { mix(c.bg, c.blue, 0.22) } else { bg }))
                                             .font_family(MONO)
                                             .text_size(px(12.))
                                             .line_height(px(DIFF_LINE_HEIGHT))
@@ -767,7 +768,7 @@ impl Plait {
                             .flex_shrink_0()
                             .justify_between()
                             .text_size(px(11.))
-                            .text_color(rgb(SUBTLE))
+                            .text_color(rgb(colors().subtle))
                             .child(format!("{} patch lines · {} ms", count, elapsed.as_millis()))
                             .children(hint),
                     )
@@ -788,8 +789,8 @@ impl Plait {
                     .flex_shrink_0()
                     .pt_2()
                     .border_r_1()
-                    .border_color(rgb(BORDER))
-                    .bg(rgb(RAIL))
+                    .border_color(rgb(colors().border))
+                    .bg(rgb(colors().rail))
                     .child(self.file_panel(false, cx)),
             )
             .child(
@@ -807,7 +808,7 @@ impl Plait {
 #[cfg(test)]
 mod tests {
     use super::{change_mark, split_path, stage_verb};
-    use crate::ui::theme::{BLUE, MINT, RED};
+    use crate::ui::theme::colors;
     use plait_core::model::Change;
     use std::path::PathBuf;
 
@@ -844,9 +845,9 @@ mod tests {
         for (index, mark) in marks.iter().enumerate() {
             assert!(!marks[..index].contains(mark), "{mark} repeats");
         }
-        assert_eq!(change_mark("New").1, MINT);
-        assert_eq!(change_mark("Conflict").1, RED);
-        assert_eq!(change_mark("Modified").1, BLUE);
+        assert_eq!(change_mark("New").1, colors().mint);
+        assert_eq!(change_mark("Conflict").1, colors().red);
+        assert_eq!(change_mark("Modified").1, colors().blue);
     }
 
     #[test]

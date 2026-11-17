@@ -16,7 +16,7 @@ mod trigger;
 pub use commands::CommandId;
 pub use completion::{Completion, CompletionEvent, CompletionItem};
 
-use super::theme::{self, BG, ButtonAction, DisabledControl, EDGE, MUTED, RAIL, SUBTLE, TEXT};
+use super::theme::{self, ButtonAction, DisabledControl, colors};
 use commands::COMMANDS;
 use draft::Draft;
 use gpui::{prelude::*, *};
@@ -31,8 +31,6 @@ use std::{
 use trigger::{Trigger, TriggerKind};
 use unicode_segmentation::UnicodeSegmentation;
 
-// Focus edge for the whole box, quieter than the keyboard ring on small controls.
-const FOCUS_EDGE: u32 = 0x6f8fc4;
 /// Suggestions kept for one query; typing narrows the list faster than scrolling.
 const SUGGESTION_LIMIT: usize = 50;
 /// The suggestion list is narrower than a wide composer, so paths stay scannable.
@@ -1155,7 +1153,7 @@ impl Composer {
                 .max_w(px(SUGGESTION_WIDTH + SUGGESTION_GUTTER))
                 .pl(px(SUGGESTION_GUTTER))
                 .pb(px(6.))
-                .bg(rgb(BG))
+                .bg(rgb(colors().bg))
                 .child(list),
         )
     }
@@ -1190,8 +1188,12 @@ impl Render for Composer {
             .min_w_0()
             .rounded_xl()
             .border_1()
-            .border_color(rgb(if focused { FOCUS_EDGE } else { EDGE }))
-            .bg(rgb(RAIL))
+            .border_color(rgb(if focused {
+                colors().focus_edge
+            } else {
+                colors().edge
+            }))
+            .bg(rgb(colors().rail))
             .child(
                 div()
                     .id("composer-input")
@@ -1222,7 +1224,11 @@ impl Render for Composer {
                     .px_3()
                     .pt_3()
                     .pb_1()
-                    .text_color(rgb(if self.enabled { TEXT } else { MUTED }))
+                    .text_color(rgb(if self.enabled {
+                        colors().text
+                    } else {
+                        colors().muted
+                    }))
                     .text_size(px(13.))
                     .line_height(px(LINE_HEIGHT))
                     .on_action(cx.listener(|this, _: &Submit, window, cx| {
@@ -1399,7 +1405,7 @@ impl Render for Composer {
                             .min_w_0()
                             .truncate()
                             .text_size(px(11.))
-                            .text_color(rgb(SUBTLE))
+                            .text_color(rgb(colors().subtle))
                             .child(hint),
                     )
                     .when(self.busy, |el| {

@@ -4,7 +4,7 @@
 //! Enter, Escape, and the vertical arrows in its own key context; the field
 //! leaves those keys unbound so they reach the parent.
 
-use super::theme::{BG, BLUE, EDGE, FOCUS_EDGE, RED, ROW_HEIGHT, SUBTLE, TEXT, tag};
+use super::theme::{ROW_HEIGHT, colors, tag};
 use gpui::{prelude::*, *};
 use std::{borrow::Cow, ops::Range};
 use unicode_segmentation::UnicodeSegmentation;
@@ -792,7 +792,7 @@ impl Element for LineElement {
                 len: text.len(),
                 font: style.font(),
                 color: if empty {
-                    rgb(SUBTLE).into()
+                    rgb(colors().subtle).into()
                 } else {
                     style.color
                 },
@@ -850,7 +850,7 @@ impl Element for LineElement {
                 if !selection.is_empty()
                     && let Some(rectangle) = field.rectangle(selection.clone())
                 {
-                    window.paint_quad(fill(rectangle, rgba(0x93b8f54d)));
+                    window.paint_quad(fill(rectangle, rgba(colors().text_selection)));
                 }
                 if let Some(line) = &field.shaped {
                     let origin = point(bounds.left() - field.scroll, bounds.top());
@@ -868,14 +868,14 @@ impl Element for LineElement {
                             point(rectangle.left(), rectangle.bottom() - px(2.)),
                             size(rectangle.size.width, px(1.)),
                         ),
-                        rgb(TEXT),
+                        rgb(colors().text),
                     ));
                 }
                 if selection.is_empty()
                     && field.focus.is_focused(window)
                     && let Some(cursor) = field.rectangle(selection)
                 {
-                    window.paint_quad(fill(cursor, rgb(BLUE)));
+                    window.paint_quad(fill(cursor, rgb(colors().blue)));
                 }
             });
             if field.paint_error != failure {
@@ -918,10 +918,14 @@ impl Render for TextField {
             .rounded_md()
             .border_1()
             // A field shows focus however it was reached; the cursor alone is too quiet.
-            .border_color(rgb(if focused { FOCUS_EDGE } else { EDGE }))
-            .bg(rgb(BG))
+            .border_color(rgb(if focused {
+                colors().focus_edge
+            } else {
+                colors().edge
+            }))
+            .bg(rgb(colors().bg))
             .text_size(px(13.))
-            .text_color(rgb(TEXT))
+            .text_color(rgb(colors().text))
             .on_action(
                 cx.listener(|this, _: &Backspace, w, cx| {
                     this.edit(|line| line.delete(false), w, cx)
@@ -1010,7 +1014,7 @@ impl Render for TextField {
             )
             .child(div().flex_1().min_w_0().child(LineElement(cx.entity())))
             .when_some(self.paint_error.clone(), |el, error| {
-                el.child(tag(error, RED).flex_shrink_0())
+                el.child(tag(error, colors().red).flex_shrink_0())
             })
     }
 }

@@ -114,6 +114,23 @@ pub struct Preferences {
     /// Shortcuts changed on this desktop. Action IDs this client does not know
     /// are kept, so an entry written by a newer client survives an older one.
     pub keymap: Keymap,
+    /// Follow macOS, or keep one appearance.
+    #[serde(deserialize_with = "lenient")]
+    pub appearance: crate::theme::Appearance,
+    /// Theme names for each appearance; `None` is Plait Light or Plait Dark.
+    pub light_theme: Option<String>,
+    pub dark_theme: Option<String>,
+}
+
+/// A value this client does not know (written by a newer one) reads as the
+/// default rather than failing the whole file.
+fn lenient<'de, D: serde::Deserializer<'de>, T: Default + serde::de::DeserializeOwned>(
+    deserializer: D,
+) -> Result<T, D::Error> {
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default())
 }
 
 /// A level this client does not know (written by a newer one) reads as unset
@@ -401,6 +418,20 @@ mod tests {
             serde_json::from_str(r#"{"default_thinking":"extreme","hide_inspector":true}"#)
                 .unwrap();
         assert_eq!(newer.default_thinking(), ThinkingLevel::Medium);
+        assert!(newer.hide_inspector);
+    }
+
+    #[test]
+    fn appearance_follows_the_system_until_chosen_and_survives_newer_values() {
+        use crate::theme::Appearance;
+        assert_eq!(Preferences::default().appearance, Appearance::System);
+        let saved: Preferences =
+            serde_json::from_str(r#"{"appearance":"light","light_theme":"Nord"}"#).unwrap();
+        assert_eq!(saved.appearance, Appearance::Light);
+        assert_eq!(saved.light_theme.as_deref(), Some("Nord"));
+        let newer: Preferences =
+            serde_json::from_str(r#"{"appearance":"dusk","hide_inspector":true}"#).unwrap();
+        assert_eq!(newer.appearance, Appearance::System);
         assert!(newer.hide_inspector);
     }
 

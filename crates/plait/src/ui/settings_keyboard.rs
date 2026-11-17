@@ -196,7 +196,7 @@ impl Plait {
                             .flex_1()
                             .min_w_0()
                             .child(div().text_size(px(12.)).child(shortcut.title()))
-                            .when(changed, |el| el.child(tag("Customized", SUBTLE))),
+                            .when(changed, |el| el.child(tag("Customized", colors().subtle))),
                     )
                     .child(
                         toned_button(
@@ -247,7 +247,7 @@ impl Plait {
             if let Some(saved) = shortcut.unusable(keymap) {
                 item = item.child(tag(
                     format!("Cannot read saved shortcut {saved:?}; using the default."),
-                    AMBER,
+                    colors().amber,
                 ));
             }
             if recording {
@@ -257,7 +257,7 @@ impl Plait {
                             .note
                             .as_deref()
                             .unwrap_or("Press a key combination. Escape cancels."),
-                        AMBER,
+                        colors().amber,
                     ))
                     .child(
                         row()
@@ -281,13 +281,13 @@ impl Plait {
             list = list.child(item);
         }
         if count == 0 {
-            list = list.child(tag("No shortcuts match.", MUTED));
+            list = list.child(tag("No shortcuts match.", colors().muted));
         }
         let unknown = actions::unknown(keymap);
         column().gap_2()
             .when_some(self.keyboard.search.clone(), |el, field| el.child(field))
             .child(list)
-            .when(unknown > 0, |el| el.child(tag(format!("{unknown} shortcut entries belong to another app version and are preserved."), SUBTLE)))
+            .when(unknown > 0, |el| el.child(tag(format!("{unknown} shortcut entries belong to another app version and are preserved."), colors().subtle)))
             .child(row().child(button("reset-all-shortcuts", "Reset all shortcuts").on_activate(cx, |this, _, cx| {
                 let mut value = this.preferences.value.clone();
                 actions::reset_all(&mut value.keymap);

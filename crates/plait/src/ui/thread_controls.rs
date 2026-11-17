@@ -34,12 +34,12 @@ impl Render for TextTooltip {
         div()
             .max_w(px(360.))
             .p_3()
-            .bg(rgb(PANEL))
+            .bg(rgb(colors().panel))
             .border_1()
-            .border_color(rgb(BORDER))
+            .border_color(rgb(colors().border))
             .rounded_md()
             .text_size(px(12.))
-            .text_color(rgb(TEXT))
+            .text_color(rgb(colors().text))
             .child(self.0.clone())
     }
 }
@@ -231,7 +231,7 @@ impl Plait {
             .w_full()
             .min_w_0()
             .text_size(px(11.))
-            .text_color(rgb(MUTED))
+            .text_color(rgb(colors().muted))
             .child(
                 button("thread-model", "")
                     .max_w(px(240.))
@@ -262,9 +262,9 @@ impl Plait {
         if let Some(usage) = &usage {
             let detail = usage.detail.clone();
             let tint = match usage.pressure {
-                ContextPressure::Normal => MUTED,
-                ContextPressure::High => AMBER,
-                ContextPressure::NearlyFull => RED,
+                ContextPressure::Normal => colors().muted,
+                ContextPressure::High => colors().amber,
+                ContextPressure::NearlyFull => colors().red,
             };
             controls = controls.child(
                 button("thread-usage", usage.label.clone())
@@ -292,7 +292,7 @@ impl Plait {
             };
             content = content.child(tag(
                 format!("Current run: {approval} · Model locked during run"),
-                SUBTLE,
+                colors().subtle,
             ));
         }
         if self.thread_controls.usage_open
@@ -301,7 +301,7 @@ impl Plait {
             content = content.child(
                 div()
                     .text_size(px(11.))
-                    .text_color(rgb(MUTED))
+                    .text_color(rgb(colors().muted))
                     .child(usage.detail),
             );
         }
@@ -311,7 +311,11 @@ impl Plait {
             content = content.child(
                 div()
                     .text_size(px(11.))
-                    .text_color(rgb(if *failed { AMBER } else { MUTED }))
+                    .text_color(rgb(if *failed {
+                        colors().amber
+                    } else {
+                        colors().muted
+                    }))
                     .child(note.clone()),
             );
         }
@@ -400,7 +404,7 @@ impl Plait {
         if !snapshot.status.busy() && !snapshot.queued.is_empty() {
             stack = stack.child(tag(
                 "Queue held · next send resumes from the first message",
-                AMBER,
+                colors().amber,
             ));
         }
         let draft_empty = self
@@ -423,7 +427,7 @@ impl Plait {
                     .gap_2()
                     .w_full()
                     .min_w_0()
-                    .child(tag(mode, SUBTLE))
+                    .child(tag(mode, colors().subtle))
                     .child(
                         div()
                             .flex_1()
@@ -480,7 +484,11 @@ impl Plait {
                     .min_w_0()
                     .child(tag(
                         if sending { "Sending…" } else { "Unconfirmed" },
-                        if sending { BLUE } else { AMBER },
+                        if sending {
+                            colors().blue
+                        } else {
+                            colors().amber
+                        },
                     ))
                     .child(
                         div()
@@ -589,7 +597,7 @@ impl Plait {
             .detail(detail.to_owned())
             .enabled(protocol >= 2);
             if chosen == mode {
-                item.badge("Current", BLUE)
+                item.badge("Current", colors().blue)
             } else {
                 item
             }

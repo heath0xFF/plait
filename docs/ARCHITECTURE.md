@@ -49,7 +49,8 @@ ui/                     GPUI layout, actions, focus, lists, theme
   settings_providers.rs provider sign-in, API keys, and custom endpoints
   update.rs             release checks and in-app update installation
   worktree.rs           starting a thread in its own worktree, and removing it
-  theme.rs              tokens and the small original controls
+  theme.rs              the current palette and the small original controls
+  appearance.rs         light and dark themes, the themes folder, and their settings
   snapshot.rs           headless scene snapshots of the root view (tests only)
   composer/             native input, IME, clipboard, undo, and its events
     draft.rs            text, selection, undo, acceptance guard, prompt recall
@@ -66,7 +67,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
   markdown.rs           native conversation blocks: prose, code, tables, diffs
   settings.rs           host status and the Models, Approvals, Keyboard, About sections
   changes.rs            real local status and diff views
-  theme.rs              tokens, original controls, embedded glyphs
+  theme.rs              current palette, original controls, embedded glyphs
   snapshot.rs           windowless scene snapshots on macOS and Linux (tests only)
 
 crates/plait-core/src/
@@ -85,6 +86,7 @@ navigation.rs           project grouping, activity tracking, filtering, and jump
 session.rs              private desktop journal, identity checks, writer lock
 markdown.rs             plain text blocks and style ranges, parsed off render
 reveal.rs               frame-paced reveal of streaming text and cut blocks
+theme.rs                palettes, Base16 scheme parsing, contrast floors
 highlight.rs            lexical syntax classes for fenced and tool code
 diff.rs                 line diff of an edit's old and new text
 review.rs               quoting picked diff lines into a message
@@ -637,7 +639,10 @@ One 44-point header carries the thread title, its state, and the Conversation /
 Changes switch; there is no separate tab strip. Navigation, changed-file, and
 model rows are 28 to 36 points and one line. The composer is one raised box; the
 Project, Machine, branch, and saved model sit on a context line beneath it.
-`ui/theme.rs` owns the tokens and the small original controls. A control's tone
+`ui/theme.rs` owns the small original controls and the current palette, which
+views read with `colors()` while drawing; `ui/appearance.rs` picks it from the
+preferences and the macOS appearance and redraws when either changes. The
+palette is per thread, so parallel UI tests with different themes stay apart. A control's tone
 (ghost, selected, filled, primary) is chosen when it is built, because GPUI
 accepts one hover style per element and reports a second one only at draw time.
 

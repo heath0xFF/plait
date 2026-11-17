@@ -107,9 +107,9 @@ pub(super) fn picker_items(
         .enabled(model.authenticated)
         .marked(favorites.contains(&(model.provider.as_str(), model.model_id.as_str())));
         if !model.authenticated {
-            item.badge("Not signed in", AMBER)
+            item.badge("Not signed in", colors().amber)
         } else if default == Some(&choice) {
-            item.badge("Default", MINT)
+            item.badge("Default", colors().mint)
         } else {
             // One step from any usable row; the default row carries the marker instead.
             item.aside("Set default")
@@ -235,7 +235,7 @@ impl Plait {
             let name = choosing.map(|choice| self.model_name(choice));
             return Some((
                 format!("Saving {} as the default…", name.unwrap_or_default()),
-                BLUE,
+                colors().blue,
             ));
         }
         if let Some(choice) = choosing.filter(|choice| Some(*choice) != saved) {
@@ -245,13 +245,13 @@ impl Plait {
                     "{} is not saved as the default. {reason} Choose it again to retry.",
                     self.model_name(choice)
                 ),
-                AMBER,
+                colors().amber,
             ));
         }
         self.host
             .save_message
             .clone()
-            .map(|message| (message, MUTED))
+            .map(|message| (message, colors().muted))
     }
 
     fn picker_note(&self) -> Option<SharedString> {
@@ -406,14 +406,18 @@ impl Plait {
                 .py_2()
                 .gap_3()
                 .border_b_1()
-                .border_color(rgb(BORDER))
+                .border_color(rgb(colors().border))
                 .text_size(px(12.))
         };
         if self.worktree_busy {
             return Some(
                 bar()
-                    .child(dot(BLUE))
-                    .child(div().text_color(rgb(MUTED)).child("Preparing worktree…"))
+                    .child(dot(colors().blue))
+                    .child(
+                        div()
+                            .text_color(rgb(colors().muted))
+                            .child("Preparing worktree…"),
+                    )
                     .into_any_element(),
             );
         }
@@ -425,8 +429,8 @@ impl Plait {
             );
             return Some(
                 bar()
-                    .child(dot(BLUE))
-                    .child(div().text_color(rgb(MUTED)).child(text!(label)))
+                    .child(dot(colors().blue))
+                    .child(div().text_color(rgb(colors().muted)).child(text!(label)))
                     .into_any_element(),
             );
         }
@@ -436,12 +440,12 @@ impl Plait {
             let connected = self.host.connected;
             return Some(
                 bar()
-                    .child(dot(AMBER))
+                    .child(dot(colors().amber))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .text_color(rgb(AMBER))
+                            .text_color(rgb(colors().amber))
                             .child(text!(format!(
                                 "Thread with {} is not confirmed. {detail}",
                                 model_label(model)
@@ -463,12 +467,12 @@ impl Plait {
         let error = failure.filter(|_| idle)?;
         Some(
             bar()
-                .child(dot(RED))
+                .child(dot(colors().red))
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
-                        .text_color(rgb(RED))
+                        .text_color(rgb(colors().red))
                         .child(text!(format!("Thread not created. {error}"))),
                 )
                 .into_any_element(),

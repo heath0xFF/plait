@@ -120,6 +120,7 @@ impl Plait {
                     }
                 }
                 super::actions::install(cx, &this.preferences.value.keymap);
+                this.apply_theme(cx);
                 this.pump_preferences(cx);
                 let mut value = this.preferences.value.clone();
                 value.navigation.observe(&this.host.threads, None, true);
@@ -252,7 +253,7 @@ impl Plait {
             .child(self.shortcut_editor(cx))
             .when_some(
                 self.preference_note(Some(PreferenceGroup::Keyboard)),
-                |el, note| el.child(tag(note, SUBTLE)),
+                |el, note| el.child(tag(note, colors().subtle)),
             )
     }
 }

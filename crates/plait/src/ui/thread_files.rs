@@ -232,13 +232,13 @@ impl Plait {
             .gap_2()
             .cursor_pointer()
             .child(icon(if collapsed { "right" } else { "down" }).size(px(12.)))
-            .child(div().text_color(rgb(MUTED)).child(format!(
+            .child(div().text_color(rgb(colors().muted)).child(format!(
                 "{count} {} changed",
                 if count == 1 { "file" } else { "files" }
             )))
             .child(counts(Some(added), Some(removed)))
             .child(div().flex_1())
-            .child(div().text_color(rgb(SUBTLE)).child("Uncommitted"))
+            .child(div().text_color(rgb(colors().subtle)).child("Uncommitted"))
             .on_click(cx.listener(|this, _, _, cx| {
                 this.thread_files.collapsed = !this.thread_files.collapsed;
                 cx.notify();
@@ -263,9 +263,9 @@ impl Plait {
                 .max_w(px(CONTENT_WIDTH))
                 .mx_auto()
                 .border_1()
-                .border_color(rgb(EDGE))
+                .border_color(rgb(colors().edge))
                 .rounded_md()
-                .bg(rgb(PANEL))
+                .bg(rgb(colors().panel))
                 .text_size(px(12.))
                 .child(header)
                 .children(rows)
@@ -281,10 +281,10 @@ fn counts(added: Option<usize>, removed: Option<usize>) -> Div {
         .font_family(MONO)
         .text_size(px(11.))
         .when_some(added.filter(|n| *n > 0), |el, n| {
-            el.child(div().text_color(rgb(MINT)).child(format!("+{n}")))
+            el.child(div().text_color(rgb(colors().mint)).child(format!("+{n}")))
         })
         .when_some(removed.filter(|n| *n > 0), |el, n| {
-            el.child(div().text_color(rgb(RED)).child(format!("−{n}")))
+            el.child(div().text_color(rgb(colors().red)).child(format!("−{n}")))
         })
 }
 
@@ -309,21 +309,28 @@ fn file_row(index: usize, count: &LineCount, cx: &mut Context<Plait>) -> Statefu
         .gap_2()
         .rounded_sm()
         .cursor_pointer()
-        .hover(|el| el.bg(rgb(RAIL)))
+        .hover(|el| el.bg(rgb(colors().rail)))
         .child(div().w(px(12.)).flex_shrink_0())
-        .child(div().flex_shrink_0().text_color(rgb(TEXT)).child(name))
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_color(rgb(colors().text))
+                .child(name),
+        )
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .text_color(rgb(SUBTLE))
+                .text_color(rgb(colors().subtle))
                 .child(directory),
         )
         .when(count.untracked, |el| {
-            el.child(tag("New", SUBTLE).flex_shrink_0())
+            el.child(tag("New", colors().subtle).flex_shrink_0())
         })
-        .when(binary, |el| el.child(tag("Binary", SUBTLE).flex_shrink_0()))
+        .when(binary, |el| {
+            el.child(tag("Binary", colors().subtle).flex_shrink_0())
+        })
         .child(counts(count.added, count.removed))
         .on_click(
             cx.listener(move |this, _, window, cx| this.open_thread_file(path.clone(), window, cx)),

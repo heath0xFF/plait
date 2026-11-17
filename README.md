@@ -54,6 +54,10 @@ thread status, unread activity, search, rename, and archive. Opening another
 project keeps each thread's draft. See [project navigation](docs/MACOS.md#projects-and-threads)
 for live-list limits and notifications.
 
+Light and dark appearance follows macOS, with Plait's own themes, shipped
+Base16 schemes, and any Base16 scheme file you add; see
+[appearance and themes](docs/MACOS.md#appearance-and-themes).
+
 Code blocks, tool details, and message text have copy controls. Threads and drafts
 restore on reopening; no task is sent automatically. Drag either side panel's
 edge to resize it; Cmd-B and Cmd-L hide the sidebar and Git inspector. See
@@ -148,3 +152,5 @@ Start with [Contributing](CONTRIBUTING.md) for build requirements and checks.
 
 Plait's original code and documentation are [MIT licensed](LICENSE).
 Dependencies retain their own licenses, including GPUI's Apache-2.0 license.
+The bundled Base16 color schemes in `assets/themes/base16` are from
+tinted-theming/schemes under its MIT license, kept beside them.

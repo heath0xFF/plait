@@ -20,6 +20,7 @@ pub mod review;
 pub mod selection;
 pub mod session;
 pub mod state;
+pub mod theme;
 pub mod tool_view;
 pub mod transcript;
 pub mod update;

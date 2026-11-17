@@ -81,6 +81,12 @@ provenance records. The desktop counts their uncommitted lines with a hardened
 Git read and lists them above the composer; Settings → View hides the list.
 Snapshots are unchanged, so older clients are unaffected.
 
+**Agreed for M2.5 appearance:** light and dark themes in the desktop only.
+Preferences gain an appearance (System, Light, or Dark) and a theme name for
+each; older files load with the defaults. Base16 scheme files are read from a
+themes folder beside the desktop preferences, and a few MIT-licensed schemes ship
+with their license. Nothing changes in the host or the protocol.
+
 **Agreed for M2.5 worktrees:** a thread may start in its own worktree, never by
 default. The desktop runs `git worktree add` from HEAD on a new `plait/<name>`
 branch, in a `<repository>.worktrees/` folder beside the repository, and starts

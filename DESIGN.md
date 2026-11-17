@@ -101,7 +101,8 @@ conversation keeps a readable minimum width.
   favorite star, outlined or filled, and Set default on every usable row; the
   current default carries a mint Default label instead.
 - **Settings.** Host status and Reconnect first, then Models, Providers,
-  Approvals, Keyboard, and About tabs. The heading and tabs stay visible while
+  Approvals, Keyboard, View, and About tabs. View lists light and dark themes
+  side by side, each with a swatch of its background, text, and accents. The heading and tabs stay visible while
   the active section scrolls. Each setting is a label and one line
   of meaning on the left and its control on the right. Provider forms occupy their section while open; keys are masked, with explicit reveal. Trusted command access needs a
   consequence summary and a separate confirmation. Shortcut recording shows
@@ -118,23 +119,34 @@ conversation keeps a readable minimum width.
   selected commit's message and patch.
 
 ## Tokens
-- Background: #171819. Navigation: #1c1d1f. Panel / user bubble: #26282b.
-- Border: #303238. Control outline: #3a3d45. Selected row: #2b2d31.
-- Main text: #e8eaf0. Secondary text: #9da5b4. Labels and hints: #7f8696.
-- Mint #94dec5: local/read-only state, additions, the chosen option.
-- Blue #93b8f5: running work, modifications, hunk headers, keyboard focus.
-- Violet #c0adf3: thread identity.
-- Amber #e4c58d: attention/limits. Rose #f0a6ac: errors/deletions.
+Colors are roles in one palette (`plait_core::theme::Palette`), so every theme
+keeps the same meaning. Plait Dark values:
+- Background: #1c1d20. Navigation: #202124. Panel / user bubble: #292b2f.
+- Border: #33353b. Control outline: #3d4048. Selected row: #2e3035.
+- Main text: #d9dce3. Secondary text: #9ba2af. Labels and hints: #7d8492.
+- Mint #8fd3bc: local/read-only state, additions, the chosen option.
+- Blue #8fb2ec: running work, modifications, hunk headers, keyboard focus.
+- Violet #b9a8e8: thread identity.
+- Amber #dcbd88: attention/limits. Rose #e59ea5: errors/deletions.
+
+Main text is about 12:1 against the background: readable for long sessions
+without the glare of near-white on near-black. Plait Light uses a warm
+off-white background (#f7f7f5) with #2b2e33 text, white raised panels, and
+darker accents. Base16 themes are mapped onto the same roles: base00 behind
+base05 text, accents from base08–base0E, and grays mixed from background toward
+text. A contrast floor keeps body text at 7:1, secondary text at 4.5:1, and
+hints and accents at 3:1 or better whatever the scheme.
 
 Accents carry state, not decoration: selection and hover are neutral. The one
-affirmative action in a view (Send, Create, Save) is light on dark.
+affirmative action in a view (Send, Create, Save) is main text with the
+background as its label.
 
 Code uses the same palette for syntax, and nowhere else is color read this way:
 violet keywords, mint strings, amber numbers and constants, blue types, keys,
 and attributes, secondary-text punctuation, and hint-colored comments. Function
 names and plain identifiers stay main text. Diff lines keep the Git meaning:
-a `+` or `−` gutter mark with a mint or rose line tint at 12% opacity. Selected
-text is white at 18% opacity, so it reads the same on every surface. Inline
+a `+` or `−` gutter mark with a faint mint or rose line tint. Selected
+text is main text at low opacity, so it reads the same on every surface. Inline
 code is main text on the panel color.
 
 System sans-serif at 11–15 points, with 13 points for body and navigation; Menlo

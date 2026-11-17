@@ -49,19 +49,19 @@ impl Plait {
             .px_3()
             .justify_center()
             .cursor_pointer()
-            .when(selected, |el| el.bg(rgb(SELECTED)))
-            .when(!selected, |el| el.hover(|s| s.bg(rgba(HOVER))))
+            .when(selected, |el| el.bg(rgb(colors().selected)))
+            .when(!selected, |el| el.hover(|s| s.bg(rgba(colors().hover))))
             .child(
                 div()
                     .truncate()
-                    .text_color(rgb(TEXT))
+                    .text_color(rgb(colors().text))
                     .child(commit.subject.clone()),
             )
             .child(
                 row()
                     .gap_2()
                     .text_size(px(11.))
-                    .text_color(rgb(SUBTLE))
+                    .text_color(rgb(colors().subtle))
                     .child(div().font_family(MONO).child(commit.short.clone()))
                     .child(
                         div()
@@ -184,14 +184,14 @@ impl Plait {
                     .w(px(if wide { 320. } else { 264. }))
                     .flex_shrink_0()
                     .border_r_1()
-                    .border_color(rgb(BORDER))
-                    .bg(rgb(RAIL))
+                    .border_color(rgb(colors().border))
+                    .bg(rgb(colors().rail))
                     .child(
                         row()
                             .h(px(36.))
                             .px_3()
                             .flex_shrink_0()
-                            .child(icon("branch").text_color(rgb(MUTED)))
+                            .child(icon("branch").text_color(rgb(colors().muted)))
                             .child(
                                 div()
                                     .flex_1()

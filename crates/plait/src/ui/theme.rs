@@ -2,34 +2,30 @@ use gpui::{prelude::*, *};
 use plait_core::host;
 use std::borrow::Cow;
 
-pub const BG: u32 = 0x171819;
-pub const RAIL: u32 = 0x1c1d1f;
-pub const PANEL: u32 = 0x26282b;
-pub const BORDER: u32 = 0x303238;
-pub const TEXT: u32 = 0xe8eaf0;
-pub const MUTED: u32 = 0x9da5b4;
-pub const MINT: u32 = 0x94dec5;
-pub const BLUE: u32 = 0x93b8f5;
-pub const VIOLET: u32 = 0xc0adf3;
-pub const RED: u32 = 0xf0a6ac;
-pub const AMBER: u32 = 0xe4c58d;
-/// Section labels, hints, and counts: quieter than MUTED, still readable.
-pub const SUBTLE: u32 = 0x7f8696;
-/// Selected navigation and list rows. Neutral, so accents stay meaningful.
-pub const SELECTED: u32 = 0x2b2d31;
-/// Outline of raised controls such as the composer and approval card.
-pub const EDGE: u32 = 0x3a3d45;
-/// Focus edge of a text input: quieter than the ring on small controls.
-pub const FOCUS_EDGE: u32 = 0x6f8fc4;
-/// Translucent so one hover step reads the same on every surface.
-pub const HOVER: u32 = 0xffffff0d;
-/// Selected conversation text. Neutral, and translucent for the same reason.
-pub const SELECTION: u32 = 0xffffff2e;
-/// Line tints for a diff inside a tool result: mint additions, rose deletions.
-pub const ADDED_FILL: u32 = 0x94dec51f;
-pub const REMOVED_FILL: u32 = 0xf0a6ac1f;
-/// Outline of a failed command's output, beside its written state.
-pub const FAILED_EDGE: u32 = 0xf0a6ac66;
+pub use plait_core::theme::{Palette, mix};
+
+thread_local! {
+    /// The palette every view draws with. Per thread, so parallel UI tests
+    /// with different themes do not see each other's colors.
+    static CURRENT: std::cell::Cell<&'static Palette> =
+        const { std::cell::Cell::new(&plait_core::theme::PLAIT_DARK) };
+}
+
+/// The current theme's colors. Read during render; cheap.
+pub fn colors() -> &'static Palette {
+    CURRENT.with(std::cell::Cell::get)
+}
+
+/// Draw with `palette` from now on. False when it is already in use.
+pub fn set_colors(palette: &Palette) -> bool {
+    if colors() == palette {
+        return false;
+    }
+    // A few hundred bytes per switch, kept so `colors()` can hand out a
+    // plain reference without locking.
+    CURRENT.with(|current| current.set(Box::leak(Box::new(*palette))));
+    true
+}
 
 /// Readable column for conversation text and the composer.
 pub const CONTENT_WIDTH: f32 = 760.;
@@ -76,22 +72,24 @@ fn control(id: impl Into<ElementId>, name: SharedString, tone: Tone) -> Stateful
         .rounded_md()
         .border_1()
         .border_color(gpui::transparent_black())
-        .focus_visible(|s| s.border_color(rgb(BLUE)));
+        .focus_visible(|s| s.border_color(rgb(colors().blue)));
     match tone {
         Tone::Ghost => base
-            .text_color(rgb(MUTED))
-            .hover(|s| s.bg(rgba(HOVER)).text_color(rgb(TEXT))),
-        Tone::Selected => base.bg(rgb(SELECTED)).text_color(rgb(TEXT)),
+            .text_color(rgb(colors().muted))
+            .hover(|s| s.bg(rgba(colors().hover)).text_color(rgb(colors().text))),
+        Tone::Selected => base
+            .bg(rgb(colors().selected))
+            .text_color(rgb(colors().text)),
         Tone::Filled => base
-            .bg(rgb(PANEL))
-            .border_color(rgb(EDGE))
-            .text_color(rgb(TEXT))
-            .hover(|s| s.bg(rgb(0x2f3136))),
+            .bg(rgb(colors().panel))
+            .border_color(rgb(colors().edge))
+            .text_color(rgb(colors().text))
+            .hover(|s| s.bg(rgb(colors().raised_hover))),
         Tone::Primary => base
-            .bg(rgb(TEXT))
-            .text_color(rgb(BG))
+            .bg(rgb(colors().text))
+            .text_color(rgb(colors().bg))
             .font_weight(FontWeight::MEDIUM)
-            .hover(|s| s.bg(rgb(0xffffff))),
+            .hover(|s| s.bg(rgb(colors().primary_hover))),
     }
 }
 
@@ -126,7 +124,7 @@ pub fn quiet_button(
         .h(px(22.))
         .opacity(0.)
         .group_hover(group, |s| s.opacity(1.))
-        .focus_visible(|s| s.border_color(rgb(BLUE)).opacity(1.))
+        .focus_visible(|s| s.border_color(rgb(colors().blue)).opacity(1.))
 }
 
 /// Square glyph control. The name is the accessible label; no text is drawn.
@@ -146,9 +144,9 @@ pub fn toned_icon_button(
 ) -> Stateful<Div> {
     // GPUI tints a glyph with its own color, not the control's text color.
     let tint = match tone {
-        Tone::Ghost => MUTED,
-        Tone::Selected | Tone::Filled => TEXT,
-        Tone::Primary => BG,
+        Tone::Ghost => colors().muted,
+        Tone::Selected | Tone::Filled => colors().text,
+        Tone::Primary => colors().bg,
     };
     control(id, name.into(), tone)
         .size(px(ROW_HEIGHT))
@@ -237,24 +235,24 @@ pub fn pill() -> Div {
         .flex_shrink_0()
         .rounded_full()
         .border_1()
-        .border_color(rgb(EDGE))
+        .border_color(rgb(colors().edge))
         .text_size(px(11.))
-        .text_color(rgb(MUTED))
+        .text_color(rgb(colors().muted))
 }
 
 pub fn host_status_color(status: host::ThreadStatus) -> u32 {
     match status {
-        host::ThreadStatus::Idle => MINT,
-        host::ThreadStatus::Running => BLUE,
-        host::ThreadStatus::AwaitingApproval | host::ThreadStatus::Interrupted => AMBER,
-        host::ThreadStatus::Stopped => MUTED,
-        host::ThreadStatus::Error => RED,
+        host::ThreadStatus::Idle => colors().mint,
+        host::ThreadStatus::Running => colors().blue,
+        host::ThreadStatus::AwaitingApproval | host::ThreadStatus::Interrupted => colors().amber,
+        host::ThreadStatus::Stopped => colors().muted,
+        host::ThreadStatus::Error => colors().red,
     }
 }
 
 /// Small uppercase-free heading above a group, in the manner of a list label.
 pub fn section_label(text: impl Into<SharedString>) -> Div {
-    tag(text, SUBTLE).font_weight(FontWeight::MEDIUM)
+    tag(text, colors().subtle).font_weight(FontWeight::MEDIUM)
 }
 
 /// Two-option switch. The caller supplies tab buttons with `aria_selected`.
@@ -264,9 +262,9 @@ pub fn segmented() -> Div {
         .p(px(2.))
         .flex_shrink_0()
         .rounded_lg()
-        .bg(rgb(RAIL))
+        .bg(rgb(colors().rail))
         .border_1()
-        .border_color(rgb(BORDER))
+        .border_color(rgb(colors().border))
 }
 
 pub fn segment(id: impl Into<ElementId>, label: &'static str, selected: bool) -> Stateful<Div> {
@@ -290,8 +288,8 @@ pub fn chip(id: impl Into<ElementId>, label: &'static str, on: bool) -> Stateful
         .flex_shrink_0()
         .rounded_full()
         .text_size(px(11.))
-        .when(!on, |el| el.border_color(rgb(BORDER)))
-        .when(on, |el| el.border_color(rgb(EDGE)))
+        .when(!on, |el| el.border_color(rgb(colors().border)))
+        .when(on, |el| el.border_color(rgb(colors().edge)))
         .aria_toggled(if on { Toggled::True } else { Toggled::False })
         .child(label)
 }
@@ -308,7 +306,7 @@ pub fn bubble() -> Div {
         .px(px(14.))
         .py_2()
         .rounded_xl()
-        .bg(rgb(PANEL))
+        .bg(rgb(colors().panel))
 }
 
 /// Pulls a disclosure row left so its chevron sits on the text edge.
@@ -322,11 +320,11 @@ pub fn code_block() -> Div {
         .pl_4()
         .py_1()
         .border_l_1()
-        .border_color(rgb(BORDER))
+        .border_color(rgb(colors().border))
         .font_family(MONO)
         .text_size(px(12.))
         .line_height(px(19.))
-        .text_color(rgb(MUTED))
+        .text_color(rgb(colors().muted))
 }
 
 pub fn dot(color: u32) -> Div {
@@ -342,7 +340,7 @@ pub fn icon(name: &'static str) -> Svg {
         .path(name)
         .size(px(14.))
         .flex_shrink_0()
-        .text_color(rgb(MUTED))
+        .text_color(rgb(colors().muted))
 }
 
 pub fn empty(title: &'static str, detail: impl Into<SharedString>) -> Stateful<Div> {
@@ -361,7 +359,7 @@ pub fn empty(title: &'static str, detail: impl Into<SharedString>) -> Stateful<D
             div()
                 .text_size(px(15.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(rgb(TEXT))
+                .text_color(rgb(colors().text))
                 .child(title),
         )
         .child(
@@ -370,7 +368,7 @@ pub fn empty(title: &'static str, detail: impl Into<SharedString>) -> Stateful<D
                 .text_center()
                 .text_size(px(12.))
                 .line_height(px(19.))
-                .text_color(rgb(MUTED))
+                .text_color(rgb(colors().muted))
                 .child(detail),
         )
 }
