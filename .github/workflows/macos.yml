@@ -10,9 +10,12 @@ on:
 permissions:
   contents: read
 
+# Main and tag builds always finish: a newer push waits behind the running
+# build rather than cancelling it, and GitHub keeps only the newest waiting one.
+# Pull requests still cancel superseded builds.
 concurrency:
   group: macos-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
