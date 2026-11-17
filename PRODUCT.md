@@ -29,7 +29,8 @@ mandatory worktrees, hidden execution, or agent orchestration. Build small,
 testable changes with clear state, presentation, and execution boundaries.
 
 ## Decisions
-M2.5, the daily driver, shipped in v0.1.0-preview.8; current work is M4 on local
-execution. Agent harnesses other than Pi are planned (M7). Changes to shared contracts,
+M2.5, the daily driver, shipped in v0.1.0-preview.8. v0.1.0-preview.9 gives Pi
+threads the person's skills, prompt templates, and user instructions (M8 steps 1
+and 2). Current work is M7: agent harnesses other than Pi, Codex first. Changes to shared contracts,
 permissions, or persistence require agreement and compatibility tests. Follow
 [Contributing](CONTRIBUTING.md) and the [originality policy](docs/ORIGINALITY.md).

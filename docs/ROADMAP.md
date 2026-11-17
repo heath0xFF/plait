@@ -3,8 +3,8 @@
 These are planned milestones, not a list of shipped features. See the
 [README](../README.md) for the current preview and [Verification](VERIFICATION.md)
 for acceptance evidence and open checks. **M2.5 shipped in v0.1.0-preview.8.
-Current work is M8: the person's own Pi skills, instructions, and tools, then
-M7.**
+M8 steps 1 and 2 (skills, prompt templates, and user instructions) shipped in
+v0.1.0-preview.9. Current work is M7, Codex first; M8 steps 3 and 4 follow it.**
 
 ## Milestones
 
@@ -17,8 +17,8 @@ M7.**
 | M4 — Development tools | Git staging, commits and history; file browser/editor; review feedback; process and log views | Git shipped ahead of M3 (staging, hunks, commits, history, push, fetch, fast-forward pull); a read-only file viewer shipped in v0.1.0-preview.8; the rest planned |
 | M5 — Previews | Live HTML, Markdown and MDX, automatic refresh, and selected-content feedback to the agent | Planned |
 | M6 — Multiple machines | Unified project navigation across independent hosts, including disconnected/reconnecting states | Planned |
-| M7 — Any agent harness | Threads run by other agent harnesses (Claude Code, Codex, Pi, omp, Antigravity, and others) beside Pi, with the same conversation, approval, Git, and navigation views | Direction agreed; does not depend on M3. Protocol details need agreement before implementation |
-| M8 — Skills, tools, and CLIs | Pi threads use the skills, prompt templates, global instructions, MCP servers, and command-line tools the person already set up for their agent, with each one visible in Settings and every call under Plait's approvals | Current work. Step 1 (skills and user instructions) shipped in builds after preview.8; step 2 (prompt templates, Settings → Agent, and `/` completion) is in source; CLIs and MCP follow |
+| M7 — Any agent harness | Threads run by other agent harnesses (Claude Code, Codex, Pi, omp, Antigravity, and others) beside Pi, with the same conversation, approval, Git, and navigation views | Current work. Direction agreed; does not depend on M3. Protocol details need agreement before implementation |
+| M8 — Skills, tools, and CLIs | Pi threads use the skills, prompt templates, global instructions, MCP servers, and command-line tools the person already set up for their agent, with each one visible in Settings and every call under Plait's approvals | Steps 1 (skills and user instructions) and 2 (prompt templates, Settings → Agent, and `/` completion) shipped in v0.1.0-preview.9; steps 3 (named CLIs) and 4 (MCP) follow M7 |
 
 Do not build the whole roadmap at once. Each change must compile, run, and have
 its own checks. Protocol, storage, and shared-contract changes need agreement

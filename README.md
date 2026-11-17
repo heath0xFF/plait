@@ -169,14 +169,14 @@ are protected in both approval modes. See [host and sandbox rules](docs/HOST.md)
 ## Status
 
 Plait is an early preview, built in the open and used daily to build itself.
-The latest release is **v0.1.0-preview.8**.
+The latest release is **v0.1.0-preview.9**.
 
 - **Mac only, local only.** Remote hosts and Linux execution are
   [planned](docs/ROADMAP.md).
 - **One agent harness.** Threads run on Pi today. Claude Code, Codex, and other
   harnesses are planned (M7).
-- **Your Pi setup, partly.** Builds after preview.8 give threads your Pi
-  skills (including `/skill:name`), prompt templates, and user-level
+- **Your Pi setup, partly.** Threads get your Pi skills (including
+  `/skill:name`), prompt templates, and user-level
   `AGENTS.md`, listed in Settings → Agent and offered when you type `/`. MCP
   servers and named CLIs are planned (M8).
 - **Not an IDE.** There is no file editor, embedded terminal, merge, rebase, or
