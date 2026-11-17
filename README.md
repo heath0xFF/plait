@@ -152,14 +152,13 @@ Dashed boxes are planned, not shipped.
 ## Status
 
 Plait is an early preview, built in the open and used daily to build itself.
-The latest release is **v0.1.0-preview.9**.
+The latest release is **v0.1.0-preview.10**.
 
 - **Mac only, local only.** Remote hosts and Linux execution are
   [planned](docs/ROADMAP.md).
-- **Agent harnesses.** Released previews run threads on Pi. On `main`, a thread
-  can also run in your own Codex or Claude Code, with its own sign-in and
-  permission modes; Claude Code needs a one-time setup in Settings → Agent.
-  These are not yet in a release, and other harnesses are planned (M7).
+- **Agent harnesses.** A thread runs on Pi, built in, or in your own Codex or
+  Claude Code, with its own sign-in and permissions; Claude Code needs a
+  one-time setup in Settings → Agent. Other harnesses are planned (M7).
 - **Your Pi setup, partly.** Threads get your Pi skills (including
   `/skill:name`), prompt templates, and user-level
   `AGENTS.md`, listed in Settings → Agent and offered when you type `/`. MCP

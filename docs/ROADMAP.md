@@ -4,9 +4,9 @@ These are planned milestones, not a list of shipped features. See the
 [README](../README.md) for the current preview and [Verification](VERIFICATION.md)
 for acceptance evidence and open checks. **M2.5 shipped in v0.1.0-preview.8.
 M8 steps 1 and 2 (skills, prompt templates, and user instructions) shipped in
-v0.1.0-preview.9. M7 step 1 (choosing a harness, and Codex) and step 2 (each
-harness's own permissions, and Claude Code threads) are on `main`, not yet
-released. M8 steps 3 and 4 follow M7.**
+v0.1.0-preview.9. M7 steps 1 (choosing a harness, and Codex) and 2 (each
+harness's own permissions, and Claude Code threads) shipped in
+v0.1.0-preview.10. M8 steps 3 and 4 follow M7.**
 
 ## Milestones
 
@@ -19,7 +19,7 @@ released. M8 steps 3 and 4 follow M7.**
 | M4 — Development tools | Git staging, commits and history; file browser/editor; review feedback; process and log views | Git shipped ahead of M3 (staging, hunks, commits, history, push, fetch, fast-forward pull); a read-only file viewer shipped in v0.1.0-preview.8; the rest planned |
 | M5 — Previews | Live HTML, Markdown and MDX, automatic refresh, and selected-content feedback to the agent | Planned |
 | M6 — Multiple machines | Unified project navigation across independent hosts, including disconnected/reconnecting states | Planned |
-| M7 — Any agent harness | Threads run by other agent harnesses (Claude Code, Codex, Pi, omp, Antigravity, and others) beside Pi, with the same conversation, approval, Git, and navigation views | Current work. Steps 1 and 2 (harness choice, Codex, each harness's own permissions, and Claude Code; protocol version 4) are on `main`, not yet released; an ACP client follows, agreed first |
+| M7 — Any agent harness | Threads run by other agent harnesses (Claude Code, Codex, Pi, omp, Antigravity, and others) beside Pi, with the same conversation, approval, Git, and navigation views | Current work. Steps 1 and 2 (harness choice, Codex, each harness's own permissions, and Claude Code; protocol version 4) shipped in v0.1.0-preview.10; an ACP client follows, agreed first |
 | M8 — Skills, tools, and CLIs | Pi threads use the skills, prompt templates, global instructions, MCP servers, and command-line tools the person already set up for their agent, with each one visible in Settings and every call under Plait's approvals | Steps 1 (skills and user instructions) and 2 (prompt templates, Settings → Agent, and `/` completion) shipped in v0.1.0-preview.9; steps 3 (named CLIs) and 4 (MCP) follow M7 |
 
 Do not build the whole roadmap at once. Each change must compile, run, and have

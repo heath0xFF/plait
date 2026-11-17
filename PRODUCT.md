@@ -31,6 +31,8 @@ testable changes with clear state, presentation, and execution boundaries.
 ## Decisions
 M2.5, the daily driver, shipped in v0.1.0-preview.8. v0.1.0-preview.9 gives Pi
 threads the person's skills, prompt templates, and user instructions (M8 steps 1
-and 2). Current work is M7: agent harnesses other than Pi, Codex first. Changes to shared contracts,
+and 2). v0.1.0-preview.10 runs threads in the person's own Codex or Claude Code
+beside Pi, each with its own permissions (M7 steps 1 and 2). Current work is the
+rest of M7, an ACP client next. Changes to shared contracts,
 permissions, or persistence require agreement and compatibility tests. Follow
 [Contributing](CONTRIBUTING.md) and the [originality policy](docs/ORIGINALITY.md).
