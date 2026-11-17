@@ -44,7 +44,8 @@ cargo test --locked "${packages[@]}"
 cargo build --locked -p plait-host
 (
     cd runtime
-    npm ci --ignore-scripts
+    # Optional packages are only the Agent SDK's platform builds of Claude Code, which no test runs.
+    npm ci --ignore-scripts --omit=optional
     npm run check
     if "$require_sandbox"; then
         npm run test:sandbox
@@ -52,4 +53,7 @@ cargo build --locked -p plait-host
         npm test
     fi
 )
-cargo build --locked --release "${packages[@]}"
+# CI's package job builds and tests the release binaries itself, beside this one.
+if [[ -z ${PLAIT_CHECK_SKIP_RELEASE:-} ]]; then
+    cargo build --locked --release "${packages[@]}"
+fi

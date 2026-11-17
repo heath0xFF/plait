@@ -8,15 +8,19 @@ manifest, and publishes.
 
 1. Keep the Cargo version for `plait` and `plait-host` the same
    (`MAJOR.MINOR.PATCH`). A preview tag adds `-preview.N`, counting from 1.
-2. Merge to `main` with checks passing.
-3. Tag the merged commit and push the tag:
+2. Merge to `main` with local checks passing (`scripts/check.sh`).
+3. Tag the merged commit and push the tag. There is no need to wait for
+   `main`'s macOS build first: the tag's build runs the same checks on the same
+   commit and publishes nothing unless they pass.
 
    ```sh
    git tag v0.1.0-preview.7
    git push origin v0.1.0-preview.7
    ```
 
-4. The **macOS build** workflow builds from that tag and runs the installer
+4. The **macOS build** workflow builds from that tag. Its check job (format,
+   lint, tests, and the real command sandbox) and package job run side by side;
+   the package job builds the installers and runs the installer
    smoke test, including migration to the prebuilt per-user install. Its publish job writes `update.json`, signs it, and publishes the
    release with the app archive, host archive, packages, DMG, and checksums.
 

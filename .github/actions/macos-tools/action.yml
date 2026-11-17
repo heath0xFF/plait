@@ -1,0 +1,43 @@
+name: macOS native tools
+description: Node, Xcode's Metal toolchain, Rust, and the cache identity for native builds.
+outputs:
+  cache-id:
+    description: Identifies the Xcode, macOS, and Metal versions a native build cache belongs to.
+    value: ${{ steps.native-tools.outputs.cache-id }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: '26.12.0'
+    - name: Check native build tools
+      id: native-tools
+      shell: bash
+      run: |
+        test "$(uname -m)" = arm64
+        xcodebuild -version
+        if ! xcrun --sdk macosx metal --version; then
+          xcodebuild -downloadComponent MetalToolchain
+        fi
+        rustup show
+        python3 - <<'PY'
+        from pathlib import Path
+        import subprocess
+        for name in ['metal', 'metallib']:
+            path = Path(subprocess.check_output(['xcrun', '--sdk', 'macosx', '--find', name], text=True).strip()).resolve()
+            for item in [path, *list(path.parents)[:5]]:
+                info = item.stat()
+                print(name, item, 'uid', info.st_uid, 'mode', oct(info.st_mode & 0o777))
+        PY
+        node --input-type=module - <<'JS'
+        import { mkdtemp, rm } from 'node:fs/promises';
+        import { appleToolchain } from './runtime/src/apple-toolchain.ts';
+        const scratch = await mkdtemp('/private/tmp/plait-toolchain-check-');
+        try {
+          const tools = await appleToolchain(scratch, AbortSignal.timeout(20000));
+          if (!tools.bin) throw new Error('No trusted installed Metal toolchain is available.');
+          console.log('Root-owned Metal tool discovery passed; sandbox tests still follow.');
+        } finally { await rm(scratch, { recursive: true, force: true }); }
+        JS
+        cache_id=$({ xcodebuild -version; sw_vers -productVersion; xcrun --sdk macosx metal --version | awk 'NR == 1'; } | shasum -a 256 | awk '{print $1}')
+        echo "cache-id=$cache_id" >> "$GITHUB_OUTPUT"
