@@ -27,6 +27,7 @@ const IDENTIFIER_PATTERN = /^[A-Z][A-Z0-9]{0,15}-\d{1,9}$/;
 const LINK_CURSOR_PATTERN = /^(\d{1,16}):([A-Za-z0-9_-]{1,128})$/;
 const TEAM_KEY_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
+const CURSOR_CONTROL_PATTERN = /[\p{Cf}\p{Zl}\p{Zp}\u0000-\u001f\u007f-\u009f]/u;
 // Multiline comments permit tabs and newlines, but reject NUL and other C0/DEL control bytes.
 const COMMENT_CONTROL_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 export const LINEAR_LINKS_MAX_LIMIT = 500;
@@ -54,7 +55,7 @@ function checkBoundedText(value: unknown, field: string, maxChars: number, allow
 }
 
 function checkCursor(value: unknown, field: string): string {
-  if (typeof value !== 'string' || !value.length || Buffer.byteLength(value) > FIELD_LIMITS.cursor || CONTROL_PATTERN.test(value)) {
+  if (typeof value !== 'string' || !value.length || Buffer.byteLength(value, 'utf8') > FIELD_LIMITS.cursor || CURSOR_CONTROL_PATTERN.test(value)) {
     fail('invalid_request', `Invalid ${field}.`);
   }
   return value;

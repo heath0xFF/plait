@@ -117,6 +117,17 @@ const ISSUE_UPDATE_STATE_MUTATION = `mutation PlaitIssueUpdateState($id: String!
 const MAX_WAIT_SECONDS = 86_400;
 const DEFAULT_RATE_LIMIT_WAIT_SECONDS = 60;
 const MAX_TEAM_PAGES = 10;
+const MAX_STATE_POSITION = 1_000_000;
+const UNSAFE_CURSOR_PATTERN = /[\p{Cf}\p{Zl}\p{Zp}\u0000-\u001f\u007f-\u009f]/u;
+
+function safePriority(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 4 ? value : 0;
+}
+
+function safePosition(value: unknown): number {
+  const num = safeNumber(value, 0);
+  return Math.max(-MAX_STATE_POSITION, Math.min(MAX_STATE_POSITION, num));
+}
 
 const asObject = (value: unknown): JsonObject | null =>
   typeof value === 'object' && value !== null && !Array.isArray(value) ? value as JsonObject : null;
@@ -259,7 +270,7 @@ function parseState(raw: unknown, sanitize: ResponseSanitizer): LinearWorkflowSt
     id,
     name,
     type: sanitize.text(obj.type, FIELD_LIMITS.type),
-    position: safeNumber(obj.position, 0),
+    position: safePosition(obj.position),
   };
 }
 
@@ -292,7 +303,7 @@ function parseIssueSummary(raw: unknown, sanitize: ResponseSanitizer): LinearIss
     identifier,
     title: sanitize.text(obj.title, FIELD_LIMITS.title),
     url: sanitize.url(obj.url),
-    priority: safeNumber(obj.priority, 0),
+    priority: safePriority(obj.priority),
     updated_at: sanitize.text(obj.updatedAt, FIELD_LIMITS.timestamp),
     team_id: sanitize.text(teamObj?.id, FIELD_LIMITS.id),
     state: {
@@ -334,8 +345,9 @@ function parsePageInfo(raw: unknown, sanitize: ResponseSanitizer): { hasMore: bo
   const info = asObject(raw);
   const hasMore = info?.hasNextPage === true;
   const rawCursor = info?.endCursor;
-  const cursor = typeof rawCursor === 'string' && rawCursor.length > 0 && rawCursor.length <= FIELD_LIMITS.cursor
-    && !/[\u0000-\u001f\u007f]/.test(rawCursor) && !sanitize.containsSecret(rawCursor)
+  const cursor = typeof rawCursor === 'string' && rawCursor.length > 0
+    && Buffer.byteLength(rawCursor, 'utf8') <= FIELD_LIMITS.cursor
+    && !UNSAFE_CURSOR_PATTERN.test(rawCursor) && !sanitize.containsSecret(rawCursor)
     ? rawCursor
     : null;
   return { hasMore: hasMore && cursor !== null, nextCursor: hasMore ? cursor : null };

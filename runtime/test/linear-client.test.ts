@@ -303,3 +303,67 @@ test('LinearClient throws auth and rate-limit GraphQL errors on HTTP 200 even be
     return true;
   });
 });
+
+test('LinearClient rejects cursors with bidi/C1 controls or >512 bytes and bounds numeric fields', async t => {
+  const fake = new FakeLinearServer();
+  const endpoint = await fake.start();
+  t.after(() => fake.close());
+  const client = new LinearClient({ endpoint });
+
+  // 1. Cursor with bidi override and C1 control must be dropped, and priority out of 0..4 must fall back to 0.
+  fake.enqueueFault((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      data: {
+        issues: {
+          nodes: [{
+            id: 'i1', identifier: 'PLA-1', title: 'Ok', url: 'https://linear.app/acme/issue/PLA-1',
+            priority: 1e308, updatedAt: '2026-11-18T12:00:00.000Z',
+            team: { id: 'team-pla' }, state: { id: 's1', name: 'Todo', type: 'unstarted' },
+            assignee: null, labels: { nodes: [] },
+          }],
+          pageInfo: { hasNextPage: true, endCursor: 'cur\u202e\u0085x' },
+        },
+      },
+    }));
+    return true;
+  });
+  const res1 = await client.listIssues(fake.validKey, { teamId: 'team-pla', filter: 'active' });
+  assert.equal(res1.data.next_cursor, null, 'cursor containing bidi/C1 controls must be rejected');
+  assert.equal(res1.data.has_more, false);
+  assert.equal(res1.data.issues[0].priority, 0, 'out-of-range priority must be normalized to 0');
+
+  // 2. Multibyte cursor under 512 UTF-16 units but over 512 UTF-8 bytes must be rejected; huge state position must be bounded.
+  fake.enqueueFault((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      data: {
+        teams: {
+          nodes: [{
+            id: 't1', key: 'PLA', name: 'Plait',
+            states: { nodes: [{ id: 's1', name: 'Todo', type: 'unstarted', position: 1e308 }] },
+          }],
+          pageInfo: { hasNextPage: true, endCursor: 'あ'.repeat(300) },
+        },
+      },
+    }));
+    return true;
+  });
+  const teams = await client.listTeams(fake.validKey);
+  assert(Math.abs(teams.data[0].states[0].position) <= 1_000_000, 'huge state position must be clamped');
+
+  fake.enqueueFault((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      data: {
+        issues: {
+          nodes: [],
+          pageInfo: { hasNextPage: true, endCursor: 'あ'.repeat(300) },
+        },
+      },
+    }));
+    return true;
+  });
+  const res2 = await client.listIssues(fake.validKey, { teamId: 'team-pla', filter: 'active' });
+  assert.equal(res2.data.next_cursor, null, 'cursor over 512 UTF-8 bytes must be rejected');
+});
