@@ -169,6 +169,28 @@ fn records_and_prunes_without_writing_to_the_repository() {
     assert_eq!(after["paths"][2]["added"], 1);
     assert_eq!(after["paths"][2]["removed"], 1);
     assert_eq!(snapshot(&root), changed, "a record wrote to the repository");
+    let git_before = snapshot(&root.join(".git"));
+    let untouched_before = fs::read(root.join(".gitignore")).unwrap();
+    let meta = fs::metadata(&root).unwrap();
+    let (ok, undone, error) = helper(
+        "undo",
+        &json!({
+            "checkout": root, "store": store, "before": before["commit"], "after": after["commit"],
+            "before_id": "undo-before", "id": "undo-after", "identity": { "dev": meta.dev().to_string(), "ino": meta.ino().to_string() }
+        }),
+    );
+    assert!(ok, "{error}");
+    assert_eq!(undone["state"], "undone", "{undone}");
+    assert_eq!(fs::read(root.join("notes.txt")).unwrap(), b"before\n");
+    assert_eq!(fs::read(root.join("local.env")).unwrap(), b"SECRET=1\n");
+    assert!(!root.join("new.txt").exists());
+    assert_eq!(fs::read(root.join(".gitignore")).unwrap(), untouched_before);
+    assert_eq!(
+        snapshot(&root.join(".git")),
+        git_before,
+        "undo touched the person's Git metadata"
+    );
+    let changed = snapshot(&root);
     let (ok, pruned, error) = helper(
         "prune",
         &json!({"store": store, "remove": ["before-1", "after-1"]}),
@@ -383,4 +405,71 @@ fn the_real_helper_denies_git_timestamp_writes() {
     );
     assert!(store.join("records/denied-write-observed").exists());
     assert_eq!(snapshot(&root), before);
+    let recorded: Value = serde_json::from_slice(&out.stdout).unwrap();
+    fs::write(root.join("notes.txt"), "changed by run\n").unwrap();
+    let (ok, after, error) = helper(
+        "record",
+        &json!({"checkout":root,"store":store,"id":"probe-after","before":recorded["commit"]}),
+    );
+    assert!(ok, "{error}");
+    fs::remove_file(store.join("records/denied-write-observed")).unwrap();
+    let git_before = snapshot(&root.join(".git"));
+    let meta = fs::metadata(&root).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_plait-host"))
+        .arg("undo")
+        .env("PLAIT_GIT", &wrapper)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(json!({"checkout":root,"store":store,"before":recorded["commit"],"after":after["commit"],"before_id":"ub","id":"ua","identity":{"dev":meta.dev().to_string(),"ino":meta.ino().to_string()}}).to_string().as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let undone: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(undone["state"], "undone");
+    assert!(store.join("records/denied-write-observed").exists());
+    assert_eq!(snapshot(&root.join(".git")), git_before);
+    assert_eq!(fs::read(root.join("notes.txt")).unwrap(), b"before\n");
+}
+
+#[test]
+fn undo_refuses_hard_links_including_links_to_git_metadata() {
+    // The command sandbox disallows creating hard links, even in scratch.
+    // Exercise these fixtures at the real helper boundary, outside that sandbox.
+    for git_link in [false, true] {
+        let base = Scratch::new();
+        let root = repository(&base.0);
+        let store = base.0.join("store");
+        fs::create_dir(&store).unwrap();
+        let (ok, before, error) =
+            helper("record", &json!({"checkout":root,"store":store,"id":"b"}));
+        assert!(ok, "{error}");
+        let target = root.join("notes.txt");
+        if git_link {
+            fs::remove_file(&target).unwrap();
+            fs::hard_link(root.join(".git/description"), &target).unwrap();
+        } else {
+            fs::write(&target, "run").unwrap();
+            fs::hard_link(&target, root.join("alias")).unwrap();
+        }
+        let (ok, after, error) = helper(
+            "record",
+            &json!({"checkout":root,"store":store,"id":"a","before":before["commit"]}),
+        );
+        assert!(ok, "{error}");
+        let old = snapshot(&root);
+        let meta = fs::metadata(&root).unwrap();
+        let (ok, undo, error) = helper(
+            "undo",
+            &json!({"checkout":root,"store":store,"before":before["commit"],"after":after["commit"],"before_id":"ub","id":"ua","identity":{"dev":meta.dev().to_string(),"ino":meta.ino().to_string()}}),
+        );
+        assert!(ok, "{error}");
+        assert_eq!(undo["state"], "blocked");
+        assert_eq!(snapshot(&root), old);
+    }
 }

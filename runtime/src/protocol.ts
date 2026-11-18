@@ -61,6 +61,8 @@ export type Snapshot = {
   live_reasoning?: string; retry?: { attempt: number; at: number } | null;
   /** Absent for Pi threads, including every thread saved before version 4. */
   harness?: ThreadHarness;
+  /** Version 5: changes to this thread's checkout records. */
+  records_revision?: number;
 };
 export type Summary = {
   id: string; checkout: string; model: ModelChoice; status: string;
@@ -68,12 +70,12 @@ export type Summary = {
   /** Version 4 only. */
   harness?: HarnessId;
 };
-export const PROTOCOL_VERSIONS = [1, 2, 3, 4] as const;
+export const PROTOCOL_VERSIONS = [1, 2, 3, 4, 5] as const;
 export type Protocol = typeof PROTOCOL_VERSIONS[number];
 export type Request = Record<string, string | boolean | number> & { op: string };
 export function version(request: Request): Protocol {
   const asked = request.protocol_version;
-  return asked === 4 ? 4 : asked === 3 ? 3 : asked === 2 ? 2 : 1;
+  return asked === 5 ? 5 : asked === 4 ? 4 : asked === 3 ? 3 : asked === 2 ? 2 : 1;
 }
 const TURN_LIMIT = 'Agent ended without an answer (turn_limit). Inspect the transcript before retrying.';
 /**
@@ -115,6 +117,7 @@ export function view(snapshot: Snapshot, protocol: Protocol) {
   // Version 4 adds the harness; Pi threads saved earlier have none recorded.
   const harness = snapshot.harness;
   return protocol === 3 ? third : {
+    ...(protocol >= 5 ? { records_revision: snapshot.records_revision ?? 0 } : {}),
     ...third,
     harness: { id: harness?.id ?? 'pi', version: harness?.version ?? null, mode: harness?.mode ?? null, reported: harness?.reported ?? null },
   };
@@ -153,13 +156,16 @@ const fields3: Record<string, string[]> = {
 };
 // Version 4 adds harnesses: an operation to list them and a choice when a thread starts.
 const fields4: Record<string, string[]> = { harnesses: [], set_harness_path: ['harness'], set_harness_mode: ['harness', 'mode'], set_up_harness: ['harness'] };
+const fields5: Record<string, string[]> = { turn_records: ['thread_id'], undo_turn: ['thread_id', 'record_id', 'request_id'] };
+const optional5: Record<string, string[]> = { turn_records: ['before', 'limit'], undo_turn: ['leave_changed'] };
+export const RECORD_CURSOR = /^\d{1,16}:\d{1,16}:\d{1,16}:\d{1,16}$/;
 const optional4: Record<string, string[]> = { create_thread: ['harness', 'mode'], set_harness_path: ['path'], configure_thread: ['mode'] };
 const optional3: Record<string, string[]> = {
   submit: ['when_busy'], list_threads: ['checkout', 'limit', 'cursor', 'archived'], history: ['before', 'limit'],
   watch_threads: ['archived'], configure_thread: ['provider', 'model_id', 'thinking'],
   create_thread: ['thinking'],
 };
-const limits: Record<string, number> = { list_threads: 200, history: 500 };
+const limits: Record<string, number> = { list_threads: 200, history: 500, turn_records: 50 };
 export const CURSOR = /^\d{1,16}:\d{1,16}$/;
 export const HISTORY_CURSOR = /^\d{1,16}:[01]:\d{1,16}$/;
 export const HISTORY_REF = /^(?:e\d{1,16}\.\d{1,6}\.(?:text|reasoning|output|input\.\d{1,6})|q\d{1,16})$/;
@@ -171,7 +177,8 @@ function validate3(request: Request) {
     invalid(`limit must be an integer from 1 to ${limits[request.op]}.`);
   }
   if (request.cursor !== undefined && (typeof request.cursor !== 'string' || !CURSOR.test(request.cursor))) invalid('Invalid cursor.');
-  if (request.before !== undefined && (typeof request.before !== 'string' || !HISTORY_CURSOR.test(request.before))) invalid('Invalid before cursor.');
+  if (request.before !== undefined && (typeof request.before !== 'string' || !(request.op === 'turn_records' ? RECORD_CURSOR : HISTORY_CURSOR).test(request.before))) invalid('Invalid before cursor.');
+  if (request.op === 'turn_records' && request.before !== undefined && !(request.before as string).split(':').every(part => Number.isSafeInteger(Number(part)))) invalid('Invalid before cursor.');
   if (request.ref !== undefined && !HISTORY_REF.test(request.ref as string)) invalid('Invalid ref.');
   if (request.archived !== undefined && typeof request.archived !== 'boolean') invalid('archived must be boolean.');
   if (request.when_busy !== undefined && request.when_busy !== 'follow_up' && request.when_busy !== 'steer') invalid('when_busy must be follow_up or steer.');
@@ -185,13 +192,14 @@ export function validate(value: unknown): Request {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail('invalid_request', 'Expected an object.');
   const request = value as Request;
   const third = version(request) >= 3;
-  const fourth = version(request) === 4;
+  const fourth = version(request) >= 4;
+  const fifth = version(request) >= 5;
   const known = typeof request.op === 'string' ? request.op : '';
-  const expected = fourth && Object.hasOwn(fields4, known) ? fields4[known]
+  const expected = fifth && Object.hasOwn(fields5, known) ? fields5[known] : fourth && Object.hasOwn(fields4, known) ? fields4[known]
     : third && Object.hasOwn(fields3, known) ? fields3[known] : Object.hasOwn(fields, known) ? fields[known] : undefined;
   // `approval` stays allowed on every version so version 1 keeps its specific error.
   const allowed = expected && [...expected, 'protocol_version', ...(known === 'submit' ? ['approval'] : []), ...(third ? optional3[known] ?? [] : []),
-    ...(fourth ? optional4[known] ?? [] : [])];
+    ...(fourth ? optional4[known] ?? [] : []), ...(fifth ? optional5[known] ?? [] : [])];
   if (!allowed || Object.keys(request).some(key => key !== 'op' && !allowed.includes(key))) fail('invalid_request', 'Unknown operation or field.');
   if (request.protocol_version !== undefined && !PROTOCOL_VERSIONS.includes(request.protocol_version as Protocol)) {
     fail('invalid_request', 'Unsupported protocol_version.');
@@ -212,7 +220,8 @@ export function validate(value: unknown): Request {
   if (request.path !== undefined && (typeof request.path !== 'string' || !request.path.startsWith('/') || request.path.length > 4096)) {
     fail('invalid_request', 'path must be an absolute path.');
   }
-  for (const key of ['request_id', 'thread_id', 'approval_id']) {
+  if (request.leave_changed !== undefined && typeof request.leave_changed !== 'boolean') fail('invalid_request', 'leave_changed must be boolean.');
+  for (const key of ['request_id', 'thread_id', 'approval_id', 'record_id']) {
     if (request[key] !== undefined && !/^[A-Za-z0-9_-]{1,128}$/.test(request[key] as string)) fail('invalid_request', `Invalid ${key}.`);
   }
   if (Buffer.byteLength(JSON.stringify(request)) > 65000) fail('invalid_request', 'Request is too large.');

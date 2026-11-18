@@ -449,7 +449,8 @@ mod tests {
             (2, true),
             (3, true),
             (4, true),
-            (5, false),
+            (5, true),
+            (6, false),
             (0, false),
         ] {
             state.reconnect();

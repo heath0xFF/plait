@@ -138,7 +138,7 @@ test('different stores and TMPDIR values still share the checkout inode lease', 
   const store = join(f.base, 'second-store'); const temporary = join(f.base, 'other-temp');
   await exec('/bin/mkdir', ['-p', store, temporary]);
   const host = spawn(binary, ['run', '--store', store, '--runtime', fixture], { stdio: 'ignore', env: { ...process.env, TMPDIR: temporary, PLAIT_TEST_SCENARIO: 'crash' } });
-  t.after(async () => { host.kill('SIGKILL'); await delay(200); });
+  f.own(host); // Stop both hosts before the shared fixture directory is removed.
   await until(() => request(store, { op: 'status' }), reply => reply.ok);
   const created = await request(store, { op: 'create_thread', checkout: f.repo, provider: 'faux', model_id: 'faux-1', request_id: 'other-create' });
   const id = created.result.thread.id;

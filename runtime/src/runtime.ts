@@ -106,7 +106,7 @@ export class Runtime {
   constructor(directory: string, models: Models, authenticated: Set<string>) {
     this.directory = directory; this.models = models; this.authenticated = authenticated;
     this.store = new Store(directory);
-    this.records = new Records(this.store, directory);
+    this.records = new Records(this.store, directory, id => this.changed(id));
     this.records.start();
     this.codex = new CodexHarness(this.store);
     this.claude = new ClaudeHarness(this.store, { sdk: sdkDirectory(directory), cwd: directory });
@@ -146,14 +146,14 @@ export class Runtime {
       fail('model_unavailable', 'Exact model is missing or has no configured authentication. Sign in to its provider in Settings.');
     }
   }
-  snapshot(id: string) { return this.sessions.get(id)?.snapshot ?? this.store.get(id); }
+  snapshot(id: string) { const snapshot = this.sessions.get(id)?.snapshot ?? this.store.get(id); snapshot.records_revision = this.records.revision(id); return snapshot; }
   async handle(input: unknown): Promise<unknown> {
     if (this.providers?.handles(input)) return this.providers.handle(input);
     const request = validate(input);
     const protocol = version(request);
     const result = await this.dispatch(request, protocol);
     // Every snapshot leaves through the negotiated wire shape.
-    if (result && typeof result === 'object' && 'thread' in result) return { ...result, thread: view(result.thread as Snapshot, protocol) };
+    if (result && typeof result === 'object' && 'thread' in result) return { ...result, thread: view({ ...(result.thread as Snapshot), records_revision: this.records.revision((result.thread as Snapshot).id) }, protocol) };
     return result;
   }
   private async dispatch(request: ReturnType<typeof validate>, protocol: Protocol): Promise<unknown> {
@@ -258,7 +258,15 @@ export class Runtime {
       case 'changed_files': {
         // Files this thread's tools wrote, as recorded for provenance: a list, not a diff.
         const id = String(request.thread_id); this.snapshot(id);
-        return { files: this.store.changedPaths(id) };
+        return { files: protocol >= 5 ? this.records.changedPaths(id) : this.store.changedPaths(id) };
+      }
+      case 'turn_records': {
+        const id = String(request.thread_id); this.snapshot(id);
+        return this.records.page(id, request.before as string | undefined, request.limit as number | undefined);
+      }
+      case 'undo_turn': {
+        const snapshot = this.snapshot(String(request.thread_id));
+        return this.records.undo(snapshot, String(request.record_id), String(request.request_id), request.leave_changed === true, this.active.has(snapshot.checkout));
       }
       case 'history': {
         const id = String(request.thread_id); this.snapshot(id);

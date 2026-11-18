@@ -174,12 +174,18 @@ fn run(
     } else {
         Stdio::null()
     };
+    let shared_group = record::has_deadline();
     let mut child = command
         .stdin(stdin)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        // Its own process group, so a timeout also stops hooks and filters.
-        .process_group(0)
+        // Undo's helper owns the whole process group so its outer deadline
+        // also kills Git. Ordinary reads/writes retain independent groups.
+        .process_group(if shared_group {
+            unsafe { libc::getpgrp() }
+        } else {
+            0
+        })
         .spawn()
         .map_err(|e| format!("Cannot start Git: {e}"))?;
     let stdout = child.stdout.take().ok_or("Git stdout is unavailable")?;
@@ -202,11 +208,11 @@ fn run(
     let status = match finished.recv_timeout(timeout) {
         Ok(Ok(status)) => Ok(status),
         Ok(Err(e)) => {
-            stop_group(group);
+            stop_group(group, shared_group);
             Err(format!("Cannot wait for Git: {e}"))
         }
         Err(_) => {
-            stop_group(group);
+            stop_group(group, shared_group);
             // The kill ends the wait, which reaps Git.
             let _ = finished.recv_timeout(DRAIN_GRACE);
             Err(format!(
@@ -250,12 +256,16 @@ fn collect(reader: mpsc::Receiver<std::io::Result<Output>>, name: &str) -> Resul
 
 /// Kill Git and everything it started (hooks, filters). The thread waiting
 /// on Git reaps it.
-fn stop_group(group: Option<i32>) {
+fn stop_group(group: Option<i32>, shared: bool) {
     // The child leads its own group (see `process_group(0)`), so its PID is the group ID.
     if let Some(group) = group {
         // SAFETY: killpg only sends a signal; a stale group ID fails with ESRCH.
         unsafe {
-            libc::killpg(group, libc::SIGKILL);
+            if shared {
+                libc::kill(group, libc::SIGKILL);
+            } else {
+                libc::killpg(group, libc::SIGKILL);
+            }
         }
     }
 }
@@ -724,6 +734,7 @@ mod branch;
 mod counts;
 mod log;
 pub mod record;
+pub mod undo;
 mod worktree;
 mod write;
 #[cfg(test)]

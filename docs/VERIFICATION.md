@@ -900,8 +900,9 @@ app.
 
 ## Checkout recording stage 1 (unreleased)
 
-Stage 1 records runs internally; it does not provide undo, record-listing
-operations, protocol version 5, or desktop controls. The checks below are
+Stage 1 introduced internal run records without undo, record-listing
+operations, protocol version 5, or desktop controls. The later
+[stage 2 checks](#turn-undo-stage-2-unreleased) cover the host operations. The checks below are
 source-level evidence, not a release or installed-app acceptance claim.
 
 The real-repository core tests cover additions, deletions, mode-only changes,
@@ -985,3 +986,81 @@ current files again. Unchanged borrowed objects do not constitute a backup of
 a deleted repository. Stage 2 must validate availability and coverage before
 restoring anything, page the stored path lists within protocol frame limits,
 and expose the after-restart warning and unsupported metadata plainly.
+
+## Turn undo stage 2 (unreleased)
+
+Stage 2 exposes protocol version 5 listing and undo in the host, with shared
+Rust client types. It adds no desktop control. The checks below use disposable
+repositories and scripted harnesses; no native app or paid model is launched.
+
+On 2026-11-18, `bash scripts/check.sh` exited 0: workspace formatting and
+clippy, 547 Rust tests, 344 runtime tests, TypeScript checking, and the workspace
+release builds passed. Five Rust tests are ignored by the ordinary gate;
+the two recording cost tests were separately run below. The new coverage
+includes 19 core undo tests and 15 version 5 runtime tests. The release
+metadata Python suite also passed all 12 tests.
+
+The core undo suite checks exact bytes, executable bits, symlink targets,
+binary content, individually ignored small files, spaces, newlines, non-ASCII
+names and leading dashes. It exercises unborn repositories, linked worktrees,
+mode-only changes, created-then-deleted files, removal of newly empty
+directories, and undo of an undo. Preflight tests cover person/later-run edits,
+case-only renames during and after runs on the case-insensitive test volume,
+file/directory transitions, nonempty directories, and symlink ancestors.
+Injected changes before the final recheck exercise parent swaps, edits before
+rename and changes before deletion. Tests also cover temporary-name collisions,
+wrong checkout identities, missing borrowed unchanged blobs, partial failure,
+`leave_changed`, and exclusion of unrelated edits and refused restores from
+the undo record's scope.
+
+The ordinary core fixture compares unaffected working files and every Git
+metadata path, byte, mode, inode and modification/change time around undo, and
+checks each restored path against its recorded before bytes and Git mode.
+The real host-helper tests extend the recorder's Git-directory comparison to
+undo and inject a Git command that tries to change index timestamps under the
+undo sandbox. Current hard links, including a working path linked to Git
+metadata, are refused with the entire fixture unchanged. These hard-link
+fixtures run in the host suite because the command sandbox intentionally denies
+creating hard links even in scratch; they are not skipped by the full gate.
+
+The version 5 runtime suite covers fake Codex and fake Claude Code through the
+runtime request dispatcher, plus Pi replay through the host socket. It checks
+busy checkout exclusion, another host's inode lease,
+steering membership and separate follow-ups, a later record in another thread,
+failed/wrong-thread records, restart warnings, command paths in `changed_files`,
+old snapshot shapes, strict request validation, and multi-page paths and
+coverage within the 1 MiB frame. Applied request IDs deduplicate after restart;
+blocked IDs may be retried and conflicting reuse is refused. An injected U1
+capture failure exercises recovery of completed writes without replay and
+without claiming another file changed while the host was down. Rust client
+checks cover version 5 request/reply shapes, status negotiation down to version
+1, and an old host refusing undo without retrying the mutation at another
+version. Packaging metadata advertises version 5.
+
+A 3,500-file changed checkout with a private path manifest larger than 1 MiB
+exercises the real 10-second undo deadline.
+Preflight runs out of budget before applying; every file retains its after
+bytes and the checkout lease is released. This checks the budget, not a claim
+that a large undo completes in ten seconds. Capture, object reads and writes
+share the helper deadline; subprocesses stay in its group for timeout cleanup.
+The measured undo request in the final gate returned after 10,003 ms.
+
+These tests do not prove an atomic transaction against external editors.
+Existing-file replacement/deletion has a final check-to-mutation interval;
+an unrelated writer can still race it and lose a change. Detected late races
+stop with `undo_incomplete` and can leave earlier restores applied. A crash
+between a file mutation and journal completion can omit that path from the
+recovered undo record; no write is replayed. A writer changing an already
+restored path before U1 capture can affect that recorded after image. Power
+loss, arbitrary filesystem faults, installed UI acceptance, and live paid
+harness turns are not verified here. Linux has no Seatbelt enforcement;
+macOS helper evidence must not be read as Linux containment evidence.
+
+After the case-spelling reconciliation was added, the existing 50,000-file
+recording cost checks still passed (`bash scripts/bench-records.sh`, exit 0).
+On the same platform and toolchain as the stage 1 measurements above, seven
+warm samples measured a 195 ms core median (193–210 ms) and a 215 ms sandboxed
+helper median (210–222 ms). The 200-file helper median was 69 ms (66–76 ms).
+These release-build measurements include the added directory-name checks;
+they measure recording, not undo or native rendering. They were taken during
+development without otherwise isolating the machine.

@@ -176,6 +176,8 @@ pub struct Record {
 /// record knows which paths the earlier one could not see.
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct Note {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    undo_paths: Option<Vec<String>>,
     not_covered: Vec<Uncovered>,
     total: usize,
 }
@@ -301,6 +303,19 @@ pub fn protected_paths(located: &Located) -> Vec<&Path> {
 
 /// Records the checkout. See the module comment for what a record holds.
 pub fn record(located: &Located, request: &Request) -> Result<Record> {
+    record_with_paths(located, request, None)
+}
+
+/// Undo only claims writes it completed, even if another process edited the checkout.
+pub fn record_undo(located: &Located, request: &Request, paths: &[String]) -> Result<Record> {
+    record_with_paths(located, request, Some(paths))
+}
+
+fn record_with_paths(
+    located: &Located,
+    request: &Request,
+    undo_paths: Option<&[String]>,
+) -> Result<Record> {
     let start = Instant::now();
     valid_id(&request.id)?;
     let before = match &request.before {
@@ -319,8 +334,19 @@ pub fn record(located: &Located, request: &Request) -> Result<Record> {
         Vec::new()
     };
     let (head, head_ref) = person_head(&located.root)?;
-    let listing = private.status()?;
+    let mut listing = private.status()?;
     let private_paths = private.index_paths()?;
+    // Git can stat an indexed spelling through its case alias and miss a
+    // case-only rename. Reconcile actual names before making a restorable tree.
+    for (old, new) in renamed_spellings(&located.root, &private_paths) {
+        listing.retain(|entry| !matches!(entry, Entry::Tracked { path, .. } if path == &old));
+        listing.push(Entry::Tracked {
+            path: old,
+            worktree: b'D',
+            submodule: false,
+        });
+        listing.push(Entry::Untracked(new));
+    }
     let tracked: HashSet<Vec<u8>> = tracked.into_iter().collect();
     let untracked: Vec<Vec<u8>> = private_paths
         .iter()
@@ -383,6 +409,7 @@ pub fn record(located: &Located, request: &Request) -> Result<Record> {
         private.own_objects(&[tree.as_str()])?;
     }
     let note = Note {
+        undo_paths: undo_paths.map(<[String]>::to_vec),
         total: not_covered.len(),
         not_covered: not_covered.clone(),
     };
@@ -392,7 +419,10 @@ pub fn record(located: &Located, request: &Request) -> Result<Record> {
     let paths = match before {
         Some(before) => {
             let earlier = private.note(&before)?;
-            let (paths, extra) = private.changes(&before, &commit, &earlier, &not_covered)?;
+            let (mut paths, extra) = private.changes(&before, &commit, &earlier, &not_covered)?;
+            if let Some(scope) = undo_paths {
+                paths.retain(|p| scope.contains(&p.path));
+            }
             private.own_copies(&paths)?;
             not_covered.extend(earlier.not_covered);
             not_covered.extend(extra);
@@ -416,7 +446,7 @@ pub fn record(located: &Located, request: &Request) -> Result<Record> {
     })
 }
 
-fn valid_id(id: &str) -> Result<()> {
+pub(super) fn valid_id(id: &str) -> Result<()> {
     if id.is_empty()
         || id.len() > 128
         || !id
@@ -519,7 +549,7 @@ fn person(root: &Path) -> Command {
 
 /// Runs a command that must succeed, with its whole output.
 fn ok(command: &mut Command, input: Option<Vec<u8>>, limit: usize) -> Result<Vec<u8>> {
-    let raw = run(command, input, limit, TIMEOUT)?;
+    let raw = run(command, input, limit, remaining()?)?;
     if !raw.status.success() {
         return Err(raw.failure());
     }
@@ -531,7 +561,7 @@ fn ok(command: &mut Command, input: Option<Vec<u8>>, limit: usize) -> Result<Vec
 
 /// Runs a command whose exit status 1 means "none".
 fn maybe(command: &mut Command) -> Result<Option<Vec<u8>>> {
-    let raw = run(command, None, LIMIT, TIMEOUT)?;
+    let raw = run(command, None, LIMIT, remaining()?)?;
     match raw.status.code() {
         Some(0) => Ok(Some(raw.out.bytes)),
         Some(1) => Ok(None),
@@ -832,6 +862,18 @@ impl Private {
     }
 
     fn ignored(&self, paths: &[Vec<u8>]) -> Result<Vec<Vec<u8>>> {
+        let paths: Vec<_> = paths
+            .iter()
+            .filter(|path| {
+                let relative = Path::new(OsStr::from_bytes(path));
+                !relative
+                    .ancestors()
+                    .skip(1)
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .any(|p| fs::symlink_metadata(self.root.join(p)).is_ok_and(|m| !m.is_dir()))
+            })
+            .cloned()
+            .collect();
         if paths.is_empty() {
             return Ok(Vec::new());
         }
@@ -843,9 +885,9 @@ impl Private {
                 "-z",
                 "--stdin",
             ]),
-            Some(nul_joined(paths)),
+            Some(nul_joined(&paths)),
             LISTING_LIMIT,
-            TIMEOUT,
+            remaining()?,
         )?;
         if raw.out.truncated {
             return Err("Git ignore output exceeds the record limit.".into());
@@ -1115,6 +1157,75 @@ impl Private {
 }
 
 /// The checkout's attributes that would convert content, path by path.
+fn renamed_spellings(root: &Path, paths: &[Vec<u8>]) -> Vec<(Vec<u8>, Vec<u8>)> {
+    use std::collections::HashMap;
+    use std::ffi::OsString;
+    let mut directories: HashMap<PathBuf, BTreeSet<OsString>> = HashMap::new();
+    let mut parents: HashMap<PathBuf, Option<PathBuf>> = HashMap::new();
+    parents.insert(PathBuf::new(), Some(root.to_path_buf()));
+    fn actual(
+        root: &Path,
+        path: &Path,
+        directories: &mut HashMap<PathBuf, BTreeSet<OsString>>,
+        parents: &mut HashMap<PathBuf, Option<PathBuf>>,
+    ) -> Option<PathBuf> {
+        if let Some(known) = parents.get(path) {
+            return known.clone();
+        }
+        let parent_path = path.parent()?;
+        let parent = actual(root, parent_path, directories, parents)?;
+        let names = directories.entry(parent.clone()).or_insert_with(|| {
+            if !fs::symlink_metadata(&parent).is_ok_and(|m| m.is_dir()) {
+                return BTreeSet::new();
+            }
+            fs::read_dir(&parent)
+                .into_iter()
+                .flatten()
+                .filter_map(|entry| entry.ok().map(|e| e.file_name()))
+                .collect()
+        });
+        let name = path.file_name()?;
+        let resolved = if names.contains(name) {
+            Some(parent.join(name))
+        } else {
+            let expected = fs::symlink_metadata(parent.join(name)).ok()?;
+            names
+                .iter()
+                .find(|candidate| {
+                    fs::symlink_metadata(parent.join(candidate))
+                        .is_ok_and(|m| m.dev() == expected.dev() && m.ino() == expected.ino())
+                })
+                .map(|name| parent.join(name))
+        };
+        // Cache shared ancestors, not every leaf in a 50,000-file checkout.
+        if resolved
+            .as_ref()
+            .is_some_and(|p| p != root && directories.contains_key(p))
+        {
+            parents.insert(path.to_path_buf(), resolved.clone());
+        }
+        resolved
+    }
+    let mut result = Vec::new();
+    for path in paths {
+        let relative = Path::new(OsStr::from_bytes(path));
+        // Resolve and cache each parent once. A symlink directory supplies no names.
+        if let Some(parent) = relative.parent()
+            && !parents.contains_key(parent)
+        {
+            let resolved = actual(root, parent, &mut directories, &mut parents);
+            parents.insert(parent.to_path_buf(), resolved);
+        }
+        if let Some(resolved) = actual(root, relative, &mut directories, &mut parents)
+            && let Ok(relative) = resolved.strip_prefix(root)
+            && relative.as_os_str().as_bytes() != path
+        {
+            result.push((path.clone(), relative.as_os_str().as_bytes().to_vec()));
+        }
+    }
+    result
+}
+
 fn converted(
     located: &Located,
     private: &Private,
@@ -1719,7 +1830,11 @@ fn pipe(first: &mut Command, input: Vec<u8>, second: &mut Command) -> Result<()>
             .stdin(stdin)
             .stdout(stdout)
             .stderr(Stdio::null())
-            .process_group(0)
+            .process_group(if has_deadline() {
+                unsafe { libc::getpgrp() }
+            } else {
+                0
+            })
             .spawn()
             .map_err(|e| format!("Cannot start Git: {e}"))
     };
@@ -1739,6 +1854,7 @@ fn pipe(first: &mut Command, input: Vec<u8>, second: &mut Command) -> Result<()>
         });
     }
     let start = Instant::now();
+    let timeout = remaining()?;
     let mut statuses = [None, None];
     while statuses.iter().any(Option::is_none) {
         for (slot, child) in statuses.iter_mut().zip([&mut producer, &mut consumer]) {
@@ -1746,7 +1862,7 @@ fn pipe(first: &mut Command, input: Vec<u8>, second: &mut Command) -> Result<()>
                 *slot = child.try_wait().map_err(|e| e.to_string())?;
             }
         }
-        if start.elapsed() > TIMEOUT {
+        if start.elapsed() > timeout {
             for child in [&mut producer, &mut consumer] {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -1802,6 +1918,16 @@ pub fn sources(store: &Path) -> Vec<Source> {
 pub fn prune(request: &PruneRequest) -> Result<Pruned> {
     for id in &request.remove {
         valid_id(id)?;
+    }
+    for id in &request.remove {
+        for extension in ["json", "tmp", "paths"] {
+            let path = records_dir(&request.store).join(format!("undo-{id}.{extension}"));
+            match fs::remove_file(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.to_string()),
+            }
+        }
     }
     let mut result = Pruned::default();
     for format in ["sha1", "sha256"] {
@@ -1897,3 +2023,128 @@ pub fn prune(request: &PruneRequest) -> Result<Pruned> {
 #[cfg(test)]
 #[path = "record_tests.rs"]
 mod tests;
+
+// Undo has one budget across all of its Git commands, including both captures.
+thread_local! {
+    static DEADLINE: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
+
+pub(super) fn within<T>(deadline: Instant, work: impl FnOnce() -> Result<T>) -> Result<T> {
+    struct Reset(Option<Instant>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            DEADLINE.set(self.0);
+        }
+    }
+    let _reset = Reset(DEADLINE.replace(Some(deadline)));
+    work()
+}
+
+pub(super) fn has_deadline() -> bool {
+    DEADLINE.get().is_some()
+}
+
+pub(super) fn remaining() -> Result<Duration> {
+    DEADLINE.get().map_or(Ok(TIMEOUT), |end| {
+        end.checked_duration_since(Instant::now())
+            .filter(|d| !d.is_zero())
+            .ok_or_else(|| "Undo exceeded its time budget.".into())
+    })
+}
+
+/// Reads only the private store. Undo needs changed blobs, not a copy of all
+/// borrowed, unchanged objects. Reusing this command builder keeps filters off.
+pub(super) struct Reader(Private);
+impl Reader {
+    pub(super) fn open(located: &Located, store: &Path) -> Result<Self> {
+        Ok(Self(Private::open(
+            &records_dir(store),
+            located,
+            &PersonConfig::read(&located.root)?,
+        )?))
+    }
+    pub(super) fn changes(
+        &self,
+        before: &str,
+        after: &str,
+    ) -> Result<(Vec<ChangedPath>, Vec<Uncovered>)> {
+        valid_oid(before, if before.len() == 64 { "sha256" } else { "sha1" })?;
+        valid_oid(after, if before.len() == 64 { "sha256" } else { "sha1" })?;
+        let earlier = self.0.note(before)?;
+        let later = self.0.note(after)?;
+        let (mut paths, mut uncovered) =
+            self.0
+                .changes(before, after, &earlier, &later.not_covered)?;
+        if let Some(scope) = later.undo_paths {
+            paths.retain(|p| scope.contains(&p.path));
+        }
+        uncovered.extend(earlier.not_covered);
+        uncovered.extend(later.not_covered);
+        uncovered.sort();
+        uncovered.dedup();
+        Ok((paths, uncovered))
+    }
+    pub(super) fn coverage(&self, before: &str, after: &str) -> Result<Vec<Uncovered>> {
+        let mut result = self.0.note(before)?.not_covered;
+        result.extend(self.0.note(after)?.not_covered);
+        result.sort();
+        result.dedup();
+        Ok(result)
+    }
+    pub(super) fn entry(&self, commit: &str, path: &str) -> Result<Option<(String, String)>> {
+        let bytes = ok(
+            self.0.git(true).args(["ls-tree", "-z", commit, "--", path]),
+            None,
+            LIMIT,
+        )?;
+        let Some(entry) = bytes.split(|b| *b == 0).find(|e| !e.is_empty()) else {
+            return Ok(None);
+        };
+        let tab = entry
+            .iter()
+            .position(|b| *b == b'\t')
+            .ok_or("Invalid record entry")?;
+        let header = std::str::from_utf8(&entry[..tab]).map_err(|e| e.to_string())?;
+        let fields: Vec<_> = header.split(' ').collect();
+        if fields.len() != 3 {
+            return Err("Invalid record entry".into());
+        }
+        if fields[1] == "tree" {
+            return Ok(None);
+        }
+        Ok(Some((fields[0].into(), fields[2].into())))
+    }
+    pub(super) fn entries(
+        &self,
+        commit: &str,
+    ) -> Result<std::collections::BTreeMap<String, (String, String)>> {
+        let bytes = ok(
+            self.0.git(true).args(["ls-tree", "-r", "-z", commit]),
+            None,
+            LISTING_LIMIT,
+        )?;
+        let mut entries = std::collections::BTreeMap::new();
+        for entry in bytes.split(|b| *b == 0).filter(|e| !e.is_empty()) {
+            let tab = entry
+                .iter()
+                .position(|b| *b == b'\t')
+                .ok_or("Invalid record tree")?;
+            let header = std::str::from_utf8(&entry[..tab]).map_err(|e| e.to_string())?;
+            let parts: Vec<_> = header.split(' ').collect();
+            if parts.len() != 3 {
+                return Err("Invalid record tree".into());
+            }
+            if let Ok(path) = std::str::from_utf8(&entry[tab + 1..]) {
+                entries.insert(path.to_owned(), (parts[0].to_owned(), parts[2].to_owned()));
+            }
+        }
+        Ok(entries)
+    }
+    pub(super) fn blob(&self, oid: &str) -> Result<Vec<u8>> {
+        ok(
+            self.0.git(false).args(["cat-file", "blob", oid]),
+            None,
+            FILE_LIMIT as usize + 1,
+        )
+    }
+}

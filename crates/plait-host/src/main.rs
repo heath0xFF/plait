@@ -44,6 +44,8 @@ fn run() -> io::Result<()> {
     // The host's records of a checkout; JSON on stdin and stdout.
     match operation.as_str() {
         "record" => return record::run(),
+        "undo" => return record::undo(),
+        "undo-contained" => return record::undo_contained(),
         "record-contained" => return record::run_contained(),
         "prune" => return record::prune(),
         "prune-contained" => return record::prune_contained(),
@@ -56,7 +58,7 @@ fn run() -> io::Result<()> {
                 "component": "host", "version": env!("CARGO_PKG_VERSION"),
                 "revision": option_env!("PLAIT_BUILD_REVISION").unwrap_or("development"),
                 "release": plait_core::update::current_version().map(|version| version.to_string()),
-                "protocol_version": 4,
+                "protocol_version": 5,
             }),
         )?;
         return Ok(());

@@ -119,6 +119,7 @@ git.rs                  synchronous Git adapter: hardened reads; background only
   git/counts.rs         uncommitted line counts for named paths (read-only)
   git/worktree.rs       add and remove optional per-thread worktrees
   git/record.rs         private checkout records, coverage, changed paths, pruning (M9)
+  git/undo.rs           checked working-file restoration and durable undo journal (M9)
 fuzzy.rs                case-insensitive subsequence matching for pickers
 ```
 
@@ -164,13 +165,34 @@ private caches, loose objects, and packs after 30 days, including for archived
 threads. The [host contract](HOST.md#checkout-records-m9-stage-1-unreleased)
 describes the layout, limits, exact-byte policy, recovery, and platform boundary.
 
-This stage has no new client operations or snapshot fields. The existing
-conversation closing-line summaries count observed tools; they are not these
-checkout records. Protocol version 5, safe file restoration, record listing,
-and native undo controls are subsequent implementation stages, not available
-through this recording work. Undo will restore bytes, executable bits, and
-symlinks only; other permissions, extended attributes, and hard links are outside
-that promise. Paths changed since a run require “Undo the rest” or “Cancel”.
+Stage 2 adds protocol version 5 record listing and undo, still unreleased.
+`record-views.ts` pages complete paths, coverage and request membership within
+the client frame. Snapshot `records_revision` changes when records change;
+older snapshot shapes are unchanged. The native closing-line summaries still
+count observed tools. Desktop undo controls are stage 3.
+
+`plait-host undo` holds the checkout lease and runs the headless restoration
+code under a sandbox that allows working files but denies Git-directory
+writes. It takes U0, checks each target against the run's after entries and
+current no-follow reads, then restores eligible files using descriptor-relative
+temporary files and renames. Default conflicts apply nothing; `leave_changed`
+selects only safe paths. A final U1 and its private commit note claim only
+completed restores, excluding unrelated edits observed during undo. The pair
+can itself be undone. Content, executable bits and symlinks are restored;
+other permissions, extended attributes and hard links are outside that promise.
+
+The runtime budgets undo at 10 seconds within the serialized sidecar's
+20-second request limit. `undo_operations` stores applied-result deduplication
+and pending/interrupted identities; `record_garbage` defers removal of abandoned
+captures to pruning. A private durable journal precedes writes and records
+completed paths. Startup recovers a missing after capture without replaying
+writes and marks it after restart. Failures after applying starts can be
+partial; callers refresh records and inspect the checkout. The lease excludes
+host writers, not editors or other external processes. Immediate revalidation
+and exclusive creation protect detected changes, but replacing/deleting an
+existing path still has a check-to-mutation race. See the
+[version 5 contract](HOST.md#protocol-version-5-m9-undo-operations-unreleased)
+for paging, recovery, deduplication and these verification limits.
 
 ## Local agent boundary
 

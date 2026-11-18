@@ -21,6 +21,8 @@ const columns = [
   ['requests', 'state', 'TEXT'], ['requests', 'queue', 'TEXT'],
   // Null for Pi, so threads saved before version 4 need no backfill.
   ['threads', 'harness', 'TEXT'],
+  ['threads', 'records_revision', 'INTEGER NOT NULL DEFAULT 0'],
+  ['records', 'undoes', 'TEXT'],
 ];
 const summary = (row: Row): Summary => ({
   id: String(row.id), checkout: String(row.checkout), model: JSON.parse(String(row.model)), status: String(row.status),
@@ -49,6 +51,9 @@ export class Store {
         after_restart INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS records_thread ON records(thread, created_at);
       CREATE INDEX IF NOT EXISTS records_before ON records(before);
+      CREATE TABLE IF NOT EXISTS record_garbage(id TEXT PRIMARY KEY);
+      CREATE TABLE IF NOT EXISTS undo_operations(thread TEXT NOT NULL, request_id TEXT NOT NULL, target TEXT NOT NULL, leave_changed INTEGER NOT NULL,
+        before_id TEXT NOT NULL, record_id TEXT NOT NULL, result TEXT, PRIMARY KEY(thread,request_id));
       CREATE TABLE IF NOT EXISTS record_paths(record TEXT NOT NULL, path TEXT NOT NULL, before_mode TEXT, before_oid TEXT, after_mode TEXT, after_oid TEXT,
         added INTEGER, removed INTEGER, PRIMARY KEY(record,path));`);
     for (const [table, column, type] of columns) {

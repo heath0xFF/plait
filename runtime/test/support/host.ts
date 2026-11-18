@@ -69,7 +69,7 @@ export async function setup(t: { after: (fn: () => Promise<void>) => void }, sce
   };
   t.after(async () => {
     for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-    await delay(400); await rm(base, { recursive: true, force: true });
+    await delay(400); await rm(base, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   });
   const host = await start();
   // Most suites test the sandbox, which is now opt-in; trusted suites switch per test.
@@ -81,5 +81,5 @@ export async function setup(t: { after: (fn: () => Promise<void>) => void }, sce
   const watch = async (id: string) => (await request(store, { op: 'watch', thread_id: id })).result.thread;
   const submit = (id: string, request_id = 'submit-1', text = 'Do the scripted task.') => request(store, { op: 'submit', thread_id: id, request_id, text });
   const approve = (id: string, approval_id: string, allow = true) => request(store, { op: 'approve', thread_id: id, approval_id, allow });
-  return { base, repo, store, host, start, create, watch, submit, approve };
+  return { base, repo, store, host, start, create, watch, submit, approve, own: (child: ChildProcess) => children.push(child) };
 }

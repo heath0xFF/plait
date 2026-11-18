@@ -293,8 +293,8 @@ waits until a sandboxed project needs it.
 
 **Direction for M9, turn records:** the host records the checkout around every
 run, for Pi, Codex, and Claude Code in every permission mode. This protection
-does not depend on the harness reporting its edits. Recording is the first
-implementation stage; undo operations and their desktop presentation follow.
+does not depend on the harness reporting its edits. Recording and the host undo
+operations are implemented in source; their desktop presentation follows.
 None of M9 is released yet.
 
 - **A run is the unit.** One submitted message, steering messages that join it,
@@ -331,15 +331,16 @@ unknown. A created-then-deleted file leaves no difference.
   missing after record in the background under the checkout lease, or at the
   next leased run if the checkout was busy. That record is marked “after
   restart”: it may include changes made while the host was down.
-- **Undo this run, in the next implementation stage.** Restore changed and
+- **Undo this run, host operations in source.** Restore changed and
   deleted files and remove created files, only when each path still matches
   the run's after record. Paths changed since are never overwritten; the
   person chooses “Undo the rest” or “Cancel”. An undo is recorded and can
   itself be undone. Undo changes files, not Git history.
 - **Presentation, after the operations.** A finished run will show its file
   list and size and offer Undo. The changed-files view will include command
-  writes recorded by the host. A run that moved HEAD will say so. Stage 1
-  adds no desktop view, operation, or snapshot field.
+  writes recorded by the host. A run that moved HEAD will say so. Stage 1 added
+  no desktop view, operation, or snapshot field. Stage 2 adds
+  host operations; the control and confirmation sheet remain stage 3.
 - **Order and release.** Undo precedes M7's ACP client. Codex and Claude Code
   in v0.1.0-preview.10 and v0.1.0-preview.11 have no per-run undo; this work is
   not a claim that those releases can undo turns.
@@ -363,9 +364,13 @@ Agreed for implementation:
   its run is active or its after record is still within retention.
 - **Protocol.** Stage 1 retains versions 1–4 and existing snapshots. The only
   visible addition is the failed-before error (`runtime_error` to versions 1
-  and 2). Listing records and undo will be new operations in protocol version
-  5, documented in the [host contract](HOST.md) when implemented. Older hosts
-  offer no undo, and the desktop must say so.
+  and 2). Listing records and undo are source-level operations in protocol
+  version 5, documented in the [host contract](HOST.md#protocol-version-5-m9-undo-operations-unreleased).
+  Lists page within the frame; applied undos deduplicate by request ID, and
+  interrupted operations are never replayed. The 10-second budget can leave a
+  partial undo if a failure happens after restoring starts. The checkout lease
+  excludes host writers; external-editor races remain an explicit limit. Older
+  hosts offer no undo, and the desktop must say so.
 
 Use existing tools for editing, interactive shells, and debugging; "Ways out"
 below is how Plait hands off to them. A native mobile companion is a

@@ -12,7 +12,7 @@ pub const REQUEST_LIMIT: usize = 64 * 1024;
 /// Newest protocol this client speaks. Version 2 adds ordered tools and approval modes.
 /// Version 3 adds full history, thread metadata, a live thread list, in-thread model and
 /// thinking changes, queued inputs, usage, and reasoning. Version 4 adds agent harnesses.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 const REPLY_LIMIT: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,6 +210,9 @@ pub struct Snapshot {
     /// Version 4 only: which harness runs the thread.
     #[serde(default)]
     pub harness: Option<harness::ThreadHarness>,
+    /// Version 5 only; refetch turn records when it changes.
+    #[serde(default)]
+    pub records_revision: Option<u64>,
 }
 
 /// What a submission does when its thread already has an active run.
@@ -485,6 +488,22 @@ pub enum Request {
         request_id: String,
         protocol_version: u32,
     },
+    TurnRecords {
+        thread_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        before: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        limit: Option<usize>,
+        protocol_version: u32,
+    },
+    UndoTurn {
+        thread_id: String,
+        record_id: String,
+        request_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        leave_changed: Option<bool>,
+        protocol_version: u32,
+    },
     ChangedFiles {
         thread_id: String,
         protocol_version: u32,
@@ -492,6 +511,29 @@ pub enum Request {
 }
 
 impl Request {
+    pub fn turn_records(thread_id: String, before: Option<String>, limit: Option<usize>) -> Self {
+        Self::TurnRecords {
+            thread_id,
+            before,
+            limit,
+            protocol_version: 5,
+        }
+    }
+    pub fn undo_turn(
+        thread_id: String,
+        record_id: String,
+        request_id: String,
+        leave_changed: bool,
+    ) -> Self {
+        Self::UndoTurn {
+            thread_id,
+            record_id,
+            request_id,
+            leave_changed: leave_changed.then_some(true),
+            protocol_version: 5,
+        }
+    }
+
     /// Version 1 hosts reject unknown fields, so only a negotiated version 2 sends any.
     pub fn submit(
         thread_id: String,
@@ -694,6 +736,81 @@ pub struct ThreadsPage {
 pub struct ThreadReply {
     pub thread: Snapshot,
 }
+/// Version 5 pages can continue within a record. Append each list at its offset.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TurnRecordsReply {
+    pub records: Vec<TurnRecord>,
+    pub before: Option<String>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TurnRecord {
+    pub id: String,
+    pub request_ids: Vec<String>,
+    pub request_ids_offset: usize,
+    pub request_ids_total: usize,
+    pub kind: RecordKind,
+    pub undoes: Option<String>,
+    pub state: RecordState,
+    pub head_moved: bool,
+    pub after_restart: bool,
+    pub paths: Vec<RecordPath>,
+    pub paths_offset: usize,
+    pub paths_total: usize,
+    pub not_covered: Vec<crate::git::record::Uncovered>,
+    pub not_covered_offset: usize,
+    pub not_covered_total: usize,
+    pub created_at: u64,
+}
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordKind {
+    Turn,
+    Undo,
+}
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordState {
+    Recording,
+    Ready,
+    Failed,
+    Undone,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordPath {
+    pub path: PathBuf,
+    pub change: RecordChange,
+    pub added: Option<u64>,
+    pub removed: Option<u64>,
+}
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordChange {
+    Added,
+    Modified,
+    Deleted,
+    Mode,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UndoTurnReply {
+    pub state: UndoState,
+    pub changed_since: Vec<PathBuf>,
+    pub changed_since_total: usize,
+    pub not_covered: Vec<crate::git::record::Uncovered>,
+    pub not_covered_total: usize,
+    pub record_id: String,
+    pub after_restart: bool,
+}
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UndoState {
+    Undone,
+    Blocked,
+}
+
 /// Paths relative to the thread's checkout, sorted, at most 500.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1066,11 +1183,48 @@ mod tests {
         (Client { path }, server, directory)
     }
 
+    #[test]
+    fn version_five_record_requests_and_replies() {
+        let request = Request::turn_records("t".into(), Some("4:500:0:0".into()), Some(2));
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            serde_json::json!({"op":"turn_records","protocol_version":5,"thread_id":"t","before":"4:500:0:0","limit":2})
+        );
+        let request = Request::undo_turn("t".into(), "r".into(), "u".into(), true);
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            serde_json::json!({"op":"undo_turn","protocol_version":5,"thread_id":"t","record_id":"r","request_id":"u","leave_changed":true})
+        );
+        let reply: UndoTurnReply = serde_json::from_value(serde_json::json!({"state":"blocked","changed_since":["a"],"changed_since_total":1,"not_covered":[],"not_covered_total":0,"record_id":"r","after_restart":true})).unwrap();
+        assert_eq!(reply.state, UndoState::Blocked);
+        assert!(reply.after_restart);
+        let page: TurnRecordsReply = serde_json::from_value(serde_json::json!({"records":[{"id":"r","request_ids":["initial","steer"],"request_ids_offset":0,"request_ids_total":2,"kind":"turn","undoes":null,"state":"ready","head_moved":false,"after_restart":false,"paths":[{"path":"a","change":"modified","added":1,"removed":2}],"paths_offset":0,"paths_total":1,"not_covered":[],"not_covered_offset":0,"not_covered_total":0,"created_at":1}],"before":null})).unwrap();
+        assert_eq!(page.records[0].paths[0].change, RecordChange::Modified);
+    }
+
+    #[test]
+    fn old_host_refuses_undo_without_retrying_at_an_older_version() {
+        let (client, server, directory) = scripted("undo-old-host", vec![UNKNOWN_VERSION]);
+        assert!(matches!(
+            client.request::<UndoTurnReply>(&Request::undo_turn(
+                "t".into(),
+                "r".into(),
+                "u".into(),
+                false
+            )),
+            Err(Error::Rejected(_))
+        ));
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["protocol_version"], 5);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     const UNKNOWN_VERSION: &str = r#"{"ok":false,"error":{"code":"invalid_request","message":"Unsupported protocol_version."}}"#;
     const UNKNOWN_FIELD: &str = r#"{"ok":false,"error":{"code":"invalid_request","message":"Unknown operation or field."}}"#;
 
     #[test]
-    fn negotiation_steps_down_from_four_to_one() {
+    fn negotiation_steps_down_from_five_to_one() {
         let newest = Request::Status {
             protocol_version: Some(PROTOCOL_VERSION),
         };
@@ -1080,20 +1234,27 @@ mod tests {
                 .map(|request| request["protocol_version"].clone())
                 .collect()
         };
-        // A version 4 host answers at once.
+        // A version 4 host answers after rejecting version 5.
         let (client, server, directory) = scripted(
             "negotiate-4",
-            vec![r#"{"ok":true,"result":{"protocol_version":4,"default_model":null,"models":[]}}"#],
+            vec![
+                UNKNOWN_VERSION,
+                r#"{"ok":true,"result":{"protocol_version":4,"default_model":null,"models":[]}}"#,
+            ],
         );
         let status: Status = client.request(&newest).unwrap();
         assert_eq!(status.protocol_version, 4);
-        assert_eq!(asked(server.join().unwrap()), [serde_json::json!(4)]);
+        assert_eq!(
+            asked(server.join().unwrap()),
+            [serde_json::json!(5), serde_json::json!(4)]
+        );
         std::fs::remove_dir_all(directory).unwrap();
 
         // A version 3 host answers the step below, with model capabilities.
         let (client, server, directory) = scripted(
             "negotiate-3",
             vec![
+                UNKNOWN_VERSION,
                 UNKNOWN_VERSION,
                 r#"{"ok":true,"result":{"protocol_version":3,"default_model":null,"models":[{"provider":"p","model_id":"m","name":"M","authenticated":true,"reasoning":true,"thinking_levels":["off","xhigh","max"],"context_window":200000,"input":["text","image"]}]}}"#,
             ],
@@ -1107,7 +1268,11 @@ mod tests {
         assert_eq!(status.models[0].context_window, Some(200000));
         assert_eq!(
             asked(server.join().unwrap()),
-            [serde_json::json!(4), serde_json::json!(3)]
+            [
+                serde_json::json!(5),
+                serde_json::json!(4),
+                serde_json::json!(3)
+            ]
         );
         std::fs::remove_dir_all(directory).unwrap();
 
@@ -1115,6 +1280,7 @@ mod tests {
         let (client, server, directory) = scripted(
             "negotiate-2",
             vec![
+                UNKNOWN_VERSION,
                 UNKNOWN_VERSION,
                 UNKNOWN_VERSION,
                 r#"{"ok":true,"result":{"protocol_version":2,"default_model":null,"models":[]}}"#,
@@ -1125,6 +1291,7 @@ mod tests {
         assert_eq!(
             asked(server.join().unwrap()),
             [
+                serde_json::json!(5),
                 serde_json::json!(4),
                 serde_json::json!(3),
                 serde_json::json!(2)
@@ -1136,6 +1303,7 @@ mod tests {
         let (client, server, directory) = scripted(
             "negotiate-1",
             vec![
+                UNKNOWN_VERSION,
                 UNKNOWN_FIELD,
                 UNKNOWN_FIELD,
                 UNKNOWN_FIELD,
@@ -1148,6 +1316,7 @@ mod tests {
         assert_eq!(
             asked(server.join().unwrap()),
             [
+                serde_json::json!(5),
                 serde_json::json!(4),
                 serde_json::json!(3),
                 serde_json::json!(2),

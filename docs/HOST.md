@@ -2,7 +2,8 @@
 
 This is the version 1 contract plus the opt-in additions described in
 [Protocol version 2](#protocol-version-2) and
-[Protocol version 3](#protocol-version-3). Changes require compatibility review.
+[Protocol version 3](#protocol-version-3), [Protocol version 4](#protocol-version-4),
+and [Protocol version 5](#protocol-version-5-m9-undo-operations-unreleased). Changes require compatibility review.
 All values below are JSON. The desktop has no dependency on the host crate and
 does not own its process.
 
@@ -41,7 +42,7 @@ runtime dependencies; it does not need a development checkout or shell Node.
 ## Transport
 
 Owner-only Unix stream socket, UTF-8 newline-delimited JSON, protocol version 1
-by default; versions 2 and 3 are opt-in per request.
+by default; versions 2–5 are opt-in per request.
 Clients and the daemon verify connected-peer user identity with `getpeereid` on
 macOS or `SO_PEERCRED` on Linux. Clients also check socket and parent ownership
 and private modes before connecting. This does not enable Linux commands.
@@ -155,7 +156,7 @@ arguments are never clipped. `truncated` flags clipping.
 ## Protocol version 2
 
 Version 2 is negotiated per request, so desktops and hosts can update separately.
-Every operation accepts an optional `"protocol_version":1`, `2`, or `3`; omitting it
+Every operation accepts an optional `"protocol_version":1`, `2`, `3`, `4`, or `5`; omitting it
 means version 1, and version 1 replies are byte-for-byte unchanged.
 
 - **Negotiation.** A client sends `{"op":"status","protocol_version":2}`. A
@@ -1356,9 +1357,10 @@ and Claude Code, regardless of permission mode. A run includes its steering
 messages and every harness turn inside it; a queued follow-up gets a separate
 pair. The before record completes before a harness starts. The after record
 is taken after harness cleanup, including on Stop and failure, before releasing
-the checkout lease or draining the next input. These are internal records:
-there is no listing operation, undo operation, snapshot addition, or desktop
-presentation in this stage. Protocol versions remain 1–4.
+the checkout lease or draining the next input. Stage 1 introduced these
+internal records without client operations or snapshot changes. Stage 2
+exposes them through [version 5](#protocol-version-5-m9-undo-operations-unreleased);
+native presentation is still planned.
 
 If the before record cannot be made, the run ends in `error` with
 `record_failed` and its queue remains held. Versions 1 and 2 see the existing
@@ -1400,8 +1402,8 @@ coverage exclusions from both sides. A file created and deleted within a run
 has no net change. The host copies earlier content for changed paths into its
 own object store; subsequent repository pruning cannot remove those copies.
 Unchanged borrowed blobs are not a complete repository backup. Restoring
-files, executable bits, and links is planned for the next stage; other mode
-bits, extended attributes, and hard-link relationships will not be restored.
+files, executable bits, and links is available in the version 5 host operation;
+other mode bits, extended attributes, and hard-link relationships are not restored.
 Git history and effects outside the checkout are not restorable this way.
 
 ### Store and read-only enforcement
@@ -1448,3 +1450,136 @@ rebuilds private packs, then deletes unreachable loose objects. Known repository
 objects are read-only alternates during this work. Pruning failures are retried
 at the next interval; they do not authorize repository writes. Stores can thus
 retain expired data longer if pruning fails. No thread-deletion policy exists.
+
+## Protocol version 5 (M9 undo operations, unreleased)
+
+Version 5 adds `turn_records`, `undo_turn`, and `records_revision` on snapshots.
+It is negotiated per request. Versions 1–4 retain their reply shapes; an older
+host rejects version 5 with `invalid_request`. Clients negotiate status from 5
+downward, and must tell the person that undo needs a newer host when 5 is not
+available. Undo requests are never retried at an older version. Native controls
+are the next implementation stage; these operations are not a release claim.
+
+### Listing a thread's records
+
+```json
+{"op":"turn_records","protocol_version":5,"thread_id":"THREAD_ID","before":"CURSOR","limit":20}
+```
+
+`before` and `limit` are optional. The default limit is 20 record fragments,
+maximum 50. Results are newest first, in the existing success envelope:
+
+```json
+{"records":[{"id":"RECORD_ID","request_ids":["INITIAL_REQUEST","STEERING_REQUEST"],"request_ids_offset":0,"request_ids_total":2,"kind":"turn","undoes":null,"state":"ready","head_moved":false,"after_restart":false,"paths":[{"path":"src/main.rs","change":"modified","added":3,"removed":1}],"paths_offset":0,"paths_total":1,"not_covered":[{"path":"build/","reason":"ignored_directory"}],"not_covered_offset":0,"not_covered_total":1,"created_at":1795000000000}],"before":null}
+```
+
+- `kind` is `turn` or `undo`. `undoes` names the record an undo targeted,
+  otherwise null. IDs are the pair's later record; while a run has no later
+  record yet, its earlier record ID stands in. Match conversation closing
+  lines by `request_ids`, not by this provisional ID. IDs include the initial
+  request and inputs actually placed as steering, read from durable transcript
+  positions. A queued follow-up belongs to its own run.
+- `state` is `recording`, `ready`, `failed`, or `undone`. Failed pairs cannot be
+  undone. `undone` records that an undo was applied, including “Undo the rest”;
+  it does not assert that every path currently equals the earlier tree. The
+  safety checks run again on every new request, including for an `undone` row.
+- `change` is `added`, `modified`, `deleted`, or `mode`. Binary line counts are
+  null. `head_moved` compares HEAD and its symbolic ref across the pair; undo
+  does not put either back. `after_restart` means the later capture happened
+  after a restart and can include changes made while the host was down.
+- Coverage reasons are `ignored_directory`, `ignored_large`, `ignored_limit`,
+  `too_large`, `nested_repository`, `submodule`, `special`, `name`, `changing`,
+  and `unreadable`. Directory entries end in `/`. Coverage comes from both
+  records, not just the later tree. Absence from coverage is not evidence that
+  an excluded file was absent on disk.
+- Lists are complete through paging: each fragment includes at most 500 items
+  in each list, with offsets and totals, and the response targets 800,000 bytes
+  plus its small envelope, below the 1 MiB frame. A large record repeats its ID
+  on successive pages. Append at the given offsets. `before` is null at the
+  end; otherwise pass it unchanged. It contains a row position and offsets
+  (`row:paths:coverage:requests`), not a timestamp. Restart listing when the
+  snapshot's integer `records_revision` changes. Old cursors are not snapshot
+  isolation, and retention can remove their records.
+
+Version 5 `changed_files` returns up to 500 sorted unique paths from the union
+of tool provenance and retained record paths, including command writes and
+undo records. Its reply stays `{"files":["relative/path"]}`; versions 3 and 4
+retain their tool-provenance-only list.
+
+### Undoing a run or an undo
+
+```json
+{"op":"undo_turn","protocol_version":5,"thread_id":"THREAD_ID","record_id":"RECORD_ID","request_id":"CLIENT_UUID","leave_changed":true}
+```
+
+`leave_changed` is optional and defaults to false. The result is:
+
+```json
+{"state":"undone","changed_since":[],"changed_since_total":0,"not_covered":[],"not_covered_total":0,"record_id":"UNDO_RECORD_ID","after_restart":false}
+```
+
+A preflight conflict returns `state:"blocked"`, the target `record_id`, and
+`changed_since`; it changes no working files. An applied result names the new
+undo record, which can itself be undone. `after_restart` carries the target's
+warning. Each reply list is a preview of at most 500 entries and shares the
+800,000-byte budget; totals make omissions explicit. Record paths and coverage
+can be read in full with `turn_records`; blocked-path previews have no separate
+continuation operation. A client must display truncation, not imply it has
+shown every blocked path.
+
+The operation holds the checkout lease and returns `busy` if another host
+writer, active run in any thread in that checkout, recording, or pruning is
+in progress. The runtime supplies the complete stored path metadata through a private
+manifest, outside the small helper request frame; it is never a client-supplied
+path list. A fresh capture precedes validation. A path is eligible only if
+its fresh entry (mode and object, or absence) equals the target's after entry,
+its current bytes and executable bit still match, every ancestor is a real
+directory or absent, it is not a nonempty directory, and its name does not
+resolve through a different current spelling on the filesystem. The latter
+uses actual directory names and the filesystem's name equivalence, covering
+case-insensitive and Unicode aliases without changing the person's Git config.
+Hard-linked current files are also refused: replacing a link changes metadata
+of its siblings, which could include Git metadata.
+
+If any path is blocked, the default applies nothing. With `leave_changed:true`,
+only eligible paths are restored. Excluded coverage remains excluded. Created
+files are removed deepest first; directories absent from the earlier tree are
+removed only if empty. Other files are restored shallowest first using a
+sibling temporary file and rename. Symlinks are read and created as links.
+Descriptor-relative traversal never follows a symlink ancestor; root and parent
+identities and file content are checked again immediately before each mutation.
+Restoring an absent path uses an exclusive rename, so a newly appeared file
+cannot be overwritten. Git's index, HEAD, refs, objects, and other metadata are
+never written; on macOS the helper's sandbox explicitly denies these writes,
+while permitting working-file and private-store writes.
+
+The runtime gives the helper the remaining part of a 10-second operation
+budget, within the sidecar's 20-second limit. Git commands also share a deadline.
+A failure before applying is `undo_failed`, with no working files changed.
+A late failure, timeout, or interrupted apply is `undo_incomplete`: some files
+may already have been restored. Refresh records and inspect the checkout;
+do not automatically issue another undo. A durable private journal holds U0
+and the paths whose restores completed. Recovery takes a missing U1 under the
+lease, marks it after restart, and limits the undo record to those completed
+paths. A process death between a mutation and saving its completion can leave
+that mutation outside the recovered list. It is not replayed.
+
+Applied results are persisted by `(thread_id, request_id)`. Repeating the same
+ID and arguments returns the saved result without writing files, even after a
+restart. Different arguments with an applied or interrupted ID return
+`conflict`. Blocked and preflight-failed requests do not retain deduplication
+results and can be retried. Interrupted requests retain an uncertainty marker
+and return `undo_incomplete` instead of replaying possible effects. These
+markers and applied replies outlive the 30-day file-record retention.
+
+Undo restores bytes, Git's executable bit, and symlink targets. It does not
+restore other permissions, extended attributes, hard-link relationships,
+empty-directory history, Git history, or effects outside the checkout. It is
+not an atomic filesystem transaction: unrelated programs do not honor the host
+lease. An external write or rename in the small interval between the final
+check and replacing/removing an existing path can still race the mutation and
+lose that external change. A writer can also change an already restored path
+before U1 is captured. Detected races stop with `undo_incomplete`; these checks
+do not establish a guarantee against arbitrary concurrent external writers or
+power loss. Undo records exclude unrelated paths and failed restores, so their
+redo does not claim those concurrent edits.

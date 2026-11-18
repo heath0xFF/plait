@@ -1,13 +1,16 @@
-//! `plait-host record` and `plait-host prune`: the runtime's helpers for the
+//! `plait-host record`, `undo` and `prune`: the runtime's helpers for the
 //! host's own records of a checkout. Each reads one JSON request on stdin and
 //! writes one JSON reply on stdout.
 //!
 //! On macOS the work runs in a second copy of this program under
-//! `sandbox-exec`, with a profile that denies writes to the checkout and its
-//! Git directories, so neither Git nor this code can change the person's
-//! repository, not even a modification time. Elsewhere it runs directly.
+//! `sandbox-exec`. Recording denies writes to the checkout; undo permits working
+//! files. Both deny Git-directory writes, including timestamp changes.
+//! Elsewhere the helpers run directly.
 
-use plait_core::git::record::{self, Located, PruneRequest, Request};
+use plait_core::git::{
+    record::{self, Located, PruneRequest, Request},
+    undo,
+};
 use serde_json::{Value, json};
 use std::{
     io::{self, Read, Write},
@@ -39,7 +42,8 @@ fn failure(message: String) -> io::Error {
 }
 
 pub fn run() -> io::Result<()> {
-    let request: Request = serde_json::from_value(read_request()?).map_err(io::Error::other)?;
+    let value = read_request()?;
+    let request: Request = serde_json::from_value(value.clone()).map_err(io::Error::other)?;
     if !request.store.is_absolute() {
         return Err(failure("store must be absolute".into()));
     }
@@ -51,7 +55,7 @@ pub fn run() -> io::Result<()> {
     let records = prepare_store(&store)?;
     contain(
         "record-contained",
-        &json!({"request": request, "located": located}),
+        &json!({"request": request, "located": located, "undo": value["undo"] == true}),
         &protected,
         &records,
     )
@@ -63,8 +67,20 @@ pub fn run_contained() -> io::Result<()> {
         serde_json::from_value(value["request"].clone()).map_err(io::Error::other)?;
     let located: Located =
         serde_json::from_value(value["located"].clone()).map_err(io::Error::other)?;
-    let made = record::record(&located, &request).map_err(failure)?;
+    let made = capture(&located, &request, value["undo"] == true)?;
     reply(serde_json::to_value(made)?)
+}
+
+fn capture(located: &Located, request: &Request, is_undo: bool) -> io::Result<record::Record> {
+    if !is_undo {
+        return record::record(located, request).map_err(failure);
+    }
+    // Recovery reads the last durable list of completed writes, never broadens
+    // an interrupted undo to edits made by another process while it was down.
+    let path = undo::journal(&request.store, &request.id).map_err(failure)?;
+    let saved: undo::Outcome =
+        serde_json::from_slice(&std::fs::read(path)?).map_err(io::Error::other)?;
+    record::record_undo(located, request, &saved.applied_paths).map_err(failure)
 }
 
 pub fn prune() -> io::Result<()> {
@@ -136,7 +152,12 @@ fn prepare_store(store: &Path) -> io::Result<std::path::PathBuf> {
 #[cfg(target_os = "macos")]
 fn contain(operation: &str, input: &Value, protected: &[&Path], records: &Path) -> io::Result<()> {
     use std::process::Stdio;
-    let profile = record::sandbox_profile(protected, records).map_err(failure)?;
+    let mut profile = record::sandbox_profile(protected, records).map_err(failure)?;
+    if operation == "undo-contained" {
+        let located: Located =
+            serde_json::from_value(input["located"].clone()).map_err(io::Error::other)?;
+        profile = undo_profile(&located, records)?;
+    }
     let mut child = crate::command::with_profile(&profile)
         .arg(std::env::current_exe()?)
         .arg(operation)
@@ -171,10 +192,13 @@ fn contain(operation: &str, input: &Value, _: &[&Path], _: &Path) -> io::Result<
                 serde_json::from_value(input["request"].clone()).map_err(io::Error::other)?;
             let located: Located =
                 serde_json::from_value(input["located"].clone()).map_err(io::Error::other)?;
-            reply(serde_json::to_value(
-                record::record(&located, &request).map_err(failure)?,
-            )?)
+            reply(serde_json::to_value(capture(
+                &located,
+                &request,
+                input["undo"] == true,
+            )?)?)
         }
+        "undo-contained" => undo_value(input.clone()),
         _ => {
             let request: PruneRequest =
                 serde_json::from_value(input.clone()).map_err(io::Error::other)?;
@@ -183,4 +207,96 @@ fn contain(operation: &str, input: &Value, _: &[&Path], _: &Path) -> io::Result<
             )?)
         }
     }
+}
+
+/// Undo has the same Git protection as recording, but can replace working files.
+#[cfg(target_os = "macos")]
+fn undo_profile(located: &Located, records: &Path) -> io::Result<String> {
+    let quote =
+        |path: &Path| serde_json::to_string(&path.to_string_lossy()).map_err(io::Error::other);
+    let mut profile = format!(
+        "(version 1) (allow default) (deny network*) (deny file-write*) (allow file-write* (literal \"/dev/null\") (subpath {}) (subpath {}))",
+        quote(records)?,
+        quote(&located.root)?
+    );
+    // An explicit deny wins over the working-tree exception, including worktrees.
+    for path in [&located.git_dir, &located.common_dir]
+        .into_iter()
+        .chain(located.alternates.iter())
+    {
+        profile.push_str(&format!(" (deny file-write* (subpath {}))", quote(path)?));
+    }
+    profile.push_str(&format!(
+        " (deny file-write* (subpath {}))",
+        quote(&located.root.join(".git"))?
+    ));
+    Ok(profile)
+}
+
+pub fn undo() -> io::Result<()> {
+    use std::os::{
+        fd::AsRawFd,
+        unix::{fs::MetadataExt, fs::OpenOptionsExt},
+    };
+    let value = read_request()?;
+    let request: undo::Request = serde_json::from_value(value.clone()).map_err(io::Error::other)?;
+    if !request.store.is_absolute() {
+        return Err(failure("store must be absolute".into()));
+    }
+    let located = undo::locate(&request.checkout).map_err(failure)?;
+    let lease = std::fs::File::options()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
+        .open(&located.root)?;
+    let meta = lease.metadata()?;
+    if meta.dev().to_string() != request.identity.dev
+        || meta.ino().to_string() != request.identity.ino
+    {
+        return Err(failure("Checkout identity changed".into()));
+    }
+    // Runtime passes its lease as fd 4. Standalone calls acquire the same lock.
+    let mut inherited = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let held = unsafe { libc::fstat(4, inherited.as_mut_ptr()) } == 0 && {
+        let inherited = unsafe { inherited.assume_init() };
+        inherited.st_ino == meta.ino() && inherited.st_dev as u64 == meta.dev()
+    };
+    let fd = if held { 4 } else { lease.as_raw_fd() };
+    if unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(failure("busy: checkout already has a writer".into()));
+    }
+    let store = resolve_store(&request.store)?;
+    record::sandbox_profile(&record::protected_paths(&located), &store).map_err(failure)?;
+    let records = prepare_store(&store)?;
+    contain(
+        "undo-contained",
+        &json!({"request": request, "located": located, "paths_file": value["paths_file"] == true}),
+        &record::protected_paths(&located),
+        &records,
+    )
+}
+fn undo_value(value: Value) -> io::Result<()> {
+    let mut request: undo::Request =
+        serde_json::from_value(value["request"].clone()).map_err(io::Error::other)?;
+    if value["paths_file"] == true {
+        let journal = undo::journal(&request.store, &request.id).map_err(failure)?;
+        let path = journal.with_extension("paths");
+        if std::fs::metadata(&path)?.len() > 256 * 1024 * 1024 {
+            return Err(failure("Undo path list too large".into()));
+        }
+        let source: Value =
+            serde_json::from_slice(&std::fs::read(path)?).map_err(io::Error::other)?;
+        request.paths =
+            Some(serde_json::from_value(source["paths"].clone()).map_err(io::Error::other)?);
+        request.not_covered =
+            Some(serde_json::from_value(source["not_covered"].clone()).map_err(io::Error::other)?);
+    }
+
+    let located: Located =
+        serde_json::from_value(value["located"].clone()).map_err(io::Error::other)?;
+    reply(serde_json::to_value(
+        undo::undo(&located, &request).map_err(failure)?,
+    )?)
+}
+pub fn undo_contained() -> io::Result<()> {
+    undo_value(read_request()?)
 }
