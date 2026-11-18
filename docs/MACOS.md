@@ -156,10 +156,25 @@ Git writes, and the ability to change already-modified files. It affects the nex
 run; an active run retains its original policy. The approval default is independent.
 
 **MCP servers** on the project's page lists the servers configured for Pi,
-with an On/Off switch saved for this checkout. Sandboxed projects start with
-all servers off; trusted projects follow Pi's enabled setting until changed.
-Hover a row for its source file, program or URL host, and why it is off. An
-invalid entry or Pi's disabled MCP extension must be fixed in Pi first.
+with an On/Off switch saved for this checkout. User-level servers default on in
+trusted projects and off in sandboxed ones. A server defined or replaced by the
+project's `.pi/mcp.json` always starts off as **Needs review**. Read that file,
+then turn the server on here. The saved choice is bound to the unresolved
+definition; a changed entry is off again and says **Changed**.
+
+Hover shows the defining file and executable with an argument count, or only
+the URL host for HTTP. Argument values, env/header values, and credential
+commands are hidden. Read the file before opting in; **Open file** opens a
+project definition or override in the Files tab in one action. Files outside
+the checkout show their paths only. A stale enable request is rejected, so
+Refresh and read the changed file before enabling it again. Invalid entries
+and Pi's disabled MCP extension must be fixed in Pi first.
+
+Project overrides initially say **User limits**: they can disable a server,
+hide tools, or defer them, but cannot enable a user-disabled server or expose
+user-hidden tools. To permit an override after reading it, turn the server on
+explicitly here (off then on if it is already on). That choice has the same
+definition binding.
 
 Pi threads now find and call tools from enabled stdio servers and HTTP servers
 that need no sign-in or a configured header key. The first tool search connects
@@ -167,6 +182,10 @@ them; each call gets its own `mcp:server/tool` row. Servers stop with the run.
 Trusted projects follow the thread's approval mode. A sandboxed project always
 asks **Use <tool> from <server>**, even in Auto mode, because MCP permits network
 access while keeping the command filesystem sandbox.
+An enabled local server can read the project and use the network from startup,
+before any call is approved, including when sandboxed. Approval gates calls;
+it does not gate the server's own behaviour. Nothing from an unapproved project
+definition runs, including credential commands and variable expansion.
 
 Refresh shows real connection state and the last observed tool count after a run
 has connected a server. Failures appear in Problems with a redacted stderr tail.

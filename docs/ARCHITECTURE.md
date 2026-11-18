@@ -300,14 +300,18 @@ These boundaries need the tests listed in HOST.md before valuable-repository use
 restricted override, namespace, and exposure rules. Run discovery reads each
 applicable configuration file once; settings additionally reads saved sign-in
 metadata without using or refreshing credentials. `mcp/policy.ts` applies
-checkout-identity-bound switches after merge. Other harnesses bypass this path.
+checkout-identity and unresolved-definition-bound switches after merge.
+Project definitions and replacements require explicit consent; unreviewed
+overrides intersect user tool visibility and cannot enable a disabled user
+server. Settings echoes the listing digest when enabling, rejecting a changed
+definition. Other harnesses bypass this path.
 
 `mcp/tools.ts` installs search only for eligible enabled servers. First search
 connects them, then installs one deferred, sequential, unsafe-to-replay tool per
 remote tool. Pi Durable freezes a tool task's `api.agent()` before execution;
 the search wrapper supplies the tools just discovered to the pinned search
 implementation. Code mode is never installed. Stable collision-checked names
-cannot shadow local tools; safe display labels are saved in host settings so
+cannot shadow local tools; safe display labels are saved on first call in a thread so
 live and historical rows retain `mcp:server/tool` across restarts.
 
 `mcp/transport.ts` owns execution-time value resolution and transports.
@@ -317,8 +321,10 @@ server cannot inherit private descriptors. Sandboxed servers use the command
 filesystem profile with network permission added; trusted servers use the
 shared login environment. Streamable HTTP uses bounded fetches with no redirects
 or OAuth provider. Sampling and elicitation are declined by the pinned client.
-`mcp/secrets.ts` scrubs configured and resolved values before registration,
-presentation, and durable storage. Large results use `CommandOutputs` and
+`mcp/secrets.ts` scrubs resolved configured credentials of at least eight
+characters in free text. It preserves identifiers, rejects credential-bearing
+tool names/titles/schema keys and constraints, and leaves inherited environment,
+arguments, and URL paths/queries alone. Large results use `CommandOutputs` and
 `read_output`. Closing a run revokes permission and closes its transports before
 releasing the checkout. Recovery never restarts an old MCP effect.
 

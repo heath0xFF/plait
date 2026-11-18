@@ -5,7 +5,8 @@ import type { Registry, ToolRegistration } from '@earendil-works/pi-durable';
 import { McpClient, McpAuthRequiredError, McpTimeoutError, createMcpToolName } from '@earendil-works/pi-mcp';
 import type { Tool } from '@earendil-works/pi-mcp';
 import type { ToolState } from '../tools.ts';
-import type { Entry, McpServer } from './config.ts';
+import { definitionDigest, MCP_NAME } from './config.ts';
+import type { Config, Entry, McpServer } from './config.ts';
 import { Secrets } from './secrets.ts';
 import { MCP_CALL_TIMEOUT_MS, MCP_START_TIMEOUT_MS, transport } from './transport.ts';
 import { fail } from '../protocol.ts';
@@ -16,22 +17,27 @@ import { checkRoot } from '../safety.ts';
 
 export type Observation = { state: 'connected' | 'stopped' | 'failed'; tool_count?: number; problem?: string; needs_sign_in?: boolean };
 type Connection = Awaited<ReturnType<typeof transport>>;
-export const fingerprint = (entry: Entry) => createHash('sha256').update(JSON.stringify(entry)).digest('hex');
+export const fingerprint = definitionDigest;
 export const nameKey = (thread: string, name: string) => `mcp_tool:${JSON.stringify([thread, name])}`;
 const decoded = (value: string) => { try { return decodeURIComponent(value); } catch { return value; } };
 
-function exposure(entry: Entry, name: string) {
-  const overrides = entry.config.toolExposure ?? {};
+function exposure(config: Config, name: string) {
+  const overrides = config.toolExposure ?? {};
   if (overrides[name]) return overrides[name];
   for (const [pattern, value] of Object.entries(overrides)) {
     if (pattern.includes('*') && new RegExp('^' + pattern.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$').test(name)) return value;
   }
-  return entry.config.exposure ?? 'codemode';
+  return config.exposure ?? 'codemode';
 }
+
+export function toolExposure(entry: Entry, name: string) {
+  return entry.limit && exposure(entry.limit, name) === 'hidden' ? 'hidden' : exposure(entry.config, name);
+}
+const visible = (config: Config) => config.exposure !== 'hidden' || Object.values(config.toolExposure ?? {}).some(value => value !== 'hidden');
 
 export function eligible(entry: Entry, server: McpServer) {
   return server.enabled && server.can_enable && server.needs_sign_in !== true && !entry.config.auth
-    && (entry.config.exposure !== 'hidden' || Object.values(entry.config.toolExposure ?? {}).some(value => value !== 'hidden'));
+    && visible(entry.config) && (!entry.limit || visible(entry.limit));
 }
 
 /** One owner per run; a failed connection is never restarted or a call retried. */
@@ -41,25 +47,23 @@ export class McpRun {
   private readonly observe: (entry: Entry, observation: Observation) => void;
   private readonly remember: (name: string, label: string) => void;
   private readonly secrets = new Secrets();
-  private readonly clients = new Map<string, { client: McpClient; pipe: Connection; entry: Entry; count?: number; failed: boolean }>();
+  private readonly clients = new Map<string, { client: McpClient; pipe: Connection; entry: Entry; count?: number; failed: boolean; problem?: string }>();
   private readonly tools: ToolRegistration[] = [];
   private readonly names = new Set<string>();
+  private readonly remembered = new Set<string>();
   private readonly problems: string[] = [];
   private discovering?: Promise<void>;
   private closed = false;
 
   constructor(state: ToolState, entries: Entry[], observe: McpRun['observe'], remember: McpRun['remember']) {
     this.state = state; this.entries = entries; this.observe = observe; this.remember = remember;
-    // Even another server's result must not disclose a configured credential.
+    // URL userinfo is a credential; paths, queries, arguments, and inherited env are not.
     for (const { config } of entries) {
-      for (const value of Object.values('command' in config ? config.env ?? {} : config.headers ?? {})) this.secrets.add(value);
-      if ('command' in config) for (const arg of config.args ?? []) this.secrets.add(arg);
-      else {
+      if ('url' in config) {
         const url = new URL(config.url);
-        this.secrets.add(url.href); this.secrets.add(url.username); this.secrets.add(url.password);
+        this.secrets.add(url.username); this.secrets.add(url.password);
+        this.secrets.add(decoded(url.username));
         this.secrets.add(decoded(url.password));
-        for (const value of url.pathname.split('/').filter(Boolean)) this.secrets.add(decoded(value));
-        for (const value of url.searchParams.values()) this.secrets.add(value);
       }
     }
   }
@@ -126,16 +130,26 @@ export class McpRun {
         if (cursor && cursors.has(cursor)) throw new Error();
         if (cursor) cursors.add(cursor);
       } while (cursor);
-      const active = { client, pipe, entry, count: listed.length, failed: false };
+      const active = { client, pipe, entry, count: listed.length, failed: false, problem: undefined as string | undefined };
       this.clients.set(entry.name, active);
       const used = new Set<string>(); const offered: ToolRegistration[] = [];
-      for (const tool of listed) {
-        if (typeof tool.name !== 'string' || !tool.name || tool.name.length > 256 || used.has(tool.name)
-          || !tool.inputSchema || typeof tool.inputSchema !== 'object' || Array.isArray(tool.inputSchema)
-          || tool.inputSchema.type !== 'object' || Buffer.byteLength(JSON.stringify(tool)) > 65536) throw new Error();
-        used.add(tool.name);
-        if (exposure(entry, tool.name) !== 'hidden') offered.push(this.tool(entry, tool, client));
+      const refused: string[] = [];
+      for (const [index, tool] of listed.entries()) {
+        try {
+          if (!tool || typeof tool.name !== 'string' || !MCP_NAME.test(tool.name) || used.has(tool.name)
+            || this.secrets.contains(tool.name) || [tool.title, tool.annotations?.title].some(title => title !== undefined && (typeof title !== 'string' || this.secrets.contains(title)))
+            || !tool.inputSchema || typeof tool.inputSchema !== 'object' || Array.isArray(tool.inputSchema)
+            || tool.inputSchema.type !== 'object' || Buffer.byteLength(JSON.stringify(tool)) > 65536) throw new Error();
+          used.add(tool.name);
+          const parameters = this.secrets.schema(tool.inputSchema);
+          if (toolExposure(entry, tool.name) !== 'hidden') offered.push(this.tool(entry, tool, client, parameters));
+        } catch {
+          // Never echo a rejected name, title, or schema: it may be a credential or control text.
+          const problem = `Tool ${index + 1} was refused: invalid name or schema, duplicate name, or credential in an identifier or constraint.`;
+          refused.push(problem); this.problems.push(`${entry.name}: ${problem}`);
+        }
       }
+      active.problem = refused.length ? refused.join('\n').slice(0, 2000) : undefined;
       this.tools.push(...offered);
       client.onClose(() => {
         if (!this.closed && !this.state.authorization.signal.aborted && !active.failed) {
@@ -143,7 +157,7 @@ export class McpRun {
         }
       });
       client.onError(() => { if (!active.failed) { active.failed = true; this.problem(entry, pipe, 'MCP server protocol failed.'); stop(); } });
-      this.observe(entry, { state: 'connected', tool_count: listed.length });
+      this.observe(entry, { state: 'connected', tool_count: listed.length, ...(active.problem ? { problem: active.problem } : {}) });
     } catch (error) {
       this.problem(entry, pipe, error instanceof McpAuthRequiredError ? 'Sign in with Pi; browser sign-in support is planned.'
         : deadline.signal.aborted ? 'MCP server startup timed out after 10 seconds.' : 'MCP server could not start or list tools.', error instanceof McpAuthRequiredError);
@@ -152,19 +166,19 @@ export class McpRun {
     } finally { clearTimeout(timer); signal.removeEventListener('abort', stop); }
   }
 
-  private tool(entry: Entry, tool: Tool, client: McpClient): ToolRegistration {
+  private tool(entry: Entry, tool: Tool, client: McpClient, parameters: Tool['inputSchema']): ToolRegistration {
     // Always hash: names stay stable regardless of list order, collisions, or later searches.
-    const safeTool = this.secrets.text(tool.name).replace(/[\r\n\t]/g, ' ');
+    const safeTool = tool.name;
     const suffix = createHash('sha256').update(`${entry.name}\0${tool.name}`).digest('hex').slice(0, 16);
     const name = createMcpToolName(entry.name, safeTool).slice(0, 47) + '_' + suffix;
     if (this.names.has(name)) throw new Error('MCP tool namespace collision.');
     this.names.add(name);
     const label = `mcp:${entry.name}/${safeTool}`;
-    this.remember(name, label);
     return defineTool({ name, description: `${label}: ${clipHead(this.secrets.text(tool.description ?? ''), 2048)}`,
-      parameters: this.secrets.json(tool.inputSchema), deferred: true, replay: 'unsafe', executionMode: 'sequential',
+      parameters, deferred: true, replay: 'unsafe', executionMode: 'sequential',
       outputLimits: { maxBytes: 24576, maxLines: 20000 },
       execute: async (input, api, context) => {
+        if (!this.remembered.has(name)) { this.remember(name, label); this.remembered.add(name); }
         const state = this.state;
         const signal = AbortSignal.any([state.authorization.signal, ...(context.abortSignal ? [context.abortSignal] : [])]);
         state.authorization.check(signal);
@@ -219,9 +233,9 @@ export class McpRun {
   async close() {
     this.closed = true;
     await this.discovering?.catch(() => {});
-    await Promise.all([...this.clients.values()].map(async ({ client, pipe, entry, count, failed }) => {
+    await Promise.all([...this.clients.values()].map(async ({ client, pipe, entry, count, failed, problem }) => {
       await client.close().catch(() => {});
-      if (!failed) this.observe(entry, { state: 'stopped', tool_count: count });
+      if (!failed) this.observe(entry, { state: 'stopped', tool_count: count, ...(problem ? { problem } : {}) });
       await this.cleanup(entry, pipe);
     }));
   }

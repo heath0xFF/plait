@@ -1,7 +1,7 @@
 //! MCP settings use injected metadata; these scenes never contact a host or server.
 use super::{Harness, fixture_repository, isolated};
 use crate::ui::settings_agent::AgentView;
-use plait_core::host::agent::{AgentResources, McpServer, McpState, McpTransport};
+use plait_core::host::agent::{AgentResources, McpConsent, McpServer, McpState, McpTransport};
 use std::{path::Path, sync::Arc};
 
 fn resources(checkout: &Path) -> AgentResources {
@@ -11,6 +11,7 @@ fn resources(checkout: &Path) -> AgentResources {
         source: "/opt/sample-agent/mcp.json".into(),
         override_source: None,
         program: (transport == McpTransport::Stdio).then(|| "uvx".into()),
+        argument_count: (transport == McpTransport::Stdio).then_some(2),
         host: (transport == McpTransport::Http).then(|| "docs.example".into()),
         enabled,
         can_enable: true,
@@ -20,6 +21,8 @@ fn resources(checkout: &Path) -> AgentResources {
         problem: None,
         state: None,
         tool_count: None,
+        definition: Some("a".repeat(64)),
+        consent: None,
     };
     let mut invalid = server("invalid-config", McpTransport::Http, false, None, false);
     invalid.transport = None;
@@ -50,6 +53,31 @@ fn resources(checkout: &Path) -> AgentResources {
     }
 }
 
+fn review_resources(checkout: &Path) -> AgentResources {
+    let mut reply = resources(checkout);
+    reply.trusted = true;
+    let project = checkout.join(".pi/mcp.json");
+    let server = &mut reply.mcp_servers[0];
+    server.source = project.clone();
+    server.enabled = false;
+    server.consent = Some(McpConsent::Required);
+    server.disabled_reason =
+        Some("Defined by this project. Read its configuration file before turning it on.".into());
+    let server = &mut reply.mcp_servers[1];
+    server.source = project.clone();
+    server.consent = Some(McpConsent::Changed);
+    server.disabled_reason = Some(
+        "The server definition changed. Read its configuration file and turn it on again.".into(),
+    );
+    let server = &mut reply.mcp_servers[2];
+    server.name = "project-tool-limits".into();
+    server.needs_sign_in = Some(false);
+    server.override_source = Some(project);
+    server.consent = Some(McpConsent::Restricted);
+    server.disabled_reason = Some("Project overrides are limited by your user configuration until you explicitly turn this server on here.".into());
+    reply
+}
+
 pub(super) fn mcp_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.connect(repository, false);
     harness.update(|plait, window, cx| {
@@ -73,6 +101,14 @@ pub(super) fn mcp_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     });
     harness.capture(&format!("project-settings-mcp-observed-{suffix}"));
     harness.update(|plait, _, _| {
+        plait.policy.value = Some(plait_core::host::policy::CommandPolicy::Trusted);
+        plait.agent.view = Some(Arc::new(AgentView::new(review_resources(
+            &plait.host.checkout,
+        ))));
+    });
+    harness.capture(&format!("project-settings-mcp-review-{suffix}"));
+    harness.update(|plait, _, _| {
+        plait.policy.value = Some(plait_core::host::policy::CommandPolicy::Sandboxed);
         let mut reply = resources(&plait.host.checkout);
         reply.mcp_servers.clear();
         plait.agent.view = Some(Arc::new(AgentView::new(reply)));
@@ -106,6 +142,13 @@ fn mcp_rows_explain_configuration_and_sign_in() {
     let rows = &view.mcp_servers;
     assert_eq!(rows[0].state, "Ready to search");
     assert!(rows[0].enabled && rows[0].hover.contains("uvx"));
+    assert!(
+        rows[0]
+            .hover
+            .contains("2 arguments; their values are hidden")
+    );
+    assert!(rows[0].hover.contains("before any call is approved"));
+    assert!(rows[0].file.is_none());
     assert_eq!(rows[1].state, "Off");
     assert!(rows[1].hover.contains("sandboxed project"));
     assert_eq!(rows[2].state, "Sign in with Pi");
@@ -122,6 +165,13 @@ fn mcp_rows_explain_configuration_and_sign_in() {
         AgentView::new(observed).mcp_servers[0].state,
         "Connected · 8 tools"
     );
+    let review = AgentView::new(review_resources(Path::new("/repo")));
+    assert_eq!(review.mcp_servers[0].state, "Needs review");
+    assert_eq!(review.mcp_servers[1].state, "Changed");
+    assert_eq!(review.mcp_servers[2].state, "User limits");
+    for row in &review.mcp_servers[..3] {
+        assert_eq!(row.file.as_deref(), Some(Path::new(".pi/mcp.json")));
+    }
 }
 
 #[test]
@@ -131,8 +181,10 @@ fn mcp_replies_are_guarded_by_checkout_connection_and_refresh() {
     }
     let scratch = std::env::temp_dir().join(format!("plait-mcp-view-{}", std::process::id()));
     let repository = fixture_repository(&scratch);
+    std::fs::create_dir_all(repository.join(".pi")).unwrap();
+    std::fs::write(repository.join(".pi/mcp.json"), "{\"mcpServers\":{}}\n").unwrap();
     let mut harness = Harness::new(&repository, None, 900., 600.);
-    harness.update(|plait, _, _| {
+    harness.update(|plait, _, cx| {
         let key = (plait.host.epoch, plait.host.checkout.clone());
         plait.agent.key = Some(key.clone());
         let revision = plait.agent.revision;
@@ -152,6 +204,14 @@ fn mcp_replies_are_guarded_by_checkout_connection_and_refresh() {
                 .name
                 .as_ref(),
             "local-docs"
+        );
+        let review = AgentView::new(review_resources(&repository));
+        plait.settings_open = true;
+        plait.open_file(review.mcp_servers[0].file.clone().unwrap(), None, cx);
+        assert!(!plait.settings_open);
+        assert_eq!(
+            plait.file_viewer.path.as_deref(),
+            Some(Path::new(".pi/mcp.json"))
         );
     });
     drop(harness);

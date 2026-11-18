@@ -446,7 +446,13 @@ project.
   tools, is not used.
 - **Approval.** In a trusted project a call follows the thread's approval
   mode. In a sandboxed project a server is off until turned on for that
-  project, and every call asks, because it is the only way out to the network.
+  project, and every call asks. A project-defined or replaced server is off
+  even in a trusted project until the person reads its configuration and
+  turns it on; the choice is bound to the unresolved definition, and a change
+  switches it off again. Project overrides only narrow the user's enablement
+  and tool visibility until explicitly enabled with the same binding. Once a
+  server starts it can read the project and, even when sandboxed, use the
+  network before a call is approved: approval gates calls, not server behaviour.
   What a server says about itself never skips an approval.
 - **Sign-in.** A server that needs a key from the config file, or none, works
   at once. One that needs a browser sign-in is listed as needing a sign-in
@@ -455,7 +461,8 @@ project.
 - **Never.** Plait does not start a server the person did not configure, does
   not send a server's secrets to the model or the desktop, declines a server's
   requests to sample the model or question the person, and does not repeat a
-  call after a host restart.
+  call after a host restart. A configuration supplied by a repository is not
+  the person's choice until they explicitly enable its reviewed definition.
 
 **Built for step 4:** bounded configuration discovery and project switches;
 run-scoped, guardian-owned stdio and header-key/anonymous HTTP connections;

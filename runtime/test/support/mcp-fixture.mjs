@@ -14,6 +14,12 @@ const tools = ['echo', 'large', 'sample', 'crash', 'a-b', 'a_b', 'command', 'ins
   description: `Fixture ${name} ${process.env.FIXTURE_SECRET ?? ''}`,
   inputSchema: { type: 'object', properties: { text: { type: 'string' } }, additionalProperties: false },
   annotations: { readOnlyHint: true, destructiveHint: false } }));
+if (mode === 'bad-metadata') tools.push(
+  ...['bad\u001b[31m', 'bad\u202etool', 'bad\u200btool', 'x'.repeat(129), process.env.FIXTURE_SECRET, 'namespace:tool.v1/search'].map(name => ({ ...tools[0], name })),
+  { ...tools[0], name: 'secret_title', title: process.env.FIXTURE_SECRET },
+  { ...tools[0], name: 'secret_key', inputSchema: { type: 'object', properties: { [process.env.FIXTURE_SECRET]: { type: 'string' } } } },
+  { ...tools[0], name: 'secret_enum', inputSchema: { type: 'object', properties: { value: { enum: [process.env.FIXTURE_SECRET] } } } },
+);
 const pending = new Map();
 createInterface({ input: process.stdin }).on('line', async line => {
   const message = JSON.parse(line);
@@ -37,6 +43,7 @@ createInterface({ input: process.stdin }).on('line', async line => {
       send({ id: 'elicitation', method: 'elicitation/create', params: { message: 'question' } }); return;
     }
     let text = name === 'large' ? 'big-data-'.repeat(25000) : `${message.params.arguments.text ?? 'hello'} ${process.env.FIXTURE_SECRET ?? ''} ${process.env.FIXTURE_EXPANDED ?? ''} ${process.env.FIXTURE_COMMAND ?? ''}`;
+    if (mode === 'environment') text = `Found 12 results; ${JSON.stringify(Object.fromEntries(['PATH', 'SHLVL', 'USER', 'HOME', 'LANG', 'TERM'].map(key => [key, process.env[key]])))}; ${process.argv.slice(4).join(' ')}; ${process.env.SHORT}`;
     if (name === 'inspect') {
       const read = path => { try { return readFileSync(path, 'utf8'); } catch { return 'denied'; } };
       const write = path => { try { writeFileSync(path, 'changed'); return 'allowed'; } catch { return 'denied'; } };

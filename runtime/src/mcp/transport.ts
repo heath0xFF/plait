@@ -70,7 +70,6 @@ export async function transport(entry: Entry, state: ToolState, secrets: Secrets
     } else env = {};
     const resolved: Record<string, string> = {};
     for (const [key, value] of Object.entries(values ?? {})) {
-      secrets.add(value);
       if (value.startsWith('!')) {
         // Neither the command nor its output enters a transcript or a command log.
         try {
@@ -81,7 +80,7 @@ export async function transport(entry: Entry, state: ToolState, secrets: Secrets
           if (bytes >= 16000) throw new Error();
         } catch { throw new Error('An MCP credential command failed.'); }
         if (!resolved[key] || resolved[key] === 'Command completed.') throw new Error('An MCP credential command returned no value.');
-      } else resolved[key] = expand(value, { ...process.env, ...env }, secrets);
+      } else resolved[key] = expand(value, { ...process.env, ...env });
       secrets.add(resolved[key]);
     }
     if ('url' in config) {
@@ -92,8 +91,6 @@ export async function transport(entry: Entry, state: ToolState, secrets: Secrets
       });
       return { connection, cleanup, stderr: () => '' };
     }
-    for (const value of Object.values(env)) secrets.add(value);
-    for (const arg of config.args ?? []) secrets.add(arg);
     const connection = new PipeTransport({ maxMessageBytes: MCP_MESSAGE_BYTES, maxStderrBytes: 8192, closeTimeoutMs: 0,
       open: async handlers => guardianPipe(resolve(root, home(config.cwd ?? '.')), policy, home(config.command), (config.args ?? []).map(home),
         trusted ? { ...env, ...resolved } : { ...resolved, ...env }, state, handlers, signal),

@@ -43,6 +43,7 @@ const responses: FauxResponseStep[] = mode?.startsWith('mcp-') ? [
   context => { appendFileSync(join(process.argv[2], 'mcp-context.jsonl'), JSON.stringify(context) + '\n'); return call('tool_search', { query: 'echo fixture', limit: 20 }, 'search-mcp'); },
   context => {
     appendFileSync(join(process.argv[2], 'mcp-context.jsonl'), JSON.stringify(context) + '\n');
+    if (mode === 'mcp-search-only') return fauxAssistantMessage('Search complete.');
     const tool = context.messages.flatMap(message => message.role === 'system' ? message.toolsAdded ?? [] : [])
       .find(tool => tool.description.startsWith('mcp:docs/echo:'));
     return tool ? call(tool.name, { text: 'fixture echo' }, 'call-mcp') : fauxAssistantMessage('No MCP tool was offered.');
@@ -149,6 +150,7 @@ class FixtureRuntime extends Runtime {
     }));
   }
   override registry(state: ToolState) {
+    if (mode === 'mcp-consent') faux.setResponses(responses);
     if (mode?.startsWith('mcp-')) state.loginEnvironment = Promise.resolve({ env: { HOME: this.directory, PATH: '/usr/bin:/bin' }, source: 'login-shell' });
     if (mode === 'permissive-policy') {
       // This test-only policy proves authorization cannot replace file or sandbox checks.

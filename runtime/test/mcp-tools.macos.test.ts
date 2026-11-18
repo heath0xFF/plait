@@ -42,20 +42,21 @@ async function rig(t: TestContext, policy: 'trusted' | 'sandboxed' = 'trusted', 
     loginEnvironment: Promise.resolve({ env: { PATH: '/usr/bin:/bin', HOME: base }, source: 'login-shell' }),
   };
   const settings = new Map<string, string>(); const prefs = { setting: (key: string) => settings.get(key) ?? null, setSetting: (key: string, value: string | null) => { if (value) settings.set(key, value); } };
-  setMcpEnabled(prefs, root, state.rootIdentity, 'docs', true);
-  const entries = mcpPolicy(prefs, root, state.rootIdentity, found.servers).flatMap(row => eligible(found.entries.get(row.name)!, row) ? [found.entries.get(row.name)!] : []);
-  const observations: unknown[] = []; const names = new Map<string, string>();
-  const run = new McpRun(state, entries, (entry, observed) => observations.push({ name: entry.name, ...observed }), (name, label) => names.set(name, label));
+  setMcpEnabled(prefs, root, state.rootIdentity, found.entries.get('docs')!, true);
+  const entries = mcpPolicy(prefs, root, state.rootIdentity, found.servers, found.entries).flatMap(row => eligible(found.entries.get(row.name)!, row) ? [found.entries.get(row.name)!] : []);
+  const observations: unknown[] = []; const names = new Map<string, string>(); let remembered = 0;
+  const run = new McpRun(state, entries, (entry, observed) => observations.push({ name: entry.name, ...observed }), (name, label) => { remembered++; names.set(name, label); });
   const registry = createRegistry(); run.install(registry);
   let serial = 0;
   const api = () => ({ callId: `call-${serial++}`, agent: async () => ({ deferred: registry.snapshot().tools().map(item => item.tool).filter(tool => tool.deferred) }) }) as unknown as ToolExecutionApi;
   const search = () => registry.snapshot().tools()[0].tool.execute({ query: 'fixture', limit: 20 }, api(), context);
   const call = (tool = 'echo', args = { text: 'hello' }) => {
-    const name = [...names].find(([, label]) => label === `mcp:docs/${tool}`)?.[0]; assert.ok(name, `registered ${tool}: ${JSON.stringify(observations)}`);
-    return registry.snapshot().tools().find(item => item.tool.name === name)!.tool.execute(args, api(), context);
+    const offered = registry.snapshot().tools().find(item => item.tool.description.startsWith(`mcp:docs/${tool}:`));
+    assert.ok(offered, `registered ${tool}: ${JSON.stringify(observations)}`);
+    return offered.tool.execute(args, api(), context);
   };
   t.after(async () => { authorization.revoke(); await run.close(); db.close(); });
-  return { root, base, marker, snapshot, interactive, approvals, observations, names, registry, run, state, found, search, call, db };
+  return { root, base, marker, snapshot, interactive, approvals, observations, names, registry, run, state, found, search, call, db, remembers: () => remembered };
 }
 async function waitFor(predicate: () => boolean) { for (let i = 0; i < 500; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 10)); } throw new Error('fixture wait timed out'); }
 
@@ -75,11 +76,13 @@ for (const policy of ['trusted', 'sandboxed'] as const) for (const mode of ['ask
 
 test('deferred search, collisions, unsafe replay, secret-free output and overflow storage', async t => {
   const f = await rig(t); await assert.rejects(readFile(f.marker), { code: 'ENOENT' }); await f.search();
+  assert.equal(f.names.size, 0, 'Search writes no stored labels');
   const all = f.registry.snapshot().tools().map(item => item.tool);
   assert.ok(all.slice(1).every(tool => tool.deferred && tool.replay === 'unsafe'));
   assert.equal(new Set(all.map(tool => tool.name)).size, all.length);
   assert.ok(all.slice(1).every(tool => tool.name.startsWith('mcp__') && tool.name !== 'command'));
   const echo = await f.call(); const large = await f.call('large'); assert.ok(JSON.stringify(large).length < 24576);
+  assert.equal(f.names.size, 2); await f.call(); assert.equal(f.remembers(), 2, 'A repeated call does not write another label');
   const rows = f.db.prepare('SELECT data FROM command_output_chunks').all();
   const serialized = JSON.stringify([all, echo, large, f.observations, f.approvals, rows.map(row => Buffer.from(row.data as Uint8Array).toString())]);
   for (const value of [secret, 'fixture-variable-secret', 'fixture-command-secret', 'SERVER_INSTRUCTIONS_MUST_NOT_REACH_MODEL']) assert.ok(!serialized.includes(value), value);
@@ -93,7 +96,7 @@ test('startup crash, ten-second startup timeout, and stalled call are bounded an
   const crash = await rig(t, 'trusted', 'auto', 'crash-start'); await crash.search();
   assert.match(JSON.stringify(crash.observations), /fixture startup crash/); assert.doesNotMatch(JSON.stringify(crash.observations), new RegExp(secret));
   const malformed = await rig(t, 'trusted', 'auto', 'bad-schema'); await malformed.search();
-  assert.equal(malformed.registry.snapshot().tools().length, 1); assert.match(JSON.stringify(malformed.observations), /could not start or list tools/);
+  assert.equal(malformed.registry.snapshot().tools().length, 1); assert.match(JSON.stringify(malformed.observations), /Tool 1 was refused/);
   const silent = await rig(t, 'trusted', 'auto', 'silent'); const start = Date.now(); await silent.search();
   assert.ok(Date.now() - start < 13000); assert.match(JSON.stringify(silent.observations), /timed out/);
   const hang = await rig(t, 'trusted', 'auto', 'hang-call'); await hang.search(); assert.equal((await hang.call()).isError, true);
@@ -106,9 +109,35 @@ test('two servers with identical remote tool names remain separate from each oth
   t.after(() => run.close()); const registry = createRegistry(); run.install(registry);
   const api = { callId: 'two-servers', agent: async () => ({ deferred: [] }) } as unknown as ToolExecutionApi;
   await registry.snapshot().tools()[0].tool.execute({ query: 'fixture' }, api, context);
-  assert.equal(labels.size, 16); assert.equal(registry.snapshot().tools().length, 17);
-  assert.ok([...labels.keys()].every(name => name.startsWith('mcp__') && name.length <= 64));
-  assert.ok([...labels.values()].includes('mcp:docs/echo')); assert.ok([...labels.values()].includes('mcp:other/echo'));
+  const offered = registry.snapshot().tools().slice(1).map(item => item.tool);
+  assert.equal(labels.size, 0); assert.equal(offered.length, 16);
+  assert.ok(offered.every(tool => tool.name.startsWith('mcp__') && tool.name.length <= 64));
+  for (const server of ['docs', 'other']) await offered.find(tool => tool.description.startsWith(`mcp:${server}/echo:`))!.execute({}, api, context);
+  assert.deepEqual([...labels.values()].sort(), ['mcp:docs/echo', 'mcp:other/echo']);
+});
+
+test('ordinary login environment, arguments and short configured values are not scrubbed', async t => {
+  const f = await rig(t, 'trusted', 'auto', 'environment', { SHORT: '1' });
+  const env = { PATH: '/usr/bin:/bin', SHLVL: '1', USER: 'fixture-user', HOME: '/Users/fixture-person', LANG: 'en_US.UTF-8', TERM: 'xterm-256color' };
+  f.state.loginEnvironment = Promise.resolve({ env, source: 'login-shell' });
+  const config = f.found.entries.get('docs')!.config;
+  assert.ok('command' in config); config.args!.push('-y', '.', 'run', 'ordinary-long-argument');
+  await f.search(); const result = await f.call();
+  const text = JSON.parse(result.output![0].type === 'text' ? result.output![0].text.split('\n[Command output:')[0] : '').content[0].text;
+  assert.equal(text, `Found 12 results; ${JSON.stringify(env)}; -y . run ordinary-long-argument; 1`);
+  assert.doesNotMatch(text, /\[redacted\]/);
+});
+
+test('unsafe names and credentials in tool names, titles or schema keys refuse only those tools', async t => {
+  const f = await rig(t, 'trusted', 'auto', 'bad-metadata'); const search = await f.search();
+  const tools = f.registry.snapshot().tools().slice(1).map(item => item.tool);
+  assert.equal(tools.length, 9);
+  assert.ok(tools.some(tool => tool.description.startsWith('mcp:docs/namespace:tool.v1/search:')));
+  const serialized = JSON.stringify([tools, search, f.observations]);
+  for (const unsafe of [secret, '\u001b', '\u202e', '\u200b', '\\u001b']) assert.ok(!serialized.includes(unsafe));
+  assert.match(serialized, /was refused/);
+  await f.call(); assert.deepEqual([...f.names.values()], ['mcp:docs/echo']);
+  await f.run.close(); assert.match(JSON.stringify(f.observations.at(-1)), /"state":"stopped".*was refused/);
 });
 
 test('Stop kills the MCP server and its child process group', async t => {
@@ -140,17 +169,18 @@ test('loopback HTTP resolves header values only at search and never invokes OAut
     if (!message.id) { response.writeHead(202).end(); return; }
     const result = message.method === 'initialize' ? { protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'http fixture', version: '1' } }
       : message.method === 'tools/list' ? { tools: [{ name: 'echo', description: 'fixture HTTP echo', inputSchema: { type: 'object' } }] }
-      : { content: [{ type: 'text', text: request.headers.authorization }] };
+      : { content: [{ type: 'text', text: `documentation search all-documents ${request.headers.authorization}` }] };
     response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result }));
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); t.after(() => { server.closeAllConnections(); server.close(); });
-  const entry = { ...f.found.entries.get('docs')!, config: { url: `http://127.0.0.1:${(server.address() as { port: number }).port}`, headers: { Authorization: 'Bearer ${MCP_TEST_TOKEN}' } } };
+  const entry = { ...f.found.entries.get('docs')!, config: { url: `http://127.0.0.1:${(server.address() as { port: number }).port}/documentation/search?view=all-documents`, headers: { Authorization: 'Bearer ${MCP_TEST_TOKEN}' } } };
   const run = new McpRun(f.state, [entry], () => {}, () => {}); t.after(() => run.close());
   const registry = createRegistry(); run.install(registry); assert.equal(requests, 0);
   const api = { callId: 'http', agent: async () => ({ deferred: registry.snapshot().tools().map(item => item.tool).filter(tool => tool.deferred) }) } as unknown as ToolExecutionApi;
   await registry.snapshot().tools()[0].tool.execute({ query: 'fixture' }, api, context);
   const result = await registry.snapshot().tools()[1].tool.execute({}, api, context);
   assert.ok(headers.every(value => value === 'Bearer fixture-variable-secret')); assert.doesNotMatch(JSON.stringify(result), /fixture-variable-secret/);
+  assert.match(JSON.stringify(result), /documentation search all-documents/);
 });
 
 test('HTTP authentication challenge stays listed for Pi sign-in with no retry or leaked body', async t => {

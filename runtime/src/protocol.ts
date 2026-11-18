@@ -161,6 +161,7 @@ const optional5: Record<string, string[]> = { turn_records: ['before', 'limit'],
 export const RECORD_CURSOR = /^\d{1,16}:\d{1,16}:\d{1,16}:\d{1,16}$/;
 const optional4: Record<string, string[]> = { create_thread: ['harness', 'mode'], set_harness_path: ['path'], configure_thread: ['mode'] };
 const optional3: Record<string, string[]> = {
+  set_mcp_server: ['definition'],
   submit: ['when_busy'], list_threads: ['checkout', 'limit', 'cursor', 'archived'], history: ['before', 'limit'],
   watch_threads: ['archived'], configure_thread: ['provider', 'model_id', 'thinking'],
   create_thread: ['thinking'],
@@ -172,6 +173,7 @@ export const HISTORY_REF = /^(?:e\d{1,16}\.\d{1,6}\.(?:text|reasoning|output|inp
 const text = (value: unknown): value is string => typeof value === 'string' && !!value.trim();
 function validate3(request: Request) {
   const invalid = (message: string): never => fail('invalid_request', message);
+  if (request.definition !== undefined && (typeof request.definition !== 'string' || !/^[a-f0-9]{64}$/.test(request.definition))) invalid('Invalid MCP definition digest.');
   if (request.checkout !== undefined && !text(request.checkout)) invalid('checkout must be a nonempty string.');
   if (request.limit !== undefined && (!Number.isSafeInteger(request.limit) || (request.limit as number) < 1 || (request.limit as number) > limits[request.op])) {
     invalid(`limit must be an integer from 1 to ${limits[request.op]}.`);

@@ -1,8 +1,9 @@
 // Metadata only: never resolve config values, load a transport, or refresh a token.
 // Merge and validation follow Pi 1.5.2's extensions/mcp/config and core/mcp-servers.
 import { constants } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { open } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import { isMcpServerOverride, mcpNamespace, validateMcpServerConfig } from '@earendil-works/pi-mcp';
 import type { McpServerConfig, McpServerConfigResult } from '@earendil-works/pi-mcp';
 import type { Problem } from '../skills.ts';
@@ -13,6 +14,7 @@ export type McpServer = {
   source: string;
   override_source: string | null;
   program: string | null;
+  argument_count?: number;
   host: string | null;
   enabled: boolean;
   can_enable: boolean;
@@ -23,10 +25,20 @@ export type McpServer = {
   problem: string | null;
   state?: 'connected' | 'stopped' | 'failed';
   tool_count?: number;
+  /** Unresolved definition digest, used to reject a stale settings decision. */
+  definition?: string;
+  consent?: 'required' | 'changed' | 'restricted';
 };
-export type Entry = { name: string; source: string; override_source: string | null; config: McpServerConfig & { exposure?: string; toolExposure?: Record<string, string>; auth?: unknown }; transport: 'stdio' | 'http' };
+export type Config = McpServerConfig & { exposure?: string; toolExposure?: Record<string, string>; auth?: unknown };
+export type Entry = { name: string; source: string; override_source: string | null; config: Config; transport: 'stdio' | 'http';
+  project?: 'definition' | 'override'; projectConfig?: unknown; userConfig?: Config; limit?: Config };
+/** Include exposure ordering: overlapping wildcard rules are evaluated in configured order. */
+export const definitionDigest = (entry: Entry) => createHash('sha256').update(JSON.stringify({
+  transport: entry.transport, config: entry.config, project: entry.project, projectConfig: entry.projectConfig, user: entry.userConfig,
+})).digest('hex');
 type State = { entries: Map<string, Entry>; namespaces: Map<string, string>; invalid: Map<string, McpServer>; problems: Problem[] };
 const FILE_LIMIT = 1024 * 1024;
+export const MCP_NAME = /^[A-Za-z0-9_.:/-]{1,128}$/;
 const OVERRIDES = new Set(['enabled', 'exposure', 'toolExposure']);
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -101,6 +113,10 @@ async function merge(path: string, project: boolean, state: State) {
     state.problems.push({ path, message: 'autoEnableCodemode must be a boolean.' });
   }
   for (const [name, value] of Object.entries(parsed.mcpServers ?? {})) {
+    if (!MCP_NAME.test(name)) {
+      state.problems.push({ path, message: 'An MCP server name was refused: use 1–128 ASCII letters, digits, _, -, ., :, or /.' });
+      continue;
+    }
     const base = state.entries.get(name);
     const override = project && record(value) && isMcpServerOverride(value);
     if (override && (!base || Object.keys(value).some(key => !OVERRIDES.has(key)))) {
@@ -120,7 +136,10 @@ async function merge(path: string, project: boolean, state: State) {
     }
     state.namespaces.set(mcpNamespace(name), name);
     state.entries.set(name, { name, config: result.config, transport: result.kind,
-      source: override ? base!.source : path, override_source: override ? path : null });
+      source: override ? base!.source : path, override_source: override ? path : null,
+      ...(project ? { project: override ? 'override' as const : 'definition' as const, projectConfig: value } : {}),
+      ...(override ? { userConfig: base!.config } : {}),
+    });
     state.invalid.delete(name);
   }
 }
@@ -156,15 +175,22 @@ export async function loadMcp(checkout: string, trusted: boolean, agentDir: stri
   const auth = describe && [...state.entries.values()].some(entry => entry.transport === 'http')
     ? await json(join(agentDir, 'mcp-auth.json'), state.problems) ?? {} : {};
   const servers = [...state.entries.values()].map((entry): McpServer => {
-    const enabled = piEnabled && trusted && entry.config.enabled !== false;
+    const enabled = piEnabled && trusted && entry.project !== 'definition'
+      && entry.config.enabled !== false && entry.userConfig?.enabled !== false;
     const config = entry.config;
     return {
       name: entry.name, transport: entry.transport, source: entry.source, override_source: entry.override_source,
-      program: entry.transport === 'stdio' && 'command' in config ? basename(config.command.trim().split(/\s/)[0]) : null,
+      program: 'command' in config ? config.command : null,
+      ...('command' in config ? { argument_count: config.args?.length ?? 0 } : {}),
       host: entry.transport === 'http' && 'url' in config ? new URL(config.url).host : null,
       enabled, can_enable: piEnabled, ...signIn(entry, auth), problem: null,
+      definition: definitionDigest(entry),
+      ...(entry.project ? { consent: entry.project === 'definition' || entry.userConfig?.enabled === false ? 'required' as const : 'restricted' as const } : {}),
       disabled_reason: config.auth ? 'Provider authentication is planned; use a configured header key for now.'
         : !piEnabled ? 'MCP is disabled in Pi settings.' : !trusted ? 'Off until enabled for this sandboxed project.'
+        : entry.project === 'definition' ? 'Defined by this project. Read its configuration file before turning it on.'
+        : entry.project === 'override' && entry.userConfig?.enabled === false ? 'This project cannot enable a server disabled in your user configuration. Read its configuration before turning it on.'
+        : entry.project === 'override' && enabled ? 'Project overrides are limited by your user configuration until you explicitly turn this server on here.'
         : !enabled ? 'Disabled in Pi configuration.' : null,
     };
   });

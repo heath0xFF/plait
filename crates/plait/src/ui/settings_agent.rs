@@ -59,15 +59,24 @@ pub(super) struct McpRow {
     label: SharedString,
     pub(super) enabled: bool,
     can_enable: bool,
+    pub(super) file: Option<PathBuf>,
+    definition: Option<String>,
 }
 
 impl From<McpServer> for McpRow {
     fn from(server: McpServer) -> Self {
-        use plait_core::host::agent::McpState;
-        let state = if server.state == Some(McpState::Failed) && server.needs_sign_in == Some(true)
-        {
+        use plait_core::host::agent::{McpConsent, McpState};
+        let state = if server.consent == Some(McpConsent::Changed) {
+            "Changed"
+        } else if server.consent == Some(McpConsent::Required) {
+            "Needs review"
+        } else if server.consent == Some(McpConsent::Restricted) && server.enabled {
+            "User limits"
+        } else if server.state == Some(McpState::Failed) && server.needs_sign_in == Some(true) {
             "Sign in with Pi"
-        } else if server.state == Some(McpState::Failed) {
+        } else if server.state == Some(McpState::Failed)
+            || (server.state.is_some() && server.problem.is_some())
+        {
             "Problem"
         } else if server.problem.is_some() {
             "Invalid"
@@ -98,9 +107,15 @@ impl From<McpServer> for McpRow {
         if let Some(source) = &server.override_source {
             hover.push(format!("Project override: {}", source.display()));
         }
-        if let Some(target) = server.program.as_ref().or(server.host.as_ref()) {
-            hover.push(target.clone());
+        if let Some(program) = &server.program {
+            hover.push(format!("Starts: {program}"));
+            if let Some(count) = server.argument_count {
+                hover.push(format!("{count} arguments; their values are hidden here. Read the defining file before turning this server on."));
+            }
+        } else if let Some(host) = &server.host {
+            hover.push(format!("Connects to: {host}"));
         }
+        hover.push("Environment and header values and credential commands are always hidden. Once on, local servers can read the project and use the network from startup, including when sandboxed and before any call is approved. Approval gates calls, not the server's own behaviour.".into());
         if let Some(reason) = server.disabled_reason.as_ref().or(server.problem.as_ref()) {
             hover.push(reason.clone());
         }
@@ -133,6 +148,8 @@ impl From<McpServer> for McpRow {
             hover: hover.join("\n").into(),
             enabled: server.enabled,
             can_enable: server.can_enable,
+            file: None,
+            definition: server.definition,
         }
     }
 }
@@ -207,7 +224,28 @@ impl AgentView {
             .collect();
         Self {
             trusted: reply.trusted,
-            mcp_servers: reply.mcp_servers.into_iter().map(McpRow::from).collect(),
+            mcp_servers: reply
+                .mcp_servers
+                .into_iter()
+                .map(|server| {
+                    let file = server
+                        .override_source
+                        .as_ref()
+                        .unwrap_or(&server.source)
+                        .strip_prefix(&reply.checkout)
+                        .ok()
+                        .filter(|path| {
+                            !path.as_os_str().is_empty()
+                                && path
+                                    .components()
+                                    .all(|part| matches!(part, std::path::Component::Normal(_)))
+                        })
+                        .map(PathBuf::from);
+                    let mut row = McpRow::from(server);
+                    row.file = file;
+                    row
+                })
+                .collect(),
             instructions: reply.instructions.as_ref().map(|file| Row {
                 title: "User instructions".into(),
                 detail: size(file.bytes).into(),
@@ -262,7 +300,11 @@ impl Plait {
         self.request_agent(None, cx);
     }
 
-    fn request_agent(&mut self, change: Option<(String, bool)>, cx: &mut Context<Self>) {
+    fn request_agent(
+        &mut self,
+        change: Option<(String, bool, Option<String>)>,
+        cx: &mut Context<Self>,
+    ) {
         if self.agent.busy || !self.host.connected || cfg!(test) {
             return;
         }
@@ -280,7 +322,9 @@ impl Plait {
         let task = cx.background_executor().spawn(async move {
             let canonical = std::fs::canonicalize(&checkout)?;
             let request = match change {
-                Some((name, enabled)) => Request::set_mcp_server(canonical.clone(), name, enabled),
+                Some((name, enabled, definition)) => {
+                    Request::set_mcp_server(canonical.clone(), name, enabled, definition)
+                }
                 None => Request::agent_resources(canonical.clone()),
             };
             let reply: AgentResources =
@@ -426,6 +470,7 @@ impl Plait {
         {
             let hover = server.hover.clone();
             let name = server.name.clone();
+            let definition = server.definition.clone();
             let enabled = !server.enabled;
             let available = server.can_enable
                 && self.host.connected
@@ -447,6 +492,14 @@ impl Plait {
                     )
                     .child(tag(server.transport, colors().subtle).flex_shrink_0())
                     .child(tag(server.state.clone(), colors().muted).flex_shrink_0())
+                    .when_some(server.file.clone(), |el, path| {
+                        el.child(button(("mcp-open-file", index), "Open file").on_activate(
+                            cx,
+                            move |this, _, cx| {
+                                this.open_file(path.clone(), None, cx);
+                            },
+                        ))
+                    })
                     .child(
                         chip(
                             ("mcp-switch", index),
@@ -458,7 +511,10 @@ impl Plait {
                         .disabled(!available)
                         .when(available, |el| {
                             el.on_activate(cx, move |this, _, cx| {
-                                this.request_agent(Some((name.to_string(), enabled)), cx);
+                                this.request_agent(
+                                    Some((name.to_string(), enabled, definition.clone())),
+                                    cx,
+                                );
                             })
                         }),
                     ),

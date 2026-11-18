@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { DatabaseSync } from 'node:sqlite';
+import type { McpServer } from '../src/mcp/config.ts';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { setup, request, until, delay } from './support/host.ts';
@@ -35,6 +38,18 @@ test('real host searches lazily, records each call, prompts, and stores no seede
   const events = await readFile(marker, 'utf8'); assert.equal(events.match(/call echo/g)?.length, 1);
   const spawns = await readFile(join(f.store, 'mcp-spawns.jsonl'), 'utf8');
   assert.equal(spawns.match(/mcp-server/g)?.length, 1);
+  const db = new DatabaseSync(join(f.store, 'host.sqlite'), { readOnly: true });
+  try { assert.equal(db.prepare("SELECT count(*) AS n FROM settings WHERE key LIKE 'mcp_tool:%'").get()!.n, 1); }
+  finally { db.close(); }
+});
+
+test('first search stores no per-thread tool labels when no MCP tool is called', async t => {
+  const f = await setup(t, 'mcp-search-only', false, false); const marker = await config(f); const thread = await f.create();
+  await f.submit(thread.id); await until(() => f.watch(thread.id), value => value.status === 'idle');
+  assert.match(await readFile(marker, 'utf8'), /start /); assert.doesNotMatch(await readFile(marker, 'utf8'), /call /);
+  const db = new DatabaseSync(join(f.store, 'host.sqlite'), { readOnly: true });
+  try { assert.equal(db.prepare("SELECT count(*) AS n FROM settings WHERE key LIKE 'mcp_tool:%'").get()!.n, 0); }
+  finally { db.close(); }
 });
 
 test('off servers start no process and expose neither search nor MCP tools', { timeout: 15000 }, async t => {
@@ -63,3 +78,65 @@ test('host death kills the MCP group and restart never replays an interrupted ca
   await f.submit(thread.id, 'fresh', 'Continue after interruption'); await until(() => f.watch(thread.id), value => value.status === 'idle');
   await delay(200); assert.equal((await readFile(marker, 'utf8')).match(/call echo/g)?.length, 1);
 });
+
+for (const approval of ['ask', 'auto'] as const) for (const kind of ['definition', 'replacement', 'enable-override', 'exposure-override'] as const) {
+  test(`trusted ${approval} ${kind} runs nothing before definition consent and nothing after it changes`, { timeout: 30000 }, async t => {
+    const f = await setup(t, 'mcp-consent', false, false); const marker = await config(f);
+    const userPath = join(f.store, 'test-pi', 'mcp.json');
+    const user = JSON.parse(await readFile(userPath, 'utf8'));
+    const credential = join(f.store, 'credential-called');
+    user.mcpServers.docs.env.FIXTURE_COMMAND = `!printf called > '${credential}'; printf fixture-key`;
+    let requests = 0;
+    const http = createServer((_request, response) => { requests++; response.end(); });
+    await new Promise<void>(resolve => http.listen(0, '127.0.0.1', resolve));
+    t.after(() => { http.closeAllConnections(); http.close(); });
+    const project: { mcpServers: Record<string, Record<string, unknown>> } = { mcpServers: {
+      docs: kind.endsWith('override') ? kind === 'enable-override' ? { enabled: true } : { exposure: 'direct' } : user.mcpServers.docs,
+      remote: { url: `http://127.0.0.1:${(http.address() as { port: number }).port}`, headers: {
+        Key: `!printf called > '${credential}'; printf fixture-key`, Other: '${MCP_MUST_NOT_EXPAND_BEFORE_CONSENT}',
+      } },
+    } };
+    if (kind === 'definition') user.mcpServers = {};
+    if (kind === 'replacement') user.mcpServers.docs = { command: 'never-start-replaced-user-server' };
+    if (kind === 'enable-override') user.mcpServers.docs.enabled = false;
+    if (kind === 'exposure-override') user.mcpServers.docs.exposure = 'hidden';
+    await writeFile(userPath, JSON.stringify(user));
+    await mkdir(join(f.repo, '.pi'));
+    const projectPath = join(f.repo, '.pi/mcp.json'); await writeFile(projectPath, JSON.stringify(project));
+    const rows = async () => (await request(f.store, { op: 'agent_resources', checkout: f.repo, protocol_version: 3 }) as unknown as { result: { mcp_servers: McpServer[] } }).result.mcp_servers;
+    const enable = (definition?: string) => request(f.store, { op: 'set_mcp_server', checkout: f.repo, name: 'docs', enabled: true, definition, protocol_version: 3 });
+    const run = async (id: string) => {
+      const thread = await f.create(id);
+      await request(f.store, { op: 'submit', thread_id: thread.id, request_id: id, text: 'fixture', approval, protocol_version: 3 });
+      return thread;
+    };
+    const initial = (await rows()).find(row => row.name === 'docs')!;
+    assert.equal(initial.consent, kind === 'exposure-override' ? 'restricted' : 'required');
+    const off = await run('off'); await until(() => f.watch(off.id), value => value.status === 'idle');
+    for (const path of [marker, credential]) await assert.rejects(readFile(path), { code: 'ENOENT' });
+    assert.equal(requests, 0);
+    assert.doesNotMatch(await readFile(join(f.store, 'mcp-spawns.jsonl'), 'utf8').catch(() => ''), /mcp-server|trusted-command|"command"/);
+    assert.ok((await rows()).every(row => row.state === undefined));
+    assert.equal((await enable()).error?.code, 'permission_denied');
+    assert.equal((await enable(initial.definition)).ok, true);
+    const on = await run('on');
+    const next = await until(() => f.watch(on.id), value => !!value.pending_approval || value.status === 'idle' || value.status === 'error');
+    if (approval === 'ask') {
+      assert.equal(next.pending_approval?.summary, 'Use echo from docs');
+      await f.approve(on.id, next.pending_approval!.id);
+    }
+    const done = await until(() => f.watch(on.id), value => value.status === 'idle' || value.status === 'error');
+    assert.equal(done.status, 'idle', JSON.stringify(done));
+    assert.equal((await readFile(marker, 'utf8')).match(/start /g)?.length, 1);
+    assert.equal(await readFile(credential, 'utf8'), 'called'); assert.equal(requests, 0);
+    project.mcpServers.docs.toolExposure = { sample: 'hidden' };
+    await writeFile(projectPath, JSON.stringify(project)); await rm(credential);
+    const changed = (await rows()).find(row => row.name === 'docs')!;
+    assert.equal(changed.enabled, false); assert.equal(changed.consent, 'changed');
+    assert.equal((await enable(initial.definition)).error?.code, 'permission_denied');
+    const after = await run('changed'); await until(() => f.watch(after.id), value => value.status === 'idle');
+    assert.equal((await readFile(marker, 'utf8')).match(/start /g)?.length, 1);
+    await assert.rejects(readFile(credential), { code: 'ENOENT' }); assert.equal(requests, 0);
+    assert.equal((await readFile(join(f.store, 'mcp-spawns.jsonl'), 'utf8')).match(/mcp-server/g)?.length, 1);
+  });
+}

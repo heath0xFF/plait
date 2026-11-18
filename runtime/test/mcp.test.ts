@@ -11,8 +11,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import { DefaultPackageManager, SettingsManager } from '@earendil-works/pi-coding-agent';
-import { listMcp, loadMcp } from '../src/mcp/config.ts';
-import { mcpPolicy, setMcpEnabled } from '../src/mcp/policy.ts';
+import { definitionDigest, listMcp, loadMcp } from '../src/mcp/config.ts';
+import { executionEntry, mcpPolicy, setMcpEnabled } from '../src/mcp/policy.ts';
+import { eligible, toolExposure } from '../src/mcp/tools.ts';
 import { commandPolicy, setCommandPolicy } from '../src/command/policy.ts';
 import { report } from '../src/skills.ts';
 import { validate } from '../src/protocol.ts';
@@ -63,9 +64,9 @@ test('MCP merge matches pinned Pi: replacement, restricted overrides, validation
     const ours = await f.list(trusted);
     const theirs = pi.loadMcpConfig({ agentDir: f.agent, cwd: f.repo, projectTrusted: trusted });
     assert.deepEqual(ours.servers.filter(server => !server.problem).map(server => ({
-      name: server.name, source: server.source, override: server.override_source ?? undefined, enabled: server.enabled,
+      name: server.name, source: server.source, override: server.override_source ?? undefined,
     })), theirs.servers.map(server => ({
-      name: server.name, source: server.source, override: server.override, enabled: trusted && server.config.enabled !== false,
+      name: server.name, source: server.source, override: server.override,
     })));
     assert.equal(ours.problems.length, theirs.errors.length);
   }
@@ -77,7 +78,7 @@ test('MCP merge matches pinned Pi: replacement, restricted overrides, validation
   assert.deepEqual(trusted.entries.get('base')?.config.toolExposure, { find: 'codemode-deferred' });
   assert.equal(sandboxed.entries.get('base')?.config.toolExposure, undefined);
   assert.equal(servers.find(server => server.name === 'replaced')?.transport, 'stdio');
-  assert.equal(servers.find(server => server.name === 'base')?.program, 'node');
+  assert.equal(servers.find(server => server.name === 'base')?.program, '/bin/node');
   assert.equal(servers.find(server => server.name === 'stays')?.program, 'uvx');
   assert.ok(servers.find(server => server.name === 'invalid')?.problem);
   assert.equal(servers.filter(server => server.name === 'invalid').length, 1);
@@ -123,7 +124,7 @@ test('listing resolves no secrets and starts no process, transport, or network r
     const found = await f.list();
     const serialized = JSON.stringify(report(f.repo, true, { skills: [], templates: [], problems: found.problems, mcpServers: found.servers }));
     for (const value of [secret, '!touch', '!echo', 'MCP_SECRET_TEST', '--token', '/private/']) assert.ok(!serialized.includes(value), value);
-    assert.equal(found.servers[0].program, 'node'); assert.equal(found.servers[1].host, 'docs.example');
+    assert.equal(found.servers[0].program, '/opt/tools/node'); assert.equal(found.servers[0].argument_count, 2); assert.equal(found.servers[1].host, 'docs.example');
     assert.equal(found.servers[2].signed_in, true); assert.deepEqual(calls, []);
     await assert.rejects(readFile(join(f.base, 'spawned')), { code: 'ENOENT' });
   } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
@@ -174,16 +175,19 @@ test('project MCP switches round trip in the host store under both policies and 
   const directory = join(f.base, 'store'); await mkdir(directory);
   let store = new Store(directory); t.after(async () => store.close());
   const identity = { dev: '1', ino: '2' };
-  const read = async (root = f.repo, who = identity, pi = true) => mcpPolicy(store, root, who,
-    (await f.list(commandPolicy(store, root, who) === 'trusted', pi)).servers);
+  const definitions = await loadMcp(f.repo, true, f.agent, true);
+  const read = async (root = f.repo, who = identity, pi = true) => {
+    const found = await loadMcp(f.repo, commandPolicy(store, root, who) === 'trusted', f.agent, pi);
+    return mcpPolicy(store, root, who, found.servers, found.entries);
+  };
   assert.deepEqual((await read()).map(row => row.enabled), [true, false]);
   setCommandPolicy(store, f.repo, identity, 'sandboxed');
   assert.deepEqual((await read()).map(row => row.enabled), [false, false]);
-  setMcpEnabled(store, f.repo, identity, 'on', true); setMcpEnabled(store, f.repo, identity, 'off', true);
+  setMcpEnabled(store, f.repo, identity, definitions.entries.get('on')!, true); setMcpEnabled(store, f.repo, identity, definitions.entries.get('off')!, true);
   assert.deepEqual((await read()).map(row => row.enabled), [true, true]);
   store.close(); store = new Store(directory);
   assert.deepEqual((await read()).map(row => row.enabled), [true, true]);
-  setCommandPolicy(store, f.repo, identity, 'trusted'); setMcpEnabled(store, f.repo, identity, 'on', false);
+  setCommandPolicy(store, f.repo, identity, 'trusted'); setMcpEnabled(store, f.repo, identity, definitions.entries.get('on')!, false);
   assert.deepEqual((await read()).map(row => row.enabled), [false, true]);
   assert.deepEqual((await read('/other')).map(row => row.enabled), [true, false]);
   assert.deepEqual((await read(f.repo, { dev: '1', ino: '3' })).map(row => row.enabled), [true, false]);
@@ -197,6 +201,103 @@ test('project MCP switches round trip in the host store under both policies and 
 test('set_mcp_server is a version 3 additive operation with strict fields', () => {
   const request = { op: 'set_mcp_server', checkout: '/repo', name: 'docs', enabled: true, protocol_version: 3 };
   assert.deepEqual(validate(request), request);
+  assert.deepEqual(validate({ ...request, definition: 'a'.repeat(64) }), { ...request, definition: 'a'.repeat(64) });
   for (const bad of [{ ...request, protocol_version: 1 }, { ...request, enabled: 'true' }, { ...request, name: '' },
-    { ...request, env: 'secret' }, { ...request, enabled: undefined }]) assert.throws(() => validate(bad), { code: 'invalid_request' });
+    { ...request, env: 'secret' }, { ...request, enabled: undefined }, { ...request, definition: 'x' }, { ...request, definition: 1 }]) assert.throws(() => validate(bad), { code: 'invalid_request' });
+});
+
+const identity = { dev: '1', ino: '2' };
+function switches() {
+  const values = new Map<string, string>();
+  return { values, setting: (key: string) => values.get(key) ?? null,
+    setSetting: (key: string, value: string | null) => { if (value === null) values.delete(key); else values.set(key, value); } };
+}
+
+test('project definitions and replacements need review, with digest and directory identity binding', async t => {
+  const f = await fixture(t); const settings = switches();
+  await f.user({ user: { command: 'node' }, replaced: { command: 'user-program' } });
+  const config = { command: 'project-program', args: ['SECRET_ARG'], cwd: '.', env: { TOKEN: '${SECRET_VAR}', KEY: '!echo SECRET_COMMAND' } };
+  await f.project({ local: config, replaced: config });
+  const load = () => loadMcp(f.repo, true, f.agent, true);
+  let found = await load();
+  const read = (who = identity) => mcpPolicy(settings, f.repo, who, found.servers, found.entries);
+  assert.deepEqual(read().map(row => [row.name, row.enabled, row.consent]), [
+    ['user', true, undefined], ['replaced', false, 'required'], ['local', false, 'required'],
+  ]);
+  assert.match(read()[1].disabled_reason!, /Defined by this project/);
+  const entry = found.entries.get('local')!;
+  setMcpEnabled(settings, f.repo, identity, entry, true);
+  assert.equal(read()[2].enabled, true); assert.equal(read()[2].consent, undefined);
+  assert.equal(JSON.parse([...settings.values.values()][0]).definition, definitionDigest(entry));
+  assert.doesNotMatch(JSON.stringify([...settings.values]), /SECRET|project-program|TOKEN/);
+  assert.equal(read({ dev: '1', ino: '3' })[2].enabled, false);
+  await f.project({ local: { ...config, args: ['changed'] }, replaced: config }); found = await load();
+  assert.equal(read()[2].enabled, false); assert.equal(read()[2].consent, 'changed');
+  assert.match(read()[2].disabled_reason!, /definition changed/);
+  setMcpEnabled(settings, f.repo, identity, found.entries.get('local')!, true);
+  assert.equal(read()[2].enabled, true);
+  settings.setSetting(`mcp_server:${JSON.stringify([f.repo, 'local'])}`, JSON.stringify({ root: identity, enabled: true }));
+  assert.equal(read()[2].enabled, false); assert.equal(read()[2].consent, 'required');
+  const sandboxed = await loadMcp(f.repo, false, f.agent, true);
+  assert.deepEqual(sandboxed.servers.map(row => [row.name, row.enabled]), [['user', false], ['replaced', false]]);
+});
+
+test('every unresolved launch field and exposure change invalidates a saved project choice', async t => {
+  const f = await fixture(t); const settings = switches();
+  const stdio = { command: 'node', args: ['a'], cwd: '.', env: { KEY: '${ONE}' } };
+  const http = { url: 'http://127.0.0.1:1234/mcp', headers: { Key: '!echo ONE' } };
+  for (const [original, changes] of [
+    [stdio, [{ ...stdio, command: 'other' }, { ...stdio, args: ['b'] }, { ...stdio, cwd: 'subdir' },
+      { ...stdio, env: { OTHER: '${ONE}' } }, { ...stdio, env: { KEY: '${TWO}' } }, { ...stdio, exposure: 'hidden' }, http]],
+    [http, [{ ...http, url: 'http://127.0.0.1:1235/mcp' }, { ...http, headers: { Other: '!echo ONE' } }, { ...http, headers: { Key: '!echo TWO' } }]],
+  ] as const) {
+    for (const changed of changes) {
+      await f.project({ server: original }); const before = await loadMcp(f.repo, true, f.agent, true);
+      setMcpEnabled(settings, f.repo, identity, before.entries.get('server')!, true);
+      await f.project({ server: changed }); const after = await loadMcp(f.repo, true, f.agent, true);
+      const row = mcpPolicy(settings, f.repo, identity, after.servers, after.entries)[0];
+      assert.equal(row.enabled, false); assert.equal(row.consent, 'changed');
+    }
+  }
+});
+
+test('unreviewed project overrides only narrow user enablement and exact or wildcard tool exposure', async t => {
+  const f = await fixture(t); const settings = switches();
+  await f.user({
+    disabled: { command: 'node', enabled: false },
+    hidden: { command: 'node', exposure: 'hidden' },
+    filtered: { command: 'node', exposure: 'direct', toolExposure: { private: 'hidden', 'secret*': 'hidden', public: 'direct' } },
+  });
+  await f.project({
+    disabled: { enabled: true }, hidden: { exposure: 'direct', toolExposure: { '*': 'direct' } },
+    filtered: { exposure: 'deferred', toolExposure: { private: 'direct', 'secret*': 'codemode', public: 'hidden' } },
+  });
+  const found = await loadMcp(f.repo, true, f.agent, true);
+  const read = () => mcpPolicy(settings, f.repo, identity, found.servers, found.entries);
+  const [disabled, hidden, filtered] = read();
+  assert.equal(disabled.enabled, false); assert.equal(disabled.consent, 'required');
+  assert.equal(eligible(executionEntry(found.entries.get('hidden')!, hidden), hidden), false);
+  assert.equal(filtered.consent, 'restricted'); assert.equal(filtered.enabled, true);
+  const entry = executionEntry(found.entries.get('filtered')!, filtered);
+  for (const name of ['private', 'secretThing', 'public']) assert.equal(toolExposure(entry, name), 'hidden');
+  assert.equal(toolExposure(entry, 'other'), 'deferred');
+  for (const row of read()) setMcpEnabled(settings, f.repo, identity, found.entries.get(row.name)!, true);
+  assert.ok(read().every(row => row.enabled && row.consent === undefined));
+  assert.notEqual(toolExposure(executionEntry(found.entries.get('filtered')!, read()[2]), 'private'), 'hidden');
+  assert.equal(eligible(executionEntry(found.entries.get('hidden')!, read()[1]), read()[1]), true);
+  await f.user({ same: { command: 'node', enabled: true } });
+  await f.project({ same: { enabled: true } });
+  const before = await loadMcp(f.repo, true, f.agent, true);
+  setMcpEnabled(settings, f.repo, identity, before.entries.get('same')!, true);
+  await f.project({ same: {} });
+  const after = await loadMcp(f.repo, true, f.agent, true);
+  assert.equal(mcpPolicy(settings, f.repo, identity, after.servers, after.entries)[0].consent, 'changed', 'Even an equivalent raw project entry must be reviewed again');
+});
+
+test('server names with escapes, direction controls, or zero-width characters never reach listing labels', async t => {
+  const f = await fixture(t);
+  await f.user(Object.fromEntries(['bad\u001bname', 'bad\u202ename', 'bad\u200bname', 'x'.repeat(129)].map(name => [name, { command: 'never-start' }])));
+  const found = await f.list(); assert.equal(found.servers.length, 0); assert.equal(found.problems.length, 4);
+  const serialized = JSON.stringify(found);
+  for (const unsafe of ['\u001b', '\u202e', '\u200b', '\\u001b']) assert.ok(!serialized.includes(unsafe));
 });

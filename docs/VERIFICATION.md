@@ -691,14 +691,42 @@ interrupted call. Seeded env/header/command secrets are searched for in tool
 metadata, approvals, captured model contexts, snapshots, history, output storage,
 and durable database bytes. These checks establish known-value redaction, not
 resistance to an arbitrary server deliberately encoding credentials.
+Redaction fixtures preserve ordinary login values (including SHLVL, USER, HOME,
+LANG, TERM, and PATH), arguments, URL paths/query values, and short configured
+values while still removing seeded configured credentials. The eight-character
+minimum means shorter credentials are not scrubbed. Tool names with ESC,
+U+202E, or U+200B are refused, as are credential-bearing names/titles/schema
+keys and constraints; valid tools from the same server remain available. Schema
+keys are preserved, and only schema descriptions are rewritten.
+
+The first search makes zero display-label settings writes, including when the
+server offers unused tools. Actual calls create one label per thread/tool;
+repeat calls reuse it. There is currently no automatic cleanup for these label
+settings, including on archive, so they accumulate with distinct tools actually
+called across threads. The first-search deadline applies per batch, not to the
+whole search: N silent enabled servers take about `10 × ceil(N / 4)` seconds,
+plus process shutdown and scheduling overhead.
+
+Project-consent tests cover new and replacing repository definitions, enable
+overrides, and attempts to expose user-hidden tools in trusted Ask and Auto
+threads. Before opt-in they assert no MCP/credential guardian spawn, no fixture
+server or credential-command marker, no loopback HTTP requests, and no observed
+connection. After explicit enable the fixture runs; changing its entry prevents
+another start. Missing and stale enable digests are rejected. Unit tests cover
+all unresolved launch fields, exposure changes, legacy name-only switches,
+directory identity mismatch, and exact/wildcard visibility intersections. Saved
+switches contain only a digest and policy metadata, never configured values.
 
 Core tests decode older hosts and unknown fields/transports and serialize the
 version 3 switch request. Desktop tests cover state wording, source details,
 and stale connection/checkout replies. `project-settings-mcp-*`,
-`project-settings-mcp-observed-*`, `project-settings-no-mcp-*`, and
+`project-settings-mcp-observed-*`, `project-settings-mcp-review-*`, `project-settings-no-mcp-*`, and
 `mcp-tool-approval-*` draw injected metadata and a separate tool/approval row at
 1380×860 and 900×600. Headless Metal/Core Text rendering does not prove native
 pointer interaction, focus, accessibility, or installed-app behavior.
+Desktop tests check **Needs review**, **Changed**, **User limits**, redacted
+argument-count hover wording, and that in-checkout configuration uses the
+existing Files-tab navigation while external configuration has no open action.
 
 No installed app was launched or inspected for this stage. No real configured
 server, external-network MCP endpoint, browser sign-in, or saved OAuth token

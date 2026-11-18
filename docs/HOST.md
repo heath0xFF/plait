@@ -1191,14 +1191,29 @@ per-tool exposure overrides and patterns are honored. Each tool is a separate
 call, shown as `mcp:server/tool`. Server instructions never enter the model's
 instructions. Names have a reserved prefix and stable hash, are checked for
 collisions, and cannot replace built-in tools.
+Remote tool names must contain 1–128 ASCII letters, digits, `_`, `-`, `.`, `:`,
+or `/`. Control, bidirectional, and zero-width characters are refused without
+echoing the supplied name. Invalid tools are omitted and listed as problems;
+other tools from the server remain usable. Server names also pass this display
+boundary before Pi's stricter configuration-name validation.
 
 The host reads `mcp.json` in Pi's agent directory (normally `~/.pi/agent`), then
 `<checkout>/.pi/mcp.json` only for trusted commands. Merge and validation follow
-Pi **1.5.2**, using the pinned `@earendil-works/pi-mcp` validator:
+Pi **1.5.2**, using the pinned `@earendil-works/pi-mcp` validator, with an
+additional Plait consent boundary for repository-controlled entries:
 
 - A full project entry replaces the user entry of the same name. An entry
   without `command`, `url`, or `type` may override only `enabled`, `exposure`,
   and `toolExposure`; all other user fields stay in place.
+- A project definition or replacement is **off until explicitly enabled in
+  project settings**, even when commands are trusted. Until then nothing from
+  it runs: no process, credential command, variable expansion, or network request.
+- Without that explicit choice, a restricted project override can only narrow
+  the user configuration. It cannot enable a disabled user server. Tool
+  visibility is the intersection of the user and project rules, including
+  exact names and wildcard patterns; user-hidden tools stay hidden. Visible
+  tools can be deferred or hidden. An explicit enable permits the reviewed
+  override, bound to the same definition digest as a full project entry.
 - An invalid entry is reported and skipped; a rejected project replacement
   leaves the valid user entry intact. Names whose `-` and `_` spellings share
   a tool namespace conflict. Legacy SSE is refused.
@@ -1218,11 +1233,16 @@ reply budget. Each row has this shape:
  "disabled_reason":"Off until enabled for this sandboxed project.","problem":null}
 ```
 
-`transport` is `stdio`, `http`, or null for an invalid entry. `program` is only
-the executable's basename, never its arguments; `host` is only the URL host,
+`transport` is `stdio`, `http`, or null for an invalid entry. `program` is
+the configured executable, never its arguments; `argument_count` is a count
+only. Hover text directs the person to read those hidden arguments in the
+defining file before turning the server on. For an in-checkout definition or
+override, **Open file** uses the existing Files tab; files outside the checkout
+are shown as paths only. `host` is only the URL host,
 never credentials, path, query, or fragment. `source` names the defining file;
 `override_source` names a restricted project override. `problem` explains an
-invalid row; rejected entries and unreadable files also appear in `problems`.
+invalid entry or an observed connection/tool problem; rejected entries and
+unreadable files also appear in `problems`.
 Files are read up to 1 MiB each. Parse errors contain no file excerpts, and
 neither environment values, headers, OAuth secrets nor resolved `!command` or
 `${VAR}` values enter the reply.
@@ -1244,16 +1264,29 @@ A desktop can save its project choice and receive a refreshed `agent_resources`
 reply with:
 
 ```json
-{"op":"set_mcp_server","protocol_version":3,"checkout":"/absolute/checkout","name":"docs","enabled":true}
+{"op":"set_mcp_server","protocol_version":3,"checkout":"/absolute/checkout","name":"docs","enabled":true,"definition":"<64-character digest returned by agent_resources>"}
 ```
 
 The host stores the boolean by canonical checkout and server name, bound to
-the checkout directory's device and inode, in its settings table. It never
-edits Pi's files. A sandboxed checkout defaults to off; a trusted checkout
-follows Pi's `enabled` until changed. A saved choice overrides that default
-under either policy, but cannot enable an invalid entry or bypass Pi's MCP
-disable setting. Missing servers return `not_found`; blocked entries return
+the checkout directory's device/inode and a SHA-256 digest of the unresolved
+definition. The digest includes transport, command, arguments, cwd, environment
+and header names/values, URL, exposure rules, and the user definition underlying
+an override. It never stores resolved values or edits Pi's files. A changed
+definition makes the saved choice off again, labelled **Changed**; a new project
+definition says **Needs review**. Unreviewed overrides say **User limits** while
+using the intersection; turning the switch off and on explicitly enables the
+reviewed override. User-level servers remain on by default in trusted projects
+and off by default in sandboxed ones.
+
+The settings request echoes the displayed `definition` digest. The host rejects
+an enable if that digest is stale, and requires it for every project definition
+or override. Old name-only switches cannot approve repository-controlled entries;
+older clients can still disable them and manage user-only entries. A saved
+choice cannot enable an invalid entry or bypass Pi's MCP disable setting.
+Missing servers return `not_found`; blocked or stale choices return
 `permission_denied`. A new directory at the same path does not inherit a choice.
+The optional `consent` metadata is `required`, `changed`, or `restricted`; it is
+configuration policy, separate from observed connection `state`.
 
 This is an additive version 3 operation, not a protocol version bump. Older
 hosts omit `mcp_servers` and show no section; older clients ignore the new list.
@@ -1269,6 +1302,11 @@ mode. Sandboxed projects always ask for each call, including in Auto mode. The
 existing `command` approval kind reads **Use <tool> from <server>**, with only
 that call's arguments. Read-only annotations and other server hints cannot skip
 approval. Stop revokes a pending answer before any call is dispatched.
+Approval gates calls, not the server's own behaviour. Once on, a local server
+can read the project and use the network from the moment first search starts
+it, including when sandboxed and before any call has been approved. The settings
+hover states this boundary. Environment/header values and credential commands
+are always hidden in settings; inspect the defining file before opting in.
 
 A stdio server is started by `plait-host mcp-server`, not Pi's process transport.
 The guardian retains the store and checkout leases and closes all private file
@@ -1299,16 +1337,25 @@ Thread-owned files are checked before and reconciled after trusted calls.
 Configured `${VAR}`, `$VAR`, escaping (`$$`, `$!`), and `!command` values in env
 and headers resolve only on first search. Credential commands run under a
 guardian and the same project policy, with a 10-second deadline, and produce no
-transcript or command log. Secrets are scrubbed from server metadata, results,
-stored output, approvals, and diagnostics. HTTP uses the configured endpoint
+transcript or command log. Credential redaction tracks only configured env/header
+values after expansion, credential-command results, URL userinfo, and the token
+part of Authorization values. It does not treat inherited login environment,
+arguments, URL paths, queries, or entire URLs as secrets. Values shorter than
+eight characters are not scrubbed; this is a deliberate limit to avoid corrupting
+ordinary output. Descriptions, results, stored output, approval argument values,
+and diagnostics are scrubbed. Names and schema keys are never rewritten: a tool
+containing a known credential in its name, title, schema key, or non-description
+schema constraint is refused. HTTP uses the configured endpoint
 with redirects and authentication recovery disabled; it starts no server process.
 
 **Bounds and recovery.** Startup (including configuration value resolution and
 tool listing) has a 10-second deadline. Calls default to 60 seconds; a positive
 configured `timeout` in seconds overrides it, capped at 15 minutes. There are
 four concurrent startup attempts. Listing is bounded to 500 tools and 1 MiB
-of metadata per server; each wire message is bounded to 16 MiB. Text and
-structured results use the existing `CommandOutputs` store (16 MiB per output,
+of metadata per server. If all N enabled servers stay silent, first search waits
+about `10 × ceil(N / 4)` seconds, plus bounded shutdown and scheduling overhead;
+there is no separate whole-search deadline. Each wire message is bounded to 16 MiB.
+Text and structured results use the existing `CommandOutputs` store (16 MiB per output,
 32 newest outputs per thread), with a 12 KB tail preview and `read_output`
 continuations. Non-text content is omitted with an explicit notice; message
 images are a separate milestone. Sampling and elicitation have no handlers and
@@ -1318,6 +1365,9 @@ Both search and calls are registered as unsafe to replay. Failed connections and
 calls are never retried. After a host restart the interrupted call is shown as
 interrupted; a new submission is required for new work. No protocol version was
 changed.
+
+Display labels are stored only when a tool is first called in a thread, never
+for every offered tool at discovery. Repeated calls reuse the stored label.
 
 ## Safety boundary
 

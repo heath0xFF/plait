@@ -15,6 +15,8 @@ pub enum Request {
         checkout: PathBuf,
         name: String,
         enabled: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        definition: Option<String>,
         protocol_version: u32,
     },
     AgentResources {
@@ -24,11 +26,17 @@ pub enum Request {
 }
 
 impl Request {
-    pub fn set_mcp_server(checkout: PathBuf, name: String, enabled: bool) -> Self {
+    pub fn set_mcp_server(
+        checkout: PathBuf,
+        name: String,
+        enabled: bool,
+        definition: Option<String>,
+    ) -> Self {
         Self::SetMcpServer {
             checkout,
             name,
             enabled,
+            definition,
             protocol_version: 3,
         }
     }
@@ -121,6 +129,16 @@ pub enum McpState {
     Other,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum McpConsent {
+    Required,
+    Changed,
+    Restricted,
+    #[serde(other)]
+    Other,
+}
+
 /// Metadata only: no arguments, environment, headers, URL paths, or credentials.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct McpServer {
@@ -129,6 +147,7 @@ pub struct McpServer {
     pub source: PathBuf,
     pub override_source: Option<PathBuf>,
     pub program: Option<String>,
+    pub argument_count: Option<u32>,
     pub host: Option<String>,
     pub enabled: bool,
     pub can_enable: bool,
@@ -141,6 +160,8 @@ pub struct McpServer {
     /// Observed in this host's lifetime, absent until a run starts the server.
     pub state: Option<McpState>,
     pub tool_count: Option<u32>,
+    pub definition: Option<String>,
+    pub consent: Option<McpConsent>,
 }
 
 /// What a run in `checkout` would be offered now, under its current policy.
@@ -207,19 +228,38 @@ mod tests {
         let reply: AgentResources = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(reply.mcp_servers[0].state, Some(McpState::Connected));
         assert_eq!(reply.mcp_servers[0].tool_count, Some(8));
+        value["mcp_servers"][0]["argument_count"] = 2.into();
+        value["mcp_servers"][0]["definition"] = "a".repeat(64).into();
+        value["mcp_servers"][0]["consent"] = "required".into();
+        let reply: AgentResources = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(reply.mcp_servers[0].argument_count, Some(2));
+        assert_eq!(reply.mcp_servers[0].consent, Some(McpConsent::Required));
         value["mcp_servers"][0]["transport"] = "future".into();
         value["mcp_servers"][0]["state"] = "future".into();
+        value["mcp_servers"][0]["consent"] = "future".into();
         let reply: AgentResources = serde_json::from_value(value).unwrap();
         assert_eq!(reply.mcp_servers[0].transport, Some(McpTransport::Other));
         assert_eq!(reply.mcp_servers[0].state, Some(McpState::Other));
+        assert_eq!(reply.mcp_servers[0].consent, Some(McpConsent::Other));
         assert_eq!(
             serde_json::to_value(Request::set_mcp_server(
                 "/repo".into(),
                 "docs".into(),
-                false
+                false,
+                None
             ))
             .unwrap(),
             serde_json::json!({"op": "set_mcp_server", "checkout": "/repo", "name": "docs", "enabled": false, "protocol_version": 3})
+        );
+        assert_eq!(
+            serde_json::to_value(Request::set_mcp_server(
+                "/repo".into(),
+                "docs".into(),
+                true,
+                Some("a".repeat(64))
+            ))
+            .unwrap()["definition"],
+            "a".repeat(64)
         );
     }
 }
