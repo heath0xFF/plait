@@ -15,8 +15,11 @@ import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { MAX_LINE_BYTES } from '../src/codex/server.ts';
 import { Runtime } from '../src/runtime.ts';
+import { CodexEntries } from '../src/codex/entries.ts';
 
 const png = readFileSync(new URL('./support/images/0.png', import.meta.url));
+const caption = 'Look\u202e here\u001b\u0085\u2028\n\tat this';
+const displayCaption = 'Look\\u202e here\\u001b\\u0085\\u2028\n\tat this';
 const id = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 async function upload(call: (input: any) => Promise<any>, thread: string, bytes = png) {
   let image;
@@ -72,19 +75,23 @@ test('bounded image storage validates bytes, dimensions, IDs, chunks, count and 
 for (const [name,make] of [['codex',codex],['claude',claude]] as const) test(`${name} receives original images, preserves references on reopen, and keeps version 5 history unchanged`,async t=>{
   const h=await make(t); const thread=await h.create();
   const call=(input:any)=>h.call(input,6); const image=await upload(call,thread.id);
-  assert.equal((await call({op:'submit',thread_id:thread.id,request_id:'image-request',text:'look at this',images:[image.id]})).ok,true);
+  assert.equal((await call({op:'submit',thread_id:thread.id,request_id:'image-request',text:caption,images:[image.id]})).ok,true);
   await h.finish(thread.id);
   const snapshot=h.runtime.snapshot(thread.id); assert.deepEqual(snapshot.messages.find(m=>m.id==='request-image-request')?.images,[image]);
+  assert.equal(snapshot.messages.find(m=>m.id==='request-image-request')?.text,displayCaption);
   const history=await call({op:'history',thread_id:thread.id}); assert.deepEqual(history.result.items.find((m:any)=>m.id==='request-image-request')?.images,[image]);
+  assert.equal(history.result.items.find((m:any)=>m.id==='request-image-request')?.text,displayCaption);
   const old=await h.call({op:'history',thread_id:thread.id},5); assert.equal(old.result.items.some((m:any)=>'images' in m),false);
   const log=name==='codex'?join(h.store,'frames.jsonl'):join(h.store,'claude-images.jsonl');
   if(name==='codex') {
     const frames=(await readFile(log,'utf8')).trim().split('\n').map(line=>JSON.parse(line));
     const content=frames.find(frame=>frame.method==='turn/start').params.input;
+    assert.equal(content[0].text,caption);
     assert.deepEqual(content[1],{type:'image',url:`data:image/png;base64,${png.toString('base64')}`});
   } else {
     const frames=(await readFile(log,'utf8')).trim().split('\n').map(line=>JSON.parse(line));
     const content=frames.filter(frame=>frame.stdin).map(frame=>JSON.parse(frame.stdin)).find(frame=>frame.type==='user').message.content;
+    assert.equal(content[0].text,caption);
     assert.deepEqual(content[1],{type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}});
   }
   await h.close();
@@ -103,10 +110,13 @@ for (const [name,make] of [['codex',codex],['claude',claude]] as const) test(`${
 test('Pi images survive a real host restart and replay through the scripted provider',async t=>{
   const h=await socketHost(t,'images'); const thread=await h.create(); const call=(input:any)=>request(h.store,{protocol_version:6,...input}) as Promise<any>;
   const image=await upload(call,thread.id);
-  const submission={op:'submit',thread_id:thread.id,request_id:'image-request',text:'look',images:[image.id]};
+  const submission={op:'submit',thread_id:thread.id,request_id:'image-request',text:caption,images:[image.id]};
   assert.equal((await call(submission)).ok,true);
   await until(()=>call({op:'watch',thread_id:thread.id}),reply=>reply.result.thread.status==='idle');
   const contexts=(await readFile(join(h.store,'model-contexts.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+  assert.equal(contexts[0].find((m:any)=>m.role==='user').content[0].text,caption);
+  assert.equal((await call({op:'watch',thread_id:thread.id})).result.thread.messages.find((m:any)=>m.id==='request-image-request').text,displayCaption);
+  assert.equal((await call({op:'history',thread_id:thread.id})).result.items.find((m:any)=>m.id==='request-image-request').text,displayCaption);
   assert.deepEqual(contexts[0].find((m:any)=>m.role==='user').content[1],{type:'image',mimeType:'image/png',data:png.toString('base64')});
   h.host.kill('SIGTERM'); await until(async()=>h.host.exitCode!==null||h.host.signalCode!==null,done=>done); await h.start();
   assert.equal((await call({op:'image_read',thread_id:thread.id,image_id:image.id,offset:0})).result.data,png.toString('base64'));
@@ -233,4 +243,35 @@ test('reopen releases image associations left by an older host cancellation',asy
   const reopened=new Store(base); t.after(()=>reopened.close());
   assert.deepEqual(reopened.images.forRequest('t','cancelled'),[]);
   assert.equal(reopened.db.prepare('SELECT used FROM images').get()!.used,0);
+});
+
+for (const typed of [false,true]) test(`image caption escaping keeps history offsets consistent before and after placement (typed=${typed})`,async t=>{
+  const h=await codex(t); const thread=await h.create(); const image=await upload(input=>h.call(input,6),thread.id);
+  const prefix=typed?'/skill:caption ':'';
+  const text=prefix+'\u202e'.repeat(12000)+'\n\tEND';
+  const displayed=prefix+'\\u202e'.repeat(12000)+'\n\tEND';
+  const snapshot=h.runtime.snapshot(thread.id);
+  h.runtime.store.admit(thread.id,'caption',text,{},snapshot,undefined,[image.id]);
+  assert.equal(h.runtime.store.inputs(thread.id)[0].text,text);
+  for (const placed of [false,true]) {
+    if(placed) {
+      const entries=new CodexEntries(join(h.store,`${thread.id}.codex.sqlite`));
+      entries.append([{id:1,kind:'message',model:[{role:'user',content:text}]}]); entries.close();
+      h.runtime.store.place(thread.id,'caption',1);
+    }
+    const page=await h.call({op:'history',thread_id:thread.id},6);
+    assert.equal(page.ok,true,JSON.stringify(page.error));
+    const item=page.result.items.find((item:any)=>item.id==='request-caption');
+    assert.deepEqual(item.images,[image]);
+    const more=item.more.find((part:any)=>part.field==='text');
+    assert.ok(more.ref.startsWith(placed?(typed?'p':'e'):'q'));
+    let complete=item.text;
+    for(let offset: number|null=more.offset;offset!==null;) {
+      const reply=await h.call({op:'history_text',thread_id:thread.id,ref:more.ref,offset},6);
+      assert.equal(reply.ok,true,JSON.stringify(reply.error));
+      assert.equal(reply.result.length,displayed.length);
+      complete+=reply.result.text; offset=reply.result.next_offset;
+    }
+    assert.equal(complete,displayed);
+  }
 });

@@ -385,7 +385,8 @@ export class Runtime {
         pending: (anchor: number, rowid: number, limit: number) => this.store.pendingBefore(id, anchor, rowid, limit),
         placed: (low: number, high: number) => this.store.placed(id, low, high),
         typed: (entry: number) => this.store.placed(id, entry, entry).get(entry)?.text,
-        journal: (rowid: number) => this.store.journal(id, rowid), active: !!session,
+        journal: (rowid: number) => this.store.journal(id, rowid),
+        journalHasImages: (rowid: number) => this.store.journalHasImages(id, rowid), active: !!session,
       };
       if (session?.root) return work({ ...base, entries: entries(session.root) });
       // A Codex thread's translated transcript is its own store, read the same way.

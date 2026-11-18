@@ -9,7 +9,7 @@
 import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { createInterface } from 'node:readline';
+import { stdinLines } from './stdin-lines.ts';
 
 type Frame = Record<string, any>;
 const scenario = process.env.FAKE_CLAUDE_SCENARIO ?? 'turn';
@@ -223,8 +223,7 @@ function serve() {
     }
   }
 
-  const lines = createInterface({ input: process.stdin });
-  lines.on('line', line => {
+  stdinLines(line => {
     record({ stdin: line });
     let frame: Frame;
     try { frame = JSON.parse(line); } catch { return; }
@@ -239,7 +238,5 @@ function serve() {
       queue.push(sent);
       next();
     }
-  });
-  // Like Claude Code, end when the SDK closes stdin.
-  lines.on('close', () => { void wait(10).then(() => process.exit(0)); });
+  }, () => { void wait(10).then(() => process.exit(0)); });
 }

@@ -115,7 +115,7 @@ export function update(snapshot: Snapshot, view: ConversationView, inputs: Input
         const reasoning = message.role === 'assistant' ? clipTail(reasoningText(message), 4096) : '';
         if (text || reasoning || images?.length) push({
           id: message.role === 'user' && placed.has(Number(entry.id)) ? `request-${placed.get(Number(entry.id))!.request_id}` : `${entry.id}-${index}`,
-          role: message.role, text: clip(text), ...(images?.length ? { images } : {}), ...(reasoning ? { reasoning } : {}),
+          role: message.role, text: clip(images?.length ? escapeDisplay(text) : text), ...(images?.length ? { images } : {}), ...(reasoning ? { reasoning } : {}),
         });
         if (message.role === 'assistant' && message.usage && message.stopReason !== 'error' && message.stopReason !== 'aborted') answered = message;
       }

@@ -29,6 +29,7 @@ export type HistorySource = {
   /** The typed text of the input placed at an entry. */
   typed(entry: number): string | undefined;
   journal(rowid: number): string | undefined;
+  journalHasImages?(rowid: number): boolean;
   /** A tool call with no result is still running only while its run is. */
   active: boolean;
 };
@@ -65,7 +66,7 @@ function entryUnit(entry: EntryRecord, placed: Map<number, Placed>): Unit {
       if (text || reasoning || input?.images?.length) {
         // The same stable IDs the snapshot uses.
         const item: MessageItem = { type: 'message', id: input ? `request-${input.request_id}` : `${id}-${index}`, role: message.role, text: '', reasoning: '', ...(input?.images?.length ? { images: input.images } : {}) };
-        assign(item, 'text', text, typed ? `p${id}` : `${ref}.text`); assign(item, 'reasoning', reasoning, `${ref}.reasoning`);
+        assign(item, 'text', input?.images?.length ? escapeDisplay(text) : text, typed ? `p${id}` : `${ref}.text`); assign(item, 'reasoning', reasoning, `${ref}.reasoning`);
         unit.items.push(item);
       }
     }
@@ -83,7 +84,7 @@ function entryUnit(entry: EntryRecord, placed: Map<number, Placed>): Unit {
 }
 function pendingUnit(input: PendingInput): Unit {
   const item: MessageItem = { type: 'message', id: `request-${input.request_id}`, role: 'user', text: '', reasoning: '', ...(input.images?.length ? { images: input.images } : {}) };
-  assign(item, 'text', input.text, `q${input.rowid}`);
+  assign(item, 'text', input.images?.length ? escapeDisplay(input.text) : input.text, `q${input.rowid}`);
   return { key: `${input.anchor}:1:${input.rowid}`, items: [item], results: new Map(), bytes: bytes(item) };
 }
 /** Walks both sources newest first: an unplaced input sits after the entries up to its anchor. */
@@ -169,13 +170,23 @@ export async function historyPage(source: HistorySource, before: string | undefi
   return { items, before: older };
 }
 async function resolve(source: HistorySource, ref: string): Promise<string | undefined> {
-  if (ref.startsWith('q')) return source.journal(Number(ref.slice(1)));
-  if (ref.startsWith('p')) return source.typed(Number(ref.slice(1)));
+  if (ref.startsWith('q')) {
+    const rowid = Number(ref.slice(1)); const text = source.journal(rowid);
+    return text !== undefined && source.journalHasImages?.(rowid) ? escapeDisplay(text) : text;
+  }
+  if (ref.startsWith('p')) {
+    const entry = Number(ref.slice(1)); const text = source.typed(entry);
+    return text !== undefined && source.placed(entry, entry).get(entry)?.images?.length ? escapeDisplay(text) : text;
+  }
   const [entry, index, field, part] = ref.slice(1).split('.');
   const found = (await source.entries?.({ minEntryId: Number(entry), maxEntryId: Number(entry), order: 'ascending' }, 1))?.[0];
   const message = ((found?.model ?? []) as readonly Message[])[Number(index)];
   if (!message) return undefined;
-  if (field === 'text') return message.role === 'user' || message.role === 'assistant' ? messageText(message) : undefined;
+  if (field === 'text') {
+    if (message.role !== 'user' && message.role !== 'assistant') return undefined;
+    const text = messageText(message);
+    return message.role === 'user' && source.placed(Number(entry), Number(entry)).get(Number(entry))?.images?.length ? escapeDisplay(text) : text;
+  }
   if (field === 'reasoning') return message.role === 'assistant' ? reasoningText(message) : undefined;
   if (field === 'output') return message.role === 'toolResult' ? escapeDisplay(messageText(message)) : undefined;
   const call = Array.isArray(message.content) ? message.content[Number(part)] : undefined;

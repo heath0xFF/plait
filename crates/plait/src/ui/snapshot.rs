@@ -121,6 +121,15 @@ fn text_system() -> Arc<dyn PlatformTextSystem> {
 
 fn git(repository: &Path, arguments: &[&str]) {
     let status = Command::new("git")
+        // Keep fixture commits from starting detached maintenance during later checks.
+        .args([
+            "-c",
+            "maintenance.auto=false",
+            "-c",
+            "gc.auto=0",
+            "-c",
+            "receive.autoGC=false",
+        ])
         .arg("-C")
         .arg(repository)
         .args(arguments)

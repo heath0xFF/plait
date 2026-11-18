@@ -1453,6 +1453,10 @@ late, EXIF-rotated display dimensions, and Codex capability resolution before
 its first watched snapshot. Scripted Pi, Codex and Claude Code inputs contain
 only image blocks for image-only messages. Pinned source confirms their input
 shapes; live provider acceptance and provider-specific refusals remain untested.
+Image-caption regressions check format/control escaping in each harness's
+snapshot and history while the scripted harness receives the unchanged prompt.
+Long captions exercise full-text offsets before placement and through both
+ordinary and typed-input history references.
 
 Claude Code's pinned SDK has no model image-capability field;
 unknown support is deliberately allowed, not inferred from model names.

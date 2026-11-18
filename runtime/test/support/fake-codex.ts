@@ -5,7 +5,7 @@
 // FAKE_CODEX_WRITE, when set, names a directory where each turn writes `codex-<message ID>.txt` as it starts.
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createInterface } from 'node:readline';
+import { stdinLines } from './stdin-lines.ts';
 
 type Frame = { id?: string | number; method?: string; params?: any; result?: any; error?: any };
 const scenario = process.env.FAKE_CODEX_SCENARIO ?? 'turn';
@@ -192,13 +192,10 @@ function handle(frame: Frame) {
   }
 }
 
-const lines = createInterface({ input: process.stdin });
-lines.on('line', line => {
+stdinLines(line => {
   if (log) appendFileSync(log, `${line}\n`);
   let frame: Frame;
   try { frame = JSON.parse(line); } catch { return; }
   handle(frame);
-});
-// Like Codex, end when the client closes stdin.
-lines.on('close', () => process.exit(0));
+}, () => process.exit(0));
 if (scenario === 'stderr') process.stderr.write(Array.from({ length: 40 }, (_, index) => `line ${index}`).join('\n') + '\n');

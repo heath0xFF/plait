@@ -808,6 +808,9 @@ pending image submission and blocks sending that draft twice; pending rows
 show the image count even without text. Disabled composers reject paste/drop,
 and a refused attachment's notice clears on the next text edit.
 The journal and caches contain no image data in snapshot frames.
+Displayed image captions use the same format/control-character escaping as
+tool rows and approvals, including paged history. Stored prompts and harness
+input retain the original text; history offsets count the displayed text.
 
 The release frame benchmark includes 50 distinct image references with a
 bounded cache of prepared thumbnails. It measures CPU render/layout/prepaint/

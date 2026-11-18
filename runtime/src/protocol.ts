@@ -1,5 +1,5 @@
 import type { ImageRef } from './images.ts';
-import { clipTail } from './text.ts';
+import { clipTail, escapeDisplay } from './text.ts';
 
 export type QueueMode = 'follow_up' | 'steer';
 /**
@@ -12,7 +12,7 @@ export type InputRecord = {
   /** Set while the input waits behind a run; it is not part of the conversation yet. */
   queued?: { mode: QueueMode; approval: ApprovalMode };
 };
-export const inputMessage = (input: InputRecord) => ({ id: `request-${input.request_id}`, role: 'user' as const, text: clipTail(input.text, 4096), ...(input.images?.length ? { images: input.images } : {}) });
+export const inputMessage = (input: InputRecord) => ({ id: `request-${input.request_id}`, role: 'user' as const, text: clipTail(input.images?.length ? escapeDisplay(input.text) : input.text, 4096), ...(input.images?.length ? { images: input.images } : {}) });
 
 export type ModelChoice = { provider: string; model_id: string };
 export type Status = 'idle' | 'running' | 'awaiting_approval' | 'stopped' | 'interrupted' | 'error';
@@ -131,7 +131,7 @@ export function summaryView(summary: Summary, protocol: Protocol): Summary {
   return protocol >= 4 ? { ...rest, harness: harness ?? 'pi' } : rest;
 }
 export const queuedView = (input: InputRecord): Queued => ({
-  id: `request-${input.request_id}`, request_id: input.request_id, text: clipTail(input.text, 4096),
+  id: `request-${input.request_id}`, request_id: input.request_id, text: inputMessage(input).text,
   mode: input.queued!.mode, approval: input.queued!.approval,
 });
 export class HostError extends Error {
@@ -174,7 +174,7 @@ const optional3: Record<string, string[]> = {
 const limits: Record<string, number> = { list_threads: 200, history: 500, turn_records: 50 };
 export const CURSOR = /^\d{1,16}:\d{1,16}$/;
 export const HISTORY_CURSOR = /^\d{1,16}:[01]:\d{1,16}$/;
-export const HISTORY_REF = /^(?:e\d{1,16}\.\d{1,6}\.(?:text|reasoning|output|input\.\d{1,6})|q\d{1,16})$/;
+export const HISTORY_REF = /^(?:e\d{1,16}\.\d{1,6}\.(?:text|reasoning|output|input\.\d{1,6})|[pq]\d{1,16})$/;
 const text = (value: unknown): value is string => typeof value === 'string' && !!value.trim();
 function validate3(request: Request) {
   const invalid = (message: string): never => fail('invalid_request', message);

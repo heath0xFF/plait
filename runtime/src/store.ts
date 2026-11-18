@@ -216,6 +216,11 @@ export class Store {
     const row = this.db.prepare('SELECT input FROM requests WHERE scope=? AND rowid=? AND input IS NOT NULL AND entry IS NULL AND state IS NULL').get(id, rowid);
     return row ? JSON.parse(String(row.input)) : undefined;
   }
+  journalHasImages(id: string, rowid: number): boolean {
+    return !!this.db.prepare(`SELECT 1 FROM requests JOIN message_images
+      ON message_images.thread=requests.scope AND message_images.request=requests.id
+      WHERE requests.scope=? AND requests.rowid=?`).get(id, rowid);
+  }
   owned(id: string): Postimage[] {
     return this.db.prepare('SELECT image FROM postimages WHERE thread_id=? LIMIT 500').all(id).map(row => JSON.parse(String(row.image)));
   }
