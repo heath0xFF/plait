@@ -2,10 +2,12 @@
 use plait_core::git::{record, review};
 use serde_json::Value;
 use std::{
-    io::{self, Read, Write},
-    process::Stdio,
+    io::{self, Read},
     time::Duration,
 };
+// Only the sandboxed path on macOS starts a contained copy of this program.
+#[cfg(target_os = "macos")]
+use std::{io::Write, process::Stdio};
 
 pub fn run() -> io::Result<()> {
     super::record::supervise("review-worker", Duration::from_secs(10))
