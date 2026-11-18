@@ -50,7 +50,7 @@ fn change(plait: &Plait, path: &str) -> usize {
     let snapshot = plait
         .state
         .repository
-        .snapshot
+        .snapshot()
         .ready()
         .expect("status read");
     let index = snapshot
@@ -156,7 +156,7 @@ fn open_what_is_on_screen() {
         plait.select_file(index, DiffMode::Unstaged, window, cx);
     });
     harness.update(|plait, _, cx| {
-        let Load::Ready(diff) = &plait.state.repository.diff else {
+        let Load::Ready(diff) = &plait.state.repository.diff() else {
             panic!("the diff is read");
         };
         assert_eq!(handoff::first_changed_line(&diff.lines), Some(3));
@@ -168,7 +168,7 @@ fn open_what_is_on_screen() {
     );
     // A picked line wins over the first change.
     harness.update(|plait, _, cx| {
-        let Load::Ready(diff) = &plait.state.repository.diff else {
+        let Load::Ready(diff) = &plait.state.repository.diff() else {
             panic!("the diff is read");
         };
         let first = diff.lines.iter().position(|line| line.new_line == Some(1));

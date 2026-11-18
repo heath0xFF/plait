@@ -34,7 +34,7 @@ impl Plait {
         now: i64,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let selected = self.state.repository.commits.selected.as_deref() == Some(&commit.id);
+        let selected = self.state.repository.selected_commit() == Some(&commit.id);
         let id = commit.id.clone();
         column()
             .id(("commit", index))
@@ -81,8 +81,7 @@ impl Plait {
     }
 
     fn commit_list(&self, cx: &mut Context<Self>) -> AnyElement {
-        let commits = &self.state.repository.commits;
-        let history = match &commits.list {
+        let history = match self.state.repository.commit_list() {
             Load::Empty | Load::Loading => {
                 return empty("Reading history…", "Git is running in the background.")
                     .into_any_element();
@@ -97,7 +96,7 @@ impl Plait {
         }
         let count = history.commits.len();
         let more = history.more;
-        let loading = commits.loading_more;
+        let loading = self.state.repository.commit_loading_more();
         column()
             .flex_1()
             .min_h_0()
@@ -107,7 +106,7 @@ impl Plait {
                     count,
                     cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
                         let now = now();
-                        let Some(history) = this.state.repository.commits.list.ready() else {
+                        let Some(history) = this.state.repository.commit_list().ready() else {
                             return Vec::new();
                         };
                         // Borrowed, not cloned: only the visible rows are built.
@@ -147,7 +146,7 @@ impl Plait {
     }
 
     fn commit_patch(&self, cx: &mut Context<Self>) -> AnyElement {
-        match &self.state.repository.commits.patch {
+        match self.state.repository.commit_patch() {
             Load::Empty => empty(
                 "Select a commit",
                 "Its message and changes appear here, compared with its first parent.",
@@ -171,7 +170,7 @@ impl Plait {
         let branch = self
             .state
             .repository
-            .snapshot
+            .snapshot()
             .ready()
             .map(|snapshot| snapshot.branch.clone());
         row()

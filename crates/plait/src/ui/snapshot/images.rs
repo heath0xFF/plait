@@ -32,8 +32,14 @@ pub(super) fn install(harness: &mut Harness, count: usize) {
         })
         .collect::<Vec<_>>();
     harness.update(|plait, _, cx| {
-        plait.host.status.as_mut().unwrap().protocol_version = 6;
-        let mut snapshot = (**plait.host.snapshot.as_ref().unwrap()).clone();
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 6;
+        let mut snapshot = (**plait.host.thread.snapshot.as_ref().unwrap()).clone();
         snapshot.image_input = Some("yes".into());
         snapshot.messages = (0..count)
             .map(|index| Message {
@@ -56,14 +62,18 @@ pub(super) fn install(harness: &mut Harness, count: usize) {
         snapshot.tools.clear();
         snapshot.live_text.clear();
         snapshot.status = ThreadStatus::Idle;
-        plait.host.snapshot = Some(Arc::new(snapshot));
+        plait.host.thread.snapshot = Some(Arc::new(snapshot));
         plait.history = Default::default();
         plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
             &Default::default(),
-            plait.host.snapshot.as_ref().unwrap(),
+            plait.host.thread.snapshot.as_ref().unwrap(),
         ));
         plait.images = super::super::images::ImageCache::scene(
-            (plait.host.epoch, plait.host.watch_epoch, THREAD.into()),
+            (
+                plait.host.connection.epoch,
+                plait.host.thread.watch_epoch,
+                THREAD.into(),
+            ),
             references
                 .iter()
                 .rev()

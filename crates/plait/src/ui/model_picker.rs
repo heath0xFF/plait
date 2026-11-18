@@ -166,7 +166,13 @@ impl Plait {
 
     /// Pi's catalog, or only the models of the harness the thread runs in.
     fn picker_items(&self, purpose: Option<ModelPurpose>) -> Vec<Item> {
-        let Some(status) = self.host.status.as_ref().filter(|_| self.host.connected) else {
+        let Some(status) = self
+            .host
+            .connection
+            .status
+            .as_ref()
+            .filter(|_| self.host.connection.connected)
+        else {
             return Vec::new();
         };
         let harness = self.picker_harness(purpose);
@@ -184,14 +190,14 @@ impl Plait {
     }
 
     pub(super) fn picker_stamp(&self) -> PickerStamp {
-        let status = self.host.status.as_ref();
+        let status = self.host.connection.status.as_ref();
         PickerStamp {
-            connected: self.host.connected,
+            connected: self.host.connection.connected,
             models: status.map_or_else(Vec::new, |status| catalog_stamp(&status.models)),
             default: status.and_then(|status| status.default_model.clone()),
-            choosing: self.host.settings_model.clone(),
-            saving: self.host.saving,
-            message: self.host.save_message.clone(),
+            choosing: self.host.connection.settings_model.clone(),
+            saving: self.host.connection.saving,
+            message: self.host.connection.save_message.clone(),
             favorites: self.preferences.value.favorite_models.clone(),
             harnesses: self.harnesses.generation,
         }
@@ -234,7 +240,7 @@ impl Plait {
                 .harness_model(harness, &choice)
                 .filter(|model| model.authenticated);
         }
-        let status = self.host.status.as_ref()?;
+        let status = self.host.connection.status.as_ref()?;
         let default = status.default_model.as_ref()?;
         let usable = self.host.available(Some(default));
         status
@@ -250,7 +256,12 @@ impl Plait {
     }
 
     pub(super) fn model_name(&self, choice: &ModelChoice) -> String {
-        let models = self.host.status.as_ref().map(|status| &status.models);
+        let models = self
+            .host
+            .connection
+            .status
+            .as_ref()
+            .map(|status| &status.models);
         models
             .and_then(|models| models.iter().find(|model| model.choice() == *choice))
             .or_else(|| self.harness_model(self.thread_harness(), choice))
@@ -260,9 +271,9 @@ impl Plait {
     /// Where a default-model change stands, in words and with its accent.
     /// The host's reply decides; nothing is reported saved before it.
     pub(super) fn default_model_state(&self) -> Option<(String, u32)> {
-        let saved = self.host.status.as_ref()?.default_model.as_ref();
-        let choosing = self.host.settings_model.as_ref();
-        if self.host.saving {
+        let saved = self.host.connection.status.as_ref()?.default_model.as_ref();
+        let choosing = self.host.connection.settings_model.as_ref();
+        if self.host.connection.saving {
             let name = choosing.map(|choice| self.model_name(choice));
             return Some((
                 format!("Saving {} as the default…", name.unwrap_or_default()),
@@ -270,7 +281,12 @@ impl Plait {
             ));
         }
         if let Some(choice) = choosing.filter(|choice| Some(*choice) != saved) {
-            let reason = self.host.save_message.clone().unwrap_or_default();
+            let reason = self
+                .host
+                .connection
+                .save_message
+                .clone()
+                .unwrap_or_default();
             return Some((
                 format!(
                     "{} is not saved as the default. {reason} Choose it again to retry.",
@@ -280,13 +296,19 @@ impl Plait {
             ));
         }
         self.host
+            .connection
             .save_message
             .clone()
             .map(|message| (message, colors().muted))
     }
 
     fn picker_note(&self, purpose: Option<ModelPurpose>) -> Option<SharedString> {
-        let status = self.host.status.as_ref().filter(|_| self.host.connected)?;
+        let status = self
+            .host
+            .connection
+            .status
+            .as_ref()
+            .filter(|_| self.host.connection.connected)?;
         if self.picker_harness(purpose) != HarnessId::Pi {
             return Some("Threads stay in the harness they started in.".into());
         }
@@ -298,9 +320,9 @@ impl Plait {
 
     /// Why the picker has nothing to list. Only real host state is described.
     fn picker_empty(&self) -> &'static str {
-        if self.host.connecting {
+        if self.host.connection.connecting {
             "Connecting to the local host…"
-        } else if !self.host.connected {
+        } else if !self.host.connection.connected {
             "Not connected to the local host, so there is no model catalog. Reconnect from Settings (⌘,)."
         } else {
             "The host returned no models. Settings (⌘,) links to the setup guide."
@@ -320,12 +342,20 @@ impl Plait {
             }
             ModelPurpose::ThreadModel => ("Change thread model", "Search models for this thread…"),
         };
-        let status = self.host.status.as_ref().filter(|_| self.host.connected);
+        let status = self
+            .host
+            .connection
+            .status
+            .as_ref()
+            .filter(|_| self.host.connection.connected);
         let drafted = self.draft_model();
         let preferred = match purpose {
-            ModelPurpose::ThreadModel => {
-                self.host.snapshot.as_ref().map(|snapshot| &snapshot.model)
-            }
+            ModelPurpose::ThreadModel => self
+                .host
+                .thread
+                .snapshot
+                .as_ref()
+                .map(|snapshot| &snapshot.model),
             ModelPurpose::NewThread => drafted.as_ref(),
             ModelPurpose::DefaultModel => status.and_then(|status| status.default_model.as_ref()),
         };
@@ -381,7 +411,7 @@ impl Plait {
 
     /// The composer the conversation tab shows: the selected thread's, or the draft's.
     pub(super) fn visible_composer(&self) -> Option<&Entity<Composer>> {
-        match &self.host.selected {
+        match &self.host.thread.selected {
             Some(id) => self.composers.get(id),
             None => self.draft.composer.as_ref().filter(|_| self.draft.open),
         }
@@ -394,18 +424,19 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.host.saving || !self.host.available(Some(&choice)) {
+        if self.host.connection.saving || !self.host.available(Some(&choice)) {
             return;
         }
         let saved = self
             .host
+            .connection
             .status
             .as_ref()
             .and_then(|s| s.default_model.as_ref());
-        if saved == Some(&choice) && self.host.settings_model.as_ref() == Some(&choice) {
+        if saved == Some(&choice) && self.host.connection.settings_model.as_ref() == Some(&choice) {
             return;
         }
-        self.host.settings_model = Some(choice);
+        self.host.connection.settings_model = Some(choice);
         self.save_default_model(window, cx);
     }
 
@@ -438,8 +469,13 @@ impl Plait {
         if self.draft_visible() && self.draft_pending() {
             return None;
         }
-        if self.host.creating {
-            let model = self.host.pending_create.as_ref().map(|(_, model)| model);
+        if self.host.creation.creating {
+            let model = self
+                .host
+                .creation
+                .pending_create
+                .as_ref()
+                .map(|(_, model)| model);
             let label = model.map_or_else(
                 || "Creating thread…".to_owned(),
                 |model| format!("Creating thread with {}…", model_label(model)),
@@ -451,10 +487,10 @@ impl Plait {
                     .into_any_element(),
             );
         }
-        let failure = self.host.error.clone();
-        if let Some((_, model)) = &self.host.pending_create {
+        let failure = self.host.connection.error.clone();
+        if let Some((_, model)) = &self.host.creation.pending_create {
             let detail = failure.unwrap_or_else(|| "The host did not answer.".into());
-            let connected = self.host.connected;
+            let connected = self.host.connection.connected;
             return Some(
                 bar()
                     .child(dot(colors().amber))
@@ -473,14 +509,15 @@ impl Plait {
                             .on_activate(cx, |this, window, cx| this.retry_create(window, cx))
                     } else {
                         toned_button("reconnect-to-create", "Reconnect", Tone::Filled)
-                            .disabled(self.host.connecting)
+                            .disabled(self.host.connection.connecting)
                             .on_activate(cx, |this, window, cx| this.reconnect_host(window, cx))
                     })
                     .into_any_element(),
             );
         }
         // A rejected request. The conversation view shows host errors itself.
-        let idle = self.new_thread_open && self.host.selected.is_none() && !self.settings_open;
+        let idle =
+            self.new_thread_open && self.host.thread.selected.is_none() && !self.settings_open;
         let error = failure.filter(|_| idle)?;
         Some(
             bar()

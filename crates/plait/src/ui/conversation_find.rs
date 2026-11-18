@@ -61,7 +61,7 @@ pub(super) struct Found {
 impl Plait {
     /// Cmd-F over the conversation: show the bar and search what is loaded.
     pub(super) fn open_conversation_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.host.selected.is_none() {
+        if self.host.thread.selected.is_none() {
             return;
         }
         let field = match self.conversation_find.field.clone() {
@@ -136,7 +136,7 @@ impl Plait {
             .history
             .display
             .clone()
-            .or_else(|| self.host.snapshot.clone());
+            .or_else(|| self.host.thread.snapshot.clone());
         let transcript = self.formatted.clone();
         let history = self.history.cache.clone();
         let task = cx.background_executor().spawn(async move {
@@ -309,7 +309,14 @@ impl Plait {
             )
         } else if history.enabled && (!cache.loaded || cache.older.is_some()) {
             Some("Only loaded messages are searched. Earlier messages load as you scroll up.")
-        } else if !history.enabled && self.host.snapshot.as_ref().is_some_and(|s| s.truncated) {
+        } else if !history.enabled
+            && self
+                .host
+                .thread
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.truncated)
+        {
             Some(
                 "Only loaded messages are searched. The host clipped older messages from this conversation.",
             )

@@ -81,6 +81,7 @@ impl Plait {
     pub(super) fn update_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let busy = self
             .host
+            .connection
             .threads
             .iter()
             .filter(|thread| thread.status.busy())

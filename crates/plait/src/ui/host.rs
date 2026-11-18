@@ -44,7 +44,7 @@ impl Plait {
         complete: impl FnOnce(&mut Self, Result<T, host::Error>, &mut Window, &mut Context<Self>)
         + 'static,
     ) {
-        let epoch = self.host.epoch;
+        let epoch = self.host.connection.epoch;
         let persist = matches!(request, Request::Submit { .. }) && self.session.required;
         if persist {
             self.capture_session(cx);
@@ -101,7 +101,7 @@ impl Plait {
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                if this.host.epoch != epoch {
+                if this.host.connection.epoch != epoch {
                     return;
                 }
                 complete(this, result, window, cx);
@@ -113,7 +113,7 @@ impl Plait {
     }
 
     pub(super) fn reconnect_host(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.host.connecting {
+        if self.host.connection.connecting {
             return;
         }
         self.host_watch = None;
@@ -137,17 +137,17 @@ impl Plait {
             cx,
             |this, result, window, cx| match result {
                 Ok(status) => {
-                    if this.host.apply_status(this.host.epoch, status) {
+                    if this.host.apply_status(this.host.connection.epoch, status) {
                         this.load_threads(window, cx);
                         this.refresh_turn_review(cx);
-                        if let Some(id) = this.host.selected.clone() {
+                        if let Some(id) = this.host.thread.selected.clone() {
                             this.watch_thread(id, window, cx);
                         }
                     }
                 }
                 Err(error) => {
-                    this.host.connecting = false;
-                    this.host.error = Some(error.to_string());
+                    this.host.connection.connecting = false;
+                    this.host.connection.error = Some(error.to_string());
                 }
             },
         );
@@ -155,25 +155,25 @@ impl Plait {
     }
 
     pub(super) fn load_threads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.host.connected {
+        if !self.host.connection.connected {
             return;
         }
         if self.host.protocol() >= 3 {
             self.watch_all_threads(window, cx);
             return;
         }
-        let checkout = self.host.checkout.clone();
+        let checkout = self.host.creation.checkout.clone();
         self.host_request::<host::ThreadsReply>(
             Request::ListThreads { checkout },
             window,
             cx,
             |this, result, window, cx| match result {
                 Ok(reply) => {
-                    this.host.threads = reply.threads;
+                    this.host.connection.threads = reply.threads;
                     this.rebuild_projects(cx);
                     this.restore_thread_selection(window, cx);
                 }
-                Err(error) => this.host.error = Some(error.to_string()),
+                Err(error) => this.host.connection.error = Some(error.to_string()),
             },
         );
     }
@@ -186,6 +186,7 @@ impl Plait {
     ) {
         let Some(checkout) = self
             .host
+            .connection
             .threads
             .iter()
             .find(|thread| thread.id == id)
@@ -193,8 +194,8 @@ impl Plait {
         else {
             return;
         };
-        if checkout != self.host.checkout {
-            if self.host.creating || self.host.pending_create.is_some() {
+        if checkout != self.host.creation.checkout {
+            if self.host.creation.creating || self.host.creation.pending_create.is_some() {
                 self.notice =
                     Some("Resolve the pending thread creation before changing checkout.".into());
                 cx.notify();
@@ -226,7 +227,7 @@ impl Plait {
         }
         self.capture_session(cx);
         self.sync_composer(cx);
-        if self.host.connected {
+        if self.host.connection.connected {
             self.watch_thread(id, window, cx);
         }
         cx.notify();
@@ -245,7 +246,7 @@ impl Plait {
             .detach();
         let thread_id = id.clone();
         cx.subscribe_in(&composer, window, move |this, _, event, window, cx| {
-            if this.host.selected.as_ref() != Some(&thread_id) {
+            if this.host.thread.selected.as_ref() != Some(&thread_id) {
                 return;
             }
             match event {
@@ -264,9 +265,9 @@ impl Plait {
 
     fn watch_thread(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         self.host_watch = None;
-        self.host.watch_epoch += 1;
-        let epoch = self.host.epoch;
-        let watch_epoch = self.host.watch_epoch;
+        self.host.thread.watch_epoch += 1;
+        let epoch = self.host.connection.epoch;
+        let watch_epoch = self.host.thread.watch_epoch;
         let watch_id = id.clone();
         let protocol = self.host.protocol();
         let executor = cx.background_executor().clone();
@@ -325,7 +326,7 @@ impl Plait {
                                     );
                                     return false;
                                 }
-                                let previous = this.host.snapshot.clone();
+                                let previous = this.host.thread.snapshot.clone();
                                 if !this.host.apply_snapshot(epoch, watch_epoch, snapshot) {
                                     this.host_watch = None;
                                     this.sync_composer(cx);
@@ -333,7 +334,7 @@ impl Plait {
                                     return false;
                                 }
                                 let review_changed = previous.as_ref().is_none_or(|old| {
-                                    this.host.snapshot.as_ref().is_some_and(|new| {
+                                    this.host.thread.snapshot.as_ref().is_some_and(|new| {
                                         old.status != new.status
                                             || old.records_revision != new.records_revision
                                     })
@@ -350,6 +351,7 @@ impl Plait {
                                     .is_some_and(|snapshot| snapshot.status.busy())
                                     && this
                                         .host
+                                        .thread
                                         .snapshot
                                         .as_ref()
                                         .is_some_and(|snapshot| !snapshot.status.busy())
@@ -393,15 +395,15 @@ impl Plait {
             return;
         }
         self.host_watch = None;
-        self.host.connected = false;
-        self.host.error = Some(error.to_string());
+        self.host.connection.connected = false;
+        self.host.connection.error = Some(error.to_string());
         self.refresh_turn_review(cx);
         self.sync_composer(cx);
         cx.notify();
     }
 
     pub(super) fn refresh_live_list(&mut self, previous: Option<&Snapshot>) {
-        self.history.display = self.host.snapshot.clone();
+        self.history.display = self.host.thread.snapshot.clone();
         self.reconcile_live_list(previous);
     }
 
@@ -478,11 +480,11 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.host.connected || self.host.creating {
+        if !self.host.connection.connected || self.host.creation.creating {
             return;
         }
-        if self.host.pending_create.is_none() {
-            let Some(choice) = self.host.new_model.clone() else {
+        if self.host.creation.pending_create.is_none() {
+            let Some(choice) = self.host.creation.new_model.clone() else {
                 return;
             };
             let harness = self.new_thread_harness(&choice);
@@ -490,20 +492,20 @@ impl Plait {
                 return;
             }
             let mode = self.new_thread_mode(&choice);
-            self.host.pending_create = Some((request_id(), choice));
-            self.host.pending_thinking =
+            self.host.creation.pending_create = Some((request_id(), choice));
+            self.host.creation.pending_thinking =
                 Some(thinking.unwrap_or_else(|| self.preferences.value.default_thinking()));
             self.set_pending_harness(harness, mode);
         }
-        let (id, choice) = self.host.pending_create.clone().unwrap();
-        let thinking = self.host.pending_thinking;
+        let (id, choice) = self.host.creation.pending_create.clone().unwrap();
+        let thinking = self.host.creation.pending_thinking;
         let harness = self.pending_harness();
         let protocol = self.host.protocol();
-        self.host.creating = true;
-        self.host.error = None;
-        let selection_epoch = self.host.watch_epoch;
+        self.host.creation.creating = true;
+        self.host.connection.error = None;
+        let selection_epoch = self.host.thread.watch_epoch;
         let request = Request::create_thread(
-            self.host.checkout.clone(),
+            self.host.creation.checkout.clone(),
             &choice,
             id.clone(),
             thinking,
@@ -545,27 +547,27 @@ impl Plait {
             selection_epoch,
         } = created;
         // Only the creation still pending; the host answers each request once.
-        if self.host.pending_create.as_ref().map(|(id, _)| id) != Some(&request_id) {
+        if self.host.creation.pending_create.as_ref().map(|(id, _)| id) != Some(&request_id) {
             return;
         }
-        self.host.creating = false;
+        self.host.creation.creating = false;
         let drafted = self.draft_sent(&request_id);
         match result {
             Ok(reply)
                 if reply.thread.model == choice
                     && super::harnesses::harness_of(&reply.thread) == harness =>
             {
-                self.host.pending_create = None;
+                self.host.creation.pending_create = None;
                 let id = reply.thread.id.clone();
-                if !self.host.threads.iter().any(|thread| thread.id == id) {
+                if !self.host.connection.threads.iter().any(|thread| thread.id == id) {
                     self.host
-                        .threads
+                        .connection.threads
                         .insert(0, host::ThreadSummary::from(&reply.thread));
                     self.rebuild_projects(cx);
                 }
                 if drafted {
                     self.deliver_draft(id, window, cx);
-                } else if self.new_thread_open && self.host.watch_epoch == selection_epoch {
+                } else if self.new_thread_open && self.host.thread.watch_epoch == selection_epoch {
                     self.select_host_thread(id, window, cx);
                     self.focus_composer(window, cx);
                 }
@@ -573,18 +575,18 @@ impl Plait {
                 self.load_threads(window, cx);
             }
             Ok(_) => {
-                self.host.error = Some("Host returned a different model or harness. Creation is unconfirmed; reconnect before retrying.".into())
+                self.host.connection.error = Some("Host returned a different model or harness. Creation is unconfirmed; reconnect before retrying.".into())
             }
             Err(error) => {
                 if matches!(error, host::Error::Rejected(_)) {
-                    self.host.pending_create = None;
+                    self.host.creation.pending_create = None;
                     if drafted {
                         self.draft_rejected(error.to_string());
                     } else {
-                        self.host.error = Some(error.to_string());
+                        self.host.connection.error = Some(error.to_string());
                     }
                 } else {
-                    self.host.error = Some(format!(
+                    self.host.connection.error = Some(format!(
                         "{error} Retry creation to reuse the same request ID."
                     ));
                 }
@@ -601,7 +603,7 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(id) = self.host.selected.clone() else {
+        let Some(id) = self.host.thread.selected.clone() else {
             return;
         };
         if !self.can_submit() {
@@ -627,14 +629,14 @@ impl Plait {
         ) {
             Ok(pending) => self.retry_submission_id(&id, &pending.request_id, window, cx),
             Err(error) => {
-                self.host.error = Some(error);
+                self.host.connection.error = Some(error);
                 cx.notify();
             }
         }
     }
 
     pub(super) fn retry_submission(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(id) = self.host.selected.clone() else {
+        let Some(id) = self.host.thread.selected.clone() else {
             return;
         };
         let Some(pending) = self.host.submissions.pending(&id).cloned() else {
@@ -650,7 +652,10 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.host.connected || !self.session.ready() || !self.session_accepts_thread(id) {
+        if !self.host.connection.connected
+            || !self.session.ready()
+            || !self.session_accepts_thread(id)
+        {
             return;
         }
         let Some(pending) = self.host.submissions.get(id, request_id).cloned() else {
@@ -660,7 +665,7 @@ impl Plait {
             || (pending.when_busy.is_some() && self.host.protocol() < 3)
             || (pending.approval.is_some() && self.host.protocol() < 2)
         {
-            self.host.error =
+            self.host.connection.error =
                 Some("This message needs a newer host. Update before retrying.".into());
             return;
         }
@@ -669,8 +674,8 @@ impl Plait {
         }
         let id = id.to_owned();
         let composer = self.composers.get(&id).cloned();
-        self.host.submitting = true;
-        self.host.error = None;
+        self.host.thread.submitting = true;
+        self.host.connection.error = None;
         self.sync_composer(cx);
         self.host_request::<host::SubmitReply>(
             pending.request(&id),
@@ -705,13 +710,14 @@ impl Plait {
                         }
                     }
                 }
-                this.host.submitting = this.host.selected.as_ref().is_some_and(|selected| {
-                    this.host
-                        .submissions
-                        .all(selected)
-                        .iter()
-                        .any(|p| this.host.submissions.is_sending(&p.request_id))
-                });
+                this.host.thread.submitting =
+                    this.host.thread.selected.as_ref().is_some_and(|selected| {
+                        this.host
+                            .submissions
+                            .all(selected)
+                            .iter()
+                            .any(|p| this.host.submissions.is_sending(&p.request_id))
+                    });
                 this.capture_session(cx);
             },
         );
@@ -724,16 +730,16 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.host.connected || self.host.controlling {
+        if !self.host.connection.connected || self.host.thread.controlling {
             return;
         }
-        let Some(snapshot) = self.host.snapshot.as_ref() else {
+        let Some(snapshot) = self.host.thread.snapshot.as_ref() else {
             return;
         };
         let id = snapshot.id.clone();
         let harness = super::harnesses::harness_of(snapshot);
         let request = if let Some((approval_id, allow)) = approval {
-            if self.host.decided_approvals.contains(&approval_id)
+            if self.host.thread.decided_approvals.contains(&approval_id)
                 || !snapshot.pending_approval.as_ref().is_some_and(|pending| {
                     pending.id == approval_id
                         && super::live_conversation::approvable(pending, harness)
@@ -741,7 +747,10 @@ impl Plait {
             {
                 return;
             }
-            self.host.decided_approvals.insert(approval_id.clone());
+            self.host
+                .thread
+                .decided_approvals
+                .insert(approval_id.clone());
             Request::Approve {
                 thread_id: id.clone(),
                 approval_id,
@@ -755,21 +764,24 @@ impl Plait {
                 thread_id: id.clone(),
             }
         };
-        self.host.controlling = true;
-        let watch_epoch = self.host.watch_epoch;
+        self.host.thread.controlling = true;
+        let watch_epoch = self.host.thread.watch_epoch;
         self.host_request::<host::ThreadReply>(request, window, cx, move |this, result, _, _| {
-            if !this.host.accepts_watch(this.host.epoch, watch_epoch, &id) {
+            if !this
+                .host
+                .accepts_watch(this.host.connection.epoch, watch_epoch, &id)
+            {
                 return;
             }
-            this.host.controlling = false;
+            this.host.thread.controlling = false;
             match result {
                 // Watch owns snapshot order; a command reply can arrive after a newer event.
                 Ok(reply) if reply.thread.id == id => {}
                 Ok(_) => {
-                    this.host.error =
+                    this.host.connection.error =
                         Some("Host returned the wrong thread for this control request.".into())
                 }
-                Err(error) => this.host.error = Some(error.to_string()),
+                Err(error) => this.host.connection.error = Some(error.to_string()),
             }
         });
         self.sync_composer(cx);
@@ -777,12 +789,16 @@ impl Plait {
     }
 
     pub(super) fn save_default_model(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.host.saving || !self.host.available(self.host.settings_model.as_ref()) {
+        if self.host.connection.saving
+            || !self
+                .host
+                .available(self.host.connection.settings_model.as_ref())
+        {
             return;
         }
-        let choice = self.host.settings_model.clone().unwrap();
-        self.host.saving = true;
-        self.host.save_message = Some("Saving default model…".into());
+        let choice = self.host.connection.settings_model.clone().unwrap();
+        self.host.connection.saving = true;
+        self.host.connection.save_message = Some("Saving default model…".into());
         self.host_request::<host::DefaultReply>(
             Request::SetDefaultModel {
                 provider: choice.provider.clone(),
@@ -807,11 +823,11 @@ impl Plait {
 
     pub(super) fn can_submit(&self) -> bool {
         self.session.ready()
-            && self.navigation.available.get(&self.host.checkout) != Some(&false)
-            && self.host.connected
-            && !self.host.controlling
+            && self.navigation.available.get(&self.host.creation.checkout) != Some(&false)
+            && self.host.connection.connected
+            && !self.host.thread.controlling
             && !self.thread_configuration_pending()
-            && self.host.snapshot.as_ref().is_some_and(|snapshot| {
+            && self.host.thread.snapshot.as_ref().is_some_and(|snapshot| {
                 (self.host.protocol() >= 3
                     || (!snapshot.status.busy()
                         && self.host.submissions.pending(&snapshot.id).is_none()))
@@ -825,7 +841,7 @@ impl Plait {
     pub(super) fn sync_composer(&mut self, cx: &mut Context<Self>) {
         self.sync_thread_harness();
         self.sync_draft_composer(cx);
-        let Some(id) = self.host.selected.as_ref() else {
+        let Some(id) = self.host.thread.selected.as_ref() else {
             return;
         };
         let Some(composer) = self.composers.get(id) else {
@@ -833,28 +849,30 @@ impl Plait {
         };
         let busy = self
             .host
+            .thread
             .snapshot
             .as_ref()
             .is_some_and(|snapshot| snapshot.status.busy());
-        let reason = if self.navigation.available.get(&self.host.checkout) == Some(&false) {
+        let reason = if self.navigation.available.get(&self.host.creation.checkout) == Some(&false)
+        {
             Some("Checkout folder unavailable. Open its current location before sending.".into())
         } else if !self.session.ready() {
             Some("Restoring saved work…".into())
         } else if !self.session_accepts_thread(id) {
             Some("Thread checkout differs from the saved draft. Original work is preserved.".into())
-        } else if self.thread_controls.editing.get(id) == Some(&self.host.epoch) {
+        } else if self.thread_controls.editing.get(id) == Some(&self.host.connection.epoch) {
             Some("Restoring the queued message. Wait for cancellation to finish.".into())
-        } else if !self.host.connected {
+        } else if !self.host.connection.connected {
             Some("Host disconnected. Reconnect to send.".into())
-        } else if self.host.snapshot.is_none() {
+        } else if self.host.thread.snapshot.is_none() {
             Some("Loading saved thread…".into())
         } else if self.host.protocol() < 3
-            && (self.host.submitting || self.host.submissions.pending(id).is_some())
+            && (self.host.thread.submitting || self.host.submissions.pending(id).is_some())
         {
             Some("Message unconfirmed · Retry safely above.".into())
         } else if let Some(reason) = self.harness_reason() {
             Some(reason)
-        } else if !self.host.snapshot.as_ref().is_some_and(|snapshot| {
+        } else if !self.host.thread.snapshot.as_ref().is_some_and(|snapshot| {
             self.usable_in(super::harnesses::harness_of(snapshot), &snapshot.model)
         }) {
             Some(
@@ -872,6 +890,7 @@ impl Plait {
             Some("Saving model settings…".into())
         } else if self
             .host
+            .thread
             .snapshot
             .as_ref()
             .is_some_and(|s| s.queued.len() + self.host.submissions.all(id).len() >= 16)
@@ -894,6 +913,7 @@ impl Plait {
             composer.set_image_support(
                 self.host.protocol(),
                 self.host
+                    .thread
                     .snapshot
                     .as_ref()
                     .and_then(|snapshot| snapshot.image_input.as_deref()),
@@ -901,11 +921,15 @@ impl Plait {
             );
             composer.set_agent_commands(agent, cx);
             composer.set_send_blocked(send_blocked, cx);
-            composer.set_enabled(reason.is_none() && !self.host.controlling, reason, cx);
+            composer.set_enabled(
+                reason.is_none() && !self.host.thread.controlling,
+                reason,
+                cx,
+            );
             composer.set_busy(busy, cx);
             composer.set_queue_enabled(
                 self.host.protocol() >= 3,
-                self.host.connected && !self.host.controlling,
+                self.host.connection.connected && !self.host.thread.controlling,
                 cx,
             );
         });

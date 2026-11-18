@@ -16,15 +16,16 @@ impl Plait {
             return;
         }
         // An unconfirmed creation is retried where it was asked for.
-        if self.host.creating || self.host.pending_create.is_some() {
+        if self.host.creation.creating || self.host.creation.pending_create.is_some() {
             return self.retry_create(window, cx);
         }
-        if !self.host.connected || self.host.protocol() < 3 {
+        if !self.host.connection.connected || self.host.protocol() < 3 {
             self.notice = Some("Connect to the host to start a thread in a worktree.".into());
             return cx.notify();
         }
         let choice = self
             .host
+            .connection
             .status
             .as_ref()
             .and_then(|status| status.default_model.clone())
@@ -82,6 +83,7 @@ impl Plait {
         }
         let working = self
             .host
+            .connection
             .threads
             .iter()
             .any(|thread| thread.checkout == path && thread.status.busy());
@@ -123,7 +125,7 @@ impl Plait {
                 this.worktree_busy = false;
                 match result {
                     // Its folder is gone; show the project it came from.
-                    Ok(()) if this.host.checkout == path => {
+                    Ok(()) if this.host.creation.checkout == path => {
                         this.change_checkout(tree.main, window, cx)
                     }
                     Ok(()) => this.navigation.available.clear(),

@@ -23,7 +23,7 @@ impl Plait {
             if window.is_window_active()
                 && !this.settings_open
                 && this.tab == super::Workspace::Conversation
-                && let Some(id) = this.host.selected.clone()
+                && let Some(id) = this.host.thread.selected.clone()
             {
                 this.mark_thread_read(&id, cx);
             }
@@ -41,7 +41,13 @@ impl Plait {
             let id = id.to_owned();
             let _ = handle.update(cx, |_, window, cx| {
                 let _ = view.update(cx, |this, cx| {
-                    if this.host.threads.iter().any(|thread| thread.id == id) {
+                    if this
+                        .host
+                        .connection
+                        .threads
+                        .iter()
+                        .any(|thread| thread.id == id)
+                    {
                         this.select_host_thread(id, window, cx);
                         window.activate_window();
                     }
@@ -105,7 +111,7 @@ impl Plait {
                     }
                     this.navigation.watch = Some(lease);
                     this.navigation.loading = false;
-                    this.host.threads = all;
+                    this.host.connection.threads = all;
                     this.apply_thread_activity(true, window, cx);
                     this.rebuild_projects(cx);
                     this.restore_thread_selection(window, cx);
@@ -129,17 +135,19 @@ impl Plait {
                         match result {
                             Ok(live) => {
                                 let review_changed = live.iter().any(|new| {
-                                    new.checkout == this.host.checkout
+                                    new.checkout == this.host.creation.checkout
                                         && this
                                             .host
+                                            .connection
                                             .threads
                                             .iter()
                                             .find(|old| old.id == new.id)
                                             .is_none_or(|old| old.status != new.status)
                                 });
-                                if let Err(error) =
-                                    navigation::merge_threads(&mut this.host.threads, live)
-                                {
+                                if let Err(error) = navigation::merge_threads(
+                                    &mut this.host.connection.threads,
+                                    live,
+                                ) {
                                     this.thread_list_failed(
                                         generation,
                                         host::Error::Protocol(error),
@@ -198,12 +206,13 @@ impl Plait {
         let visible = (window.is_window_active()
             && !self.settings_open
             && self.tab == super::Workspace::Conversation)
-            .then_some(self.host.selected.as_deref())
+            .then_some(self.host.thread.selected.as_deref())
             .flatten();
         let mut preferences = self.preferences.value.clone();
-        let notifications = preferences
-            .navigation
-            .observe(&self.host.threads, visible, initial);
+        let notifications =
+            preferences
+                .navigation
+                .observe(&self.host.connection.threads, visible, initial);
         if preferences != self.preferences.value {
             self.persist_navigation(preferences, cx);
         }
@@ -211,7 +220,13 @@ impl Plait {
             return;
         }
         for id in notifications {
-            if let Some(thread) = self.host.threads.iter().find(|thread| thread.id == id) {
+            if let Some(thread) = self
+                .host
+                .connection
+                .threads
+                .iter()
+                .find(|thread| thread.id == id)
+            {
                 window.request_attention();
                 cx.show_system_notification(SystemNotification {
                     tag: format!("plait-thread:{id}").into(),
@@ -234,17 +249,17 @@ impl Plait {
         let Some(root) = self
             .state
             .repository
-            .snapshot
+            .snapshot()
             .ready()
             .map(|snapshot| snapshot.root.clone())
         else {
             return;
         };
-        if root == self.host.checkout {
+        if root == self.host.creation.checkout {
             return;
         }
-        let previous = std::mem::replace(&mut self.host.checkout, root.clone());
-        self.state.repository.path = root.clone();
+        let previous = std::mem::replace(&mut self.host.creation.checkout, root.clone());
+        self.state.repository.data.path = root.clone();
         let mut preferences = self.preferences.value.clone();
         preferences
             .navigation
@@ -259,9 +274,9 @@ impl Plait {
     pub(super) fn rebuild_projects(&mut self, cx: &mut Context<Self>) {
         let machine = self.state.projects[0].machines[0].name.clone();
         self.state.projects = navigation::projects(
-            &self.host.threads,
+            &self.host.connection.threads,
             &self.preferences.value.navigation,
-            &self.host.checkout,
+            &self.host.creation.checkout,
             &machine,
         );
         let paths = self
@@ -306,7 +321,7 @@ impl Plait {
         summary: ThreadSummary,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        navigation::merge_threads(&mut self.host.threads, vec![summary])?;
+        navigation::merge_threads(&mut self.host.connection.threads, vec![summary])?;
         self.rebuild_projects(cx);
         self.capture_session(cx);
         cx.notify();

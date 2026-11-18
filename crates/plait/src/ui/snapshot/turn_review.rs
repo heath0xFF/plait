@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 const PATCH: &str = "diff --git a/src/review.rs b/src/review.rs\n--- a/src/review.rs\n+++ b/src/review.rs\n@@ -1,3 +1,4 @@\n pub fn refresh() {\n-    read_on_frame();\n+    queue_status();\n+    notify_when_ready();\n }\n";
 fn target(p: &Plait, record: &str, path: Option<&str>) -> Target {
     Target {
-        thread: p.host.selected.clone().unwrap(),
-        checkout: p.host.checkout.clone(),
+        thread: p.host.thread.selected.clone().unwrap(),
+        checkout: p.host.creation.checkout.clone(),
         record: record.into(),
         original: "last".into(),
         path: path.map(PathBuf::from),
@@ -32,12 +32,12 @@ pub(super) fn scene(
         if kind=="undo" { inject(p,vec![data,record("last", &["last"], "undone")]); } else { inject(p,vec![data]); }
         let target=target(p,id,None);
         let mut saved=Record::prepare(&p.turn_records.data,&target).unwrap();
-        saved.describe(&p.turn_records.data,p.host.snapshot.as_deref());
-        p.turn_review=TurnReview { selected:saved.selected(&target), target:Some(target), record:Some(Arc::new(saved)), diff:(!matches!(kind,"empty"|"loading"|"unavailable"|"old")).then(||lines.unwrap_or_else(||Arc::new(plait_core::git::recorded_diff(PATCH.as_bytes(),false,Duration::from_millis(18))))), epoch:Some(p.host.epoch), ..Default::default() };
+        saved.describe(&p.turn_records.data,p.host.thread.snapshot.as_deref());
+        p.turn_review=TurnReview { selected:saved.selected(&target), target:Some(target), record:Some(Arc::new(saved)), diff:(!matches!(kind,"empty"|"loading"|"unavailable"|"old")).then(||lines.unwrap_or_else(||Arc::new(plait_core::git::recorded_diff(PATCH.as_bytes(),false,Duration::from_millis(18))))), epoch:Some(p.host.connection.epoch), ..Default::default() };
         if kind=="loading" {p.turn_review.loading=true;}
         if kind=="unavailable" {p.turn_review.error=Some(("Unavailable","The saved content is unavailable.".into()));}
         if kind=="old" {p.turn_review.older=true;p.turn_review.error=Some(("Older host","Turn review needs a newer host. Current Git changes are still available.".into()));}
-        if kind=="clean" { p.state.repository.complete(plait_core::state::Job::Status {epoch:p.state.repository.epoch(),path:repository.into()}, plait_core::state::Reply::Status(Ok(Arc::new(plait_core::model::Snapshot {root:repository.into(),branch:"main".into(),named:true,tracking:None,changes:vec![],elapsed:Duration::ZERO})))); p.state.repository.selected=None; }
+        if kind=="clean" { p.state.repository.complete(plait_core::state::Job::Status {epoch:p.state.repository.epoch(),path:repository.into()}, plait_core::state::Reply::Status(Ok(Arc::new(plait_core::model::Snapshot {root:repository.into(),branch:"main".into(),named:true,tracking:None,changes:vec![],elapsed:Duration::ZERO})))); p.state.repository.view.changes.selected=None; }
         p.diff_scroll=UniformListScrollHandle::new(); p.file_scroll=UniformListScrollHandle::new();p.tab=Workspace::Changes;
     });
 }
@@ -78,7 +78,7 @@ pub(super) fn walk(h: &mut Harness, repository: &Path, suffix: &str) {
             data["paths_total"] = json!(1);
             inject(p, vec![data]);
             let mut saved = Record::prepare(&p.turn_records.data, p.turn_review.target.as_ref().unwrap()).unwrap();
-            saved.describe(&p.turn_records.data, p.host.snapshot.as_deref());
+            saved.describe(&p.turn_records.data, p.host.thread.snapshot.as_deref());
             p.turn_review.record = Some(Arc::new(saved));
         });
         h.capture(&format!("turn-recorded-{name}-{suffix}"));
@@ -90,7 +90,7 @@ pub(super) fn walk(h: &mut Harness, repository: &Path, suffix: &str) {
         inject(p, vec![data]);
         let mut saved =
             Record::prepare(&p.turn_records.data, p.turn_review.target.as_ref().unwrap()).unwrap();
-        saved.describe(&p.turn_records.data, p.host.snapshot.as_deref());
+        saved.describe(&p.turn_records.data, p.host.thread.snapshot.as_deref());
         p.turn_review.record = Some(Arc::new(saved));
     });
     h.capture(&format!("turn-recorded-request-unloaded-{suffix}"));
@@ -136,7 +136,14 @@ pub(super) fn walk(h: &mut Harness, repository: &Path, suffix: &str) {
     });
     scene(h, repository, "ready", None);
     h.update(|p, _, cx| {
-        let mut changes = p.state.repository.snapshot.ready().unwrap().changes.clone();
+        let mut changes = p
+            .state
+            .repository
+            .snapshot()
+            .ready()
+            .unwrap()
+            .changes
+            .clone();
         for change in &mut changes {
             if change.path == Path::new("src/review.rs") {
                 change.worktree = b' ';
@@ -152,13 +159,15 @@ pub(super) fn walk(h: &mut Harness, repository: &Path, suffix: &str) {
         .window
         .update(&mut h.cx, |p, _, _| {
             p.turn_review.current = true;
-            p.state.repository.selected = None;
-            std::mem::replace(&mut p.state.repository.snapshot, Load::Loading)
+            p.state.repository.view.changes.selected = None;
+            std::mem::replace(&mut p.state.repository.data.snapshot, Load::Loading)
         })
         .unwrap();
     h.capture(&format!("turn-current-loading-{suffix}"));
     h.window
-        .update(&mut h.cx, |p, _, _| p.state.repository.snapshot = snapshot)
+        .update(&mut h.cx, |p, _, _| {
+            p.state.repository.data.snapshot = snapshot
+        })
         .unwrap();
     for kind in ["loading", "unavailable", "old"] {
         scene(h, repository, kind, None);
@@ -330,12 +339,12 @@ fn stale_review_replies() {
                 // Each identity member is changed alone. Going offline prevents
                 // a replacement read, so only the old response can install data.
                 p.tab = Workspace::Conversation;
-                p.host.connected = false;
+                p.host.connection.connected = false;
                 match change {
-                    0 => p.host.selected = Some("other".into()),
-                    1 => p.host.checkout.push("other"),
-                    2 => p.host.epoch += 1,
-                    3 => p.host.watch_epoch += 1,
+                    0 => p.host.thread.selected = Some("other".into()),
+                    1 => p.host.creation.checkout.push("other"),
+                    2 => p.host.connection.epoch += 1,
+                    3 => p.host.thread.watch_epoch += 1,
                     4 => {
                         p.state.repository.refresh();
                         p.pump(cx);
@@ -414,7 +423,7 @@ fn scope_keys_and_clean_files() {
     h.update(|p, _, cx| {
         assert_eq!(p.recorded_file().unwrap().path, PathBuf::from("README.md"));
         assert_eq!(p.recorded_file().unwrap().label, "Deleted");
-        p.state.repository.snapshot = Load::Ready(Arc::new(plait_core::model::Snapshot {
+        p.state.repository.data.snapshot = Load::Ready(Arc::new(plait_core::model::Snapshot {
             root: repository.clone(),
             branch: "main".into(),
             named: true,
@@ -422,7 +431,7 @@ fn scope_keys_and_clean_files() {
             changes: vec![],
             elapsed: Duration::ZERO,
         }));
-        p.state.repository.selected = None;
+        p.state.repository.view.changes.selected = None;
         p.review_comparison(true, cx);
         assert!(!p.recorded_current_available());
     });
@@ -487,7 +496,7 @@ fn current_waits_for_status_and_requires_a_file() {
     let (scratch, repository, mut h) = setup("review-loading");
     scene(&mut h, &repository, "ready", None);
     h.update(|p, _, cx| {
-        p.host.connected = false;
+        p.host.connection.connected = false;
         p.review_comparison(true, cx);
         assert!(p.turn_review.current);
         p.state.repository.refresh();
@@ -521,7 +530,7 @@ fn current_selects_a_present_layer() {
     scene(&mut h, &repository, "ready", None);
     h.update(|p, _, cx| {
         use plait_core::{model::DiffMode, state::DiffKey};
-        p.host.connected = false;
+        p.host.connection.connected = false;
         let changes = vec![plait_core::model::Change {
             path: "src/review.rs".into(),
             original: None,
@@ -529,22 +538,29 @@ fn current_selects_a_present_layer() {
             worktree: b' ',
         }];
         set_changes(p, changes);
-        p.state.repository.selected = Some(DiffKey {
+        p.state.repository.view.changes.selected = Some(DiffKey {
             file: 0,
             mode: DiffMode::Unstaged,
         });
         p.review_comparison(true, cx);
         assert_eq!(
-            p.state.repository.selected.as_ref().unwrap().mode,
+            p.state.repository.selected_diff().unwrap().mode,
             DiffMode::Staged
         );
         // A present staged selection stays selected when both layers exist.
-        let mut changes = p.state.repository.snapshot.ready().unwrap().changes.clone();
+        let mut changes = p
+            .state
+            .repository
+            .snapshot()
+            .ready()
+            .unwrap()
+            .changes
+            .clone();
         changes[0].worktree = b'M';
         set_changes(p, changes);
         p.sync_recorded_current(cx);
         assert_eq!(
-            p.state.repository.selected.as_ref().unwrap().mode,
+            p.state.repository.selected_diff().unwrap().mode,
             DiffMode::Staged
         );
     });
@@ -553,8 +569,8 @@ fn current_selects_a_present_layer() {
 }
 
 fn set_changes(p: &mut Plait, changes: Vec<plait_core::model::Change>) {
-    p.state.repository.snapshot = Load::Ready(Arc::new(plait_core::model::Snapshot {
-        root: p.host.checkout.clone(),
+    p.state.repository.data.snapshot = Load::Ready(Arc::new(plait_core::model::Snapshot {
+        root: p.host.creation.checkout.clone(),
         branch: "main".into(),
         named: true,
         tracking: None,
@@ -592,7 +608,7 @@ fn undo_picker_names_the_request_and_keeps_newest_first() {
         inject(p, vec![older, original, newer]);
         for (id, age) in [("last", "5m"), ("private-newer-undo", "1m"), ("private-older-undo", "2m")] {
             let mut saved = Record::prepare(&p.turn_records.data, &target(p, id, None)).unwrap();
-            saved.describe(&p.turn_records.data, p.host.snapshot.as_deref());
+            saved.describe(&p.turn_records.data, p.host.thread.snapshot.as_deref());
             assert_eq!(saved.label, "Turn · Document the behavior…");
             let prefix = if saved.restored { "Files an undo put back from" } else { "Files recorded during" };
             assert!(saved.detail.starts_with(&format!("{prefix} Document the behavior and regenerate the file list., {age} ago, in this thread.")));
@@ -661,9 +677,9 @@ fn first_old_host_file_click_opens_current() {
         p.turn_review.older && p.turn_review.target.is_none()
     });
     h.update(|p, _, _| {
-        let selected = p.state.repository.selected.as_ref().unwrap();
+        let selected = p.state.repository.selected_diff().unwrap();
         assert_eq!(
-            p.state.repository.snapshot.ready().unwrap().changes[selected.file].path,
+            p.state.repository.snapshot().ready().unwrap().changes[selected.file].path,
             Path::new("src/review.rs")
         );
         let line = p.turn_records.lines.latest.as_ref().unwrap();
@@ -680,14 +696,14 @@ fn first_old_host_file_click_opens_current() {
     h.update(|p, w, cx| {
         p.turn_review.older = false;
         p.open_turn_review(target(p, "last", Some("src/review.rs")), w, cx);
-        p.host.checkout = repository.join("different");
-        p.host.connected = false;
+        p.host.creation.checkout = repository.join("different");
+        p.host.connection.connected = false;
         p.tab = Workspace::Conversation;
-        p.state.repository.selected = None;
+        p.state.repository.view.changes.selected = None;
     });
     h.update(|p, _, _| {
         assert_eq!(p.tab, Workspace::Conversation);
-        assert!(p.state.repository.selected.is_none());
+        assert!(p.state.repository.selected_diff().is_none());
     });
     drop(host);
     drop(h);
@@ -750,7 +766,7 @@ fn recorded_wording_names_only_available_states() {
             original.files[0].detail,
             "src/review.rs, Modified. Recorded during this run."
         );
-        original.describe(&p.turn_records.data, p.host.snapshot.as_deref());
+        original.describe(&p.turn_records.data, p.host.thread.snapshot.as_deref());
         assert!(original.detail.contains('\n'));
         let detail = crate::ui::turn_review::review_picker_detail(&original);
         assert!(!detail.contains(['\n', '\r']));
@@ -758,7 +774,7 @@ fn recorded_wording_names_only_available_states() {
         let mut details = Vec::new();
         for id in ["undo-one", "undo-two"] {
             let mut saved = Record::prepare(&p.turn_records.data, &target(p, id, None)).unwrap();
-            saved.describe(&p.turn_records.data, p.host.snapshot.as_deref());
+            saved.describe(&p.turn_records.data, p.host.thread.snapshot.as_deref());
             assert!(saved.detail.contains("Document the behavior"));
             details.push(saved.detail);
         }

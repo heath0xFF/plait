@@ -452,19 +452,19 @@ fn threads(checkout: &Path, current: ThreadStatus) -> Vec<ThreadSummary> {
 fn stage(harness: &mut Harness, checkout: &Path, snapshot: Snapshot) {
     let checkout = checkout.to_owned();
     harness.update(move |plait, window, cx| {
-        plait.host.connecting = false;
-        plait.host.connected = true;
-        plait.host.error = None;
-        plait.host.status = Some(status());
-        plait.host.settings_model = Some(choice());
-        plait.host.new_model = Some(choice());
-        plait.host.threads = threads(&checkout, snapshot.status);
-        plait.host.selected = Some(THREAD.into());
+        plait.host.connection.connecting = false;
+        plait.host.connection.connected = true;
+        plait.host.connection.error = None;
+        plait.host.connection.status = Some(status());
+        plait.host.connection.settings_model = Some(choice());
+        plait.host.creation.new_model = Some(choice());
+        plait.host.connection.threads = threads(&checkout, snapshot.status);
+        plait.host.thread.selected = Some(THREAD.into());
         plait.history = Default::default();
-        plait.host.snapshot = Some(Arc::new(snapshot));
+        plait.host.thread.snapshot = Some(Arc::new(snapshot));
         plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
             &plait.formatted,
-            plait.host.snapshot.as_ref().unwrap(),
+            plait.host.thread.snapshot.as_ref().unwrap(),
         ));
         plait.settings_open = false;
         plait.new_thread_open = false;
@@ -482,7 +482,7 @@ fn stage(harness: &mut Harness, checkout: &Path, snapshot: Snapshot) {
             .preferences
             .value
             .navigation
-            .observe(&plait.host.threads, None, true);
+            .observe(&plait.host.connection.threads, None, true);
         plait.rebuild_projects(cx);
         for project in &plait.state.projects {
             plait
@@ -520,7 +520,7 @@ fn walk(output: &Path) {
         let index = plait
             .state
             .repository
-            .snapshot
+            .snapshot()
             .ready()
             .expect("Git status")
             .changes

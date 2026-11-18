@@ -68,7 +68,7 @@ impl Plait {
         let Some(jump) = plait_core::navigation::jump(
             &self.preferences.value.navigation,
             &self.state.projects,
-            &self.host.threads,
+            &self.host.connection.threads,
             &self.filtered_threads(cx),
             self.preferences.value.jump_target,
             number,
@@ -82,7 +82,7 @@ impl Plait {
         self.state
             .collapsed_machines
             .remove(&(jump.project, jump.machine));
-        let id = self.host.threads[jump.thread].id.clone();
+        let id = self.host.connection.threads[jump.thread].id.clone();
         self.select_host_thread(id, window, cx);
     }
 
@@ -135,7 +135,9 @@ impl Plait {
                 }
                 this.pump_preferences(cx);
                 let mut value = this.preferences.value.clone();
-                value.navigation.observe(&this.host.threads, None, true);
+                value
+                    .navigation
+                    .observe(&this.host.connection.threads, None, true);
                 if value != this.preferences.value {
                     this.persist_navigation(value, cx);
                 }

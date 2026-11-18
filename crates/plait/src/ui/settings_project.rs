@@ -18,7 +18,7 @@ impl Plait {
             // The checkout the policy and the Pi setup are read for.
             .child(
                 tag(
-                    self.host.checkout.to_string_lossy().into_owned(),
+                    self.host.creation.checkout.to_string_lossy().into_owned(),
                     colors().subtle,
                 )
                 .truncate(),
@@ -42,10 +42,10 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.project_of(&self.host.checkout) != project.as_path() {
+        if self.project_of(&self.host.creation.checkout) != project.as_path() {
             self.change_checkout(project.clone(), window, cx);
             // Refused while a thread is being created; its notice says why.
-            if self.project_of(&self.host.checkout) != project.as_path() {
+            if self.project_of(&self.host.creation.checkout) != project.as_path() {
                 return;
             }
         }

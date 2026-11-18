@@ -210,14 +210,14 @@ fn split_path(change: &Change) -> (String, String) {
 
 impl Plait {
     fn file_row(&self, index: usize, cx: &mut Context<Self>) -> Stateful<Div> {
-        let Some(snapshot) = self.state.repository.snapshot.ready() else {
+        let Some(snapshot) = self.state.repository.snapshot().ready() else {
             return div().id(("file", index));
         };
         let change = &snapshot.changes[index];
         let selected = self
             .state
             .repository
-            .selected
+            .selected_diff()
             .as_ref()
             .is_some_and(|key| key.file == index);
         let mode = if change.unstaged() {
@@ -289,7 +289,7 @@ impl Plait {
                 .absolute()
                 .right(px(8.))
                 .bg(rgb(colors().panel))
-                .disabled(self.state.repository.write.busy())
+                .disabled(self.state.repository.write().busy())
                 .on_activate(cx, move |this, _, cx| {
                     this.stage_change(index, stage, cx);
                     cx.stop_propagation();
@@ -304,7 +304,7 @@ impl Plait {
         }
         let repo = &self.state.repository;
         let mut read = None;
-        let body = match &repo.snapshot {
+        let body = match &repo.snapshot() {
             Load::Empty => empty(
                 "Choose a repository",
                 "Open a local Git working directory to inspect its changes.",
@@ -393,7 +393,7 @@ impl Plait {
                     .into_any_element()
             }
         };
-        let ready = self.state.repository.snapshot.ready().is_some();
+        let ready = self.state.repository.snapshot().ready().is_some();
         column()
             .flex_1()
             .min_h_0()
@@ -434,8 +434,8 @@ impl Plait {
 
     fn diff_header(&self, cx: &mut Context<Self>) -> Option<Div> {
         let repo = &self.state.repository;
-        let key = repo.selected.as_ref()?;
-        let change = repo.snapshot.ready()?.changes.get(key.file)?;
+        let key = repo.selected_diff()?;
+        let change = repo.snapshot().ready()?.changes.get(key.file)?;
         let index = key.file;
         let mode = |id: &'static str, label: &'static str, mode: DiffMode| {
             segment(id, label, key.mode == mode).on_click(
@@ -519,7 +519,7 @@ impl Plait {
                         verb => verb,
                     },
                 )
-                .disabled(!possible || repo.write.busy())
+                .disabled(!possible || repo.write().busy())
                 .on_activate(cx, move |this, _, cx| this.stage_change(index, stage, cx))
             })
             // Only the unstaged side can be thrown away; staged work is kept.
@@ -535,7 +535,7 @@ impl Plait {
                                 "Discard…"
                             },
                         )
-                        .disabled(repo.write.busy())
+                        .disabled(repo.write().busy())
                         .on_activate(cx, move |this, window, cx| {
                             this.discard_file(index, window, cx)
                         }),
@@ -561,7 +561,7 @@ impl Plait {
     }
 
     fn diff_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        match &self.state.repository.diff {
+        match &self.state.repository.diff() {
             Load::Empty => empty(
                 "Nothing to compare",
                 "Select a changed file to see its staged and unstaged changes separately.",
@@ -600,8 +600,8 @@ impl Plait {
     pub(super) fn current_pick(&self, lines: usize) -> Option<LinePick> {
         let pick = self.line_pick.as_ref()?;
         let repo = &self.state.repository;
-        let key = repo.selected.as_ref()?;
-        let change = repo.snapshot.ready()?.changes.get(key.file)?;
+        let key = repo.selected_diff()?;
+        let change = repo.snapshot().ready()?.changes.get(key.file)?;
         (change.path == pick.path && key.mode == pick.mode && pick.range().end() < &lines)
             .then(|| pick.clone())
     }
@@ -610,13 +610,17 @@ impl Plait {
     /// picked line clears it.
     pub(super) fn pick_line(&mut self, index: usize, extend: bool, cx: &mut Context<Self>) {
         let repo = &self.state.repository;
-        let Some(key) = repo.selected.as_ref() else {
+        let Some(key) = repo.selected_diff() else {
             return;
         };
-        let Some(change) = repo.snapshot.ready().and_then(|s| s.changes.get(key.file)) else {
+        let Some(change) = repo
+            .snapshot()
+            .ready()
+            .and_then(|s| s.changes.get(key.file))
+        else {
             return;
         };
-        let lines = match &repo.diff {
+        let lines = match &repo.diff() {
             Load::Ready(diff) => diff.lines.len(),
             _ => return,
         };
@@ -637,7 +641,7 @@ impl Plait {
     /// Ask the selected thread about the picked lines: quote them into its
     /// composer and go there. Nothing is sent until the user sends it.
     pub(super) fn ask_about_pick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Load::Ready(diff) = &self.state.repository.diff else {
+        let Load::Ready(diff) = &self.state.repository.diff() else {
             return;
         };
         let Some(pick) = self.current_pick(diff.lines.len()) else {
@@ -645,6 +649,7 @@ impl Plait {
         };
         let Some(composer) = self
             .host
+            .thread
             .selected
             .as_ref()
             .and_then(|id| self.composers.get(id))
@@ -672,7 +677,7 @@ impl Plait {
     fn pick_bar(&self, pick: &LinePick, cx: &mut Context<Self>) -> AnyElement {
         let range = pick.range();
         let count = range.end() - range.start() + 1;
-        let thread = self.host.selected.is_some();
+        let thread = self.host.thread.selected.is_some();
         row()
             .h(px(36.))
             .px_4()
@@ -715,13 +720,13 @@ impl Plait {
     /// new files, and conflicts stage whole.
     fn hunk_target(&self) -> Option<HunkTarget> {
         let repo = &self.state.repository;
-        let key = repo.selected.as_ref()?;
-        let change = repo.snapshot.ready()?.changes.get(key.file)?;
+        let key = repo.selected_diff()?;
+        let change = repo.snapshot().ready()?.changes.get(key.file)?;
         let whole = change.index == b'?' || change.original.is_some() || change.conflicted();
         (!whole).then(|| HunkTarget {
             path: change.path.clone(),
             mode: key.mode,
-            busy: repo.write.busy(),
+            busy: repo.write().busy(),
         })
     }
 

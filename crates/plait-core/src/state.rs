@@ -1,9 +1,16 @@
+pub use crate::{
+    checkout_state::{CheckoutRepositoryData, CommitLogData},
+    thread_view::{ChangesViewState, DiffKey, HistoryViewState, ThreadRepositoryView},
+};
 use crate::{
     git, machine,
     model::{Diff, DiffMode, Machine, Project, Snapshot},
-    recent::Recent,
 };
-use std::{collections::HashSet, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 #[derive(Debug, Default)]
 pub enum Load<T> {
@@ -22,12 +29,6 @@ impl<T> Load<T> {
             None
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct DiffKey {
-    pub file: usize,
-    pub mode: DiffMode,
 }
 
 #[derive(Clone, Debug)]
@@ -86,7 +87,7 @@ pub enum Reply {
 
 /// Diffs kept for quick switching. A diff is at most 10,000 parsed lines, so
 /// this bounds memory to a few tens of megabytes in the worst case.
-const DIFF_CACHE: usize = 16;
+pub(crate) const DIFF_CACHE: usize = 16;
 
 /// Commits listed per history page.
 pub const HISTORY_PAGE: usize = 100;
@@ -109,41 +110,13 @@ impl Job {
     }
 }
 
+/// Coordinates shared checkout repository data (`data`) with the single
+/// selected workspace slot's Git view selection (`view`).
 pub struct RepositoryState {
-    pub path: PathBuf,
-    pub snapshot: Load<Arc<Snapshot>>,
-    pub diff: Load<Arc<Diff>>,
-    pub selected: Option<DiffKey>,
-    /// Loaded on request and kept until the next refresh or checkout change.
-    pub files: Load<Arc<git::FileList>>,
-    epoch: u64,
-    running: bool,
-    pending: Option<Job>,
-    // Separate from `pending`, so a file list and a diff cannot displace each other.
-    files_queued: bool,
-    /// Recently read diffs, so moving between files does not rerun Git.
-    cache: Recent<DiffKey, Arc<Diff>>,
-    /// The next file's diff, read ahead while nothing else waits.
-    prefetch: Option<Job>,
-    /// Set while stepping through files, with the direction. A click is
-    /// random access, so it reads nothing ahead that it might wait behind.
-    ahead: Option<bool>,
-    /// Staging and committing; see `request_write`.
-    pub write: WriteState,
-    /// Count behind `staged()`; set when a status arrives.
-    staged: usize,
-    /// Commit history, loaded when the History view asks for it.
-    pub commits: CommitLog,
-    /// Count behind `conflicts()`; set when a status arrives.
-    conflicts: usize,
-    /// The repository root from the last status read. Kept while a refresh
-    /// runs, so writes and history need not wait for it; cleared on `open`.
-    root: Option<PathBuf>,
-    /// Local branches, read each time the branch picker opens.
-    pub branches: Load<Arc<git::Branches>>,
-    /// Counts branch requests, so only the newest reply is kept.
-    branch_request: u64,
-    branches_queued: bool,
+    /// Shared checkout status, file list, branches, caches, writes, and job queue.
+    pub data: CheckoutRepositoryData,
+    /// Selected-thread Git view state: selected changed file/diff and commit/patch.
+    pub view: ThreadRepositoryView,
 }
 
 /// The one write that may be queued or running, and how the last one went.
@@ -168,65 +141,80 @@ impl WriteState {
     }
 }
 
-/// History pages and the selected commit's patch.
-#[derive(Default)]
-pub struct CommitLog {
-    pub list: Load<git::History>,
-    /// A further page was asked for and has not arrived.
-    pub loading_more: bool,
-    pub selected: Option<String>,
-    pub patch: Load<Arc<Diff>>,
-    /// The History view is showing; a commit reloads the list only then.
-    wanted: bool,
-    /// Guards history replies. Separate from status, so staging keeps history.
-    epoch: u64,
-    queued_page: Option<usize>,
-    queued_show: Option<String>,
-    /// Patches by commit ID. A commit never changes, so these survive reloads.
-    shows: Recent<String, Arc<Diff>>,
-}
-
 impl RepositoryState {
     pub fn new(path: PathBuf) -> Self {
         let mut state = Self {
-            path,
-            snapshot: Load::Empty,
-            diff: Load::Empty,
-            selected: None,
-            files: Load::Empty,
-            epoch: 0,
-            running: false,
-            pending: None,
-            files_queued: false,
-            cache: Recent::new(DIFF_CACHE),
-            prefetch: None,
-            ahead: None,
-            write: WriteState::default(),
-            staged: 0,
-            commits: CommitLog::default(),
-            conflicts: 0,
-            root: None,
-            branches: Load::Empty,
-            branch_request: 0,
-            branches_queued: false,
+            data: CheckoutRepositoryData::new(path),
+            view: ThreadRepositoryView::default(),
         };
         state.refresh();
         state
     }
 
+    pub fn path(&self) -> &Path {
+        &self.data.path
+    }
+
+    pub fn snapshot(&self) -> &Load<Arc<Snapshot>> {
+        &self.data.snapshot
+    }
+
+    pub fn files(&self) -> &Load<Arc<git::FileList>> {
+        &self.data.files
+    }
+
+    pub fn branches(&self) -> &Load<Arc<git::Branches>> {
+        &self.data.branches
+    }
+
+    pub fn write(&self) -> &WriteState {
+        &self.data.write
+    }
+
+    pub fn write_mut(&mut self) -> &mut WriteState {
+        &mut self.data.write
+    }
+
+    pub fn selected_diff(&self) -> Option<&DiffKey> {
+        self.view.changes.selected.as_ref()
+    }
+
+    pub fn diff(&self) -> &Load<Arc<Diff>> {
+        &self.view.changes.diff
+    }
+
+    pub fn commit_list(&self) -> &Load<git::History> {
+        &self.data.commits.list
+    }
+
+    pub fn commit_loading_more(&self) -> bool {
+        self.data.commits.loading_more
+    }
+
+    pub fn selected_commit(&self) -> Option<&str> {
+        self.view.history.selected.as_deref()
+    }
+
+    pub fn commit_patch(&self) -> &Load<Arc<Diff>> {
+        &self.view.history.patch
+    }
+
     /// Switch checkouts. Nothing from the previous one carries over.
     pub fn open(&mut self, path: PathBuf) {
-        self.path = path;
-        self.root = None;
+        self.data.path = path;
+        self.data.root = None;
         // A list of the previous checkout's branches must not land.
-        self.branch_request += 1;
-        self.branches = Load::Empty;
-        self.branches_queued = false;
-        let wanted = self.commits.wanted;
-        self.commits = CommitLog {
-            epoch: self.commits.epoch + 1,
+        self.data.branch_request += 1;
+        self.data.branches = Load::Empty;
+        self.data.branches_queued = false;
+        let wanted = self.view.history.wanted;
+        self.data.commits = CommitLogData {
+            epoch: self.data.commits.epoch + 1,
+            ..CommitLogData::default()
+        };
+        self.view.history = HistoryViewState {
             wanted,
-            ..CommitLog::default()
+            ..HistoryViewState::default()
         };
         self.refresh();
     }
@@ -240,19 +228,19 @@ impl RepositoryState {
     /// Reread status and diffs only. Staging changes the index, not history,
     /// so it keeps the commit list and its open patch.
     fn refresh_status(&mut self) {
-        self.epoch += 1;
-        self.snapshot = Load::Loading;
-        self.staged = 0;
-        self.conflicts = 0;
-        self.diff = Load::Empty;
-        self.selected = None;
-        self.files = Load::Empty;
-        self.files_queued = false;
-        self.cache.clear();
-        self.prefetch = None;
-        self.pending = Some(Job::Status {
-            epoch: self.epoch,
-            path: self.path.clone(),
+        self.data.epoch += 1;
+        self.data.snapshot = Load::Loading;
+        self.data.staged = 0;
+        self.data.conflicts = 0;
+        self.view.changes.diff = Load::Empty;
+        self.view.changes.selected = None;
+        self.data.files = Load::Empty;
+        self.data.files_queued = false;
+        self.data.cache.clear();
+        self.data.prefetch = None;
+        self.data.pending = Some(Job::Status {
+            epoch: self.data.epoch,
+            path: self.data.path.clone(),
         });
     }
 
@@ -260,60 +248,59 @@ impl RepositoryState {
     /// load on the next visit. The selected commit and cached patches stay:
     /// commits are immutable, so only the list can be out of date.
     fn reset_history(&mut self) {
-        let commits = &mut self.commits;
-        commits.epoch += 1;
-        commits.list = Load::Empty;
-        commits.loading_more = false;
-        commits.queued_page = None;
+        self.data.commits.epoch += 1;
+        self.data.commits.list = Load::Empty;
+        self.data.commits.loading_more = false;
+        self.data.commits.queued_page = None;
         // A patch still loading was guarded by the old epoch; ask again.
-        if let (Some(id), Load::Loading) = (&commits.selected, &commits.patch) {
-            commits.queued_show = Some(id.clone());
+        if let (Some(id), Load::Loading) = (&self.view.history.selected, &self.view.history.patch) {
+            self.view.history.queued_show = Some(id.clone());
         }
-        if commits.wanted {
+        if self.view.history.wanted {
             self.request_history();
         }
     }
 
     /// Changed files with something staged, counted once per status read.
     pub fn staged(&self) -> usize {
-        self.staged
+        self.data.staged
     }
 
     /// Changed files Git reports as unmerged, counted once per status read.
     pub fn conflicts(&self) -> usize {
-        self.conflicts
+        self.data.conflicts
     }
 
     /// Show a file's diff, as a click does.
     pub fn select(&mut self, file: usize, mode: DiffMode) {
-        self.ahead = None;
+        self.view.changes.ahead = None;
         self.show(file, mode);
     }
 
     /// Show a file's diff while stepping through the list, and read the one
     /// after it (in the same direction) ahead of time.
     pub fn step(&mut self, file: usize, mode: DiffMode, forward: bool) {
-        self.ahead = Some(forward);
+        self.view.changes.ahead = Some(forward);
         self.show(file, mode);
     }
 
     fn show(&mut self, file: usize, mode: DiffMode) {
-        let Some(snapshot) = self.snapshot.ready() else {
+        let Some(snapshot) = self.data.snapshot.ready() else {
             return;
         };
         if file >= snapshot.changes.len() {
             return;
         }
         let key = DiffKey { file, mode };
-        self.selected = Some(key.clone());
-        if let Some(diff) = self.cache.get(&key).cloned() {
-            self.diff = Load::Ready(diff);
-            self.pending = None;
+        self.view.changes.selected = Some(key.clone());
+        if let Some(diff) = self.data.cache.get(&key).cloned() {
+            self.view.changes.diff = Load::Ready(diff);
+            self.data.pending = None;
             self.queue_prefetch(&key);
         } else {
-            self.diff = Load::Loading;
-            self.pending = Some(Job::Diff {
-                epoch: self.epoch,
+            self.view.changes.diff = Load::Loading;
+            self.data.pending = Some(Job::Diff {
+                epoch: self.data.epoch,
                 key,
                 snapshot: snapshot.clone(),
             });
@@ -324,8 +311,9 @@ impl RepositoryState {
     /// the view it would open in, so the next step shows a cached diff. One
     /// file only: one background Git process per step.
     fn queue_prefetch(&mut self, from: &DiffKey) {
-        self.prefetch = None;
-        let (Some(forward), Some(snapshot)) = (self.ahead, self.snapshot.ready()) else {
+        self.data.prefetch = None;
+        let (Some(forward), Some(snapshot)) = (self.view.changes.ahead, self.data.snapshot.ready())
+        else {
             return;
         };
         let count = snapshot.changes.len();
@@ -347,9 +335,9 @@ impl RepositoryState {
             DiffMode::Staged
         };
         let key = DiffKey { file, mode };
-        if !self.cache.contains(&key) {
-            self.prefetch = Some(Job::Diff {
-                epoch: self.epoch,
+        if !self.data.cache.contains(&key) {
+            self.data.prefetch = Some(Job::Diff {
+                epoch: self.data.epoch,
                 key,
                 snapshot: snapshot.clone(),
             });
@@ -358,31 +346,31 @@ impl RepositoryState {
 
     /// Changes on every refresh and checkout change; guards cached Git data.
     pub fn epoch(&self) -> u64 {
-        self.epoch
+        self.data.epoch
     }
 
     /// Ask for the checkout's file list. A cached or already queued list is kept.
     pub fn request_files(&mut self) {
-        if matches!(self.files, Load::Loading | Load::Ready(_)) {
+        if matches!(self.data.files, Load::Loading | Load::Ready(_)) {
             return;
         }
-        if let Load::Error(error) = &self.snapshot {
-            self.files = Load::Error(error.clone());
+        if let Load::Error(error) = &self.data.snapshot {
+            self.data.files = Load::Error(error.clone());
             return;
         }
-        self.files = Load::Loading;
-        self.files_queued = true;
+        self.data.files = Load::Loading;
+        self.data.files_queued = true;
     }
 
     /// Status and diffs go first. The list needs the root a status read reports.
     fn files_job(&mut self) -> Option<Job> {
-        if !self.files_queued {
+        if !self.data.files_queued {
             return None;
         }
-        let root = self.snapshot.ready()?.root.clone();
-        self.files_queued = false;
+        let root = self.data.snapshot.ready()?.root.clone();
+        self.data.files_queued = false;
         Some(Job::Files {
-            epoch: self.epoch,
+            epoch: self.data.epoch,
             root,
         })
     }
@@ -390,21 +378,21 @@ impl RepositoryState {
     /// Queue a write. Refused while another is queued or running, or before a
     /// status has found the repository root. Returns whether it was queued.
     pub fn request_write(&mut self, op: git::WriteOp) -> bool {
-        if self.write.busy() || self.root.is_none() {
+        if self.data.write.busy() || self.data.root.is_none() {
             return false;
         }
         // Keep the file in view across the refresh the write causes.
-        self.write.reselect = self.selected_change();
-        self.write.note = None;
-        self.write.undo = None;
-        self.write.queued = Some(op);
+        self.data.write.reselect = self.selected_change();
+        self.data.write.note = None;
+        self.data.write.undo = None;
+        self.data.write.queued = Some(op);
         true
     }
 
     /// The selected file's path and view, if one is selected.
     fn selected_change(&self) -> Option<(PathBuf, DiffMode)> {
-        let key = self.selected.as_ref()?;
-        let change = self.snapshot.ready()?.changes.get(key.file)?;
+        let key = self.view.changes.selected.as_ref()?;
+        let change = self.data.snapshot.ready()?.changes.get(key.file)?;
         Some((change.path.clone(), key.mode))
     }
 
@@ -412,90 +400,90 @@ impl RepositoryState {
         // `root` survives a refresh, so a write never waits on status. Only
         // `open` clears it; a write queued for the old checkout is then
         // refused with a note rather than run against the new one.
-        let root = self.root.clone();
-        let op = self.write.queued.take()?;
+        let root = self.data.root.clone();
+        let op = self.data.write.queued.take()?;
         let Some(root) = root else {
-            self.write.note = Some((
+            self.data.write.note = Some((
                 "Plait lost track of the repository; try again.".into(),
                 true,
             ));
             return None;
         };
-        self.write.running = true;
+        self.data.write.running = true;
         Some(Job::Write { root, op })
     }
 
     /// Read the local branches again, for the branch picker. Branches change
     /// outside Plait, so an open picker never shows an older list.
     pub fn request_branches(&mut self) {
-        self.branch_request += 1;
-        if self.root.is_none()
-            && let Load::Error(error) = &self.snapshot
+        self.data.branch_request += 1;
+        if self.data.root.is_none()
+            && let Load::Error(error) = &self.data.snapshot
         {
-            self.branches = Load::Error(error.clone());
-            self.branches_queued = false;
+            self.data.branches = Load::Error(error.clone());
+            self.data.branches_queued = false;
             return;
         }
-        self.branches = Load::Loading;
-        self.branches_queued = true;
+        self.data.branches = Load::Loading;
+        self.data.branches_queued = true;
     }
 
     /// Branches need the root a status read reports.
     fn branches_job(&mut self) -> Option<Job> {
-        if !self.branches_queued {
+        if !self.data.branches_queued {
             return None;
         }
-        let root = self.root.clone()?;
-        self.branches_queued = false;
+        let root = self.data.root.clone()?;
+        self.data.branches_queued = false;
         Some(Job::Branches {
-            request: self.branch_request,
+            request: self.data.branch_request,
             root,
         })
     }
 
     /// The History view closed: a commit no longer needs to reload the list.
     pub fn leave_history(&mut self) {
-        self.commits.wanted = false;
+        self.view.history.wanted = false;
     }
 
     /// Start loading history, once, for the History view.
     pub fn request_history(&mut self) {
-        self.commits.wanted = true;
-        if matches!(self.commits.list, Load::Empty | Load::Error(_)) {
-            self.commits.list = Load::Loading;
-            self.commits.queued_page = Some(0);
+        self.view.history.wanted = true;
+        if matches!(self.data.commits.list, Load::Empty | Load::Error(_)) {
+            self.data.commits.list = Load::Loading;
+            self.data.commits.queued_page = Some(0);
         }
     }
 
     /// Load the page after the commits already listed.
     pub fn request_more_history(&mut self) {
-        let Some(history) = self.commits.list.ready() else {
+        let Some(history) = self.data.commits.list.ready() else {
             return;
         };
-        if history.more && !self.commits.loading_more {
-            self.commits.loading_more = true;
-            self.commits.queued_page = Some(history.commits.len());
+        if history.more && !self.data.commits.loading_more {
+            self.data.commits.loading_more = true;
+            self.data.commits.queued_page = Some(history.commits.len());
         }
     }
 
     /// Show a commit's patch, from the cache when it was seen recently.
     pub fn select_commit(&mut self, id: String) {
-        self.commits.selected = Some(id.clone());
-        if let Some(patch) = self.commits.shows.get(&id).cloned() {
-            self.commits.patch = Load::Ready(patch);
-            self.commits.queued_show = None;
+        self.view.history.selected = Some(id.clone());
+        if let Some(patch) = self.data.commits.shows.get(&id).cloned() {
+            self.view.history.patch = Load::Ready(patch);
+            self.view.history.queued_show = None;
         } else {
-            self.commits.patch = Load::Loading;
-            self.commits.queued_show = Some(id);
+            self.view.history.patch = Load::Loading;
+            self.view.history.queued_show = Some(id);
         }
     }
 
     /// History needs the root that a status reports.
     fn history_job(&mut self) -> Option<Job> {
-        let root = self.root.clone()?;
-        let epoch = self.commits.epoch;
-        if let Some(skip) = self.commits.queued_page.take() {
-            let tip = match &self.commits.list {
+        let root = self.data.root.clone()?;
+        let epoch = self.data.commits.epoch;
+        if let Some(skip) = self.data.commits.queued_page.take() {
+            let tip = match &self.data.commits.list {
                 Load::Ready(history) if skip > 0 => history.commits.first().map(|c| c.id.clone()),
                 _ => None,
             };
@@ -506,34 +494,34 @@ impl RepositoryState {
                 skip,
             });
         }
-        let id = self.commits.queued_show.take()?;
+        let id = self.view.history.queued_show.take()?;
         Some(Job::Show { epoch, root, id })
     }
 
     /// One job at a time. A write goes first so a click is never starved by
     /// reads; then status and diffs, then history, branches, and the file list.
     pub fn next_job(&mut self) -> Option<Job> {
-        if self.running {
+        if self.data.running {
             return None;
         }
         let job = self
             .write_job()
-            .or_else(|| self.pending.take())
+            .or_else(|| self.data.pending.take())
             .or_else(|| self.history_job())
             .or_else(|| self.branches_job())
             .or_else(|| self.files_job())
-            .or_else(|| self.prefetch.take())?;
-        self.running = true;
+            .or_else(|| self.data.prefetch.take())?;
+        self.data.running = true;
         Some(job)
     }
 
     pub fn complete(&mut self, job: Job, reply: Reply) {
-        self.running = false;
+        self.data.running = false;
         match (job, reply) {
-            (Job::Status { epoch, .. }, Reply::Status(result)) if epoch == self.epoch => {
+            (Job::Status { epoch, .. }, Reply::Status(result)) if epoch == self.data.epoch => {
                 match result {
                     Ok(snapshot) => {
-                        self.path = snapshot.root.clone();
+                        self.data.path = snapshot.root.clone();
                         let mode = snapshot.changes.first().map(|c| {
                             if c.unstaged() {
                                 DiffMode::Unstaged
@@ -541,7 +529,7 @@ impl RepositoryState {
                                 DiffMode::Staged
                             }
                         });
-                        let again = self.write.reselect.take().and_then(|(path, mode)| {
+                        let again = self.data.write.reselect.take().and_then(|(path, mode)| {
                             let file = snapshot.changes.iter().position(|c| c.path == path)?;
                             let change = &snapshot.changes[file];
                             // After staging, the file may only have a staged side left.
@@ -552,10 +540,11 @@ impl RepositoryState {
                             };
                             Some((file, mode))
                         });
-                        self.staged = snapshot.changes.iter().filter(|c| c.staged()).count();
-                        self.conflicts = snapshot.changes.iter().filter(|c| c.conflicted()).count();
-                        self.root = Some(snapshot.root.clone());
-                        self.snapshot = Load::Ready(snapshot);
+                        self.data.staged = snapshot.changes.iter().filter(|c| c.staged()).count();
+                        self.data.conflicts =
+                            snapshot.changes.iter().filter(|c| c.conflicted()).count();
+                        self.data.root = Some(snapshot.root.clone());
+                        self.data.snapshot = Load::Ready(snapshot);
                         if let Some((file, mode)) = again {
                             self.select(file, mode);
                         } else if let Some(mode) = mode {
@@ -564,37 +553,37 @@ impl RepositoryState {
                     }
                     Err(error) => {
                         // No status means no root to list files under.
-                        if std::mem::take(&mut self.files_queued) {
-                            self.files = Load::Error(error.clone());
+                        if std::mem::take(&mut self.data.files_queued) {
+                            self.data.files = Load::Error(error.clone());
                         }
                         // Without a root, history and branches waiting on one can never load.
-                        if self.root.is_none() {
+                        if self.data.root.is_none() {
                             self.fail_history(&error);
-                            if std::mem::take(&mut self.branches_queued) {
-                                self.branches = Load::Error(error.clone());
+                            if std::mem::take(&mut self.data.branches_queued) {
+                                self.data.branches = Load::Error(error.clone());
                             }
                         }
-                        self.snapshot = Load::Error(error);
+                        self.data.snapshot = Load::Error(error);
                     }
                 }
             }
-            (Job::Files { epoch, .. }, Reply::Files(result)) if epoch == self.epoch => {
-                self.files = match result {
+            (Job::Files { epoch, .. }, Reply::Files(result)) if epoch == self.data.epoch => {
+                self.data.files = match result {
                     Ok(files) => Load::Ready(files),
                     Err(error) => Load::Error(error),
                 };
             }
-            (Job::Diff { epoch, key, .. }, Reply::Diff(result)) if epoch == self.epoch => {
+            (Job::Diff { epoch, key, .. }, Reply::Diff(result)) if epoch == self.data.epoch => {
                 if let Ok(diff) = &result {
-                    self.cache.insert(key.clone(), diff.clone());
+                    self.data.cache.insert(key.clone(), diff.clone());
                 }
-                if self.selected.as_ref() == Some(&key) {
+                if self.view.changes.selected.as_ref() == Some(&key) {
                     let ok = result.is_ok();
-                    self.diff = match result {
+                    self.view.changes.diff = match result {
                         Ok(diff) => Load::Ready(diff),
                         Err(error) => Load::Error(error),
                     };
-                    self.pending = None;
+                    self.data.pending = None;
                     if ok {
                         self.queue_prefetch(&key);
                     }
@@ -605,29 +594,31 @@ impl RepositoryState {
                 // history must reload.
                 let moved = matches!(op, git::WriteOp::Pull | git::WriteOp::SwitchBranch(_))
                     && result.is_ok();
-                self.write.running = false;
+                self.data.write.running = false;
                 if let Ok(outcome) = &result {
-                    self.write.committed = outcome.commit.clone();
-                    self.write.undo = outcome.backup.clone();
+                    self.data.write.committed = outcome.commit.clone();
+                    self.data.write.undo = outcome.backup.clone();
                 }
-                self.write.note = Some(match &result {
+                self.data.write.note = Some(match &result {
                     Ok(outcome) => (outcome.summary.clone(), false),
                     Err(error) => (error.clone(), true),
                 });
                 // The repository changed on disk whatever the view shows now.
                 // Only a commit changes history; staging rereads status alone.
-                if self.root.as_ref().is_none_or(|known| *known == root) {
-                    let reselect = self.write.reselect.take();
+                if self.data.root.as_ref().is_none_or(|known| *known == root) {
+                    let reselect = self.data.write.reselect.take();
                     self.refresh_status();
-                    if self.write.committed.is_some() || moved {
+                    if self.data.write.committed.is_some() || moved {
                         self.reset_history();
                     }
-                    self.write.reselect = reselect;
+                    self.data.write.reselect = reselect;
                 }
             }
-            (Job::Log { epoch, skip, .. }, Reply::Log(result)) if epoch == self.commits.epoch => {
-                self.commits.loading_more = false;
-                match (result, &mut self.commits.list) {
+            (Job::Log { epoch, skip, .. }, Reply::Log(result))
+                if epoch == self.data.commits.epoch =>
+            {
+                self.data.commits.loading_more = false;
+                match (result, &mut self.data.commits.list) {
                     (Ok(page), Load::Ready(history)) if skip > 0 => {
                         history.commits.extend(page.commits);
                         history.more = page.more;
@@ -638,26 +629,28 @@ impl RepositoryState {
                     (Err(error), list) => *list = Load::Error(error),
                 }
             }
-            (Job::Show { epoch, id, .. }, Reply::Show(result)) if epoch == self.commits.epoch => {
+            (Job::Show { epoch, id, .. }, Reply::Show(result))
+                if epoch == self.data.commits.epoch =>
+            {
                 if let Ok(patch) = &result {
-                    self.commits.shows.insert(id.clone(), patch.clone());
+                    self.data.commits.shows.insert(id.clone(), patch.clone());
                 }
-                if self.commits.selected.as_ref() == Some(&id) {
-                    self.commits.patch = match result {
+                if self.view.history.selected.as_ref() == Some(&id) {
+                    self.view.history.patch = match result {
                         Ok(patch) => Load::Ready(patch),
                         Err(error) => Load::Error(error),
                     };
                 }
             }
             (Job::Branches { request, .. }, Reply::Branches(result))
-                if request == self.branch_request =>
+                if request == self.data.branch_request =>
             {
-                self.branches = match result {
+                self.data.branches = match result {
                     Ok(branches) => Load::Ready(branches),
                     Err(error) => Load::Error(error),
                 };
             }
-            (Job::Write { .. }, _) => self.write.running = false,
+            (Job::Write { .. }, _) => self.data.write.running = false,
             _ => {}
         }
     }
@@ -665,12 +658,11 @@ impl RepositoryState {
 
 impl RepositoryState {
     fn fail_history(&mut self, error: &str) {
-        let commits = &mut self.commits;
-        if commits.queued_page.take().is_some() {
-            commits.list = Load::Error(error.to_owned());
+        if self.data.commits.queued_page.take().is_some() {
+            self.data.commits.list = Load::Error(error.to_owned());
         }
-        if commits.queued_show.take().is_some() {
-            commits.patch = Load::Error(error.to_owned());
+        if self.view.history.queued_show.take().is_some() {
+            self.view.history.patch = Load::Error(error.to_owned());
         }
     }
 }
@@ -763,8 +755,8 @@ mod tests {
         s.open("new".into());
         assert!(s.next_job().is_none());
         s.complete(old, Reply::Status(Ok(snapshot())));
-        assert_eq!(s.path, PathBuf::from("new"));
-        assert!(matches!(s.snapshot, Load::Loading));
+        assert_eq!(s.path(), std::path::Path::new("new"));
+        assert!(matches!(s.snapshot(), Load::Loading));
         assert!(
             matches!(s.next_job(), Some(Job::Status { path, .. }) if path == std::path::Path::new("new"))
         );
@@ -783,7 +775,7 @@ mod tests {
             old,
             Reply::Diff(Ok(Arc::new(Diff::message("old", Duration::ZERO)))),
         );
-        assert!(matches!(s.diff, Load::Loading));
+        assert!(matches!(s.diff(), Load::Loading));
         let current = s.next_job().unwrap();
         assert!(matches!(current, Job::Diff { ref key, .. } if key.mode == DiffMode::Staged));
         s.complete(
@@ -791,7 +783,7 @@ mod tests {
             Reply::Diff(Ok(Arc::new(Diff::message("new", Duration::ZERO)))),
         );
         s.select(0, DiffMode::Unstaged);
-        assert_eq!(&*s.diff.ready().unwrap().lines[0].text, "old");
+        assert_eq!(&*s.diff().ready().unwrap().lines[0].text, "old");
         // A click reads nothing ahead.
         assert!(s.next_job().is_none());
     }
@@ -821,7 +813,7 @@ mod tests {
     fn file_list_waits_for_status_and_is_cached_until_refresh() {
         let mut s = RepositoryState::new("repo".into());
         s.request_files();
-        assert!(matches!(s.files, Load::Loading));
+        assert!(matches!(s.files(), Load::Loading));
         let status = s.next_job().unwrap();
         assert!(matches!(status, Job::Status { .. }));
         s.complete(status, Reply::Status(Ok(snapshot())));
@@ -836,15 +828,15 @@ mod tests {
         let files = s.next_job().unwrap();
         assert!(matches!(&files, Job::Files { root, .. } if root == std::path::Path::new("/repo")));
         s.complete(files, Reply::Files(Ok(file_list("a"))));
-        assert_eq!(s.files.ready().unwrap().paths, ["a"]);
-        assert!(matches!(s.diff, Load::Ready(_)));
+        assert_eq!(s.files().ready().unwrap().paths, ["a"]);
+        assert!(matches!(s.diff(), Load::Ready(_)));
         s.request_files();
         assert!(s.next_job().is_none());
 
         let epoch = s.epoch();
         s.refresh();
         assert_ne!(s.epoch(), epoch);
-        assert!(matches!(s.files, Load::Empty));
+        assert!(matches!(s.files(), Load::Empty));
     }
 
     #[test]
@@ -862,14 +854,14 @@ mod tests {
         s.open("new".into());
         s.request_files();
         s.complete(old, Reply::Files(Ok(file_list("old"))));
-        assert!(matches!(s.files, Load::Loading));
+        assert!(matches!(s.files(), Load::Loading));
         let status = s.next_job().unwrap();
         s.complete(status, Reply::Status(Ok(snapshot())));
         let diff = s.next_job().unwrap();
         s.complete(diff, Reply::Diff(Err("gone".into())));
         let current = s.next_job().unwrap();
         s.complete(current, Reply::Files(Ok(file_list("new"))));
-        assert_eq!(s.files.ready().unwrap().paths, ["new"]);
+        assert_eq!(s.files().ready().unwrap().paths, ["new"]);
     }
 
     #[test]
@@ -878,12 +870,12 @@ mod tests {
         s.request_files();
         let status = s.next_job().unwrap();
         s.complete(status, Reply::Status(Err("not a repository".into())));
-        assert!(matches!(&s.files, Load::Error(error) if error == "not a repository"));
+        assert!(matches!(s.files(), Load::Error(error) if error == "not a repository"));
         assert!(s.next_job().is_none());
         // A later request reports the same state without queueing work.
-        s.files = Load::Empty;
+        s.data.files = Load::Empty;
         s.request_files();
-        assert!(matches!(s.files, Load::Error(_)));
+        assert!(matches!(s.files(), Load::Error(_)));
         assert!(s.next_job().is_none());
 
         let mut s = RepositoryState::new("repo".into());
@@ -894,7 +886,7 @@ mod tests {
         s.request_files();
         let files = s.next_job().unwrap();
         s.complete(files, Reply::Files(Err("too large".into())));
-        assert!(matches!(&s.files, Load::Error(error) if error == "too large"));
+        assert!(matches!(s.files(), Load::Error(error) if error == "too large"));
         // An error is not cached: asking again retries.
         s.request_files();
         assert!(matches!(s.next_job(), Some(Job::Files { .. })));
@@ -928,15 +920,15 @@ mod tests {
         let mut s = ready("repo");
         s.select(1, DiffMode::Unstaged);
         assert!(s.request_write(git::WriteOp::Stage(vec!["b".into()])));
-        assert!(s.write.busy());
+        assert!(s.write().busy());
         assert!(!s.request_write(git::WriteOp::StageAll));
         // The queued diff for the selection waits behind the write.
         let write = s.next_job().unwrap();
         assert!(matches!(&write, Job::Write { root, .. } if root == std::path::Path::new("/repo")));
         assert!(s.next_job().is_none());
         s.complete(write, outcome("Staged 1 file"));
-        assert!(!s.write.busy());
-        assert_eq!(s.write.note, Some(("Staged 1 file".into(), false)));
+        assert!(!s.write().busy());
+        assert_eq!(s.write().note, Some(("Staged 1 file".into(), false)));
         // The write refreshed status, and the staged file stays selected.
         let status = s.next_job().unwrap();
         assert!(matches!(status, Job::Status { .. }));
@@ -945,8 +937,8 @@ mod tests {
         staged.changes[1].worktree = b' ';
         s.complete(status, Reply::Status(Ok(Arc::new(staged))));
         assert_eq!(
-            s.selected,
-            Some(DiffKey {
+            s.selected_diff(),
+            Some(&DiffKey {
                 file: 1,
                 mode: DiffMode::Staged
             })
@@ -961,7 +953,7 @@ mod tests {
         }));
         let write = s.next_job().unwrap();
         s.complete(write, Reply::Write(Err("hook failed".into())));
-        assert_eq!(s.write.note, Some(("hook failed".into(), true)));
+        assert_eq!(s.write().note, Some(("hook failed".into(), true)));
         assert!(matches!(s.next_job(), Some(Job::Status { .. })));
     }
 
@@ -1000,13 +992,13 @@ mod tests {
                 more: false,
             })),
         );
-        let list = s.commits.list.ready().unwrap();
+        let list = s.commit_list().ready().unwrap();
         assert_eq!(list.commits.len(), 3);
-        assert!(!list.more && !s.commits.loading_more);
+        assert!(!list.more && !s.commit_loading_more());
 
         // Shown history reloads after a refresh, once a status provides the root.
         s.refresh();
-        assert!(matches!(s.commits.list, Load::Loading));
+        assert!(matches!(s.commit_list(), Load::Loading));
         assert!(matches!(s.next_job(), Some(Job::Status { .. })));
     }
 
@@ -1028,7 +1020,7 @@ mod tests {
         s.complete(write, outcome("Staged all changes"));
         // Only status is reread; the listed commits stay.
         assert!(matches!(s.next_job(), Some(Job::Status { .. })));
-        assert_eq!(s.commits.list.ready().unwrap().commits.len(), 1);
+        assert_eq!(s.commit_list().ready().unwrap().commits.len(), 1);
 
         let mut s = ready("repo");
         s.request_history();
@@ -1046,7 +1038,7 @@ mod tests {
                 backup: None,
             })),
         );
-        assert!(matches!(s.commits.list, Load::Loading));
+        assert!(matches!(s.commit_list(), Load::Loading));
         let status = s.next_job().unwrap();
         assert!(matches!(status, Job::Status { .. }));
         s.complete(status, Reply::Status(Ok(snapshot())));
@@ -1066,7 +1058,7 @@ mod tests {
             a,
             Reply::Show(Ok(Arc::new(Diff::message("a", Duration::ZERO)))),
         );
-        assert!(matches!(s.commits.patch, Load::Loading));
+        assert!(matches!(s.commit_patch(), Load::Loading));
         let b = s.next_job().unwrap();
         assert!(matches!(&b, Job::Show { id, .. } if id == "b"));
         s.complete(
@@ -1074,7 +1066,7 @@ mod tests {
             Reply::Show(Ok(Arc::new(Diff::message("b", Duration::ZERO)))),
         );
         s.select_commit("a".into());
-        assert_eq!(&*s.commits.patch.ready().unwrap().lines[0].text, "a");
+        assert_eq!(&*s.commit_patch().ready().unwrap().lines[0].text, "a");
         assert!(s.next_job().is_none());
     }
 
@@ -1108,7 +1100,7 @@ mod tests {
     fn a_write_runs_while_a_refresh_is_still_reading_status() {
         let mut s = ready("repo");
         s.refresh();
-        assert!(s.snapshot.ready().is_none());
+        assert!(s.snapshot().ready().is_none());
         assert!(s.request_write(git::WriteOp::StageAll));
         assert!(matches!(s.next_job(), Some(Job::Write { .. })));
     }
@@ -1119,8 +1111,8 @@ mod tests {
         assert!(s.request_write(git::WriteOp::StageAll));
         s.open("other".into());
         assert!(matches!(s.next_job(), Some(Job::Status { .. })));
-        assert!(!s.write.busy());
-        assert!(matches!(&s.write.note, Some((_, true))));
+        assert!(!s.write().busy());
+        assert!(matches!(&s.write().note, Some((_, true))));
     }
 
     fn listed(names: &[&str]) -> Reply {
@@ -1149,13 +1141,13 @@ mod tests {
         // Asked again before the first answer: the first is stale.
         s.request_branches();
         s.complete(first, listed(&["old"]));
-        assert!(matches!(s.branches, Load::Loading));
+        assert!(matches!(s.branches(), Load::Loading));
         let second = s.next_job().unwrap();
         s.complete(second, listed(&["main", "topic"]));
-        assert_eq!(s.branches.ready().unwrap().list.len(), 2);
+        assert_eq!(s.branches().ready().unwrap().list.len(), 2);
         // A refresh keeps the list; another checkout drops it and its reply.
         s.refresh();
-        assert!(s.branches.ready().is_some());
+        assert!(s.branches().ready().is_some());
         s.request_branches();
         let late = loop {
             match s.next_job().unwrap() {
@@ -1165,7 +1157,7 @@ mod tests {
         };
         s.open("other".into());
         s.complete(late, listed(&["main"]));
-        assert!(matches!(s.branches, Load::Empty));
+        assert!(matches!(s.branches(), Load::Empty));
     }
 
     #[test]
@@ -1174,11 +1166,11 @@ mod tests {
         s.request_branches();
         let status = s.next_job().unwrap();
         s.complete(status, Reply::Status(Err("not a repository".into())));
-        assert!(matches!(&s.branches, Load::Error(e) if e == "not a repository"));
+        assert!(matches!(s.branches(), Load::Error(e) if e == "not a repository"));
         assert!(s.next_job().is_none());
         // Asked again with the error still standing: it is reported at once.
         s.request_branches();
-        assert!(matches!(&s.branches, Load::Error(_)));
+        assert!(matches!(s.branches(), Load::Error(_)));
         assert!(s.next_job().is_none());
     }
 
@@ -1191,13 +1183,13 @@ mod tests {
         assert!(s.request_write(git::WriteOp::CreateBranch("topic".into())));
         let write = s.next_job().unwrap();
         s.complete(write, outcome("Created topic and switched to it"));
-        assert!(matches!(s.snapshot, Load::Loading));
-        assert!(s.commits.list.ready().is_some(), "same commits");
+        assert!(matches!(s.snapshot(), Load::Loading));
+        assert!(s.commit_list().ready().is_some(), "same commits");
         assert!(s.request_write(git::WriteOp::SwitchBranch("main".into())));
         let write = s.next_job().unwrap();
         s.complete(write, outcome("Switched to main"));
-        assert!(matches!(s.commits.list, Load::Loading));
-        assert_eq!(s.write.note, Some(("Switched to main".into(), false)));
+        assert!(matches!(s.commit_list(), Load::Loading));
+        assert_eq!(s.write().note, Some(("Switched to main".into(), false)));
     }
 
     #[test]
@@ -1207,8 +1199,8 @@ mod tests {
         s.select_commit("a".into());
         let status = s.next_job().unwrap();
         s.complete(status, Reply::Status(Err("not a repository".into())));
-        assert!(matches!(&s.commits.list, Load::Error(e) if e == "not a repository"));
-        assert!(matches!(&s.commits.patch, Load::Error(_)));
+        assert!(matches!(s.commit_list(), Load::Error(e) if e == "not a repository"));
+        assert!(matches!(s.commit_patch(), Load::Error(_)));
         assert!(s.next_job().is_none());
     }
 
@@ -1231,7 +1223,7 @@ mod tests {
                 backup: None,
             })),
         );
-        assert!(matches!(s.commits.list, Load::Empty));
+        assert!(matches!(s.commit_list(), Load::Empty));
         let status = s.next_job().unwrap();
         s.complete(status, Reply::Status(Ok(snapshot())));
         let diff = s.next_job().unwrap();
@@ -1255,8 +1247,8 @@ mod tests {
             Reply::Show(Ok(Arc::new(Diff::message("a", Duration::ZERO)))),
         );
         s.refresh();
-        assert_eq!(s.commits.selected.as_deref(), Some("a"));
-        assert!(s.commits.patch.ready().is_some());
+        assert_eq!(s.selected_commit(), Some("a"));
+        assert!(s.commit_patch().ready().is_some());
         // The list reloads; the patch is not read again.
         let status = s.next_job().unwrap();
         s.complete(status, Reply::Status(Ok(snapshot())));
@@ -1306,7 +1298,33 @@ mod tests {
         );
         assert_eq!(prefetched(&mut s), 0);
         s.step(0, DiffMode::Unstaged, false);
-        assert_eq!(&*s.diff.ready().unwrap().lines[0].text, "ahead");
+        assert_eq!(&*s.diff().ready().unwrap().lines[0].text, "ahead");
+    }
+
+    #[test]
+    fn repository_data_and_view_scopes_keep_open_and_refresh_invariants() {
+        let mut s = ready("repo");
+        s.request_history();
+        let log = s.next_job().unwrap();
+        s.complete(log, page(&["c1"], false));
+        s.select_commit("c1".into());
+        let show = s.next_job().unwrap();
+        s.complete(
+            show,
+            Reply::Show(Ok(Arc::new(Diff::message("patch", Duration::ZERO)))),
+        );
+        assert_eq!(s.selected_commit(), Some("c1"));
+        assert!(s.commit_patch().ready().is_some());
+        // Opening another checkout resets both checkout data and view selection,
+        // while preserving whether History is wanted.
+        s.open("other".into());
+        assert_eq!(s.path(), std::path::Path::new("other"));
+        assert!(s.selected_diff().is_none());
+        assert!(matches!(s.diff(), Load::Empty));
+        assert!(s.selected_commit().is_none());
+        assert!(matches!(s.commit_patch(), Load::Empty));
+        assert!(s.view.history.wanted);
+        assert!(matches!(s.commit_list(), Load::Loading));
     }
 
     #[test]

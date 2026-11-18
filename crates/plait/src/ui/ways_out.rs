@@ -121,13 +121,13 @@ impl Plait {
             return None;
         }
         let repo = &self.state.repository;
-        let key = repo.selected.as_ref()?;
-        let snapshot = repo.snapshot.ready()?;
+        let key = repo.selected_diff()?;
+        let snapshot = repo.snapshot().ready()?;
         let change = snapshot
             .changes
             .get(key.file)
             .filter(|change| on_disk(change))?;
-        let line = match &repo.diff {
+        let line = match &repo.diff() {
             Load::Ready(diff) => match self.current_pick(diff.lines.len()) {
                 Some(pick) => handoff::line_near(&diff.lines, *pick.range().start()),
                 None => handoff::first_changed_line(&diff.lines),

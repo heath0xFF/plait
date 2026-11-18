@@ -64,7 +64,7 @@ impl Plait {
     /// The draft is what the conversation area shows now.
     pub(super) fn draft_visible(&self) -> bool {
         self.draft.open
-            && self.host.selected.is_none()
+            && self.host.thread.selected.is_none()
             && !self.settings_open
             && self.tab == Workspace::Conversation
     }
@@ -74,7 +74,7 @@ impl Plait {
         self.close_overlay(false, window, cx);
         self.settings_open = false;
         self.tab = Workspace::Conversation;
-        if self.host.selected.is_some() {
+        if self.host.thread.selected.is_some() {
             self.host_watch = None;
             self.host.select(None);
             self.history = Default::default();
@@ -102,9 +102,9 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.project_of(&self.host.checkout) != checkout {
+        if self.project_of(&self.host.creation.checkout) != checkout {
             self.change_checkout(checkout.clone(), window, cx);
-            if self.host.checkout != checkout {
+            if self.host.creation.checkout != checkout {
                 return;
             }
         }
@@ -117,7 +117,7 @@ impl Plait {
             .session
             .data
             .as_ref()
-            .and_then(|data| data.new_draft_for(&self.host.checkout))
+            .and_then(|data| data.new_draft_for(&self.host.creation.checkout))
         {
             let draft = draft.clone();
             composer.update(cx, |composer, cx| {
@@ -182,7 +182,7 @@ impl Plait {
     /// recently, else the first it lists.
     pub(super) fn default_model_for(&self, harness: HarnessId) -> Option<ModelChoice> {
         if harness == HarnessId::Pi {
-            return self.host.status.as_ref()?.default_model.clone();
+            return self.host.connection.status.as_ref()?.default_model.clone();
         }
         let models = &self.harness_row(harness)?.models;
         self.preferences
@@ -222,6 +222,7 @@ impl Plait {
             return self.harness_model(harness, choice);
         }
         self.host
+            .connection
             .status
             .as_ref()?
             .models
@@ -281,6 +282,7 @@ impl Plait {
     /// The pending creation is the draft's own.
     pub(super) fn draft_pending(&self) -> bool {
         self.host
+            .creation
             .pending_create
             .as_ref()
             .is_some_and(|(id, _)| self.draft_sent(id))
@@ -288,12 +290,13 @@ impl Plait {
 
     /// Why the header chips cannot change now.
     pub(super) fn draft_locked(&self) -> Option<&'static str> {
-        (self.host.creating || self.host.pending_create.is_some()).then_some(LOCKED)
+        (self.host.creation.creating || self.host.creation.pending_create.is_some())
+            .then_some(LOCKED)
     }
 
     /// Why the draft cannot be sent now, beyond what disables its composer.
     pub(super) fn draft_blocked(&self) -> Option<String> {
-        if self.host.pending_create.is_some() && !self.draft_pending() {
+        if self.host.creation.pending_create.is_some() && !self.draft_pending() {
             return Some("Another new thread is unconfirmed · retry it above first.".into());
         }
         if self.draft_pending() {
@@ -332,13 +335,14 @@ impl Plait {
         let Some(composer) = self.draft.composer.clone() else {
             return;
         };
-        let reason = if self.navigation.available.get(&self.host.checkout) == Some(&false) {
+        let reason = if self.navigation.available.get(&self.host.creation.checkout) == Some(&false)
+        {
             Some("Checkout folder unavailable. Choose another project above.".to_owned())
         } else if !self.session.ready() {
             Some("Restoring saved work…".into())
-        } else if !self.host.connected {
+        } else if !self.host.connection.connected {
             Some("Host disconnected. Reconnect to send.".into())
-        } else if self.host.creating && self.draft_pending() {
+        } else if self.host.creation.creating && self.draft_pending() {
             // The text being sent stays as it is until the thread has it.
             Some("Creating thread…".into())
         } else {
@@ -369,7 +373,7 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.host.creating || !self.host.connected || !self.session.ready() {
+        if self.host.creation.creating || !self.host.connection.connected || !self.session.ready() {
             return;
         }
         if let Some(reason) = self.draft_blocked() {
@@ -377,12 +381,12 @@ impl Plait {
             cx.notify();
             return;
         }
-        if self.host.pending_create.is_none() {
+        if self.host.creation.pending_create.is_none() {
             let Some(choice) = self.draft_model() else {
                 return;
             };
             self.choose_new_harness(self.draft_harness(), &choice, self.draft_mode());
-            self.host.new_model = Some(choice);
+            self.host.creation.new_model = Some(choice);
         }
         let pi = self.draft_harness() == HarnessId::Pi;
         let approval = (pi && self.host.protocol() >= 2).then(|| self.draft_approval());
@@ -392,9 +396,9 @@ impl Plait {
         self.new_thread_open = false;
         // An unconfirmed creation keeps the level it was first sent with.
         self.create_host_thread_at(thinking, window, cx);
-        let Some((request_id, _)) = self.host.pending_create.clone() else {
+        let Some((request_id, _)) = self.host.creation.pending_create.clone() else {
             self.draft.sending = None;
-            self.draft.error = self.host.error.take();
+            self.draft.error = self.host.connection.error.take();
             self.sync_composer(cx);
             return;
         };
@@ -536,14 +540,14 @@ impl Plait {
         if self.draft_locked().is_some() || harness != self.draft_harness() {
             return;
         }
-        let listed = if harness == HarnessId::Pi {
-            self.host
-                .status
-                .as_ref()
-                .is_some_and(|status| status.models.iter().any(|model| model.choice() == choice))
-        } else {
-            self.harness_model(harness, &choice).is_some()
-        };
+        let listed =
+            if harness == HarnessId::Pi {
+                self.host.connection.status.as_ref().is_some_and(|status| {
+                    status.models.iter().any(|model| model.choice() == choice)
+                })
+            } else {
+                self.harness_model(harness, &choice).is_some()
+            };
         if !listed {
             return;
         }
@@ -609,14 +613,14 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.host.pending_create.is_some() {
+        if self.host.creation.pending_create.is_some() {
             return self.retry_create(window, cx);
         }
         if !self.usable_in(HarnessId::Pi, &choice) {
             return;
         }
         self.choose_new_harness(HarnessId::Pi, &choice, None);
-        self.host.new_model = Some(choice);
+        self.host.creation.new_model = Some(choice);
         self.new_thread_open = true;
         self.draft.open = false;
         self.settings_open = false;

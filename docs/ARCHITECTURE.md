@@ -83,12 +83,14 @@ ui/                     GPUI layout, actions, focus, lists, theme
 crates/plait-core/src/
 host.rs                 bounded Unix-socket framing and requests; background only
 host/watch.rs           cancellable reader and bounded async snapshot delivery
-host_state.rs           host selection, request identity, and stale-result guards
+host_state.rs           scoped host connection, selected-thread state, and submission ledger
+checkout_state.rs       checkout-scoped creation state and shared repository data/caches
+thread_view.rs          presentation-independent thread view enum and Git view selection
 transcript.rs           stable row identity and incremental list-change plans
 history.rs              stored/live merging, text parts, memory limits, run wording
 history/records.rs      complete record pages, run membership and closing-line projection
 local_socket.rs         owner-only paths and OS peer-identity checks
-state.rs                selection, collapse state, request queue, cache
+state.rs                application state, repository job coordinator, and accessors
 model.rs                plain Rust data, no GPUI
 machine.rs              this machine's display name
 preferences.rs          desktop-only preferences and Cmd-number order
@@ -411,6 +413,21 @@ current snapshot's cache, but cannot replace another selected file.
 
 Diffs are loaded on demand. Up to 16 diffs are cached per status snapshot.
 Refresh clears that cache. Threads within a checkout share its Git state.
+
+### Core state scopes
+
+Plain core state separates ownership while preserving one selected thread slot:
+
+- **`HostState`** (`host_state.rs`) groups host connection, catalog, and
+  default-model settings (`HostConnection`), checkout-scoped new-thread
+  creation (`CheckoutCreationState` in `checkout_state.rs`), selected-thread
+  read/control state (`SelectedThreadState` in `thread_view.rs`), and the
+  per-thread submission ledger (`Submissions`).
+- **`RepositoryState`** (`state.rs`) separates shared checkout repository data,
+  caches, writes, and background job queues (`CheckoutRepositoryData` in
+  `checkout_state.rs`) from the selected workspace's Git view selection
+  (`ThreadRepositoryView` in `thread_view.rs`, alongside the
+  presentation-independent `ThreadView` enum).
 
 The checkout's file list is a third job, started only when a composer asks for
 it. It has its own queue slot, so it cannot displace a diff, and it runs after

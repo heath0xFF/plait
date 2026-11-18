@@ -177,6 +177,7 @@ impl Plait {
         }
         let chosen = self
             .host
+            .thread
             .selected
             .as_deref()
             .and_then(|id| self.thread_approval(id));
@@ -306,7 +307,7 @@ impl Plait {
     /// answer ends the rows. It is drawn with the turn's state where the
     /// line ends, not in the list.
     fn latest_record(&self) -> Option<(&str, &history::TurnSummary)> {
-        let live = self.host.snapshot.as_deref()?;
+        let live = self.host.thread.snapshot.as_deref()?;
         let last = self.conversation_snapshot()?.messages.last()?;
         // While older history is being read the rows stop short of the
         // latest turn, and the state below is not that of their last row.
@@ -430,7 +431,7 @@ impl Plait {
     /// Move the streaming reveals one frame on, and ask for the next frame
     /// while either trails what has arrived. Once per frame, from `render`.
     pub(super) fn advance_reveals(&mut self, window: &mut Window) {
-        let key = self.host.selected.as_deref().unwrap_or_default();
+        let key = self.host.thread.selected.as_deref().unwrap_or_default();
         let now = Instant::now();
         let total = |parsed: Option<&std::sync::Arc<plait_core::markdown::Message>>| {
             parsed.map_or(0, |parsed| plait_core::reveal::total(&parsed.blocks))
@@ -752,9 +753,9 @@ impl Plait {
     /// their shortcuts all pass through this one gate.
     pub(super) fn can_answer(&self, approval: &Approval) -> bool {
         approvable(approval, self.thread_harness())
-            && self.host.connected
-            && !self.host.controlling
-            && !self.host.decided_approvals.contains(&approval.id)
+            && self.host.connection.connected
+            && !self.host.thread.controlling
+            && !self.host.thread.decided_approvals.contains(&approval.id)
     }
 
     /// What a Deny Once or Allow Once shortcut would send: the open thread's
@@ -767,8 +768,8 @@ impl Plait {
         let shown = !self.settings_open
             && self.tab == super::Workspace::Conversation
             && self.overlay.is_none();
-        let snapshot = self.host.snapshot.as_ref().filter(|snapshot| {
-            shown && self.host.selected.as_deref() == Some(snapshot.id.as_str())
+        let snapshot = self.host.thread.snapshot.as_ref().filter(|snapshot| {
+            shown && self.host.thread.selected.as_deref() == Some(snapshot.id.as_str())
         })?;
         let approval = snapshot.pending_approval.as_ref()?;
         self.can_answer(approval)
@@ -980,11 +981,11 @@ impl Plait {
 
     fn live_banners(&self, pending: bool, cx: &mut Context<Self>) -> Vec<Div> {
         let mut banners = Vec::new();
-        if let Some(error) = self.host.error.clone() {
+        if let Some(error) = self.host.connection.error.clone() {
             banners.push(banner(colors().red).child(text!(error)));
         }
-        if !self.host.connected {
-            let connecting = self.host.connecting;
+        if !self.host.connection.connected {
+            let connecting = self.host.connection.connecting;
             banners.push(
                 banner(colors().amber)
                     .child(div().flex_1().min_w_0().child(
@@ -1004,10 +1005,12 @@ Tone::Filled,
             );
         }
         if pending && self.host.protocol() < 3 {
-            let ready = self.host.connected && !self.host.submitting && self.session.ready();
+            let ready = self.host.connection.connected
+                && !self.host.thread.submitting
+                && self.session.ready();
             banners.push(
                 banner(colors().muted)
-                    .child(div().flex_1().min_w_0().child(if self.host.submitting {
+                    .child(div().flex_1().min_w_0().child(if self.host.thread.submitting {
                         "Waiting for host acceptance…"
                     } else {
                         "Submission unconfirmed. Retry uses the same request ID and cannot start duplicate work."
@@ -1027,15 +1030,16 @@ Tone::Filled,
     }
 
     pub(super) fn live_conversation(&self, wide: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        let snapshot = self.host.snapshot.clone();
+        let snapshot = self.host.thread.snapshot.clone();
         let model = snapshot
             .as_ref()
             .map(|snapshot| &snapshot.model)
             .or_else(|| {
                 self.host
+                    .connection
                     .threads
                     .iter()
-                    .find(|thread| Some(&thread.id) == self.host.selected.as_ref())
+                    .find(|thread| Some(&thread.id) == self.host.thread.selected.as_ref())
                     .map(|thread| &thread.model)
             });
         let model_label = model.map_or_else(
@@ -1044,6 +1048,7 @@ Tone::Filled,
         );
         let pending = self
             .host
+            .thread
             .selected
             .as_ref()
             .is_some_and(|id| self.host.submissions.pending(id).is_some());
@@ -1219,6 +1224,7 @@ Tone::Filled,
         }
         let composer = self
             .host
+            .thread
             .selected
             .as_ref()
             .and_then(|id| self.composers.get(id));

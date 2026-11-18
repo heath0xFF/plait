@@ -569,9 +569,9 @@ impl Harness {
                 .window
                 .update(&mut self.cx, |plait, _, _| {
                     let repository = &plait.state.repository;
-                    matches!(repository.snapshot, Load::Loading)
-                        || matches!(repository.diff, Load::Loading)
-                        || plait.host.connecting
+                    matches!(repository.snapshot(), Load::Loading)
+                        || matches!(repository.diff(), Load::Loading)
+                        || plait.host.connection.connecting
                 })
                 .expect("window update");
             if !busy {
@@ -594,17 +594,18 @@ impl Harness {
 
     fn change_snapshot(&mut self, change: impl FnOnce(&mut Snapshot)) {
         self.update(|plait, _, cx| {
-            let previous = plait.host.snapshot.clone().expect("sample snapshot");
-            change(Arc::make_mut(plait.host.snapshot.as_mut().unwrap()));
+            let previous = plait.host.thread.snapshot.clone().expect("sample snapshot");
+            change(Arc::make_mut(plait.host.thread.snapshot.as_mut().unwrap()));
             plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
                 &plait.formatted,
-                plait.host.snapshot.as_ref().unwrap(),
+                plait.host.thread.snapshot.as_ref().unwrap(),
             ));
             plait.refresh_live_list(Some(&previous));
             plait.conversation_rows_changed(cx);
-            let snapshot = plait.host.snapshot.as_ref().unwrap();
+            let snapshot = plait.host.thread.snapshot.as_ref().unwrap();
             if let Some(thread) = plait
                 .host
+                .connection
                 .threads
                 .iter_mut()
                 .find(|thread| thread.id == snapshot.id)
@@ -663,13 +664,13 @@ impl Harness {
     fn connect(&mut self, repository: &Path, approval: bool) {
         let checkout = repository.to_owned();
         self.update(move |plait, window, cx| {
-            plait.host.connecting = false;
-            plait.host.connected = true;
-            plait.host.error = None;
-            plait.host.status = Some(status());
-            plait.host.settings_model = Some(choice());
-            plait.host.new_model = Some(choice());
-            plait.host.threads = vec![
+            plait.host.connection.connecting = false;
+            plait.host.connection.connected = true;
+            plait.host.connection.error = None;
+            plait.host.connection.status = Some(status());
+            plait.host.connection.settings_model = Some(choice());
+            plait.host.creation.new_model = Some(choice());
+            plait.host.connection.threads = vec![
                 ThreadSummary {
                     id: THREAD.into(),
                     checkout: checkout.clone(),
@@ -686,12 +687,12 @@ impl Harness {
                 },
             ];
             // Mirror select_host_thread without opening a socket.
-            plait.host.selected = Some(THREAD.into());
+            plait.host.thread.selected = Some(THREAD.into());
             plait.history = Default::default();
-            plait.host.snapshot = Some(Arc::new(thread_snapshot(&checkout, approval)));
+            plait.host.thread.snapshot = Some(Arc::new(thread_snapshot(&checkout, approval)));
             plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
                 &plait.formatted,
-                plait.host.snapshot.as_ref().unwrap(),
+                plait.host.thread.snapshot.as_ref().unwrap(),
             ));
             plait.settings_open = false;
             plait.settings_page = SettingsPage::default();
@@ -722,7 +723,7 @@ impl Harness {
     /// Give the pending approval a new ID, so an earlier answer does not cover it.
     fn new_approval(&mut self, id: &'static str) {
         self.change_snapshot(|snapshot| snapshot.pending_approval.as_mut().unwrap().id = id.into());
-        self.update(|plait, _, _| plait.host.error = None);
+        self.update(|plait, _, _| plait.host.connection.error = None);
     }
 
     /// Press `keys` from a released keyboard and report whether an answer to
@@ -739,8 +740,12 @@ impl Harness {
         let id = id.to_owned();
         self.window
             .update(&mut self.cx, |plait, _, _| {
-                let sent = plait.host.decided_approvals.contains(&id);
-                assert_eq!(sent, plait.host.error.is_some(), "a sent answer fails here");
+                let sent = plait.host.thread.decided_approvals.contains(&id);
+                assert_eq!(
+                    sent,
+                    plait.host.connection.error.is_some(),
+                    "a sent answer fails here"
+                );
                 sent
             })
             .expect("window update")
@@ -772,6 +777,7 @@ fn approval_shortcuts_act_only_when_the_buttons_would() {
         // One gate decides for the buttons and the keys.
         let approval = plait
             .host
+            .thread
             .snapshot
             .as_ref()
             .unwrap()
@@ -798,7 +804,7 @@ fn approval_shortcuts_act_only_when_the_buttons_would() {
 
     // A key held from before the approval arrived does not answer it.
     harness.change_snapshot(|snapshot| snapshot.pending_approval = None);
-    harness.update(|plait, _, _| plait.host.error = None);
+    harness.update(|plait, _, _| plait.host.connection.error = None);
     assert!(!harness.answers("cmd-alt-y", "a5"), "no approval waits");
     harness.change_snapshot(|snapshot| {
         let mut approval = thread_snapshot(Path::new("/"), true)
@@ -813,29 +819,29 @@ fn approval_shortcuts_act_only_when_the_buttons_would() {
     );
 
     // Everything that disables the buttons stops the keys.
-    harness.update(|plait, _, _| plait.host.connected = false);
+    harness.update(|plait, _, _| plait.host.connection.connected = false);
     assert!(!harness.answers("cmd-alt-y", "a5"), "disconnected");
     harness.update(|plait, _, _| {
-        plait.host.connected = true;
-        plait.host.controlling = true;
+        plait.host.connection.connected = true;
+        plait.host.thread.controlling = true;
     });
     assert!(
         !harness.answers("cmd-alt-y", "a5"),
         "a control request is in flight"
     );
     harness.update(|plait, _, _| {
-        plait.host.controlling = false;
-        plait.host.decided_approvals.insert("a5".into());
+        plait.host.thread.controlling = false;
+        plait.host.thread.decided_approvals.insert("a5".into());
     });
     harness.release();
     harness.draw();
     harness.keystroke("cmd-alt-y");
     harness.update(|plait, _, _| {
         assert!(
-            plait.host.error.is_none(),
+            plait.host.connection.error.is_none(),
             "already decided: nothing is sent"
         );
-        plait.host.decided_approvals.remove("a5");
+        plait.host.thread.decided_approvals.remove("a5");
     });
     // Pi's approval with no arguments shows nothing to approve.
     harness.change_snapshot(|snapshot| snapshot.pending_approval.as_mut().unwrap().details.clear());
@@ -861,13 +867,13 @@ fn approval_shortcuts_act_only_when_the_buttons_would() {
     );
     harness.update(|plait, _, _| {
         plait.tab = super::Workspace::Conversation;
-        plait.host.selected = Some("thr_0c44a9d1".into());
+        plait.host.thread.selected = Some("thr_0c44a9d1".into());
     });
     assert!(
         !harness.answers("cmd-alt-y", "a6"),
         "another thread is open"
     );
-    harness.update(|plait, _, _| plait.host.selected = Some(THREAD.into()));
+    harness.update(|plait, _, _| plait.host.thread.selected = Some(THREAD.into()));
     // The palette opens over the card, so the keys wait until it closes.
     harness.update(|plait, window, cx| plait.toggle_command_palette(window, cx));
     harness.update(|plait, _, _| {
@@ -914,9 +920,9 @@ fn desktop_recovery_does_not_rebind_saved_work_or_clear_a_newer_revision() {
         });
         plait.capture_session(cx);
         let saved = plait.session.data.as_ref().unwrap().threads[THREAD].clone();
-        plait.host.threads[0].checkout = "/a-different-checkout".into();
-        let snapshot = Arc::make_mut(plait.host.snapshot.as_mut().unwrap());
-        snapshot.checkout = plait.host.threads[0].checkout.clone();
+        plait.host.connection.threads[0].checkout = "/a-different-checkout".into();
+        let snapshot = Arc::make_mut(plait.host.thread.snapshot.as_mut().unwrap());
+        snapshot.checkout = plait.host.connection.threads[0].checkout.clone();
         snapshot.messages.push(Message {
             id: format!("request-{}", pending.request_id),
             role: MessageRole::User,
@@ -933,8 +939,9 @@ fn desktop_recovery_does_not_rebind_saved_work_or_clear_a_newer_revision() {
         assert!(!plait.session_accepts_thread(THREAD));
         assert!(plait.host.submissions.pending(THREAD).is_some());
         // Only the matching identity can reconcile the accepted request, not a reused thread ID.
-        plait.host.threads[0].checkout = saved.checkout.clone();
-        Arc::make_mut(plait.host.snapshot.as_mut().unwrap()).checkout = saved.checkout.clone();
+        plait.host.connection.threads[0].checkout = saved.checkout.clone();
+        Arc::make_mut(plait.host.thread.snapshot.as_mut().unwrap()).checkout =
+            saved.checkout.clone();
         plait.restore_composer(THREAD, &composer, cx);
         plait.record_snapshot(cx);
         assert!(plait.host.submissions.pending(THREAD).is_none());
@@ -1095,7 +1102,7 @@ impl Harness {
         let deadline = Instant::now() + Duration::from_secs(10);
         while self
             .window
-            .update(&mut self.cx, |plait, _, _| plait.host.creating)
+            .update(&mut self.cx, |plait, _, _| plait.host.creation.creating)
             .expect("window update")
         {
             assert!(Instant::now() < deadline, "creation did not finish");
@@ -1140,23 +1147,23 @@ fn a_draft_creates_its_thread_only_when_sent_and_keeps_its_request_id() {
         // Opening the draft creates nothing and leaves the open thread.
         plait.open_draft(window, cx);
         assert!(plait.draft.open && plait.draft_visible());
-        assert!(plait.host.selected.is_none());
-        assert!(plait.host.pending_create.is_none() && !plait.host.creating);
+        assert!(plait.host.thread.selected.is_none());
+        assert!(plait.host.creation.pending_create.is_none() && !plait.host.creation.creating);
         let composer = plait.draft.composer.clone().unwrap();
         assert!(
             composer.focus_handle(cx).is_focused(window),
             "ready to type"
         );
         // Without a usable default, sending says why and creates nothing.
-        plait.host.status.as_mut().unwrap().default_model = None;
+        plait.host.connection.status.as_mut().unwrap().default_model = None;
         assert!(plait.draft_blocked().is_some());
     });
     harness.type_draft("Queue the status refresh");
     harness.keystroke("enter");
     harness.update(|plait, _, cx| {
-        assert!(plait.host.pending_create.is_none() && !plait.host.creating);
+        assert!(plait.host.creation.pending_create.is_none() && !plait.host.creation.creating);
         assert_eq!(draft_text(plait, cx), "Queue the status refresh");
-        plait.host.status = Some(status());
+        plait.host.connection.status = Some(status());
         plait.sync_composer(cx);
         assert!(plait.draft_blocked().is_none());
     });
@@ -1165,7 +1172,7 @@ fn a_draft_creates_its_thread_only_when_sent_and_keeps_its_request_id() {
         .window
         .update(&mut harness.cx, |plait, _, _| {
             assert!(
-                plait.host.pending_create.is_some(),
+                plait.host.creation.pending_create.is_some(),
                 "sending creates the thread"
             );
             let sending = plait.draft.sending.clone().expect("the message waits");
@@ -1173,14 +1180,14 @@ fn a_draft_creates_its_thread_only_when_sent_and_keeps_its_request_id() {
             assert_eq!(sending.approval, Some(ApprovalMode::Auto));
             // The header cannot change what is being created.
             assert!(plait.draft_locked().is_some());
-            plait.host.pending_create.clone().unwrap()
+            plait.host.creation.pending_create.clone().unwrap()
         })
         .expect("window update");
     assert_eq!(first.1, choice());
     // No host runs in this scratch home, so the request fails and stays unconfirmed.
     harness.creation_settles();
     harness.update(|plait, window, cx| {
-        assert_eq!(plait.host.pending_create.as_ref(), Some(&first));
+        assert_eq!(plait.host.creation.pending_create.as_ref(), Some(&first));
         assert!(plait.draft_pending());
         assert_eq!(draft_text(plait, cx), "Queue the status refresh");
         // The draft shows its own state; the bar above stays for elsewhere.
@@ -1190,11 +1197,11 @@ fn a_draft_creates_its_thread_only_when_sent_and_keeps_its_request_id() {
         assert_eq!(plait.draft_model(), Some(choice()));
         // Sending again retries the same request.
         plait.retry_draft(window, cx);
-        assert!(plait.host.creating);
+        assert!(plait.host.creation.creating);
     });
     harness.creation_settles();
     harness.update(|plait, window, cx| {
-        assert_eq!(plait.host.pending_create.as_ref(), Some(&first));
+        assert_eq!(plait.host.creation.pending_create.as_ref(), Some(&first));
         // Leaving keeps the text; New Thread brings it back.
         plait.select_host_thread(THREAD.into(), window, cx);
         assert!(!plait.draft.open);
@@ -1208,7 +1215,7 @@ fn a_draft_creates_its_thread_only_when_sent_and_keeps_its_request_id() {
         assert!(!plait.draft.open && plait.draft.sending.is_none());
         assert_eq!(draft_text(plait, cx), "");
         // A creation already sent stays the host's to answer.
-        assert!(plait.host.pending_create.is_some());
+        assert!(plait.host.creation.pending_create.is_some());
     });
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();
@@ -1229,7 +1236,7 @@ fn a_draft_sends_its_thinking_level_and_repeats_it_on_retry() {
     let mut harness = Harness::new(&repository, None, 900., 600.);
     harness.connect(&repository, false);
     harness.update(|plait, window, cx| {
-        let status = plait.host.status.as_mut().unwrap();
+        let status = plait.host.connection.status.as_mut().unwrap();
         status.protocol_version = 4;
         let model = status
             .models
@@ -1276,7 +1283,7 @@ fn a_draft_sends_its_thinking_level_and_repeats_it_on_retry() {
     harness.keystroke("enter");
     harness.update(|plait, _, cx| {
         assert!(plait.draft_pending(), "sending creates the thread");
-        assert_eq!(plait.host.pending_thinking, Some(Xhigh));
+        assert_eq!(plait.host.creation.pending_thinking, Some(Xhigh));
         // The chip cannot change what is being created.
         plait.choose_draft_thinking(Low, cx);
         assert_eq!(plait.draft_thinking(), Some(Xhigh));
@@ -1288,14 +1295,14 @@ fn a_draft_sends_its_thinking_level_and_repeats_it_on_retry() {
     harness.update(|plait, window, cx| {
         assert!(plait.draft_pending());
         // A retry repeats the same request at the same level.
-        let request = plait.host.pending_create.clone();
+        let request = plait.host.creation.pending_create.clone();
         plait.retry_draft(window, cx);
-        assert!(plait.host.creating);
-        assert_eq!(plait.host.pending_create, request);
-        assert_eq!(plait.host.pending_thinking, Some(Xhigh));
+        assert!(plait.host.creation.creating);
+        assert_eq!(plait.host.creation.pending_create, request);
+        assert_eq!(plait.host.creation.pending_thinking, Some(Xhigh));
     });
     harness.creation_settles();
-    harness.update(|plait, _, _| assert_eq!(plait.host.pending_thinking, Some(Xhigh)));
+    harness.update(|plait, _, _| assert_eq!(plait.host.creation.pending_thinking, Some(Xhigh)));
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();
 }
@@ -1333,9 +1340,15 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
     };
     // As `send_draft` leaves things, without a socket.
     let sent = |plait: &mut Plait, request: &str, text: &str| {
-        plait.host.status.as_mut().unwrap().protocol_version = 3;
-        plait.host.pending_create = Some((request.into(), choice()));
-        plait.host.creating = true;
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 3;
+        plait.host.creation.pending_create = Some((request.into(), choice()));
+        plait.host.creation.creating = true;
         plait.draft.sending = Some(Sending {
             images: Vec::new(),
             generation: plait.draft.generation,
@@ -1352,9 +1365,16 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
         sent(plait, "discarded", "Gone");
         plait.discard_draft(window, cx);
         plait.finish_create(created("discarded"), reply("thr_discarded"), window, cx);
-        assert!(plait.host.pending_create.is_none());
-        assert!(plait.host.threads.iter().any(|t| t.id == "thr_discarded"));
-        assert!(plait.host.selected.is_none());
+        assert!(plait.host.creation.pending_create.is_none());
+        assert!(
+            plait
+                .host
+                .connection
+                .threads
+                .iter()
+                .any(|t| t.id == "thr_discarded")
+        );
+        assert!(plait.host.thread.selected.is_none());
         assert!(!plait.composers.contains_key("thr_discarded"));
         assert!(plait.host.submissions.all("thr_discarded").is_empty());
 
@@ -1362,12 +1382,19 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
         plait.open_draft(window, cx);
         sent(plait, "current", "Kept");
         plait.finish_create(created("earlier"), reply("thr_earlier"), window, cx);
-        assert!(plait.host.creating && plait.draft_pending());
-        assert!(!plait.host.threads.iter().any(|t| t.id == "thr_earlier"));
+        assert!(plait.host.creation.creating && plait.draft_pending());
+        assert!(
+            !plait
+                .host
+                .connection
+                .threads
+                .iter()
+                .any(|t| t.id == "thr_earlier")
+        );
         // Nor does a reply for a draft from before a discard.
         plait.draft.generation += 1;
         plait.finish_create(created("current"), reply("thr_stale"), window, cx);
-        assert!(plait.host.selected.is_none() && !plait.composers.contains_key("thr_stale"));
+        assert!(plait.host.thread.selected.is_none() && !plait.composers.contains_key("thr_stale"));
         plait.discard_draft(window, cx);
 
         // Left for another thread: the message goes to the new thread, which
@@ -1376,7 +1403,7 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
         sent(plait, "left", "Sent while away");
         plait.select_host_thread(THREAD.into(), window, cx);
         plait.finish_create(created("left"), reply("thr_left"), window, cx);
-        assert_eq!(plait.host.selected.as_deref(), Some(THREAD));
+        assert_eq!(plait.host.thread.selected.as_deref(), Some(THREAD));
         assert!(
             plait.composers.contains_key("thr_left"),
             "the draft's composer moved"
@@ -1392,7 +1419,7 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
         plait.open_draft(window, cx);
         sent(plait, "visible", "Open it");
         plait.finish_create(created("visible"), reply("thr_visible"), window, cx);
-        assert_eq!(plait.host.selected.as_deref(), Some("thr_visible"));
+        assert_eq!(plait.host.thread.selected.as_deref(), Some("thr_visible"));
         assert_eq!(plait.host.submissions.all("thr_visible")[0].text, "Open it");
         assert!(!plait.draft.open);
 
@@ -1404,7 +1431,7 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
             message: "Sample refusal.".into(),
         }));
         plait.finish_create(created("refused"), refused, window, cx);
-        assert!(plait.host.pending_create.is_none() && plait.draft.sending.is_none());
+        assert!(plait.host.creation.pending_create.is_none() && plait.draft.sending.is_none());
         assert!(
             plait
                 .draft
@@ -1430,7 +1457,13 @@ fn a_worktree_thread_is_created_in_a_new_worktree_listed_under_its_project() {
     let mut harness = Harness::new(&repository, None, 900., 600.);
     harness.connect(&repository, false);
     harness.update(|plait, window, cx| {
-        plait.host.status.as_mut().unwrap().protocol_version = 3;
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 3;
         plait.new_worktree_thread(window, cx);
         assert!(plait.worktree_busy);
         assert!(plait.creation_bar(cx).is_some(), "preparing is shown");
@@ -1441,8 +1474,8 @@ fn a_worktree_thread_is_created_in_a_new_worktree_listed_under_its_project() {
         let done = harness
             .window
             .update(&mut harness.cx, |plait, _, _| {
-                (!plait.worktree_busy && plait.host.pending_create.is_some())
-                    .then(|| plait.host.checkout.clone())
+                (!plait.worktree_busy && plait.host.creation.pending_create.is_some())
+                    .then(|| plait.host.creation.checkout.clone())
             })
             .expect("window update");
         if let Some(checkout) = done {
@@ -1619,10 +1652,16 @@ fn changed_files_count_with_git_hide_on_request_and_open_in_changes() {
     harness.settle();
     let root = repository.canonicalize().unwrap();
     harness.update(move |plait, _, cx| {
-        plait.host.connected = true;
-        plait.host.status = Some(status());
-        plait.host.status.as_mut().unwrap().protocol_version = 3;
-        plait.host.selected = Some(THREAD.into());
+        plait.host.connection.connected = true;
+        plait.host.connection.status = Some(status());
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 3;
+        plait.host.thread.selected = Some(THREAD.into());
         plait.thread_files.inject(THREAD, root, Vec::new());
         plait.thread_files.set_paths(vec![
             "src/review.rs".into(),
@@ -1663,9 +1702,9 @@ fn changed_files_count_with_git_hide_on_request_and_open_in_changes() {
         plait.open_thread_file("src/review.rs".into(), window, cx);
         assert_eq!(plait.tab, super::Workspace::Changes);
         let repo = &plait.state.repository;
-        let key = repo.selected.as_ref().unwrap();
+        let key = repo.selected_diff().unwrap();
         assert_eq!(
-            repo.snapshot.ready().unwrap().changes[key.file].path,
+            repo.snapshot().ready().unwrap().changes[key.file].path,
             PathBuf::from("src/review.rs")
         );
     });
@@ -1730,7 +1769,7 @@ fn streaming_text_flows_in_over_display_frames_and_catches_up() {
 
 /// The index of the shown diff's first added line.
 fn first_added(plait: &Plait) -> usize {
-    let Load::Ready(diff) = &plait.state.repository.diff else {
+    let Load::Ready(diff) = &plait.state.repository.diff() else {
         panic!("the diff is read");
     };
     diff.lines
@@ -1755,7 +1794,7 @@ fn asking_about_picked_lines_quotes_them_into_the_thread_composer() {
         plait.ask_about_pick(window, cx);
         assert!(plait.line_pick.is_some());
 
-        plait.host.selected = Some(THREAD.into());
+        plait.host.thread.selected = Some(THREAD.into());
         let composer = cx.new(|cx| Composer::new(window, cx));
         composer.update(cx, |composer, cx| {
             composer.set_enabled(true, None, cx);
@@ -1868,12 +1907,12 @@ fn keys_drive_the_palette_and_picker() {
     press(&mut harness, "down");
     press(&mut harness, "enter");
     harness.update(|plait, window, cx| {
-        assert_eq!(plait.host.selected.as_deref(), Some("thr_0c44a9d1"));
+        assert_eq!(plait.host.thread.selected.as_deref(), Some("thr_0c44a9d1"));
         let composer = plait.composers["thr_0c44a9d1"].focus_handle(cx);
         assert!(window.focused(cx) == Some(composer));
         // Selecting dropped the sample connection; restore it for the picker.
-        plait.host.connected = true;
-        plait.host.error = None;
+        plait.host.connection.connected = true;
+        plait.host.connection.error = None;
     });
 
     // Cmd-Shift-N asks for a model. Tab stays inside the overlay.
@@ -1894,10 +1933,10 @@ fn keys_drive_the_palette_and_picker() {
             provider: "openai-codex".into(),
             model_id: "gpt-6-astra".into(),
         };
-        assert_eq!(plait.host.settings_model, Some(astra));
+        assert_eq!(plait.host.connection.settings_model, Some(astra));
         // The host's default is unchanged, and the state says so.
         assert_eq!(
-            plait.host.status.as_ref().unwrap().default_model,
+            plait.host.connection.status.as_ref().unwrap().default_model,
             Some(choice())
         );
         let (state, _) = plait.default_model_state().expect("save state");
@@ -1931,7 +1970,7 @@ fn walk(output: Option<&Path>) {
             plait.commit_message.update(cx, |field, cx| {
                 field.set_text("Queue the status refresh", cx)
             });
-            plait.state.repository.write.note = Some(("Staged 1 file".into(), false));
+            plait.state.repository.write_mut().note = Some(("Staged 1 file".into(), false));
         });
         harness.capture(&format!("changes-commit-{suffix}"));
         // Resting on the hunk header reveals its Stage hunk control.
@@ -1950,7 +1989,7 @@ fn walk(output: Option<&Path>) {
         harness.capture(&format!("changes-hunk-{suffix}"));
         // After a discard, its result offers Undo. Injected, not performed.
         harness.update(|plait, _, _| {
-            let write = &mut plait.state.repository.write;
+            let write = plait.state.repository.write_mut();
             write.note = Some(("Discarded changes to review.rs".into(), false));
             write.undo = Some(plait_core::git::Backup {
                 path: "src/review.rs".into(),
@@ -1960,7 +1999,7 @@ fn walk(output: Option<&Path>) {
         });
         harness.capture(&format!("changes-undo-{suffix}"));
         harness.update(|plait, _, _| {
-            let write = &mut plait.state.repository.write;
+            let write = plait.state.repository.write_mut();
             write.note = Some(("Staged 1 file".into(), false));
             write.undo = None;
         });
@@ -1979,7 +2018,7 @@ fn walk(output: Option<&Path>) {
             plait
                 .commit_message
                 .update(cx, |field, cx| field.set_text("", cx));
-            plait.state.repository.write.note = None;
+            plait.state.repository.write_mut().note = None;
             plait.show_tab(super::Workspace::History, window, cx);
         });
         harness.capture(&format!("history-list-{suffix}"));
@@ -1987,8 +2026,7 @@ fn walk(output: Option<&Path>) {
             let id = plait
                 .state
                 .repository
-                .commits
-                .list
+                .commit_list()
                 .ready()
                 .and_then(|history| history.commits.first())
                 .map(|commit| commit.id.clone())
@@ -2002,8 +2040,7 @@ fn walk(output: Option<&Path>) {
             let id = plait
                 .state
                 .repository
-                .commits
-                .list
+                .commit_list()
                 .ready()
                 .and_then(|history| history.commits.last())
                 .map(|commit| commit.id.clone())
@@ -2015,16 +2052,17 @@ fn walk(output: Option<&Path>) {
         harness.capture(&format!("history-files-{suffix}"));
         harness.update(|plait, _, _| {
             plait.tab = super::Workspace::Conversation;
-            plait.host.connecting = false;
-            plait.host.connected = true;
-            plait.host.status = Some(status());
+            plait.host.connection.connecting = false;
+            plait.host.connection.connected = true;
+            plait.host.connection.status = Some(status());
         });
         harness.capture(&format!("home-empty-{suffix}"));
         harness.connect(&repository, false);
         harness.capture(&format!("live-{suffix}"));
         harness.update(|plait, _, _| {
-            plait.host.connected = false;
-            plait.host.error = Some("Local host connection failed: sample error.".into());
+            plait.host.connection.connected = false;
+            plait.host.connection.error =
+                Some("Local host connection failed: sample error.".into());
         });
         harness.capture(&format!("live-disconnected-{suffix}"));
         harness.connect(&repository, true);
@@ -2067,13 +2105,13 @@ fn walk(output: Option<&Path>) {
         // Cmd-2 selects the second thread; next/previous wrap around the list.
         harness.update(|plait, window, cx| {
             plait.jump_to(2, window, cx);
-            assert_eq!(plait.host.selected.as_deref(), Some("thr_0c44a9d1"));
+            assert_eq!(plait.host.thread.selected.as_deref(), Some("thr_0c44a9d1"));
             plait.step_thread(true, window, cx);
-            assert_eq!(plait.host.selected.as_deref(), Some(THREAD));
+            assert_eq!(plait.host.thread.selected.as_deref(), Some(THREAD));
             plait.step_thread(false, window, cx);
-            assert_eq!(plait.host.selected.as_deref(), Some("thr_0c44a9d1"));
+            assert_eq!(plait.host.thread.selected.as_deref(), Some("thr_0c44a9d1"));
             plait.jump_to(9, window, cx);
-            assert_eq!(plait.host.selected.as_deref(), Some("thr_0c44a9d1"));
+            assert_eq!(plait.host.thread.selected.as_deref(), Some("thr_0c44a9d1"));
             plait.sidebar = false;
             plait.diagnostics = true;
         });
@@ -2115,13 +2153,13 @@ fn streaming_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
                 measured.is_some(),
                 "visible history row must already be measured"
             );
-            let previous = plait.host.snapshot.clone().unwrap();
-            Arc::make_mut(plait.host.snapshot.as_mut().unwrap())
+            let previous = plait.host.thread.snapshot.clone().unwrap();
+            Arc::make_mut(plait.host.thread.snapshot.as_mut().unwrap())
                 .live_text
                 .push_str(" another streamed word");
             plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
                 &plait.formatted,
-                plait.host.snapshot.as_ref().unwrap(),
+                plait.host.thread.snapshot.as_ref().unwrap(),
             ));
             plait.refresh_live_list(Some(&previous));
             assert_eq!(plait.live_scroll.bounds_for_item(anchor.item_ix), measured);
@@ -2166,7 +2204,7 @@ fn tool_states_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.change_snapshot(tool_states);
     harness.update(|plait, _, cx| {
         // The sidebar and composer follow the thread's status, as a host update would set it.
-        plait.host.threads[0].status = ThreadStatus::Error;
+        plait.host.connection.threads[0].status = ThreadStatus::Error;
         plait.sync_composer(cx);
         plait.toggle_live_tool("t2", cx);
         plait.toggle_live_tool("t3", cx);
@@ -2187,7 +2225,7 @@ fn reading_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         offset_in_item: px(0.),
     };
     harness.update(|plait, _, cx| {
-        plait.host.threads[0].status = ThreadStatus::Idle;
+        plait.host.connection.threads[0].status = ThreadStatus::Idle;
         plait.sync_composer(cx);
         plait.live_scroll.scroll_to(at(0));
     });
@@ -2394,7 +2432,7 @@ fn tool_cards_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.connect(repository, false);
     harness.change_snapshot(tool_cards);
     harness.update(|plait, _, cx| {
-        plait.host.threads[0].status = ThreadStatus::Idle;
+        plait.host.connection.threads[0].status = ThreadStatus::Idle;
         plait.sync_composer(cx);
         for id in ["c1", "c2", "c3"] {
             plait.toggle_live_tool(id, cx);
@@ -2452,7 +2490,7 @@ fn draft_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.connect(repository, false);
     harness.change_snapshot(finished_turn);
     harness.update(|plait, _, cx| {
-        plait.host.threads[0].status = ThreadStatus::Idle;
+        plait.host.connection.threads[0].status = ThreadStatus::Idle;
         plait.composers[THREAD].update(cx, |composer, cx| {
             composer.restore_draft(DRAFT.into(), 1, None, cx);
         });
@@ -2493,7 +2531,7 @@ impl Harness {
         self.connect(repository, false);
         self.change_snapshot(finished_turn);
         self.update(|plait, _, cx| {
-            plait.host.threads[0].status = ThreadStatus::Idle;
+            plait.host.connection.threads[0].status = ThreadStatus::Idle;
             plait.sync_composer(cx);
             plait.live_scroll.scroll_to_end();
         });
@@ -2713,23 +2751,23 @@ fn settings_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.update(|plait, _, _| plait.settings_open = true);
     harness.capture(&format!("settings-{suffix}"));
     harness.update(|plait, _, _| {
-        for model in &mut plait.host.status.as_mut().unwrap().models {
+        for model in &mut plait.host.connection.status.as_mut().unwrap().models {
             model.authenticated = false;
         }
     });
     harness.capture(&format!("settings-no-auth-{suffix}"));
     harness.update(|plait, _, _| {
-        plait.host.status = Some(status());
+        plait.host.connection.status = Some(status());
         // As a failed save leaves it: the choice is kept, the host's default unchanged.
-        plait.host.settings_model = Some(other_choice());
+        plait.host.connection.settings_model = Some(other_choice());
         plait
             .host
             .finish_save(Err("sample error; the host did not answer.".into()));
     });
     harness.capture(&format!("settings-save-failed-{suffix}"));
     harness.update(|plait, _, _| {
-        plait.host.settings_model = Some(choice());
-        plait.host.save_message = None;
+        plait.host.connection.settings_model = Some(choice());
+        plait.host.connection.save_message = None;
         plait.settings_open = false;
     });
 }
@@ -2793,7 +2831,7 @@ fn picker_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.update(|plait, window, cx| {
         plait.close_overlay(true, window, cx);
         // Disconnected: the picker says why it has nothing to list.
-        plait.host.connected = false;
+        plait.host.connection.connected = false;
         plait.open_model_picker(ModelPurpose::DefaultModel, window, cx);
     });
     harness.capture(&format!("model-picker-disconnected-{suffix}"));
@@ -2807,14 +2845,14 @@ fn picker_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
 fn new_thread_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.connect(repository, false);
     harness.update(|plait, _, _| {
-        plait.host.pending_create = Some(("sample-request".into(), choice()));
-        plait.host.error =
+        plait.host.creation.pending_create = Some(("sample-request".into(), choice()));
+        plait.host.connection.error =
             Some("Sample error. Retry creation to reuse the same request ID.".into());
     });
     harness.capture(&format!("new-thread-unconfirmed-{suffix}"));
     harness.update(|plait, _, _| {
-        plait.host.pending_create = None;
-        plait.host.error = None;
+        plait.host.creation.pending_create = None;
+        plait.host.connection.error = None;
     });
 }
 
@@ -2828,7 +2866,7 @@ fn draft_scenes_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     let other = other.canonicalize().unwrap();
     harness.update(move |plait, window, cx| {
         use plait_core::host::ThinkingLevel::*;
-        let status = plait.host.status.as_mut().unwrap();
+        let status = plait.host.connection.status.as_mut().unwrap();
         status.protocol_version = 4;
         status.models.truncate(6);
         // A reasoning model, so the header shows its thinking chip.
@@ -2894,8 +2932,8 @@ fn draft_scenes_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.update(|plait, window, cx| {
         plait.close_overlay(true, window, cx);
         plait.choose_draft_harness(HarnessId::Pi, cx);
-        plait.host.pending_create = Some(("sample-request".into(), choice()));
-        plait.host.error =
+        plait.host.creation.pending_create = Some(("sample-request".into(), choice()));
+        plait.host.connection.error =
             Some("Sample error. Retry creation to reuse the same request ID.".into());
         plait.draft.sending = Some(super::new_thread::Sending {
             images: Vec::new(),
@@ -2910,8 +2948,8 @@ fn draft_scenes_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     });
     harness.capture(&format!("draft-unconfirmed-{suffix}"));
     harness.update(|plait, window, cx| {
-        plait.host.pending_create = None;
-        plait.host.error = None;
+        plait.host.creation.pending_create = None;
+        plait.host.connection.error = None;
         plait.draft.sending = None;
         plait.sync_composer(cx);
         // Set aside, so the sidebar shows threads without a draft.
@@ -3010,7 +3048,7 @@ fn harnesses_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     };
     harness.fresh_composer(repository);
     harness.update(|plait, _, _| {
-        let status = plait.host.status.as_mut().unwrap();
+        let status = plait.host.connection.status.as_mut().unwrap();
         status.protocol_version = 4;
         // Only the named sample providers, so the Codex group is in view.
         status.models.truncate(6);
@@ -3027,8 +3065,8 @@ fn harnesses_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         });
     });
     harness.update(|plait, _, cx| {
-        plait.host.threads[0].model = codex_choice();
-        plait.host.threads[0].harness = Some(HarnessId::Codex);
+        plait.host.connection.threads[0].model = codex_choice();
+        plait.host.connection.threads[0].harness = Some(HarnessId::Codex);
         plait.sync_composer(cx);
     });
     harness.capture(&format!("composer-codex-thread-{suffix}"));
@@ -3059,7 +3097,7 @@ fn harnesses_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     let status = harness
         .window
         .update(&mut harness.cx, |plait, _, _| {
-            plait.host.snapshot.as_ref().unwrap().status
+            plait.host.thread.snapshot.as_ref().unwrap().status
         })
         .expect("window update");
     // During a run the mode can still change; the line says when it applies.
@@ -3112,7 +3150,13 @@ fn harnesses_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     });
     harness.capture(&format!("harness-settings-unready-{suffix}"));
     harness.update(|plait, _, _| {
-        plait.host.status.as_mut().unwrap().protocol_version = 3;
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 3;
     });
     harness.capture(&format!("harness-settings-old-host-{suffix}"));
     harness.update(|plait, window, cx| {
@@ -3213,7 +3257,7 @@ fn claude_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     use plait_core::host::{ThinkingLevel, harness::ThreadHarness};
     harness.connect(repository, false);
     harness.update(|plait, _, cx| {
-        let status = plait.host.status.as_mut().unwrap();
+        let status = plait.host.connection.status.as_mut().unwrap();
         status.protocol_version = 4;
         status.models.truncate(6);
         plait.inject_harnesses(Some(claude_harnesses("setup_required", Some(CLAUDE_SETUP))));
@@ -3264,7 +3308,7 @@ fn claude_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     // An open Claude Code thread asks before a command.
     harness.connect(repository, true);
     harness.update(|plait, _, _| {
-        let status = plait.host.status.as_mut().unwrap();
+        let status = plait.host.connection.status.as_mut().unwrap();
         status.protocol_version = 4;
         status.models.truncate(6);
         plait.inject_harnesses(Some(claude_harnesses("ready", None)));
@@ -3285,8 +3329,8 @@ fn claude_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         approval.risk = "Sample: Claude Code runs this command on your machine with your permissions, outside Plait's sandbox. Only this request is approved.".into();
     });
     harness.update(|plait, _, cx| {
-        plait.host.threads[0].model = claude_choice();
-        plait.host.threads[0].harness = Some(HarnessId::Claude);
+        plait.host.connection.threads[0].model = claude_choice();
+        plait.host.connection.threads[0].harness = Some(HarnessId::Claude);
         plait.sync_composer(cx);
         // Plait's approvals are Pi's: a Claude Code message asks for none.
         assert_eq!(plait.next_approval_mode(), None);
@@ -3328,12 +3372,30 @@ fn a_setup_reply_lands_only_on_the_request_it_answers() {
         )
     };
     harness.update(|plait, _, cx| {
-        plait.host.status.as_mut().unwrap().protocol_version = 4;
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 4;
         plait.inject_harnesses(Some(claude_harnesses("setup_required", Some(CLAUDE_SETUP))));
         // An older host cannot be asked.
-        plait.host.status.as_mut().unwrap().protocol_version = 3;
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 3;
         assert!(plait.begin_harnesses(Some(HarnessId::Claude)).is_none());
-        plait.host.status.as_mut().unwrap().protocol_version = 4;
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 4;
 
         // One request at a time; the setup is shown on Claude Code's row only.
         let request = plait.begin_harnesses(Some(HarnessId::Claude)).unwrap();
@@ -3359,7 +3421,7 @@ fn a_setup_reply_lands_only_on_the_request_it_answers() {
 
         // The host reconnected while setting up: the reply is for the old connection.
         let request = plait.begin_harnesses(Some(HarnessId::Claude)).unwrap();
-        plait.host.epoch += 1;
+        plait.host.connection.epoch += 1;
         plait.reset_harnesses();
         plait.inject_harnesses(Some(claude_harnesses("setup_required", Some(CLAUDE_SETUP))));
         assert!(!plait.harness_setting_up(HarnessId::Claude));
@@ -3391,7 +3453,13 @@ fn a_codex_draft_starts_a_codex_thread_in_its_mode() {
     let mut harness = Harness::new(&repository, None, 900., 600.);
     harness.connect(&repository, false);
     harness.update(|plait, window, cx| {
-        plait.host.status.as_mut().unwrap().protocol_version = 4;
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 4;
         plait.inject_harnesses(Some(sample_harnesses("ready", None)));
         plait.open_draft(window, cx);
         // Pi and its saved default first.
@@ -3425,10 +3493,17 @@ fn a_codex_draft_starts_a_codex_thread_in_its_mode() {
     harness.type_draft("Run in Codex");
     harness.keystroke("enter");
     harness.update(|plait, _, _| {
-        assert!(plait.host.pending_create.is_some());
+        assert!(plait.host.creation.pending_create.is_some());
         assert_eq!(plait.pending_harness(), HarnessId::Codex);
         assert_eq!(plait.pending_mode().as_deref(), Some("ask"));
-        let mini = plait.host.pending_create.as_ref().unwrap().1.clone();
+        let mini = plait
+            .host
+            .creation
+            .pending_create
+            .as_ref()
+            .unwrap()
+            .1
+            .clone();
         assert_eq!(mini.model_id, "sample-codex-mini");
         // Plait's approvals are Pi's: a Codex message asks for none.
         assert_eq!(plait.draft.sending.as_ref().unwrap().approval, None);
@@ -3443,7 +3518,7 @@ fn a_codex_draft_starts_a_codex_thread_in_its_mode() {
     harness.creation_settles();
     harness.update(|plait, window, cx| {
         plait.discard_draft(window, cx);
-        plait.host.pending_create = None;
+        plait.host.creation.pending_create = None;
         plait.open_draft(window, cx);
         // An unready harness cannot be chosen.
         plait.inject_harnesses(Some(sample_harnesses("signed_out", None)));
@@ -3451,7 +3526,13 @@ fn a_codex_draft_starts_a_codex_thread_in_its_mode() {
         assert_eq!(plait.draft_harness(), HarnessId::Pi);
         // An older host lists no harnesses, so only Pi is offered.
         plait.inject_harnesses(Some(sample_harnesses("ready", None)));
-        plait.host.status.as_mut().unwrap().protocol_version = 3;
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 3;
         plait.choose_draft_harness(HarnessId::Codex, cx);
         assert_eq!(plait.draft_harness(), HarnessId::Pi);
         assert!(plait.harness_rows().is_empty());
@@ -3478,7 +3559,13 @@ fn a_draft_starts_in_the_default_harness_while_it_is_ready() {
         model_id: "sample-codex-mini".into(),
     };
     harness.update(|plait, window, cx| {
-        plait.host.status.as_mut().unwrap().protocol_version = 4;
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 4;
         plait.inject_harnesses(Some(sample_harnesses("ready", None)));
         // `Other` has no name to save, so it is never the default.
         plait.set_default_harness(HarnessId::Other, cx);
@@ -3523,7 +3610,13 @@ fn a_draft_starts_in_the_default_harness_while_it_is_ready() {
         plait.inject_harnesses(Some(sample_harnesses("ready", None)));
         assert_eq!(plait.draft_harness(), HarnessId::Codex);
         // An older host lists no harnesses, so Pi.
-        plait.host.status.as_mut().unwrap().protocol_version = 3;
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 3;
         assert_eq!(plait.draft_harness(), HarnessId::Pi);
     });
     drop(harness);
@@ -3545,7 +3638,13 @@ fn a_mode_reply_lands_only_on_the_thread_it_was_sent_for() {
     let mut harness = Harness::new(&repository, None, 900., 600.);
     harness.connect(&repository, false);
     harness.update(|plait, _, _| {
-        plait.host.status.as_mut().unwrap().protocol_version = 4;
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 4;
         plait.inject_harnesses(Some(sample_harnesses("ready", None)));
     });
     let codex = |mode: &str, reported: Option<&str>| ThreadHarness {
@@ -3575,7 +3674,7 @@ fn a_mode_reply_lands_only_on_the_thread_it_was_sent_for() {
     };
     harness.update(|plait, _, cx| {
         // Only a mode the harness lists is sent, and a run does not block a change.
-        assert!(plait.host.snapshot.as_ref().unwrap().status.busy());
+        assert!(plait.host.thread.snapshot.as_ref().unwrap().status.busy());
         assert!(plait.begin_thread_mode("yolo".into()).is_none());
         let request = plait.begin_thread_mode("ask".into()).unwrap();
         // One change at a time.
@@ -3594,11 +3693,11 @@ fn a_mode_reply_lands_only_on_the_thread_it_was_sent_for() {
 
         // Sent, then the person opened another thread and came back: the
         // reply belongs to a watch that has ended, so it changes nothing.
-        let saved = plait.host.snapshot.clone();
+        let saved = plait.host.thread.snapshot.clone();
         let request = plait.begin_thread_mode("read_only".into()).unwrap();
         plait.host.select(Some("thr_0c44a9d1".into()));
         plait.host.select(Some(THREAD.into()));
-        plait.host.snapshot = saved;
+        plait.host.thread.snapshot = saved;
         plait.finish_thread_mode(request, reply("read_only"), cx);
         assert_eq!(shown(plait), ("ask".into(), false));
         assert!(plait.thread_controls.note.is_none());
@@ -3610,7 +3709,7 @@ fn a_mode_reply_lands_only_on_the_thread_it_was_sent_for() {
     });
     harness.update(|plait, _, cx| {
         plait.host.select(Some(THREAD.into()));
-        plait.host.snapshot = Some(Arc::new(thread_snapshot(&repository, false)));
+        plait.host.thread.snapshot = Some(Arc::new(thread_snapshot(&repository, false)));
         plait.sync_composer(cx);
     });
     // The next run reports Full access although Ask was chosen: the harness overrode it.
@@ -3967,7 +4066,10 @@ fn settings_controls_walk(harness: &mut Harness, repository: &Path, suffix: &str
         plait.show_project_settings(window, cx);
         assert!(plait.providers.form.is_none(), "the provider form closes");
         assert_eq!(plait.settings_page, SettingsPage::Project);
-        plait.policy.key = Some((plait.host.epoch, plait.host.checkout.clone()));
+        plait.policy.key = Some((
+            plait.host.connection.epoch,
+            plait.host.creation.checkout.clone(),
+        ));
         plait.policy.value = Some(CommandPolicy::Sandboxed);
     });
     harness.update(|plait, _, _| {
@@ -3999,7 +4101,7 @@ fn settings_controls_walk(harness: &mut Harness, repository: &Path, suffix: &str
         };
         let sample = AgentResources {
             mcp_servers: vec![],
-            checkout: plait.host.checkout.clone(),
+            checkout: plait.host.creation.checkout.clone(),
             trusted: false,
             instructions: Some(Instructions {
                 path: "/opt/sample-agent/AGENTS.md".into(),
@@ -4051,7 +4153,7 @@ fn composer_v3_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     use plait_core::host::{QueueMode, Queued, ThinkingLevel, Usage};
     harness.fresh_composer(repository);
     harness.update(|plait, _, cx| {
-        let status = plait.host.status.as_mut().unwrap();
+        let status = plait.host.connection.status.as_mut().unwrap();
         status.protocol_version = 3;
         let model = status
             .models
@@ -4066,7 +4168,7 @@ fn composer_v3_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
             ThinkingLevel::High,
         ]);
         model.context_window = Some(200_000);
-        Arc::make_mut(plait.host.snapshot.as_mut().unwrap()).thinking_level =
+        Arc::make_mut(plait.host.thread.snapshot.as_mut().unwrap()).thinking_level =
             Some(ThinkingLevel::Low);
         plait.host.submissions = Default::default();
         plait.sync_composer(cx);
@@ -4127,7 +4229,7 @@ fn composer_v3_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     // A thread's own approval mode overrides the default for what it sends,
     // and returning to the default follows Settings again.
     harness.update(|plait, _, cx| {
-        let id = plait.host.selected.clone().expect("open thread");
+        let id = plait.host.thread.selected.clone().expect("open thread");
         let default = plait.default_approval();
         let other = match default {
             ApprovalMode::Ask => ApprovalMode::Auto,
@@ -4229,7 +4331,7 @@ fn composer_v3_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     });
     harness.capture(&format!("composer-v3-sending-{suffix}"));
     harness.update(|plait, _, _| {
-        for queued in &plait.host.snapshot.as_ref().unwrap().queued {
+        for queued in &plait.host.thread.snapshot.as_ref().unwrap().queued {
             plait.host.submissions.restore_accepted(
                 THREAD.into(),
                 plait_core::host_state::PendingSubmit {
@@ -4287,6 +4389,7 @@ fn composer_v3_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.update(|plait, _, cx| {
         plait
             .host
+            .connection
             .status
             .as_mut()
             .unwrap()
@@ -4297,7 +4400,7 @@ fn composer_v3_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     });
     harness.capture(&format!("composer-v3-model-unavailable-{suffix}"));
     harness.update(|plait, _, cx| {
-        plait.host.connected = false;
+        plait.host.connection.connected = false;
         plait.sync_composer(cx);
     });
     harness.capture(&format!("composer-v3-disconnected-{suffix}"));
@@ -4330,7 +4433,7 @@ fn stored_page(
 }
 
 fn install_history(plait: &mut Plait, cache: plait_core::history::History) {
-    let snapshot = cache.project(plait.host.snapshot.as_ref().unwrap());
+    let snapshot = cache.project(plait.host.thread.snapshot.as_ref().unwrap());
     let stored = snapshot.tools.iter().map(|tool| tool.id.clone()).collect();
     plait.formatted = Arc::new(plait_core::markdown::Transcript::update_stored(
         &plait.formatted,
@@ -4340,7 +4443,13 @@ fn install_history(plait: &mut Plait, cache: plait_core::history::History) {
     let previous = plait.history.display.replace(Arc::new(snapshot));
     plait.history.cache = Arc::new(cache);
     plait.history.enabled = true;
-    plait.host.status.as_mut().unwrap().protocol_version = 3;
+    plait
+        .host
+        .connection
+        .status
+        .as_mut()
+        .unwrap()
+        .protocol_version = 3;
     plait.reconcile_live_list(previous.as_deref());
 }
 
@@ -4604,13 +4713,19 @@ fn navigation_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     let root = repository.to_owned();
     harness.update(move |plait, _, cx| {
         plait.sidebar = true;
-        plait.host.status.as_mut().unwrap().protocol_version = 3;
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 3;
         plait.preferences.value.navigation = Default::default();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64;
-        plait.host.threads = (0..28)
+        plait.host.connection.threads = (0..28)
             .map(|index| {
                 let checkout = match index % 3 {
                     0 => root.clone(),
@@ -4654,7 +4769,7 @@ fn navigation_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
             .preferences
             .value
             .navigation
-            .observe(&plait.host.threads, None, true);
+            .observe(&plait.host.connection.threads, None, true);
         plait
             .preferences
             .value
@@ -4764,8 +4879,14 @@ fn project_switching_keeps_each_draft_and_rejects_the_old_watch() {
     harness.connect(&repository, false);
     let other = repository.join("other");
     harness.update(|plait, window, cx| {
-        plait.host.status.as_mut().unwrap().protocol_version = 3;
-        plait.host.threads.push(ThreadSummary {
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 3;
+        plait.host.connection.threads.push(ThreadSummary {
             id: "other-thread".into(),
             checkout: other.clone(),
             model: choice(),
@@ -4779,18 +4900,19 @@ fn project_switching_keeps_each_draft_and_rejects_the_old_watch() {
             .update(cx, |composer, cx| {
                 composer.restore_draft("Original draft".into(), 8, None, cx)
             });
-        let old_epoch = plait.host.epoch;
-        let old_watch = plait.host.watch_epoch;
-        plait.host.saving = true;
-        plait.host.save_message = Some("Saving default model…".into());
+        let old_epoch = plait.host.connection.epoch;
+        let old_watch = plait.host.thread.watch_epoch;
+        plait.host.connection.saving = true;
+        plait.host.connection.save_message = Some("Saving default model…".into());
         plait.select_host_thread("other-thread".into(), window, cx);
-        assert_eq!(plait.host.checkout, other);
-        assert_eq!(plait.state.repository.path, other);
+        assert_eq!(plait.host.creation.checkout, other);
+        assert_eq!(plait.state.repository.path(), other);
         assert!(!plait.host.accepts_watch(old_epoch, old_watch, THREAD));
-        assert!(!plait.host.saving);
+        assert!(!plait.host.connection.saving);
         assert!(
             plait
                 .host
+                .connection
                 .save_message
                 .as_deref()
                 .unwrap()
@@ -4804,7 +4926,7 @@ fn project_switching_keeps_each_draft_and_rejects_the_old_watch() {
                 composer.restore_draft("Separate draft".into(), 3, None, cx)
             });
         plait.select_host_thread(THREAD.into(), window, cx);
-        assert_eq!(plait.host.checkout, repository);
+        assert_eq!(plait.host.creation.checkout, repository);
         assert_eq!(
             plait.composers[THREAD].read(cx).saved_draft().0,
             "Original draft"
@@ -4813,7 +4935,7 @@ fn project_switching_keeps_each_draft_and_rejects_the_old_watch() {
             plait.composers["other-thread"].read(cx).saved_draft().0,
             "Separate draft"
         );
-        assert_eq!(plait.host.threads.len(), 3);
+        assert_eq!(plait.host.connection.threads.len(), 3);
     });
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();
@@ -4835,16 +4957,25 @@ fn project_settings_open_for_the_chosen_project() {
     let other = repository.join("other");
     let chosen = other.clone();
     harness.update(move |plait, window, cx| {
-        plait.host.status.as_mut().unwrap().protocol_version = 3;
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 3;
         // Refused while a thread is being created: no page for the wrong project.
-        plait.host.creating = true;
+        plait.host.creation.creating = true;
         plait.show_settings_for_project(chosen.clone(), window, cx);
         assert!(!plait.settings_open);
-        assert_ne!(plait.host.checkout, chosen);
-        plait.host.creating = false;
+        assert_ne!(plait.host.creation.checkout, chosen);
+        plait.host.creation.creating = false;
         plait.notice = None;
         plait.show_settings_for_project(chosen.clone(), window, cx);
-        assert_eq!(plait.host.checkout, chosen, "the chosen project is active");
+        assert_eq!(
+            plait.host.creation.checkout, chosen,
+            "the chosen project is active"
+        );
         assert!(plait.settings_open);
         assert_eq!(plait.settings_page, SettingsPage::Project);
     });
@@ -4855,12 +4986,12 @@ fn project_settings_open_for_the_chosen_project() {
         .update(&mut harness.cx, |plait, window, cx| {
             plait.show_settings(false, window, cx);
             assert!(!plait.settings_open);
-            plait.host.epoch
+            plait.host.connection.epoch
         })
         .expect("window update");
     harness.update(move |plait, window, cx| {
         plait.show_settings_for_project(other.clone(), window, cx);
-        assert_eq!(plait.host.epoch, epoch, "no checkout change");
+        assert_eq!(plait.host.connection.epoch, epoch, "no checkout change");
         assert_eq!(plait.settings_page, SettingsPage::Project);
         plait.show_settings(false, window, cx);
         // The menu bar's Project Settings… opens the active project's page.
@@ -4904,7 +5035,10 @@ fn the_thread_menu_lists_only_the_threads_approvals() {
     harness.update(|plait, window, cx| {
         use plait_core::host::policy::CommandPolicy;
         // Trusted commands no longer add a project item to the thread's menu.
-        plait.policy.key = Some((plait.host.epoch, plait.host.checkout.clone()));
+        plait.policy.key = Some((
+            plait.host.connection.epoch,
+            plait.host.creation.checkout.clone(),
+        ));
         plait.policy.value = Some(CommandPolicy::Trusted);
         plait.open_run_settings(window, cx);
     });
@@ -4927,7 +5061,13 @@ fn thread_management_preserves_newer_edits_and_activity() {
     let mut harness = Harness::new(&repository, None, 900., 600.);
     harness.connect(&repository, false);
     harness.update(|plait, window, cx| {
-        plait.host.status.as_mut().unwrap().protocol_version = 3;
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 3;
         plait.sidebar = false;
         plait.begin_rename(THREAD.into(), window, cx);
         assert!(plait.sidebar, "global rename reveals its field");
@@ -4947,6 +5087,7 @@ fn thread_management_preserves_newer_edits_and_activity() {
 
         let summary = plait
             .host
+            .connection
             .threads
             .iter_mut()
             .find(|thread| thread.id == THREAD)
@@ -4977,6 +5118,7 @@ fn thread_management_preserves_newer_edits_and_activity() {
         assert!(focus.is_focused(window));
         let summary = plait
             .host
+            .connection
             .threads
             .iter()
             .find(|thread| thread.id == THREAD)
@@ -5038,7 +5180,13 @@ fn reconnect_releases_management_and_rejects_its_late_reply() {
     let mut harness = Harness::new(&repository, None, 900., 600.);
     harness.connect(&repository, false);
     harness.update(|plait, window, cx| {
-        plait.host.status.as_mut().unwrap().protocol_version = 3;
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 3;
         plait.begin_rename(THREAD.into(), window, cx);
         let operation = plait
             .begin_thread_management(
@@ -5061,7 +5209,7 @@ fn reconnect_releases_management_and_rejects_its_late_reply() {
                 .contains("not confirmed")
         );
         // A different operation in the new epoch must remain pending.
-        plait.host.connected = true;
+        plait.host.connection.connected = true;
         let _new = plait
             .begin_thread_management(
                 THREAD.into(),
@@ -5788,7 +5936,13 @@ fn image_drafts_stay_with_their_checkout() {
     let (directory, host) = plait_core::session::locations().unwrap();
     let (journal, _) = plait_core::session::Journal::open(&directory, host.clone()).unwrap();
     harness.update(|plait, window, cx| {
-        plait.host.status.as_mut().unwrap().protocol_version = 6;
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 6;
         plait.session.journal = Some(journal.clone());
         plait.session.data.as_mut().unwrap().host_store = host;
         plait.open_draft(window, cx);
@@ -5903,7 +6057,7 @@ fn image_queued_edit_preserves_attachments() {
     use plait_core::host::{QueueMode, Queued};
     let mut reply = serde_json::Value::Null;
     harness.update(|plait, _, cx| {
-        let snapshot = Arc::make_mut(plait.host.snapshot.as_mut().unwrap());
+        let snapshot = Arc::make_mut(plait.host.thread.snapshot.as_mut().unwrap());
         reply = serde_json::json!({"ok":true,"result":{"thread":{
             "id":THREAD,"checkout":repository,"model":{"provider":"faux","model_id":"faux-1"},
             "status":"idle","messages":[],"tools":[],"live_text":"","pending_approval":null,"error":null,"truncated":false,"queued":[]

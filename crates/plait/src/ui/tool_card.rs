@@ -57,7 +57,12 @@ fn frame() -> Div {
 
 impl Plait {
     fn group_open(&self, key: &str) -> bool {
-        let thread = self.host.snapshot.as_ref().map(|snapshot| &snapshot.id);
+        let thread = self
+            .host
+            .thread
+            .snapshot
+            .as_ref()
+            .map(|snapshot| &snapshot.id);
         thread == Some(&self.reading.groups_thread) && self.reading.open_groups.contains(key)
     }
 
@@ -94,7 +99,13 @@ impl Plait {
 
     /// Open or close the group that starts with the tool `key`.
     pub(super) fn toggle_tool_group(&mut self, key: &str, cx: &mut Context<Self>) {
-        let Some(thread) = self.host.snapshot.as_ref().map(|snapshot| &snapshot.id) else {
+        let Some(thread) = self
+            .host
+            .thread
+            .snapshot
+            .as_ref()
+            .map(|snapshot| &snapshot.id)
+        else {
             return;
         };
         if self.reading.groups_thread != *thread {

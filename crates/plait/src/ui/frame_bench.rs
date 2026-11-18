@@ -359,12 +359,12 @@ fn select(harness: &mut Harness, index: usize) {
 /// executor, so this includes work the real app does off the UI thread.
 fn install_thread(harness: &mut Harness, id: &'static str, snapshot: Snapshot) {
     harness.update(move |plait, window, cx| {
-        plait.host.selected = Some(id.into());
+        plait.host.thread.selected = Some(id.into());
         plait.history = Default::default();
-        plait.host.snapshot = Some(Arc::new(snapshot));
+        plait.host.thread.snapshot = Some(Arc::new(snapshot));
         plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
             &Default::default(),
-            plait.host.snapshot.as_ref().unwrap(),
+            plait.host.thread.snapshot.as_ref().unwrap(),
         ));
         plait.refresh_live_list(None);
         if !plait.composers.contains_key(id) {
@@ -410,7 +410,7 @@ pub fn run() -> Vec<Row> {
             plait
                 .state
                 .repository
-                .snapshot
+                .snapshot()
                 .ready()
                 .map_or(0, |s| s.changes.len())
         })
@@ -468,8 +468,8 @@ pub fn run() -> Vec<Row> {
     // a. Changes: 2,000 files, an injected 20k-line diff.
     harness.update(|plait, _, cx| {
         plait.tab = Workspace::Changes;
-        plait.state.repository.diff = Load::Ready(big_diff(20_000));
-        plait.state.repository.selected = Some(DiffKey {
+        plait.state.repository.view.changes.diff = Load::Ready(big_diff(20_000));
+        plait.state.repository.view.changes.selected = Some(DiffKey {
             file: 0,
             mode: DiffMode::Unstaged,
         });
@@ -509,10 +509,9 @@ pub fn run() -> Vec<Row> {
     // b. History: 5,000 commits, an injected 20k-line patch.
     harness.update(|plait, _, cx| {
         plait.tab = Workspace::History;
-        let log = &mut plait.state.repository.commits;
-        log.list = Load::Ready(commits(5_000));
-        log.selected = Some(format!("{:040x}", 0));
-        log.patch = Load::Ready(big_diff(20_000));
+        plait.state.repository.data.commits.list = Load::Ready(commits(5_000));
+        plait.state.repository.view.history.selected = Some(format!("{:040x}", 0));
+        plait.state.repository.view.history.patch = Load::Ready(big_diff(20_000));
         plait.commit_scroll = UniformListScrollHandle::new();
         plait.history_scroll = UniformListScrollHandle::new();
         cx.notify();
@@ -567,7 +566,7 @@ pub fn run() -> Vec<Row> {
     let big_index = harness
         .window
         .update(&mut harness.cx, |plait, _, _| {
-            let snapshot = plait.state.repository.snapshot.ready().unwrap();
+            let snapshot = plait.state.repository.snapshot().ready().unwrap();
             snapshot
                 .changes
                 .iter()

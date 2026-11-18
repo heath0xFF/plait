@@ -45,10 +45,10 @@ struct Loaded {
 impl Plait {
     pub(super) fn review_stamp(&self) -> Option<Stamp> {
         Some(Stamp {
-            thread: self.host.selected.clone()?,
-            checkout: self.host.checkout.clone(),
-            connection: self.host.epoch,
-            watch: self.host.watch_epoch,
+            thread: self.host.thread.selected.clone()?,
+            checkout: self.host.creation.checkout.clone(),
+            connection: self.host.connection.epoch,
+            watch: self.host.thread.watch_epoch,
             repository: self.state.repository.epoch(),
             generation: self.turn_review.generation,
             target: self.turn_review.target.clone(),
@@ -73,12 +73,12 @@ impl Plait {
         if cfg!(test) && self.turn_review.target.is_none() {
             return;
         }
-        if self.turn_review.epoch != Some(self.host.epoch) {
-            self.turn_review.epoch = Some(self.host.epoch);
+        if self.turn_review.epoch != Some(self.host.connection.epoch) {
+            self.turn_review.epoch = Some(self.host.connection.epoch);
             self.turn_review.older = false;
             self.turn_review.info = None;
         }
-        if self.turn_review.older || self.host.selected.is_none() {
+        if self.turn_review.older || self.host.thread.selected.is_none() {
             return;
         }
         self.turn_review.generation += 1;
@@ -92,7 +92,7 @@ impl Plait {
         let Some(stamp) = self.review_stamp() else {
             return;
         };
-        if !self.host.connected {
+        if !self.host.connection.connected {
             if self.turn_review.target.is_some() {
                 self.turn_review.error =
                     Some(("Offline", "Reconnect to read turn changes.".into()));
@@ -104,8 +104,8 @@ impl Plait {
         self.turn_review.loading = self.turn_review.target.is_some() && !self.turn_review.current;
         let records = self.turn_records.data.clone();
         let complete = self.records_current();
-        let snapshot = self.state.repository.snapshot.ready().cloned();
-        let history = self.host.snapshot.clone();
+        let snapshot = self.state.repository.snapshot().ready().cloned();
+        let history = self.host.thread.snapshot.clone();
         let task_stamp = stamp.clone();
         let task = cx.background_executor().spawn(async move {
             let client = Client::from_environment()?;
@@ -259,8 +259,8 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.host.selected.as_deref() != Some(&target.thread)
-            || self.host.checkout != target.checkout
+        if self.host.thread.selected.as_deref() != Some(&target.thread)
+            || self.host.creation.checkout != target.checkout
         {
             return;
         }
@@ -336,7 +336,7 @@ impl Plait {
             return;
         };
         let path = file.path.clone();
-        if let Some((index, mode)) = self.state.repository.snapshot.ready().and_then(|s| {
+        if let Some((index, mode)) = self.state.repository.snapshot().ready().and_then(|s| {
             s.changes
                 .iter()
                 .enumerate()
@@ -346,7 +346,7 @@ impl Plait {
                         i,
                         self.state
                             .repository
-                            .selected
+                            .selected_diff()
                             .as_ref()
                             .filter(|key| {
                                 key.file == i
@@ -370,7 +370,7 @@ impl Plait {
         }) && !self
             .state
             .repository
-            .selected
+            .selected_diff()
             .as_ref()
             .is_some_and(|s| s.file == index && s.mode == mode)
         {
@@ -391,12 +391,12 @@ impl Plait {
             && self.recorded_file().is_some_and(|file| {
                 self.state
                     .repository
-                    .selected
+                    .selected_diff()
                     .as_ref()
                     .and_then(|key| {
                         self.state
                             .repository
-                            .snapshot
+                            .snapshot()
                             .ready()?
                             .changes
                             .get(key.file)
@@ -406,7 +406,7 @@ impl Plait {
     }
     pub(super) fn recorded_current_message(&self) -> (&'static str, &str) {
         use plait_core::state::Load;
-        match &self.state.repository.snapshot {
+        match &self.state.repository.snapshot() {
             Load::Empty | Load::Loading => (
                 "Reading diff…",
                 "The file preview is loading in the background.",
@@ -461,7 +461,7 @@ impl Plait {
             return;
         };
         let data = self.turn_records.data.clone();
-        let history = self.host.snapshot.clone();
+        let history = self.host.thread.snapshot.clone();
         let task = cx.background_executor().spawn(async move {
             let mut choices = Vec::new();
             let mut newest: Vec<_> = data.iter().collect();
@@ -610,7 +610,7 @@ impl Plait {
                     .pb_2()
                     .gap_1()
                     .flex_shrink_0()
-                    .when_some(self.state.repository.snapshot.ready(), |el, snapshot| {
+                    .when_some(self.state.repository.snapshot().ready(), |el, snapshot| {
                         el.child(
                             row()
                                 .gap_1()
@@ -628,7 +628,7 @@ impl Plait {
             )
             .child(self.review_scope_button(cx))
             .child(self.recorded_files(cx))
-            .when(self.state.repository.snapshot.ready().is_some(), |el| {
+            .when(self.state.repository.snapshot().ready().is_some(), |el| {
                 el.child(self.commit_box(cx))
             })
             .child(

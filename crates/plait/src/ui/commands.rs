@@ -169,7 +169,7 @@ impl Plait {
             if let Some(jump) = plait_core::navigation::jump(
                 &self.preferences.value.navigation,
                 &self.state.projects,
-                &self.host.threads,
+                &self.host.connection.threads,
                 &indices,
                 target,
                 number,
@@ -179,6 +179,7 @@ impl Plait {
         }
         let threads = self
             .host
+            .connection
             .threads
             .iter()
             .enumerate()
@@ -204,7 +205,7 @@ impl Plait {
                         .map(|number| self.shortcut_label(&format!("jump.{number}")))
                         .unwrap_or_default(),
                 );
-                if self.host.selected.as_ref() == Some(&thread.id) {
+                if self.host.thread.selected.as_ref() == Some(&thread.id) {
                     item.badge("Open", colors().subtle)
                 } else {
                     item
@@ -215,7 +216,13 @@ impl Plait {
 
     /// "New thread with <model>" for each signed-in model.
     fn new_thread_items(&self) -> Vec<Item> {
-        let Some(status) = self.host.status.as_ref().filter(|_| self.host.connected) else {
+        let Some(status) = self
+            .host
+            .connection
+            .status
+            .as_ref()
+            .filter(|_| self.host.connection.connected)
+        else {
             return Vec::new();
         };
         model_picker::usable_models(&status.models, &self.preferences.value)
@@ -247,9 +254,9 @@ impl Plait {
         let mut preferences = self.preferences.value.navigation.clone();
         preferences.hidden.clear();
         for project in plait_core::navigation::projects(
-            &self.host.threads,
+            &self.host.connection.threads,
             &preferences,
-            &self.host.checkout,
+            &self.host.creation.checkout,
             &self.active_project().machines[0].name,
         ) {
             items.push(
@@ -407,7 +414,13 @@ impl Plait {
             }
             Command::OpenThread(id) => {
                 // The list can change while the palette is open.
-                if self.host.threads.iter().any(|thread| thread.id == id) {
+                if self
+                    .host
+                    .connection
+                    .threads
+                    .iter()
+                    .any(|thread| thread.id == id)
+                {
                     self.interaction = Some(Instant::now());
                     self.select_host_thread(id, window, cx);
                     self.focus_composer(window, cx);
@@ -436,7 +449,9 @@ impl Plait {
                 epoch,
                 level,
             } => {
-                if self.host.epoch == epoch && self.host.selected.as_ref() == Some(&thread_id) {
+                if self.host.connection.epoch == epoch
+                    && self.host.thread.selected.as_ref() == Some(&thread_id)
+                {
                     self.configure_selected(None, Some(level), window, cx);
                 }
             }
@@ -444,6 +459,7 @@ impl Plait {
                 // The thread may have closed while the menu was open.
                 if self
                     .host
+                    .connection
                     .threads
                     .iter()
                     .any(|thread| thread.id == thread_id)
@@ -466,7 +482,7 @@ impl Plait {
                 _ => {}
             },
             Command::OpenProject(path) => {
-                if self.host.pending_create.is_none() && !self.host.creating {
+                if self.host.creation.pending_create.is_none() && !self.host.creation.creating {
                     self.change_checkout(path, window, cx);
                 }
             }

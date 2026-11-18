@@ -403,7 +403,7 @@ impl Plait {
     /// Scene state, as if this connection's host had answered `harnesses`.
     #[cfg(test)]
     pub(super) fn inject_harnesses(&mut self, reply: Option<Harnesses>) {
-        self.harnesses.epoch = Some(self.host.epoch);
+        self.harnesses.epoch = Some(self.host.connection.epoch);
         self.harnesses.view = reply.map(|reply| Arc::new(HarnessesView::new(reply)));
         self.harnesses.note = None;
         self.harnesses.generation += 1;
@@ -413,8 +413,8 @@ impl Plait {
     pub(super) fn harness_rows(&self) -> &[HarnessRow] {
         match &self.harnesses.view {
             Some(view)
-                if self.harnesses.epoch == Some(self.host.epoch)
-                    && self.host.connected
+                if self.harnesses.epoch == Some(self.host.connection.epoch)
+                    && self.host.connection.connected
                     && self.host.protocol() >= 4 =>
             {
                 &view.rows
@@ -449,6 +449,7 @@ impl Plait {
     /// The harness the open thread runs in.
     pub(super) fn thread_harness(&self) -> HarnessId {
         self.host
+            .thread
             .snapshot
             .as_deref()
             .map_or(HarnessId::Pi, harness_of)
@@ -514,10 +515,10 @@ impl Plait {
 
     /// Read the list once per host connection. Settings checks again on demand.
     pub(super) fn sync_harnesses(&mut self, cx: &mut Context<Self>) {
-        if cfg!(test) || !self.host.connected || self.host.protocol() < 4 {
+        if cfg!(test) || !self.host.connection.connected || self.host.protocol() < 4 {
             return;
         }
-        if self.harnesses.epoch == Some(self.host.epoch) {
+        if self.harnesses.epoch == Some(self.host.connection.epoch) {
             return;
         }
         self.reset_harnesses();
@@ -528,7 +529,7 @@ impl Plait {
     /// flight for it can no longer land, since its epoch no longer matches.
     pub(super) fn reset_harnesses(&mut self) {
         self.harnesses = HarnessesState {
-            epoch: Some(self.host.epoch),
+            epoch: Some(self.host.connection.epoch),
             generation: self.harnesses.generation + 1,
             serial: self.harnesses.serial,
             chosen: self.harnesses.chosen.take(),
@@ -573,14 +574,14 @@ impl Plait {
     /// Mark a request as sent, one at a time; `None` when it cannot be sent now.
     /// `setup` names the harness a `set_up_harness` request is for.
     pub(super) fn begin_harnesses(&mut self, setup: Option<HarnessId>) -> Option<HarnessesRequest> {
-        if self.harnesses.busy || !self.host.connected || self.host.protocol() < 4 {
+        if self.harnesses.busy || !self.host.connection.connected || self.host.protocol() < 4 {
             return None;
         }
         self.harnesses.busy = true;
         self.harnesses.setting_up = setup;
         self.harnesses.serial += 1;
         Some(HarnessesRequest {
-            epoch: self.host.epoch,
+            epoch: self.host.connection.epoch,
             serial: self.harnesses.serial,
         })
     }
@@ -630,7 +631,7 @@ impl Plait {
         result: Result<HarnessesView, host::Error>,
         cx: &mut Context<Self>,
     ) {
-        if self.host.epoch != key.epoch
+        if self.host.connection.epoch != key.epoch
             || self.harnesses.epoch != Some(key.epoch)
             || self.harnesses.serial != key.serial
         {
@@ -658,11 +659,11 @@ impl Plait {
             multiple: false,
             prompt: Some(format!("Use this {name}").into()),
         });
-        let epoch = self.host.epoch;
+        let epoch = self.host.connection.epoch;
         cx.spawn(async move |this, cx| {
             let result = prompt.await;
             let _ = this.update(cx, |this, cx| {
-                if this.host.epoch != epoch {
+                if this.host.connection.epoch != epoch {
                     return;
                 }
                 match result {
@@ -692,6 +693,7 @@ impl Plait {
     pub(super) fn sync_thread_harness(&mut self) {
         let key = self
             .host
+            .thread
             .snapshot
             .as_ref()
             .and_then(|snapshot| snapshot.harness.clone())
@@ -734,13 +736,13 @@ impl Plait {
     /// The open thread's harness line, when it runs in a harness other than Pi.
     pub(super) fn thread_harness_line(&self) -> Option<&ThreadLine> {
         let (key, _, line) = self.harnesses.line.as_ref()?;
-        let snapshot = self.host.snapshot.as_ref()?;
+        let snapshot = self.host.thread.snapshot.as_ref()?;
         (snapshot.harness.as_ref() == Some(key)).then_some(line)
     }
 
     /// Settings → Agents: each harness, its state and version, and what protects the checkout.
     pub(super) fn harness_settings(&self, cx: &mut Context<Self>) -> Div {
-        let usable = self.host.connected && self.host.protocol() >= 4;
+        let usable = self.host.connection.connected && self.host.protocol() >= 4;
         let busy = self.harnesses.busy;
         // A setup says so on its own row; Refresh just waits.
         let checking = busy && self.harnesses.setting_up.is_none();
@@ -758,7 +760,7 @@ impl Plait {
             "Pi is built in. Codex and Claude Code run through your own installs, with their own sign-in and settings. A new thread starts in the default from New threads; choose another under its message box, and the thread stays in it.",
             refresh,
         ));
-        if !self.host.connected {
+        if !self.host.connection.connected {
             return page.child(tag(
                 "Connect the host to list agent harnesses.",
                 colors().subtle,

@@ -87,14 +87,14 @@ impl Plait {
         cx: &mut Context<Self>,
         complete: impl FnOnce(&mut Self, Result<T, host::Error>, &mut Context<Self>) + 'static,
     ) {
-        let epoch = self.host.epoch;
+        let epoch = self.host.connection.epoch;
         let task = cx
             .background_executor()
             .spawn(async move { host::Client::from_environment()?.send(&request) });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                if this.host.epoch != epoch {
+                if this.host.connection.epoch != epoch {
                     return;
                 }
                 complete(this, result, cx);
@@ -108,15 +108,15 @@ impl Plait {
         if cfg!(test) {
             return;
         }
-        if self.providers.epoch != Some(self.host.epoch) {
+        if self.providers.epoch != Some(self.host.connection.epoch) {
             let generation = self.providers.generation + 1;
             self.providers = ProviderState {
                 generation,
-                epoch: Some(self.host.epoch),
+                epoch: Some(self.host.connection.epoch),
                 ..Default::default()
             };
         }
-        if self.host.connected
+        if self.host.connection.connected
             && !self.providers.loaded
             && !self.providers.busy
             && self.providers.note.is_none()
@@ -164,7 +164,7 @@ impl Plait {
     }
 
     pub(super) fn load_providers(&mut self, reload: bool, cx: &mut Context<Self>) {
-        if !self.host.connected || cfg!(test) {
+        if !self.host.connection.connected || cfg!(test) {
             return;
         }
         self.providers.busy = true;
@@ -212,7 +212,7 @@ impl Plait {
             cx,
             |this, result, cx| match result {
                 Ok(status) => {
-                    this.host.apply_status(this.host.epoch, status);
+                    this.host.apply_status(this.host.connection.epoch, status);
                     this.sync_composer(cx);
                 }
                 Err(error) => this.providers.note = Some(error.to_string()),
@@ -339,11 +339,11 @@ impl Plait {
             return;
         }
         let generation = self.providers.generation;
-        let epoch = self.host.epoch;
+        let epoch = self.host.connection.epoch;
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(1)).await;
             let _ = this.update(cx, |this, cx| {
-                if this.providers.generation != generation || this.host.epoch != epoch || !this.settings_open { return; }
+                if this.providers.generation != generation || this.host.connection.epoch != epoch || !this.settings_open { return; }
                 if !matches!(&this.providers.form, Some(Form::Flow { state, .. }) if state.id == id && state.state.pending()) { return; }
                 this.settings_request::<_, SignInReply>(Request::SignInStatus { sign_in_id: id }, cx, move |this, result, cx| {
                     if this.providers.generation == generation { this.sign_in_reply(result, cx); }
@@ -535,7 +535,7 @@ impl Plait {
             .rounded_md()
             .border_1()
             .border_color(rgb(colors().border));
-        let enabled = !self.providers.busy && self.host.connected;
+        let enabled = !self.providers.busy && self.host.connection.connected;
         match self.providers.form.as_ref() {
             Some(Form::Key { provider, field }) => {
                 panel = panel.child(div().child(format!("API key for {provider}")))
@@ -736,7 +736,8 @@ impl Plait {
         let mut section = settings::section("Providers")
             .child(tag("Sign in with a subscription, use an API key, or connect your own model server. Credentials are stored by the host.", colors().muted))
             .when_some(self.providers.search.clone(), |el, search| el.child(search));
-        let enabled = self.host.connected && !self.providers.busy && !self.providers.unsupported;
+        let enabled =
+            self.host.connection.connected && !self.providers.busy && !self.providers.unsupported;
         let query = self
             .providers
             .search
@@ -825,7 +826,7 @@ impl Plait {
                             }),
                     ),
             )
-            .when(!self.host.connected, |el| {
+            .when(!self.host.connection.connected, |el| {
                 el.child(tag(
                     "Connect to the host to manage providers.",
                     colors().amber,

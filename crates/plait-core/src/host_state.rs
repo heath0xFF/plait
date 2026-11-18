@@ -4,115 +4,28 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::host::{ApprovalMode, ModelChoice, QueueMode, Request, Snapshot, Status, ThreadSummary};
+use crate::{
+    checkout_state::CheckoutCreationState,
+    host::{ApprovalMode, ModelChoice, QueueMode, Request, Snapshot, Status, ThreadSummary},
+    thread_view::SelectedThreadState,
+};
 use std::{path::PathBuf, sync::Arc};
 
-pub struct HostState {
+/// Host connection, cross-checkout thread catalog, and default-model settings.
+#[derive(Default)]
+pub struct HostConnection {
     pub epoch: u64,
-    pub watch_epoch: u64,
-    pub checkout: PathBuf,
     pub connected: bool,
     pub connecting: bool,
     pub error: Option<String>,
     pub status: Option<Status>,
     pub threads: Vec<ThreadSummary>,
-    pub selected: Option<String>,
-    pub snapshot: Option<Arc<Snapshot>>,
-    pub new_model: Option<ModelChoice>,
     pub settings_model: Option<ModelChoice>,
     pub saving: bool,
     pub save_message: Option<String>,
-    pub pending_create: Option<(String, ModelChoice)>,
-    /// The starting thinking level fixed when `pending_create` was made, so a
-    /// retry repeats the same request even if the default changes meanwhile.
-    pub pending_thinking: Option<crate::host::ThinkingLevel>,
-    pub creating: bool,
-    pub submitting: bool,
-    pub controlling: bool,
-    pub decided_approvals: HashSet<String>,
-    pub submissions: Submissions,
 }
 
-impl HostState {
-    pub fn new(checkout: PathBuf) -> Self {
-        Self {
-            epoch: 0,
-            watch_epoch: 0,
-            checkout,
-            connected: false,
-            connecting: false,
-            error: None,
-            status: None,
-            threads: Vec::new(),
-            selected: None,
-            snapshot: None,
-            new_model: None,
-            settings_model: None,
-            saving: false,
-            save_message: None,
-            pending_create: None,
-            pending_thinking: None,
-            creating: false,
-            submitting: false,
-            controlling: false,
-            decided_approvals: HashSet::new(),
-            submissions: Submissions::default(),
-        }
-    }
-
-    pub fn reconnect(&mut self) -> u64 {
-        self.epoch += 1;
-        self.watch_epoch += 1;
-        self.connected = false;
-        self.connecting = true;
-        self.snapshot = None;
-        self.error = None;
-        self.submitting = false;
-        self.submissions.disconnected();
-        self.controlling = false;
-        self.creating = false;
-        if self.saving {
-            self.save_message =
-                Some("Save not confirmed. Reconnect will reload the saved default.".into());
-        }
-        self.saving = false;
-        self.decided_approvals.clear();
-        self.epoch
-    }
-
-    pub fn select(&mut self, id: Option<String>) -> u64 {
-        self.watch_epoch += 1;
-        self.selected = id;
-        self.snapshot = None;
-        self.controlling = false;
-        self.watch_epoch
-    }
-
-    pub fn apply_status(&mut self, epoch: u64, mut status: Status) -> bool {
-        if epoch != self.epoch {
-            return false;
-        }
-        self.connecting = false;
-        if !(1..=crate::host::PROTOCOL_VERSION).contains(&status.protocol_version) {
-            self.connected = false;
-            self.error =
-                Some("Unsupported host protocol. Update the host and desktop together.".into());
-            return false;
-        }
-        self.connected = true;
-        if self.pending_create.is_none() && !self.model_available(self.new_model.as_ref(), &status)
-        {
-            self.new_model = status
-                .default_model
-                .clone()
-                .filter(|choice| self.model_available(Some(choice), &status));
-        }
-        status.models.sort_by_key(|model| !model.authenticated);
-        self.settings_model = status.default_model.clone();
-        self.status = Some(status);
-        true
-    }
-
+impl HostConnection {
     /// The negotiated protocol; version 1 until a status reply says otherwise.
     pub fn protocol(&self) -> u32 {
         self.status
@@ -120,7 +33,7 @@ impl HostState {
             .map_or(1, |status| status.protocol_version)
     }
 
-    fn model_available(&self, choice: Option<&ModelChoice>, status: &Status) -> bool {
+    pub(crate) fn model_available(&self, choice: Option<&ModelChoice>, status: &Status) -> bool {
         choice.is_some_and(|choice| {
             status
                 .models
@@ -137,46 +50,6 @@ impl HostState {
                 .is_some_and(|status| self.model_available(choice, status))
     }
 
-    pub fn accepts_watch(&self, epoch: u64, watch_epoch: u64, id: &str) -> bool {
-        self.epoch == epoch
-            && self.watch_epoch == watch_epoch
-            && self.selected.as_deref() == Some(id)
-    }
-
-    pub fn apply_snapshot(&mut self, epoch: u64, watch_epoch: u64, snapshot: Snapshot) -> bool {
-        if !self.accepts_watch(epoch, watch_epoch, &snapshot.id) {
-            return false;
-        }
-        let expected = self
-            .threads
-            .iter()
-            .find(|thread| thread.id == snapshot.id)
-            .map(|thread| (&thread.model, &thread.checkout))
-            .or_else(|| {
-                self.snapshot
-                    .as_ref()
-                    .map(|old| (&old.model, &old.checkout))
-            });
-        if expected.is_some_and(|(model, checkout)| {
-            (self.protocol() < 3 && *model != snapshot.model) || *checkout != snapshot.checkout
-        }) {
-            self.connected = false;
-            self.error =
-                Some("Host changed this thread's identity. Reconnect to reload it.".into());
-            return false;
-        }
-        if let Some(thread) = self
-            .threads
-            .iter_mut()
-            .find(|thread| thread.id == snapshot.id)
-        {
-            thread.status = snapshot.status;
-            thread.model = snapshot.model.clone();
-        }
-        self.snapshot = Some(Arc::new(snapshot));
-        true
-    }
-
     pub fn finish_save(&mut self, result: Result<ModelChoice, String>) {
         self.saving = false;
         match result {
@@ -190,6 +63,132 @@ impl HostState {
             }
             Err(error) => self.save_message = Some(format!("Save not confirmed: {error}")),
         }
+    }
+}
+
+pub struct HostState {
+    /// Host connection, cross-checkout thread catalog, and default-model settings.
+    pub connection: HostConnection,
+    /// Active checkout path and per-checkout thread-creation state.
+    pub creation: CheckoutCreationState,
+    /// Read and control state for the single selected thread slot.
+    pub thread: SelectedThreadState,
+    /// Per-thread submission ledger, independent of which thread is selected.
+    pub submissions: Submissions,
+}
+
+impl HostState {
+    pub fn new(checkout: PathBuf) -> Self {
+        Self {
+            connection: HostConnection::default(),
+            creation: CheckoutCreationState::new(checkout),
+            thread: SelectedThreadState::default(),
+            submissions: Submissions::default(),
+        }
+    }
+
+    pub fn reconnect(&mut self) -> u64 {
+        self.connection.epoch += 1;
+        self.connection.connected = false;
+        self.connection.connecting = true;
+        self.connection.error = None;
+        if self.connection.saving {
+            self.connection.save_message =
+                Some("Save not confirmed. Reconnect will reload the saved default.".into());
+        }
+        self.connection.saving = false;
+        self.thread.disconnected();
+        self.submissions.disconnected();
+        self.creation.disconnected();
+        self.connection.epoch
+    }
+
+    pub fn select(&mut self, id: Option<String>) -> u64 {
+        self.thread.select(id)
+    }
+
+    pub fn apply_status(&mut self, epoch: u64, mut status: Status) -> bool {
+        if epoch != self.connection.epoch {
+            return false;
+        }
+        self.connection.connecting = false;
+        if !(1..=crate::host::PROTOCOL_VERSION).contains(&status.protocol_version) {
+            self.connection.connected = false;
+            self.connection.error =
+                Some("Unsupported host protocol. Update the host and desktop together.".into());
+            return false;
+        }
+        self.connection.connected = true;
+        if self.creation.pending_create.is_none()
+            && !self
+                .connection
+                .model_available(self.creation.new_model.as_ref(), &status)
+        {
+            self.creation.new_model = status
+                .default_model
+                .clone()
+                .filter(|choice| self.connection.model_available(Some(choice), &status));
+        }
+        status.models.sort_by_key(|model| !model.authenticated);
+        self.connection.settings_model = status.default_model.clone();
+        self.connection.status = Some(status);
+        true
+    }
+
+    /// The negotiated protocol; version 1 until a status reply says otherwise.
+    pub fn protocol(&self) -> u32 {
+        self.connection.protocol()
+    }
+
+    pub fn available(&self, choice: Option<&ModelChoice>) -> bool {
+        self.connection.available(choice)
+    }
+
+    pub fn accepts_watch(&self, epoch: u64, watch_epoch: u64, id: &str) -> bool {
+        self.connection.epoch == epoch
+            && self.thread.watch_epoch == watch_epoch
+            && self.thread.selected.as_deref() == Some(id)
+    }
+
+    pub fn apply_snapshot(&mut self, epoch: u64, watch_epoch: u64, snapshot: Snapshot) -> bool {
+        if !self.accepts_watch(epoch, watch_epoch, &snapshot.id) {
+            return false;
+        }
+        let expected = self
+            .connection
+            .threads
+            .iter()
+            .find(|thread| thread.id == snapshot.id)
+            .map(|thread| (&thread.model, &thread.checkout))
+            .or_else(|| {
+                self.thread
+                    .snapshot
+                    .as_ref()
+                    .map(|old| (&old.model, &old.checkout))
+            });
+        if expected.is_some_and(|(model, checkout)| {
+            (self.protocol() < 3 && *model != snapshot.model) || *checkout != snapshot.checkout
+        }) {
+            self.connection.connected = false;
+            self.connection.error =
+                Some("Host changed this thread's identity. Reconnect to reload it.".into());
+            return false;
+        }
+        if let Some(thread) = self
+            .connection
+            .threads
+            .iter_mut()
+            .find(|thread| thread.id == snapshot.id)
+        {
+            thread.status = snapshot.status;
+            thread.model = snapshot.model.clone();
+        }
+        self.thread.snapshot = Some(Arc::new(snapshot));
+        true
+    }
+
+    pub fn finish_save(&mut self, result: Result<ModelChoice, String>) {
+        self.connection.finish_save(result);
     }
 }
 
@@ -490,8 +489,8 @@ mod tests {
             state.reconnect();
             let mut reply = status(None, Vec::new());
             reply.protocol_version = version;
-            assert_eq!(state.apply_status(state.epoch, reply), accepted);
-            assert_eq!(state.connected, accepted);
+            assert_eq!(state.apply_status(state.connection.epoch, reply), accepted);
+            assert_eq!(state.connection.connected, accepted);
             if accepted {
                 assert_eq!(state.protocol(), version);
             }
@@ -515,15 +514,21 @@ mod tests {
         let watch = state.select(Some("a".into()));
         assert!(state.apply_snapshot(0, watch, snapshot("a")));
         assert!(!state.apply_snapshot(0, watch, snapshot("b")));
-        assert_eq!(state.snapshot.as_ref().unwrap().model.model_id, "saved");
+        assert_eq!(
+            state.thread.snapshot.as_ref().unwrap().model.model_id,
+            "saved"
+        );
         let mut wrong_model = snapshot("a");
         wrong_model.model.model_id = "new-default".into();
         assert!(!state.apply_snapshot(0, watch, wrong_model));
-        assert_eq!(state.snapshot.as_ref().unwrap().model.model_id, "saved");
+        assert_eq!(
+            state.thread.snapshot.as_ref().unwrap().model.model_id,
+            "saved"
+        );
         let new_watch = state.select(Some("b".into()));
         assert!(!state.apply_snapshot(0, watch, snapshot("a")));
         assert!(state.apply_snapshot(0, new_watch, snapshot("b")));
-        assert_eq!(state.snapshot.as_ref().unwrap().id, "b");
+        assert_eq!(state.thread.snapshot.as_ref().unwrap().id, "b");
     }
 
     #[test]
@@ -533,7 +538,7 @@ mod tests {
             .submissions
             .begin("thread", "One task".into())
             .unwrap();
-        state.pending_create = Some((
+        state.creation.pending_create = Some((
             "create-once".into(),
             ModelChoice {
                 provider: "p".into(),
@@ -541,11 +546,14 @@ mod tests {
             },
         ));
         state.reconnect();
-        state.apply_status(state.epoch, status(None, vec![]));
+        state.apply_status(state.connection.epoch, status(None, vec![]));
         assert_eq!(state.submissions.pending("thread"), Some(&original));
-        assert_eq!(state.pending_create.as_ref().unwrap().0, "create-once");
-        assert!(!state.submitting);
-        assert!(!state.creating);
+        assert_eq!(
+            state.creation.pending_create.as_ref().unwrap().0,
+            "create-once"
+        );
+        assert!(!state.thread.submitting);
+        assert!(!state.creation.creating);
     }
 
     #[test]
@@ -564,13 +572,13 @@ mod tests {
                 vec![]
             )
         ));
-        assert!(state.new_model.is_none());
-        assert!(!state.available(state.new_model.as_ref()));
+        assert!(state.creation.new_model.is_none());
+        assert!(!state.available(state.creation.new_model.as_ref()));
         let watch = state.select(Some("old".into()));
         state.select(Some("new".into()));
         assert!(!state.accepts_watch(current, watch, "old"));
         state.reconnect();
-        assert!(!state.accepts_watch(current, state.watch_epoch, "new"));
+        assert!(!state.accepts_watch(current, state.thread.watch_epoch, "new"));
     }
 
     #[test]
@@ -597,15 +605,16 @@ mod tests {
                 }],
             ),
         );
-        assert_eq!(state.new_model, Some(choice.clone()));
-        state.saving = true;
+        assert_eq!(state.creation.new_model, Some(choice.clone()));
+        state.connection.saving = true;
         state.finish_save(Err("disk full".into()));
         assert_eq!(
-            state.status.as_ref().unwrap().default_model,
+            state.connection.status.as_ref().unwrap().default_model,
             Some(choice.clone())
         );
         assert!(
             state
+                .connection
                 .save_message
                 .as_ref()
                 .unwrap()
@@ -616,8 +625,11 @@ mod tests {
             model_id: "other".into(),
         };
         state.finish_save(Ok(other.clone()));
-        assert_eq!(state.status.as_ref().unwrap().default_model, Some(other));
-        assert_eq!(state.new_model, Some(choice));
+        assert_eq!(
+            state.connection.status.as_ref().unwrap().default_model,
+            Some(other)
+        );
+        assert_eq!(state.creation.new_model, Some(choice));
     }
 
     #[test]
@@ -769,5 +781,37 @@ mod tests {
                 .begin_with("t", "next".into(), None, None, Some(17))
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn scoped_host_state_preserves_defaults_and_selection_transitions() {
+        let mut state = HostState::new("/repo".into());
+        assert_eq!(state.connection.epoch, 0);
+        assert!(!state.connection.connected);
+        assert!(!state.connection.connecting);
+        assert!(state.connection.threads.is_empty());
+        assert_eq!(state.creation.checkout, PathBuf::from("/repo"));
+        assert_eq!(state.thread.watch_epoch, 0);
+        assert!(state.thread.selected.is_none());
+
+        state.thread.controlling = true;
+        state.thread.decided_approvals.insert("a1".into());
+        let watch = state.select(Some("t1".into()));
+        assert_eq!(watch, 1);
+        assert_eq!(state.thread.selected.as_deref(), Some("t1"));
+        assert!(!state.thread.controlling);
+        assert!(state.thread.decided_approvals.contains("a1"));
+
+        state.connection.saving = true;
+        state.thread.submitting = true;
+        state.creation.creating = true;
+        let epoch = state.reconnect();
+        assert_eq!(epoch, 1);
+        assert_eq!(state.thread.watch_epoch, 2);
+        assert!(!state.thread.submitting);
+        assert!(!state.creation.creating);
+        assert!(state.thread.decided_approvals.is_empty());
+        assert!(!state.connection.saving);
+        assert!(state.connection.save_message.is_some());
     }
 }

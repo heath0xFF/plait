@@ -2,6 +2,7 @@
 //!
 //! Blocking Git and host operations must run on the caller's background executor.
 
+pub mod checkout_state;
 pub mod compose;
 pub mod conversation_find;
 pub mod diff;
@@ -26,6 +27,7 @@ pub mod selection;
 pub mod session;
 pub mod state;
 pub mod theme;
+pub mod thread_view;
 pub mod tool_view;
 pub mod transcript;
 pub mod update;

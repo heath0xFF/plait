@@ -485,7 +485,7 @@ impl Plait {
     ) {
         self.reading.dragging = false;
         self.reading.pressed_link = None;
-        let (Some(hit), Some(thread)) = (hit, self.host.selected.clone()) else {
+        let (Some(hit), Some(thread)) = (hit, self.host.thread.selected.clone()) else {
             // A press on anything that is not text clears the selection.
             if self.reading.selection.take().is_some() {
                 cx.notify();
@@ -615,7 +615,7 @@ impl Plait {
         root.on_action(cx.listener(|this, _: &HistoryStart, window, cx| {
             if this.settings_open
                 || this.tab != super::Workspace::Conversation
-                || this.host.selected.is_none()
+                || this.host.thread.selected.is_none()
             {
                 cx.propagate();
                 return;
@@ -627,7 +627,7 @@ impl Plait {
         .on_action(cx.listener(|this, _: &HistoryEnd, window, cx| {
             if this.settings_open
                 || this.tab != super::Workspace::Conversation
-                || this.host.selected.is_none()
+                || this.host.thread.selected.is_none()
             {
                 cx.propagate();
                 return;

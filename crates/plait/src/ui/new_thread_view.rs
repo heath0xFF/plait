@@ -244,7 +244,7 @@ impl Plait {
             "The default from Settings → New threads."
         };
         let blocked = locked.or_else(|| {
-            (self.host.connected && self.host.protocol() < 2)
+            (self.host.connection.connected && self.host.protocol() < 2)
                 .then_some("This host asks before every edit and command.")
         });
         Some(
@@ -272,7 +272,7 @@ impl Plait {
                 .text_size(px(11.))
         };
         if self.draft_pending() {
-            if self.host.creating {
+            if self.host.creation.creating {
                 let model = self.draft_model_name().unwrap_or_default();
                 return Some(
                     line()
@@ -287,10 +287,11 @@ impl Plait {
             }
             let detail = self
                 .host
+                .connection
                 .error
                 .clone()
                 .unwrap_or_else(|| "The host did not answer.".into());
-            let connected = self.host.connected;
+            let connected = self.host.connection.connected;
             return Some(
                 line()
                     .child(dot(colors().amber))
@@ -306,7 +307,7 @@ impl Plait {
                             .on_activate(cx, |this, window, cx| this.retry_draft(window, cx))
                     } else {
                         toned_button("draft-reconnect", "Reconnect", Tone::Filled)
-                            .disabled(self.host.connecting)
+                            .disabled(self.host.connection.connecting)
                             .on_activate(cx, |this, window, cx| this.reconnect_host(window, cx))
                     })
                     .into_any_element(),
@@ -411,7 +412,7 @@ impl Plait {
         if self.draft_locked().is_some() {
             return;
         }
-        if checkout != self.host.checkout {
+        if checkout != self.host.creation.checkout {
             self.change_checkout(checkout, window, cx);
         }
         self.open_draft(window, cx);
@@ -422,7 +423,7 @@ impl Plait {
             return;
         }
         let items = super::harnesses::harness_items(self.harness_rows(), self.draft_harness());
-        let note = if self.host.connected && self.host.protocol() < 4 {
+        let note = if self.host.connection.connected && self.host.protocol() < 4 {
             "This host runs every thread in Pi. Update the host to choose another harness."
         } else {
             "A thread stays in the harness it starts in. Settings → Agents lists each one."

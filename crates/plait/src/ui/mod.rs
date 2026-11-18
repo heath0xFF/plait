@@ -115,16 +115,8 @@ actions!(
     ]
 );
 
-/// The workspace beside the sidebar.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Workspace {
-    Conversation,
-    Changes,
-    /// Commit history and each commit's patch.
-    History,
-    /// One checkout file, read-only.
-    Files,
-}
+/// The workspace beside the sidebar (presentation-independent view kind from core).
+pub(super) use plait_core::thread_view::ThreadView as Workspace;
 
 /// Below this width the Git inspector is not shown; Git stays in Changes.
 const WIDE_WINDOW: f32 = 1150.;
@@ -366,10 +358,10 @@ impl Plait {
         if count == 0 {
             return;
         }
-        let current = self.host.selected.as_ref().and_then(|id| {
+        let current = self.host.thread.selected.as_ref().and_then(|id| {
             indices
                 .iter()
-                .position(|&index| &self.host.threads[index].id == id)
+                .position(|&index| &self.host.connection.threads[index].id == id)
         });
         let next = match (current, forward) {
             (Some(index), true) => (index + 1) % count,
@@ -378,7 +370,7 @@ impl Plait {
             (None, false) => count - 1,
         };
         self.interaction = Some(std::time::Instant::now());
-        let id = self.host.threads[indices[next]].id.clone();
+        let id = self.host.connection.threads[indices[next]].id.clone();
         self.select_host_thread(id, window, cx);
     }
 
@@ -393,7 +385,7 @@ impl Plait {
             && self.recorded_file().is_some_and(|recorded| {
                 self.state
                     .repository
-                    .snapshot
+                    .snapshot()
                     .ready()
                     .and_then(|s| s.changes.get(file))
                     .is_some_and(|current| current.path == recorded.path)
@@ -443,14 +435,14 @@ impl Plait {
             return;
         }
         let repo = &self.state.repository;
-        let Some(snapshot) = repo.snapshot.ready() else {
+        let Some(snapshot) = repo.snapshot().ready() else {
             return;
         };
         let count = snapshot.changes.len();
         if count == 0 {
             return;
         }
-        let current = repo.selected.as_ref().map_or(0, |s| s.file);
+        let current = repo.selected_diff().as_ref().map_or(0, |s| s.file);
         let next = if forward {
             (current + 1) % count
         } else {
@@ -469,7 +461,7 @@ impl Plait {
         window.focus(&self.focus, cx);
         self.fetch_turn_records(window, cx);
         self.refresh_turn_review(cx);
-        if !matches!(self.state.repository.snapshot, Load::Loading) {
+        if !matches!(self.state.repository.snapshot(), Load::Loading) {
             self.state.repository.refresh();
             self.pump(cx);
             cx.notify();
@@ -481,7 +473,7 @@ impl Plait {
         if self.picker_open {
             return;
         }
-        if self.host.pending_create.is_some() || self.host.creating {
+        if self.host.creation.pending_create.is_some() || self.host.creation.creating {
             self.notice =
                 Some("Resolve the pending thread creation before changing checkout.".into());
             cx.notify();
@@ -573,7 +565,7 @@ impl Plait {
         }
         if page.is_none()
             && self.tab == Workspace::Conversation
-            && let Some(id) = self.host.selected.clone()
+            && let Some(id) = self.host.thread.selected.clone()
         {
             self.mark_thread_read(&id, cx);
         }
@@ -667,7 +659,7 @@ impl Plait {
         }
         if tab == Workspace::Conversation
             && !self.settings_open
-            && let Some(id) = self.host.selected.clone()
+            && let Some(id) = self.host.thread.selected.clone()
         {
             self.mark_thread_read(&id, cx);
         }
@@ -799,7 +791,7 @@ impl Plait {
         let changed = self
             .state
             .repository
-            .snapshot
+            .snapshot()
             .ready()
             .map(|snapshot| snapshot.changes.len())
             .filter(|count| *count > 0);
@@ -859,7 +851,7 @@ impl Plait {
         let branch = self
             .state
             .repository
-            .snapshot
+            .snapshot()
             .ready()
             .map(|snapshot| snapshot.branch.clone());
         let chip = |id: &'static str, glyph: &'static str, label: String| {
@@ -934,10 +926,10 @@ impl Render for Plait {
         self.settle_find_reveal(window);
         let project = self.active_project();
         let machine = &project.machines[0];
-        let real = self.host.selected.is_some();
-        let connection = if self.host.connecting {
+        let real = self.host.thread.selected.is_some();
+        let connection = if self.host.connection.connecting {
             ("Connecting…".to_owned(), colors().muted)
-        } else if self.host.connected {
+        } else if self.host.connection.connected {
             ("Host connected".to_owned(), colors().mint)
         } else {
             ("Host disconnected".to_owned(), colors().amber)
@@ -951,14 +943,14 @@ impl Render for Plait {
             }
             .to_owned()
         } else if real {
-            self.thread_title(self.host.selected.as_deref().unwrap_or_default())
+            self.thread_title(self.host.thread.selected.as_deref().unwrap_or_default())
         } else if drafting {
             session::UNTITLED.to_owned()
         } else {
             project.name.clone()
         };
         let status = if real && !self.settings_open {
-            self.host.snapshot.as_ref().map_or_else(
+            self.host.thread.snapshot.as_ref().map_or_else(
                 || ("Loading".to_owned(), colors().muted),
                 |snapshot| {
                     (
@@ -1004,16 +996,17 @@ impl Render for Plait {
                 this.toggle_inspector(window, cx)
             }))
             .on_action(cx.listener(|this, _: &RenameThread, window, cx| {
-                if let Some(id) = this.host.selected.clone() {
+                if let Some(id) = this.host.thread.selected.clone() {
                     this.begin_rename(id, window, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &ArchiveThread, window, cx| {
                 if let Some(thread) = this
                     .host
+                    .connection
                     .threads
                     .iter()
-                    .find(|thread| Some(&thread.id) == this.host.selected.as_ref())
+                    .find(|thread| Some(&thread.id) == this.host.thread.selected.as_ref())
                 {
                     this.archive_thread(
                         thread.id.clone(),

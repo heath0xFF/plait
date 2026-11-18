@@ -103,15 +103,15 @@ impl ThreadFiles {
 impl Plait {
     fn shows_thread_files(&self) -> bool {
         !self.preferences.value.hide_changed_files
-            && self.host.connected
+            && self.host.connection.connected
             && self.host.protocol() >= 3
-            && self.thread_files.unsupported != Some(self.host.epoch)
+            && self.thread_files.unsupported != Some(self.host.connection.epoch)
     }
 
     /// After a snapshot: ask the host again when the thread changed or a
     /// write tool finished since the last answer.
     pub(super) fn thread_files_snapshot(&mut self, cx: &mut Context<Self>) {
-        let Some(snapshot) = self.host.snapshot.as_ref() else {
+        let Some(snapshot) = self.host.thread.snapshot.as_ref() else {
             return;
         };
         let done = snapshot
@@ -140,7 +140,7 @@ impl Plait {
         records: &[host::TurnRecord],
         cx: &mut Context<Self>,
     ) {
-        let Some(snapshot) = self.host.snapshot.as_ref() else {
+        let Some(snapshot) = self.host.thread.snapshot.as_ref() else {
             return;
         };
         self.thread_files.select(&snapshot.id, &snapshot.checkout);
@@ -172,8 +172,8 @@ impl Plait {
         self.thread_files.requested = true;
         self.thread_files.request_generation += 1;
         let generation = self.thread_files.request_generation;
-        let epoch = self.host.epoch;
-        let watch = self.host.watch_epoch;
+        let epoch = self.host.connection.epoch;
+        let watch = self.host.thread.watch_epoch;
         let thread = id.clone();
         let task = cx.background_executor().spawn(async move {
             Client::from_environment()?
@@ -242,19 +242,24 @@ impl Plait {
         cx: &mut Context<Self>,
     ) {
         self.clear_turn_review();
-        let found = self.state.repository.snapshot.ready().and_then(|snapshot| {
-            let index = snapshot
-                .changes
-                .iter()
-                .position(|change| change.path == path)?;
-            let change = &snapshot.changes[index];
-            let mode = if change.unstaged() {
-                DiffMode::Unstaged
-            } else {
-                DiffMode::Staged
-            };
-            Some((index, mode))
-        });
+        let found = self
+            .state
+            .repository
+            .snapshot()
+            .ready()
+            .and_then(|snapshot| {
+                let index = snapshot
+                    .changes
+                    .iter()
+                    .position(|change| change.path == path)?;
+                let change = &snapshot.changes[index];
+                let mode = if change.unstaged() {
+                    DiffMode::Unstaged
+                } else {
+                    DiffMode::Staged
+                };
+                Some((index, mode))
+            });
         match found {
             Some((index, mode)) => self.select_file(index, mode, window, cx),
             None => {
@@ -271,7 +276,7 @@ impl Plait {
         let files = &self.thread_files;
         if !self.shows_thread_files()
             || files.counts.is_empty()
-            || files.thread.as_ref() != self.host.selected.as_ref()
+            || files.thread.as_ref() != self.host.thread.selected.as_ref()
         {
             return None;
         }

@@ -61,7 +61,7 @@ impl Plait {
         self.history
             .display
             .as_deref()
-            .or(self.host.snapshot.as_deref())
+            .or(self.host.thread.snapshot.as_deref())
     }
     pub(super) fn conversation_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.history.enabled = self.host.protocol() >= 3;
@@ -74,6 +74,7 @@ impl Plait {
         if self.history.timer
             || self
                 .host
+                .thread
                 .snapshot
                 .as_ref()
                 .is_none_or(|s| s.retry.is_none())
@@ -81,19 +82,22 @@ impl Plait {
             return;
         }
         self.history.timer = true;
-        let epoch = self.host.epoch;
-        let watch_epoch = self.host.watch_epoch;
+        let epoch = self.host.connection.epoch;
+        let watch_epoch = self.host.thread.watch_epoch;
         cx.spawn_in(window, async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
                 let keep = this
                     .update_in(cx, |this, _, cx| {
-                        if this.host.epoch != epoch || this.host.watch_epoch != watch_epoch {
+                        if this.host.connection.epoch != epoch
+                            || this.host.thread.watch_epoch != watch_epoch
+                        {
                             return false;
                         }
                         this.history.now = millis();
                         let keep = this
                             .host
+                            .thread
                             .snapshot
                             .as_ref()
                             .is_some_and(|s| s.retry.is_some());
@@ -117,13 +121,13 @@ impl Plait {
         if self.history.projecting {
             return;
         }
-        let Some(snapshot) = self.host.snapshot.clone() else {
+        let Some(snapshot) = self.host.thread.snapshot.clone() else {
             return;
         };
         self.history.projecting = true;
         let id = snapshot.id.clone();
-        let epoch = self.host.epoch;
-        let watch_epoch = self.host.watch_epoch;
+        let epoch = self.host.connection.epoch;
+        let watch_epoch = self.host.thread.watch_epoch;
         let revision = self.history.revision;
         let cache = self.history.cache.clone();
         let enabled = self.history.enabled;
@@ -176,7 +180,7 @@ impl Plait {
                 this.conversation_rows_changed(cx);
                 if this.history.enabled
                     && this.history.loading.is_none()
-                    && let Some(live) = this.host.snapshot.as_ref()
+                    && let Some(live) = this.host.thread.snapshot.as_ref()
                     && this.history.cache.needs_latest(live)
                     && this.history.tried != Some(tail_stamp(live))
                 {
@@ -188,15 +192,18 @@ impl Plait {
         .detach();
     }
     pub(super) fn load_history(&mut self, load: Load, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.history.enabled || !self.host.connected || self.history.loading.is_some() {
+        if !self.history.enabled
+            || !self.host.connection.connected
+            || self.history.loading.is_some()
+        {
             return;
         }
-        let Some(snapshot) = self.host.snapshot.as_ref() else {
+        let Some(snapshot) = self.host.thread.snapshot.as_ref() else {
             return;
         };
         let id = snapshot.id.clone();
-        let epoch = self.host.epoch;
-        let watch_epoch = self.host.watch_epoch;
+        let epoch = self.host.connection.epoch;
+        let watch_epoch = self.host.thread.watch_epoch;
         let before = match &load {
             Load::Older => match self.history.cache.older.clone() {
                 Some(cursor) => cursor,

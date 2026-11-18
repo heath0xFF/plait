@@ -62,11 +62,10 @@ pub(super) struct Find {
 impl Plait {
     /// The root quick-open paths are relative to: the repository's top level.
     pub(super) fn file_root(&self) -> PathBuf {
-        self.state
-            .repository
-            .snapshot
-            .ready()
-            .map_or_else(|| self.state.repository.path.clone(), |s| s.root.clone())
+        self.state.repository.snapshot().ready().map_or_else(
+            || self.state.repository.path().to_path_buf(),
+            |s| s.root.clone(),
+        )
     }
 
     /// Show `path` in the Files tab, at `line` (zero-based) when given.
@@ -205,7 +204,7 @@ impl Plait {
 
     /// Rows for quick open: file name first, then its directory.
     fn file_items(&self) -> (Vec<Item>, &'static str, Option<SharedString>) {
-        match &self.state.repository.files {
+        match &self.state.repository.files() {
             Load::Ready(list) => {
                 let items = list
                     .paths
@@ -242,8 +241,10 @@ impl Plait {
         let Some(overlay) = self.overlay.as_ref().filter(|overlay| overlay.files) else {
             return;
         };
-        if !matches!(self.state.repository.files, Load::Ready(_) | Load::Error(_))
-            || !overlay.palette.read(cx).is_empty()
+        if !matches!(
+            self.state.repository.files(),
+            Load::Ready(_) | Load::Error(_)
+        ) || !overlay.palette.read(cx).is_empty()
         {
             return;
         }
@@ -474,7 +475,9 @@ impl Plait {
         }
         match self.tab {
             Workspace::Files => Some(FindIn::File),
-            Workspace::Conversation if self.host.selected.is_some() => Some(FindIn::Conversation),
+            Workspace::Conversation if self.host.thread.selected.is_some() => {
+                Some(FindIn::Conversation)
+            }
             _ => None,
         }
     }

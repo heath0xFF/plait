@@ -77,7 +77,7 @@ impl Plait {
     /// Why a branch cannot be created or switched to now, if anything stops
     /// it: a short form for the palette's footer, and the full sentence.
     fn branch_refusal(&self) -> Option<(&'static str, &'static str)> {
-        if self.state.repository.write.busy() {
+        if self.state.repository.write().busy() {
             Some((
                 "Git is still working.",
                 "Git is still working. Try again when it finishes.",
@@ -201,7 +201,7 @@ impl Plait {
     /// Rows for the branch palette, what to say with none, and a footer note.
     pub(super) fn branch_items(&self) -> (Vec<Item>, &'static str, Option<SharedString>) {
         let enabled = self.branch_blocker().is_none();
-        match &self.state.repository.branches {
+        match &self.state.repository.branches() {
             Load::Ready(branches) => {
                 let now = now();
                 let items = branches
@@ -234,7 +234,7 @@ impl Plait {
             return;
         };
         if !matches!(
-            self.state.repository.branches,
+            self.state.repository.branches(),
             Load::Ready(_) | Load::Error(_)
         ) {
             return;
@@ -262,7 +262,7 @@ impl Plait {
         // Changes holds the result line, as for the menu's other Git writes.
         self.show_tab(Workspace::Changes, window, cx);
         if let Some(reason) = self.branch_blocker() {
-            self.state.repository.write.note = Some((reason.into(), true));
+            self.state.repository.write_mut().note = Some((reason.into(), true));
             return cx.notify();
         }
         self.git_write(op, cx);

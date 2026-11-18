@@ -155,9 +155,9 @@ fn state_line(text: impl Into<SharedString>, tint: u32) -> Div {
 
 impl Plait {
     fn host_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (label, tint) = if self.host.connecting {
+        let (label, tint) = if self.host.connection.connecting {
             ("Connecting to local host…".to_owned(), colors().muted)
-        } else if self.host.connected {
+        } else if self.host.connection.connected {
             (
                 format!("Local host connected · protocol {}", self.host.protocol()),
                 colors().mint,
@@ -193,8 +193,8 @@ impl Plait {
                             )
                             .child(
                                 toned_button("reconnect-host", "Reconnect", Tone::Filled)
-                                    .disabled(self.host.connecting)
-                                    .when(!self.host.connecting, |el| {
+                                    .disabled(self.host.connection.connecting)
+                                    .when(!self.host.connection.connecting, |el| {
                                         el.on_activate(cx, |this, window, cx| {
                                             this.reconnect_host(window, cx)
                                         })
@@ -202,7 +202,7 @@ impl Plait {
                             ),
                     ),
             )
-            .when_some(self.host.error.clone(), |el, error| {
+            .when_some(self.host.connection.error.clone(), |el, error| {
                 el.child(
                     div()
                         .text_size(px(12.))
@@ -210,7 +210,7 @@ impl Plait {
                         .child(text!(error)),
                 )
             })
-            .when(!self.host.connected, |el| {
+            .when(!self.host.connection.connected, |el| {
                 el.child(note(
                     "The installed host normally starts at login. Reconnect does not restart it. Closing Plait does not stop accepted work.",
                 ))
@@ -219,7 +219,7 @@ impl Plait {
 
     /// How much of the host's catalog can be used, counted from its reply.
     fn catalog_summary(&self) -> Option<String> {
-        let models = &self.host.status.as_ref()?.models;
+        let models = &self.host.connection.status.as_ref()?.models;
         if models.is_empty() {
             return Some(
                 "The host returned no models. The setup guide explains how to configure it.".into(),
@@ -284,6 +284,7 @@ impl Plait {
     fn default_model_setting(&self, cx: &mut Context<Self>) -> Div {
         let saved = self
             .host
+            .connection
             .status
             .as_ref()
             .and_then(|status| status.default_model.as_ref());
@@ -292,7 +293,7 @@ impl Plait {
             |choice| self.model_name(choice),
         );
         let usable = saved.is_none_or(|choice| self.host.available(Some(choice)));
-        let can_choose = self.host.connected && !self.host.saving;
+        let can_choose = self.host.connection.connected && !self.host.connection.saving;
         let control = toned_button("choose-default-model", "", Tone::Filled)
             .aria_label(format!("Default model: {name}. Choose another…"))
             .gap_2()
@@ -315,7 +316,7 @@ impl Plait {
             .when_some(saved, |el, choice| {
                 el.child(tag(model_label(choice), colors().muted))
             })
-            .when(!usable && self.host.connected, |el| {
+            .when(!usable && self.host.connection.connected, |el| {
                 el.child(state_line(
                     "The saved default is not signed in on this host. New threads ask for a model until it is.",
                     colors().amber,
@@ -330,7 +331,7 @@ impl Plait {
     /// nearest level the thread's model offers, so one setting fits all models.
     fn default_thinking_setting(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let level = self.preferences.value.default_thinking();
-        let detail = if self.host.connected && self.host.protocol() < 3 {
+        let detail = if self.host.connection.connected && self.host.protocol() < 3 {
             "This host starts every thread with thinking off. Update the host to use this setting."
         } else {
             "New threads start at this level, or the closest one their model offers. A thread's own level is under its message box."
@@ -460,7 +461,7 @@ impl Plait {
         let built = option_env!("PLAIT_BUILD_TIME")
             .map(|time| format!(" · built {time}"))
             .unwrap_or_default();
-        let host = if self.host.connected {
+        let host = if self.host.connection.connected {
             format!("Host protocol {}", self.host.protocol())
         } else {
             "Host not connected".into()
@@ -545,7 +546,7 @@ impl Plait {
                     }),
             );
         }
-        let detail = if self.host.connected && self.host.protocol() < 2 {
+        let detail = if self.host.connection.connected && self.host.protocol() < 2 {
             "This host asks before every edit and command. Update the host to use Automatic."
         } else {
             // Settings describes no one project, the open one included.

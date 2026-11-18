@@ -26,13 +26,13 @@ impl Plait {
     /// What to say, and offer, when no thread is selected.
     fn idle_prompt(&self) -> (&'static str, String, Option<&'static str>) {
         let machine = &self.active_project().machines[0].name;
-        if self.host.connecting {
+        if self.host.connection.connecting {
             (
                 "Connecting…",
                 format!("Looking for the Plait host on {machine}."),
                 None,
             )
-        } else if !self.host.connected {
+        } else if !self.host.connection.connected {
             (
                 "Not connected",
                 format!(
@@ -40,7 +40,7 @@ impl Plait {
                 ),
                 Some("Reconnect"),
             )
-        } else if self.host.threads.is_empty() {
+        } else if self.host.connection.threads.is_empty() {
             (
                 "No threads yet",
                 plait_core::host::policy::idle_detail(

@@ -70,7 +70,13 @@ pub(super) fn prepare(harness: &mut Harness, repository: &Path) {
         }];
     });
     harness.update(|plait, _, _| {
-        plait.host.status.as_mut().unwrap().protocol_version = 5;
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 5;
         plait.turn_records = Default::default();
         plait.thread_files = Default::default();
         plait.preferences.value.hide_inspector = true;
@@ -85,14 +91,14 @@ pub(super) fn prepare(harness: &mut Harness, repository: &Path) {
     });
 }
 pub(super) fn inject(plait: &mut Plait, data: Vec<Value>) {
-    let snapshot = plait.host.snapshot.as_ref().unwrap();
+    let snapshot = plait.host.thread.snapshot.as_ref().unwrap();
     plait.turn_records.inject(
         data.into_iter()
             .map(|v| serde_json::from_value(v).unwrap())
             .collect(),
         snapshot,
-        plait.host.epoch,
-        plait.host.watch_epoch,
+        plait.host.connection.epoch,
+        plait.host.thread.watch_epoch,
     );
 }
 pub(super) fn wait(harness: &mut Harness, done: impl Fn(&Plait) -> bool) {
@@ -213,13 +219,25 @@ fn undo_control_and_shortcut_share_the_gate() {
             "raw records cannot enable an older projection"
         );
         plait.turn_records.projected_generation -= 1;
-        plait.host.connected = false;
+        plait.host.connection.connected = false;
         assert!(plait.shortcut_undo().is_none());
-        plait.host.connected = true;
-        plait.host.status.as_mut().unwrap().protocol_version = 4;
+        plait.host.connection.connected = true;
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 4;
         assert!(plait.shortcut_undo().is_none());
         assert!(plait.legacy_record_tip().contains("newer host"));
-        plait.host.status.as_mut().unwrap().protocol_version = 5;
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 5;
         plait.settings_open = true;
         assert!(plait.shortcut_undo().is_none());
         plait.settings_open = false;
@@ -229,9 +247,9 @@ fn undo_control_and_shortcut_share_the_gate() {
         plait.toggle_command_palette(window, cx);
         assert!(plait.shortcut_undo().is_none());
         plait.overlay = None;
-        plait.host.threads[1].status = ThreadStatus::Running;
+        plait.host.connection.threads[1].status = ThreadStatus::Running;
         assert_eq!(plait.undo_refusal(&line).unwrap().0, "Wait");
-        plait.host.threads[1].status = ThreadStatus::Idle;
+        plait.host.connection.threads[1].status = ThreadStatus::Idle;
         for (state, label) in [("recording", "Recording"), ("failed", "Unavailable")] {
             inject(plait, vec![record("last", &["last"], state)]);
             assert_eq!(
@@ -440,13 +458,14 @@ fn stale_record_replies_cannot_cross_thread_revision_or_epoch() {
                     p.host.select(Some("different".into()));
                 }
                 1 => {
-                    Arc::make_mut(p.host.snapshot.as_mut().unwrap()).records_revision = Some(2);
+                    Arc::make_mut(p.host.thread.snapshot.as_mut().unwrap()).records_revision =
+                        Some(2);
                 }
                 2 => {
-                    p.host.epoch += 1;
+                    p.host.connection.epoch += 1;
                 }
                 3 => {
-                    p.host.watch_epoch += 1;
+                    p.host.thread.watch_epoch += 1;
                 }
                 _ => {
                     p.turn_records.generation += 1;
@@ -533,7 +552,7 @@ pub(super) fn undo_walk(harness: &mut Harness, repository: &Path, suffix: &str) 
     harness.capture(&format!("undo-after-restart-{suffix}"));
     prepare(harness, repository);
     harness.update(|p, _, _| {
-        p.host.status.as_mut().unwrap().protocol_version = 4;
+        p.host.connection.status.as_mut().unwrap().protocol_version = 4;
         p.turn_records = Default::default();
     });
     harness.capture(&format!("undo-older-host-{suffix}"));

@@ -49,7 +49,7 @@ impl Plait {
         self.session.loading = true;
         self.session.note = Some("Restoring saved workspace…".into());
         self.sync_composer(cx);
-        let epoch = self.host.epoch;
+        let epoch = self.host.connection.epoch;
         let task = cx.background_executor().spawn(async move {
             let (directory, host) = session::locations()?;
             let (journal, data) = Journal::open(&directory, host)?;
@@ -98,7 +98,7 @@ impl Plait {
                             this.restore_composer(id, composer, cx);
                         }
                         // A folder chosen while disk state loaded wins over the saved folder.
-                        if this.host.epoch == epoch {
+                        if this.host.connection.epoch == epoch {
                             this.change_checkout(path, window, cx);
                             this.session.restore_thread = selected;
                         }
@@ -164,7 +164,7 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.host.creating || self.host.pending_create.is_some() {
+        if self.host.creation.creating || self.host.creation.pending_create.is_some() {
             self.notice =
                 Some("Resolve the pending thread creation before changing checkout.".into());
             cx.notify();
@@ -174,7 +174,7 @@ impl Plait {
         // A draft belongs to its checkout, including while another project is open.
         let drafting = self.draft_visible();
         self.capture_session(cx);
-        if self.host.checkout != path {
+        if self.host.creation.checkout != path {
             self.draft = super::new_thread::Draft {
                 generation: self.draft.generation + 1,
                 ..Default::default()
@@ -185,22 +185,22 @@ impl Plait {
         self.persist_navigation(preferences, cx);
         self.host.submissions.disconnected();
         self.history = Default::default();
-        let epoch = self.host.epoch + 1;
+        let epoch = self.host.connection.epoch + 1;
         let submissions = std::mem::take(&mut self.host.submissions);
-        let live = self.host.protocol() >= 3 && self.host.connected;
+        let live = self.host.protocol() >= 3 && self.host.connection.connected;
         if live {
-            self.host.checkout = path.clone();
-            self.host.epoch = epoch;
+            self.host.creation.checkout = path.clone();
+            self.host.connection.epoch = epoch;
             self.host.select(None);
-            self.host.submitting = false;
-            if self.host.saving {
-                self.host.saving = false;
-                self.host.save_message =
+            self.host.thread.submitting = false;
+            if self.host.connection.saving {
+                self.host.connection.saving = false;
+                self.host.connection.save_message =
                     Some("Save not confirmed. Reconnect to reload the saved default.".into());
             }
         } else {
             self.host = HostState::new(path.clone());
-            self.host.epoch = epoch;
+            self.host.connection.epoch = epoch;
         }
         self.host.submissions = submissions;
         self.host_watch = None;
@@ -226,8 +226,13 @@ impl Plait {
 
     pub(super) fn restore_thread_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(id) = self.session.restore_thread.take()
-            && self.host.selected.is_none()
-            && let Some(summary) = self.host.threads.iter().find(|thread| thread.id == id)
+            && self.host.thread.selected.is_none()
+            && let Some(summary) = self
+                .host
+                .connection
+                .threads
+                .iter()
+                .find(|thread| thread.id == id)
             && self.saved_thread(summary).is_some()
         {
             self.select_host_thread(id, window, cx);
@@ -240,6 +245,7 @@ impl Plait {
 
     pub(super) fn session_accepts_thread(&self, id: &str) -> bool {
         self.host
+            .connection
             .threads
             .iter()
             .find(|summary| summary.id == id)
@@ -259,6 +265,7 @@ impl Plait {
     ) {
         if let Some(saved) = self
             .host
+            .connection
             .threads
             .iter()
             .find(|thread| thread.id == id)
@@ -281,7 +288,7 @@ impl Plait {
             let composer = composer.read(cx);
             let (text, revision, submitted) = composer.saved_draft();
             next.set_new_draft(
-                self.host.checkout.clone(),
+                self.host.creation.checkout.clone(),
                 Draft {
                     text: text.into(),
                     revision,
@@ -290,15 +297,16 @@ impl Plait {
                 },
             );
         }
-        if self.host.checkout.is_absolute() {
-            next.checkout = Some(self.host.checkout.clone());
+        if self.host.creation.checkout.is_absolute() {
+            next.checkout = Some(self.host.creation.checkout.clone());
         }
         next.selected = self
             .host
+            .thread
             .selected
             .clone()
             .or_else(|| self.session.restore_thread.clone());
-        for summary in &self.host.threads {
+        for summary in &self.host.connection.threads {
             let Some(composer) = self.composers.get(&summary.id) else {
                 continue;
             };
@@ -311,6 +319,7 @@ impl Plait {
                 .filter(|title| !title.is_empty())
                 .or_else(|| {
                     self.host
+                        .thread
                         .snapshot
                         .as_ref()
                         .filter(|snapshot| snapshot.id == summary.id)
@@ -366,7 +375,7 @@ impl Plait {
 
     pub(super) fn clear_new_draft(&mut self, cx: &mut Context<Self>) {
         if let Some(data) = &mut self.session.data {
-            data.clear_new_draft(&self.host.checkout);
+            data.clear_new_draft(&self.host.creation.checkout);
             if let Some(journal) = &self.session.journal {
                 journal.queue(data.clone());
             }
@@ -419,6 +428,7 @@ impl Plait {
 
     pub(super) fn thread_title(&self, id: &str) -> String {
         self.host
+            .connection
             .threads
             .iter()
             .find(|thread| thread.id == id)
@@ -431,6 +441,7 @@ impl Plait {
     pub(super) fn thread_name(&self, id: &str) -> String {
         match self
             .host
+            .connection
             .threads
             .iter()
             .find(|thread| thread.id == id)
@@ -444,6 +455,7 @@ impl Plait {
     /// The name a rename starts from: empty for an untitled thread.
     pub(super) fn rename_text(&self, id: &str) -> String {
         self.host
+            .connection
             .threads
             .iter()
             .find(|thread| thread.id == id)
@@ -452,7 +464,7 @@ impl Plait {
     }
 
     pub(super) fn record_snapshot(&mut self, cx: &mut Context<Self>) {
-        let Some(snapshot) = self.host.snapshot.as_ref() else {
+        let Some(snapshot) = self.host.thread.snapshot.as_ref() else {
             return;
         };
         let id = snapshot.id.clone();

@@ -20,17 +20,27 @@ pub(super) struct PolicyState {
 
 impl Plait {
     pub(super) fn command_policy(&self) -> Option<CommandPolicy> {
-        (self.host.connected
-            && self.policy.key.as_ref() == Some(&(self.host.epoch, self.host.checkout.clone())))
+        (self.host.connection.connected
+            && self.policy.key.as_ref()
+                == Some(&(
+                    self.host.connection.epoch,
+                    self.host.creation.checkout.clone(),
+                )))
         .then_some(self.policy.value)
         .flatten()
     }
 
     pub(super) fn sync_policy(&mut self, cx: &mut Context<Self>) {
-        if !self.host.connected || self.state.repository.snapshot.ready().is_none() || cfg!(test) {
+        if !self.host.connection.connected
+            || self.state.repository.snapshot().ready().is_none()
+            || cfg!(test)
+        {
             return;
         }
-        let key = (self.host.epoch, self.host.checkout.clone());
+        let key = (
+            self.host.connection.epoch,
+            self.host.creation.checkout.clone(),
+        );
         if self.policy.key.as_ref() == Some(&key) {
             return;
         }
@@ -42,17 +52,20 @@ impl Plait {
     }
 
     fn request_policy(&mut self, value: Option<CommandPolicy>, cx: &mut Context<Self>) {
-        if self.policy.busy || !self.host.connected {
+        if self.policy.busy || !self.host.connection.connected {
             return;
         }
         self.policy.busy = true;
         self.policy.confirm = false;
         self.policy.note = None;
-        let key = (self.host.epoch, self.host.checkout.clone());
+        let key = (
+            self.host.connection.epoch,
+            self.host.creation.checkout.clone(),
+        );
         let checkout = self
             .state
             .repository
-            .snapshot
+            .snapshot()
             .ready()
             .map_or_else(|| key.1.clone(), |snapshot| snapshot.root.clone());
         let task = cx.background_executor().spawn(async move {
@@ -79,8 +92,8 @@ impl Plait {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 if this.policy.key.as_ref() != Some(&key)
-                    || this.host.epoch != key.0
-                    || this.host.checkout != key.1
+                    || this.host.connection.epoch != key.0
+                    || this.host.creation.checkout != key.1
                 {
                     return;
                 }
@@ -110,7 +123,7 @@ impl Plait {
 
     pub(super) fn policy_settings(&self, cx: &mut Context<Self>) -> Div {
         let current = self.command_policy();
-        let enabled = self.host.connected && !self.policy.busy;
+        let enabled = self.host.connection.connected && !self.policy.busy;
         let mut choices = segmented();
         for (index, (label, policy)) in [
             ("Sandboxed", CommandPolicy::Sandboxed),

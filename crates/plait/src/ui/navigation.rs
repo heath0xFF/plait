@@ -87,7 +87,7 @@ impl Plait {
         self.state
             .projects
             .iter()
-            .find(|project| project.checkout == self.project_of(&self.host.checkout))
+            .find(|project| project.checkout == self.project_of(&self.host.creation.checkout))
             .unwrap_or(&self.state.projects[0])
     }
 
@@ -107,6 +107,7 @@ impl Plait {
             .collect::<HashMap<_, _>>();
         let mut matches = self
             .host
+            .connection
             .threads
             .iter()
             .enumerate()
@@ -133,7 +134,7 @@ impl Plait {
         let mut grouped = HashMap::<&std::path::Path, Vec<usize>>::new();
         for index in self.filtered_threads(cx) {
             grouped
-                .entry(self.project_of(&self.host.threads[index].checkout))
+                .entry(self.project_of(&self.host.connection.threads[index].checkout))
                 .or_default()
                 .push(index);
         }
@@ -142,7 +143,7 @@ impl Plait {
         let drafted = self
             .draft
             .open
-            .then(|| self.project_of(&self.host.checkout));
+            .then(|| self.project_of(&self.host.creation.checkout));
         let mut rows = Vec::new();
         for (pi, project) in self.state.projects.iter().enumerate() {
             let matching = grouped.get(project.checkout.as_path());
@@ -265,9 +266,9 @@ impl Plait {
     }
 
     fn host_thread_row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let thread = &self.host.threads[index];
+        let thread = &self.host.connection.threads[index];
         let id = thread.id.clone();
-        let selected = self.host.selected.as_ref() == Some(&id);
+        let selected = self.host.thread.selected.as_ref() == Some(&id);
         if let Some((editing, field)) = &self.navigation.rename
             && editing == &id
         {
@@ -560,7 +561,7 @@ impl Plait {
             .when(self.navigation.loading, |el| {
                 el.child(tag("Loading threads…", colors().subtle))
             })
-            .when(self.host.threads.len() > 200, |el| {
+            .when(self.host.connection.threads.len() > 200, |el| {
                 el.child(tag(
                     "Newest 200 live · Refresh older threads",
                     colors().subtle,
@@ -601,12 +602,18 @@ impl Plait {
                     this.show_settings_for_project(configure.clone(), window, cx);
                 }))
                 .child(button("project-hide", "Remove from sidebar").on_activate(cx, move |this, _, cx| {
-                    if this.project_of(&this.host.checkout) == hide { this.navigation.error = Some("Open another project before removing this one. Host threads are kept.".into()); }
+                    if this.project_of(&this.host.creation.checkout) == hide { this.navigation.error = Some("Open another project before removing this one. Host threads are kept.".into()); }
                     else { let mut value = this.preferences.value.clone(); value.navigation.hide(&hide); this.set_preferences(value, PreferenceGroup::View, cx); this.rebuild_projects(cx); }
                     this.navigation.menu = None; cx.notify();
                 }))
                 .child(tag("Removing a project keeps its host threads.", colors().subtle));
-        } else if let Some(thread) = self.host.threads.iter().find(|thread| thread.id == *id) {
+        } else if let Some(thread) = self
+            .host
+            .connection
+            .threads
+            .iter()
+            .find(|thread| thread.id == *id)
+        {
             let rename = id.clone();
             let archive = id.clone();
             let archived = thread.archived == Some(true);
@@ -656,7 +663,7 @@ impl Plait {
     }
 
     pub(super) fn begin_rename(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
-        if self.host.protocol() < 3 || !self.host.connected {
+        if self.host.protocol() < 3 || !self.host.connection.connected {
             return;
         }
         self.sidebar = true;
@@ -664,7 +671,13 @@ impl Plait {
             .filter
             .update(cx, |field, cx| field.set_text("", cx));
         self.navigation.attention = false;
-        if let Some(thread) = self.host.threads.iter().find(|thread| thread.id == id) {
+        if let Some(thread) = self
+            .host
+            .connection
+            .threads
+            .iter()
+            .find(|thread| thread.id == id)
+        {
             let project = self.project_of(&thread.checkout).to_path_buf();
             self.navigation.collapsed.remove(&project);
             if thread.archived == Some(true) {
@@ -674,7 +687,7 @@ impl Plait {
         if let Some(index) = self
             .navigation_rows(cx)
             .iter()
-            .position(|row| matches!(row, Row::Thread(index) if self.host.threads[*index].id == id))
+            .position(|row| matches!(row, Row::Thread(index) if self.host.connection.threads[*index].id == id))
         {
             self.navigation
                 .scroll
@@ -743,12 +756,15 @@ impl Plait {
         request: &Request,
         cx: &App,
     ) -> Option<ThreadManagement> {
-        if self.navigation.managing.is_some() || !self.host.connected || self.host.protocol() < 3 {
+        if self.navigation.managing.is_some()
+            || !self.host.connection.connected
+            || self.host.protocol() < 3
+        {
             return None;
         }
         self.navigation.management_generation += 1;
         let operation = ThreadManagement {
-            epoch: self.host.epoch,
+            epoch: self.host.connection.epoch,
             generation: self.navigation.management_generation,
             rename: self.navigation.rename.as_ref().and_then(|(thread, field)| {
                 (matches!(request, Request::RenameThread { .. }) && thread == &id)
@@ -771,7 +787,7 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.host.epoch != operation.epoch
+        if self.host.connection.epoch != operation.epoch
             || self
                 .navigation
                 .managing
@@ -924,9 +940,9 @@ impl Plait {
 
     /// Host state stays visible; remote entries are labeled where they appear.
     fn host_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let (label, tint) = if self.host.connecting {
+        let (label, tint) = if self.host.connection.connecting {
             ("Connecting to local host…", colors().muted)
-        } else if self.host.connected {
+        } else if self.host.connection.connected {
             ("Local host connected", colors().mint)
         } else {
             ("Local host disconnected", colors().amber)

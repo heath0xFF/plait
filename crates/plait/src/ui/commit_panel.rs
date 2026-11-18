@@ -107,7 +107,7 @@ impl Plait {
         let Some(change) = self
             .state
             .repository
-            .snapshot
+            .snapshot()
             .ready()
             .and_then(|snapshot| snapshot.changes.get(index))
         else {
@@ -135,7 +135,7 @@ impl Plait {
 
     /// Why Commit is unavailable, in words, or `None` when it can run.
     fn commit_blocker(&self, cx: &App) -> Option<&'static str> {
-        if self.state.repository.write.busy() {
+        if self.state.repository.write().busy() {
             Some("Git is still working.")
         } else if self.state.repository.conflicts() > 0 {
             Some("Resolve the conflicts, then mark each file resolved.")
@@ -160,11 +160,11 @@ impl Plait {
     /// Clear the message once its commit lands, never on a failure, and not
     /// if it was edited while the commit ran.
     pub(super) fn after_git_write(&mut self, cx: &mut Context<Self>) {
-        if self.state.repository.write.busy() {
+        if self.state.repository.write().busy() {
             return;
         }
         let sent = self.commit_sent.take();
-        if self.state.repository.write.committed.take().is_some()
+        if self.state.repository.write_mut().committed.take().is_some()
             && sent.is_some_and(|sent| sent == self.commit_message_text(cx))
         {
             self.commit_message
@@ -208,7 +208,7 @@ impl Plait {
         let Some(change) = self
             .state
             .repository
-            .snapshot
+            .snapshot()
             .ready()
             .and_then(|snapshot| snapshot.changes.get(index))
         else {
@@ -231,7 +231,7 @@ impl Plait {
     /// Push, pull, or publish, whichever the branch's state calls for.
     /// The Push and Pull menu items each run only their own.
     pub(super) fn push(&mut self, cx: &mut Context<Self>) {
-        let Some(sync) = self.state.repository.snapshot.ready().map(|s| sync_of(s)) else {
+        let Some(sync) = self.state.repository.snapshot().ready().map(|s| sync_of(s)) else {
             return;
         };
         if let (Some(op), None) = (sync.op, sync.blocker) {
@@ -241,7 +241,7 @@ impl Plait {
 
     /// The Pull menu item: only when the branch is behind and has not diverged.
     pub(super) fn pull(&mut self, cx: &mut Context<Self>) {
-        let Some(sync) = self.state.repository.snapshot.ready().map(|s| sync_of(s)) else {
+        let Some(sync) = self.state.repository.snapshot().ready().map(|s| sync_of(s)) else {
             return;
         };
         if sync.op == Some(WriteOp::Pull) {
@@ -251,7 +251,7 @@ impl Plait {
 
     /// The branch against its upstream, with Fetch and Push or Publish.
     fn sync_row(&self, busy: bool, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let sync = sync_of(self.state.repository.snapshot.ready()?);
+        let sync = sync_of(self.state.repository.snapshot().ready()?);
         let (label, description) = match sync.op {
             Some(WriteOp::Publish) => (
                 "Publish",
@@ -307,10 +307,11 @@ impl Plait {
 
     /// A thread is running in this checkout, so its edits may be half done.
     pub(super) fn running_here(&self) -> bool {
-        let Some(root) = self.state.repository.snapshot.ready().map(|s| &s.root) else {
+        let Some(root) = self.state.repository.snapshot().ready().map(|s| &s.root) else {
             return false;
         };
         self.host
+            .connection
             .threads
             .iter()
             .any(|thread| thread.status.busy() && &thread.checkout == root)
@@ -318,13 +319,13 @@ impl Plait {
 
     /// Stage-all controls, the message field, Commit, and the last result.
     pub(super) fn commit_box(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let write = &self.state.repository.write;
+        let write = self.state.repository.write();
         let busy = write.busy();
         let staged = self.staged_count();
         let changed = self
             .state
             .repository
-            .snapshot
+            .snapshot()
             .ready()
             .map_or(0, |snapshot| snapshot.changes.len());
         let blocker = self.commit_blocker(cx);

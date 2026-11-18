@@ -9,7 +9,7 @@ use plait_core::{host::MessageRole, state::Load};
 impl Plait {
     /// The open thread's composer, or the draft's when it is open instead.
     fn selected_composer(&self) -> Option<&Entity<Composer>> {
-        match &self.host.selected {
+        match &self.host.thread.selected {
             Some(id) => self.composers.get(id),
             None => self.draft.composer.as_ref().filter(|_| self.draft.open),
         }
@@ -41,7 +41,7 @@ impl Plait {
             CommandId::OpenSettings => self.show_settings(true, window, cx),
             // Unlike the menu item, keep focus in the composer that asked.
             CommandId::RefreshGit => {
-                if !matches!(self.state.repository.snapshot, Load::Loading) {
+                if !matches!(self.state.repository.snapshot(), Load::Loading) {
                     self.state.repository.refresh();
                     self.pump(cx);
                     cx.notify();
@@ -61,7 +61,7 @@ impl Plait {
     /// Pass the repository's file list to the selected composer. Called after
     /// every Git job; the composer ignores a list it already has.
     pub(in crate::ui) fn deliver_files(&self, cx: &mut Context<Self>) {
-        let files = match &self.state.repository.files {
+        let files = match &self.state.repository.files() {
             // Nothing asked for the list in this epoch; a composer keeps its last one.
             Load::Empty => return,
             Load::Loading => MentionFiles::Loading,
@@ -80,9 +80,10 @@ impl Plait {
         };
         let Some(snapshot) = self
             .host
+            .thread
             .snapshot
             .as_ref()
-            .filter(|snapshot| Some(&snapshot.id) == self.host.selected.as_ref())
+            .filter(|snapshot| Some(&snapshot.id) == self.host.thread.selected.as_ref())
         else {
             return;
         };

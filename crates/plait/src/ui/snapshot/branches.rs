@@ -43,7 +43,7 @@ fn wait(harness: &mut Harness, done: impl Fn(&Plait) -> bool) {
 }
 
 fn branch_now(plait: &Plait) -> Option<String> {
-    let snapshot = plait.state.repository.snapshot.ready()?;
+    let snapshot = plait.state.repository.snapshot().ready()?;
     Some(snapshot.branch.clone())
 }
 
@@ -97,7 +97,7 @@ fn the_branch_palette_lists_creates_and_switches() {
     harness.update(|plait, _, _| {
         assert_eq!(plait.tab, Workspace::Changes, "where the result is shown");
         assert_eq!(
-            plait.state.repository.write.note,
+            plait.state.repository.write().note,
             Some(("Switched to feature/login".into(), false))
         );
     });
@@ -122,10 +122,10 @@ fn the_branch_palette_lists_creates_and_switches() {
     set_query(&mut harness, "two words");
     press(&mut harness, "enter");
     wait(&mut harness, |plait| {
-        plait.state.repository.write.note.is_some()
+        plait.state.repository.write().note.is_some()
     });
     harness.update(|plait, _, _| {
-        let (note, failed) = plait.state.repository.write.note.clone().unwrap();
+        let (note, failed) = plait.state.repository.write().note.clone().unwrap();
         assert!(failed && note.contains("not a valid branch name"), "{note}");
         assert_eq!(branch_now(plait).as_deref(), Some("login"));
     });
@@ -151,25 +151,25 @@ fn a_branch_write_is_refused_while_git_or_a_thread_is_busy_here() {
         let (items, _, _) = plait.branch_items();
         assert!(items.iter().all(|item| !item.enabled));
         plait.branch_write(WriteOp::SwitchBranch("feature/login".into()), window, cx);
-        let (note, failed) = plait.state.repository.write.note.clone().unwrap();
+        let (note, failed) = plait.state.repository.write().note.clone().unwrap();
         assert!(failed && note.contains("Git is still working"), "{note}");
         // Only the fetch is queued; let it run.
         plait.pump(cx);
     });
-    wait(&mut harness, |plait| !plait.state.repository.write.busy());
+    wait(&mut harness, |plait| !plait.state.repository.write().busy());
     // A thread running in this checkout: refused, and the result line says why.
     harness.connect(&repository, false);
     harness.update(|plait, _, _| {
         let root = plait
             .state
             .repository
-            .snapshot
+            .snapshot()
             .ready()
             .unwrap()
             .root
             .clone();
-        plait.host.threads[0].checkout = root;
-        plait.host.threads[0].status = ThreadStatus::Running;
+        plait.host.connection.threads[0].checkout = root;
+        plait.host.connection.threads[0].status = ThreadStatus::Running;
     });
     open(&mut harness, false);
     harness.update(|plait, window, cx| {
@@ -183,14 +183,14 @@ fn a_branch_write_is_refused_while_git_or_a_thread_is_busy_here() {
     });
     harness.update(|plait, window, cx| {
         plait.branch_write(WriteOp::SwitchBranch("feature/login".into()), window, cx);
-        let (note, failed) = plait.state.repository.write.note.clone().unwrap();
+        let (note, failed) = plait.state.repository.write().note.clone().unwrap();
         assert!(failed && note.contains("thread is running"), "{note}");
-        assert!(!plait.state.repository.write.busy(), "nothing was queued");
+        assert!(!plait.state.repository.write().busy(), "nothing was queued");
     });
     harness.update(|plait, _, _| assert_eq!(branch_now(plait).as_deref(), Some("main")));
     // The thread in another checkout, such as its own worktree, does not stop it.
     harness.update(|plait, _, _| {
-        plait.host.threads[0].checkout = PathBuf::from("/elsewhere");
+        plait.host.connection.threads[0].checkout = PathBuf::from("/elsewhere");
         assert!(plait.branch_blocker().is_none());
     });
     drop(harness);
@@ -231,7 +231,7 @@ fn sample_branches() -> Arc<Branches> {
 /// Fill the open branch palette with the sample list.
 fn show_sample(harness: &mut Harness) {
     harness.update(|plait, _, cx| {
-        plait.state.repository.branches = Load::Ready(sample_branches());
+        plait.state.repository.data.branches = Load::Ready(sample_branches());
         let (items, _, note) = plait.branch_items();
         let note = plait.branch_note(note);
         let palette = plait
@@ -255,7 +255,7 @@ pub(super) fn branches_walk(harness: &mut Harness, repository: &Path, suffix: &s
     // No thread is running here, so the control is ready.
     harness.change_snapshot(|snapshot| snapshot.status = ThreadStatus::Idle);
     harness.update(|plait, window, cx| {
-        for thread in &mut plait.host.threads {
+        for thread in &mut plait.host.connection.threads {
             thread.status = ThreadStatus::Idle;
         }
         plait.show_tab(Workspace::Changes, window, cx);
@@ -273,12 +273,12 @@ pub(super) fn branches_walk(harness: &mut Harness, repository: &Path, suffix: &s
         let root = plait
             .state
             .repository
-            .snapshot
+            .snapshot()
             .ready()
             .unwrap()
             .root
             .clone();
-        plait.host.threads[0].checkout = root;
+        plait.host.connection.threads[0].checkout = root;
     });
     // The header and the sidebar both show the thread running.
     harness.change_snapshot(|snapshot| snapshot.status = ThreadStatus::Running);
@@ -288,7 +288,7 @@ pub(super) fn branches_walk(harness: &mut Harness, repository: &Path, suffix: &s
     harness.capture(&format!("branches-refused-{suffix}"));
     harness.update(|plait, window, cx| {
         plait.close_overlay(true, window, cx);
-        plait.state.repository.branches = Load::Empty;
+        plait.state.repository.data.branches = Load::Empty;
         plait.tab = Workspace::Conversation;
     });
 }

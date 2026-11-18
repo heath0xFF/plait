@@ -267,7 +267,10 @@ impl Plait {
         match &self.agent.view {
             Some(view)
                 if self.agent.key.as_ref()
-                    == Some(&(self.host.epoch, self.host.checkout.clone())) =>
+                    == Some(&(
+                        self.host.connection.epoch,
+                        self.host.creation.checkout.clone(),
+                    )) =>
             {
                 view.commands.clone()
             }
@@ -278,10 +281,16 @@ impl Plait {
     /// Read the setup once per host connection and checkout. Opening the
     /// project's settings, or Refresh there, reads it again.
     pub(super) fn sync_agent(&mut self, cx: &mut Context<Self>) {
-        if !self.host.connected || self.state.repository.snapshot.ready().is_none() || cfg!(test) {
+        if !self.host.connection.connected
+            || self.state.repository.snapshot().ready().is_none()
+            || cfg!(test)
+        {
             return;
         }
-        let key = (self.host.epoch, self.host.checkout.clone());
+        let key = (
+            self.host.connection.epoch,
+            self.host.creation.checkout.clone(),
+        );
         if self.agent.key.as_ref() == Some(&key) {
             return;
         }
@@ -305,18 +314,21 @@ impl Plait {
         change: Option<(String, bool, Option<String>)>,
         cx: &mut Context<Self>,
     ) {
-        if self.agent.busy || !self.host.connected || cfg!(test) {
+        if self.agent.busy || !self.host.connection.connected || cfg!(test) {
             return;
         }
         self.agent.busy = true;
         self.agent.revision = self.agent.revision.wrapping_add(1);
         let revision = self.agent.revision;
         self.agent.note = None;
-        let key = (self.host.epoch, self.host.checkout.clone());
+        let key = (
+            self.host.connection.epoch,
+            self.host.creation.checkout.clone(),
+        );
         let checkout = self
             .state
             .repository
-            .snapshot
+            .snapshot()
             .ready()
             .map_or_else(|| key.1.clone(), |snapshot| snapshot.root.clone());
         let task = cx.background_executor().spawn(async move {
@@ -358,8 +370,8 @@ impl Plait {
     ) -> bool {
         if self.agent.revision != revision
             || self.agent.key.as_ref() != Some(key)
-            || self.host.epoch != key.0
-            || self.host.checkout != key.1
+            || self.host.connection.epoch != key.0
+            || self.host.creation.checkout != key.1
         {
             return false;
         }
@@ -393,8 +405,8 @@ impl Plait {
             },
             Tone::Filled,
         )
-        .disabled(self.agent.busy || !self.host.connected)
-        .when(!self.agent.busy && self.host.connected, |el| {
+        .disabled(self.agent.busy || !self.host.connection.connected)
+        .when(!self.agent.busy && self.host.connection.connected, |el| {
             el.on_activate(cx, |this, _, cx| this.refresh_agent(cx))
         });
         let mut page = settings::section("Your Pi agent").child(settings::setting(
@@ -408,7 +420,7 @@ impl Plait {
         let Some(view) = self.agent.view.as_ref() else {
             let page = page.when(self.agent.note.is_none(), |el| {
                 el.child(tag(
-                    if self.host.connected {
+                    if self.host.connection.connected {
                         "Reading your agent setup…"
                     } else {
                         "Connect the host to read your agent setup."
@@ -473,9 +485,13 @@ impl Plait {
             let definition = server.definition.clone();
             let enabled = !server.enabled;
             let available = server.can_enable
-                && self.host.connected
+                && self.host.connection.connected
                 && !self.agent.busy
-                && self.agent.key.as_ref() == Some(&(self.host.epoch, self.host.checkout.clone()));
+                && self.agent.key.as_ref()
+                    == Some(&(
+                        self.host.connection.epoch,
+                        self.host.creation.checkout.clone(),
+                    ));
             section = section.child(
                 row()
                     .id(("mcp-server", index))

@@ -24,7 +24,7 @@ fn reading_at_top(harness: &mut Harness, repository: &Path) {
     harness.connect(repository, false);
     harness.change_snapshot(reading);
     harness.update(|plait, _, cx| {
-        plait.host.threads[0].status = ThreadStatus::Idle;
+        plait.host.connection.threads[0].status = ThreadStatus::Idle;
         plait.sync_composer(cx);
         plait.live_scroll.scroll_to(ListOffset::default());
     });
@@ -290,7 +290,7 @@ fn a_stale_conversation_search_is_dropped() {
             let stale = plait.found_now("fixture", invented());
             plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
                 &plait.formatted,
-                plait.host.snapshot.as_ref().unwrap(),
+                plait.host.thread.snapshot.as_ref().unwrap(),
             ));
             stale
         })

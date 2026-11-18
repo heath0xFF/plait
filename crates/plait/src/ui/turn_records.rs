@@ -109,11 +109,11 @@ impl Plait {
     }
 
     fn record_stamp(&self) -> Option<Stamp> {
-        let snapshot = self.host.snapshot.as_ref()?;
-        (self.host.selected.as_deref() == Some(snapshot.id.as_str())).then(|| Stamp {
+        let snapshot = self.host.thread.snapshot.as_ref()?;
+        (self.host.thread.selected.as_deref() == Some(snapshot.id.as_str())).then(|| Stamp {
             thread: snapshot.id.clone(),
-            epoch: self.host.epoch,
-            watch: self.host.watch_epoch,
+            epoch: self.host.connection.epoch,
+            watch: self.host.thread.watch_epoch,
             revision: snapshot.records_revision,
             generation: self.turn_records.generation,
         })
@@ -147,7 +147,7 @@ impl Plait {
         self.fetch_turn_records(window, cx);
     }
     pub(super) fn fetch_turn_records(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.host.connected || self.host.protocol() < 5 {
+        if !self.host.connection.connected || self.host.protocol() < 5 {
             return;
         }
         self.turn_records.generation += 1;
@@ -219,7 +219,7 @@ impl Plait {
         }
     }
     pub(super) fn undo_refusal(&self, line: &Line) -> Option<(&'static str, &'static str)> {
-        if !self.host.connected {
+        if !self.host.connection.connected {
             return Some(("Offline", "Reconnect to the host to undo this run."));
         }
         if self.turn_records.pending.is_some() {
@@ -228,11 +228,17 @@ impl Plait {
         if !self.records_current() {
             return Some(("Loading", "Waiting for the current run records."));
         }
-        if self.state.repository.write.busy()
-            || self.host.controlling
-            || self.host.snapshot.as_ref().is_some_and(|s| s.status.busy())
-            || self.host.snapshot.as_ref().is_some_and(|s| {
+        if self.state.repository.write().busy()
+            || self.host.thread.controlling
+            || self
+                .host
+                .thread
+                .snapshot
+                .as_ref()
+                .is_some_and(|s| s.status.busy())
+            || self.host.thread.snapshot.as_ref().is_some_and(|s| {
                 self.host
+                    .connection
                     .threads
                     .iter()
                     .any(|t| t.checkout == s.checkout && t.status.busy())
@@ -391,11 +397,12 @@ impl Plait {
         let run = &line.run;
         let target =
             self.host
+                .thread
                 .selected
                 .as_ref()
                 .map(|thread| plait_core::review::recorded::Target {
                     thread: thread.clone(),
-                    checkout: self.host.checkout.clone(),
+                    checkout: self.host.creation.checkout.clone(),
                     record: line.displayed.clone(),
                     original: line.run.clone(),
                     path: None,
@@ -459,7 +466,7 @@ impl Plait {
             .tooltip(move |_, cx| cx.new(|_| TextTooltip(tip.clone())).into());
         if latest
             && !line.undone
-            && let Some(snapshot) = &self.host.snapshot
+            && let Some(snapshot) = &self.host.thread.snapshot
         {
             let status = match snapshot.status {
                 host::ThreadStatus::Stopped => Some(("Stopped", colors().muted)),

@@ -130,8 +130,12 @@ impl ImageCache {
 
 impl Plait {
     pub(super) fn image_row(&self, references: &[ImageRef], cx: &mut Context<Self>) -> AnyElement {
-        let thread = self.host.selected.clone().unwrap_or_default();
-        let key = (self.host.epoch, self.host.watch_epoch, thread.clone());
+        let thread = self.host.thread.selected.clone().unwrap_or_default();
+        let key = (
+            self.host.connection.epoch,
+            self.host.thread.watch_epoch,
+            thread.clone(),
+        );
         let mut missing = Vec::new();
         let row = row()
             .flex_wrap()
@@ -237,9 +241,9 @@ impl Plait {
                 let result = task.await;
                 let _ = this.update(cx, |this, cx| {
                     let current = (
-                        this.host.epoch,
-                        this.host.watch_epoch,
-                        this.host.selected.clone().unwrap_or_default(),
+                        this.host.connection.epoch,
+                        this.host.thread.watch_epoch,
+                        this.host.thread.selected.clone().unwrap_or_default(),
                     );
                     if this.images.complete(&key, &current, id, result) {
                         cx.notify();
@@ -250,10 +254,14 @@ impl Plait {
         }
     }
     fn enlarge_image(&mut self, reference: ImageRef, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(thread) = self.host.selected.clone() else {
+        let Some(thread) = self.host.thread.selected.clone() else {
             return;
         };
-        let key = (self.host.epoch, self.host.watch_epoch, thread);
+        let key = (
+            self.host.connection.epoch,
+            self.host.thread.watch_epoch,
+            thread,
+        );
         self.images.large_generation += 1;
         let generation = self.images.large_generation;
         self.images.enlarged = Some((reference.clone(), None));
@@ -270,9 +278,9 @@ impl Plait {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 let actual = (
-                    this.host.epoch,
-                    this.host.watch_epoch,
-                    this.host.selected.clone().unwrap_or_default(),
+                    this.host.connection.epoch,
+                    this.host.thread.watch_epoch,
+                    this.host.thread.selected.clone().unwrap_or_default(),
                 );
                 if !accepts(&key, &actual) || this.images.large_generation != generation {
                     return;

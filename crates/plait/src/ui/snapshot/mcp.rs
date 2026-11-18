@@ -82,17 +82,25 @@ pub(super) fn mcp_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.connect(repository, false);
     harness.update(|plait, window, cx| {
         plait.show_project_settings(window, cx);
-        plait.policy.key = Some((plait.host.epoch, plait.host.checkout.clone()));
+        plait.policy.key = Some((
+            plait.host.connection.epoch,
+            plait.host.creation.checkout.clone(),
+        ));
         plait.policy.value = Some(plait_core::host::policy::CommandPolicy::Sandboxed);
-        plait.agent.key = Some((plait.host.epoch, plait.host.checkout.clone()));
-        plait.agent.view = Some(Arc::new(AgentView::new(resources(&plait.host.checkout))));
+        plait.agent.key = Some((
+            plait.host.connection.epoch,
+            plait.host.creation.checkout.clone(),
+        ));
+        plait.agent.view = Some(Arc::new(AgentView::new(resources(
+            &plait.host.creation.checkout,
+        ))));
         plait
             .settings_scroll
             .set_offset(gpui::point(gpui::px(0.), gpui::px(-180.)));
     });
     harness.capture(&format!("project-settings-mcp-{suffix}"));
     harness.update(|plait, _, _| {
-        let mut reply = resources(&plait.host.checkout);
+        let mut reply = resources(&plait.host.creation.checkout);
         reply.mcp_servers[0].state = Some(McpState::Connected);
         reply.mcp_servers[0].tool_count = Some(8);
         reply.mcp_servers[1].state = Some(McpState::Stopped);
@@ -103,13 +111,13 @@ pub(super) fn mcp_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.update(|plait, _, _| {
         plait.policy.value = Some(plait_core::host::policy::CommandPolicy::Trusted);
         plait.agent.view = Some(Arc::new(AgentView::new(review_resources(
-            &plait.host.checkout,
+            &plait.host.creation.checkout,
         ))));
     });
     harness.capture(&format!("project-settings-mcp-review-{suffix}"));
     harness.update(|plait, _, _| {
         plait.policy.value = Some(plait_core::host::policy::CommandPolicy::Sandboxed);
-        let mut reply = resources(&plait.host.checkout);
+        let mut reply = resources(&plait.host.creation.checkout);
         reply.mcp_servers.clear();
         plait.agent.view = Some(Arc::new(AgentView::new(reply)));
         plait
@@ -142,7 +150,9 @@ pub(super) fn mcp_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
             plait_core::display_text::escape(&input);
     });
     harness.update(|plait, _, _| {
-        let tool = plait.host.snapshot.as_ref().unwrap().tools[1].id.clone();
+        let tool = plait.host.thread.snapshot.as_ref().unwrap().tools[1]
+            .id
+            .clone();
         plait.expanded_live_tools.insert(tool);
     });
     harness.capture(&format!("mcp-tool-controls-{suffix}"));
@@ -197,7 +207,10 @@ fn mcp_replies_are_guarded_by_checkout_connection_and_refresh() {
     std::fs::write(repository.join(".pi/mcp.json"), "{\"mcpServers\":{}}\n").unwrap();
     let mut harness = Harness::new(&repository, None, 900., 600.);
     harness.update(|plait, _, cx| {
-        let key = (plait.host.epoch, plait.host.checkout.clone());
+        let key = (
+            plait.host.connection.epoch,
+            plait.host.creation.checkout.clone(),
+        );
         plait.agent.key = Some(key.clone());
         let revision = plait.agent.revision;
         let reply = || Ok(AgentView::new(resources(&key.1)));
