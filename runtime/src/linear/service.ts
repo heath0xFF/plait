@@ -89,7 +89,7 @@ export class LinearService {
         String(request.checkout),
         request.team_id === null ? null : String(request.team_id),
         typeof request.team_key === 'string' ? request.team_key : null,
-        typeof request.team_name === 'string' ? request.team_name : null,
+        typeof request.team_name === 'string' ? request.team_name.trim() : null,
       );
       case 'linear_list_issues': return this.listIssues({
         teamId: String(request.team_id),

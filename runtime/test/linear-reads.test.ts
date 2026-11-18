@@ -706,3 +706,29 @@ test('multibyte issue description and comments honor UTF-8 KiB bounds and fit in
   const frameBytes = Buffer.byteLength(JSON.stringify(reply) + '\n', 'utf8');
   assert(frameBytes <= 1_048_576, `reply frame must stay <= 1 MiB, got ${frameBytes} bytes`);
 });
+
+test('bounded text inputs reject oversize whitespace padding and trim team_name', async t => {
+  const h = await setupHarness(t);
+  const repo = await makeRepo(h.dir, 'project-trim');
+  assert.equal((await h.call({ op: 'linear_set_key', key: h.fake.validKey })).ok, true);
+
+  // Oversize whitespace-padded search exceeding 200 chars must be rejected.
+  const hugeSearch = await h.call({
+    op: 'linear_list_issues',
+    team_id: 'team-pla',
+    filter: 'active',
+    search: `${' '.repeat(500)}retry`,
+  });
+  assert.equal(hugeSearch.ok, false);
+  assert.equal(hugeSearch.error.code, 'invalid_request');
+
+  // Leading/trailing whitespace in a valid team_name must be trimmed before storing.
+  const bound = await h.call({
+    op: 'linear_bind_project',
+    checkout: repo,
+    team_id: 'team-pla',
+    team_name: '  Plait Core  ',
+  });
+  assert.equal(bound.ok, true);
+  assert.equal(bound.result.binding.team_name, 'Plait Core');
+});

@@ -48,9 +48,9 @@ function checkId(value: unknown, field: string): string {
 
 function checkBoundedText(value: unknown, field: string, maxChars: number, allowEmpty = false): string {
   if (typeof value !== 'string' || CONTROL_PATTERN.test(value)) fail('invalid_request', `Invalid ${field}.`);
+  if (value.length > maxChars) fail('invalid_request', `${field} is too long.`);
   const trimmed = value.trim();
   if (!allowEmpty && !trimmed) fail('invalid_request', `${field} must be a nonempty string.`);
-  if (trimmed.length > maxChars) fail('invalid_request', `${field} is too long.`);
   return trimmed;
 }
 
