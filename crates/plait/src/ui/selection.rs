@@ -642,8 +642,8 @@ impl Plait {
         ))
     }
 
-    /// Where the caret before `offset` of a block was last drawn, for pointer tests.
-    #[cfg(test)]
+    /// The middle of the caret before `offset` of a block, where it was last
+    /// drawn: for pointer tests, and for scrolling a found match into view.
     pub(super) fn text_point(
         &self,
         owner: &Owner,

@@ -115,7 +115,7 @@ pub(super) const ACTIONS: &[AppAction] = &[
     entry("view.changes", "Changes", "View", Some("cmd-shift-2"), Item, || Box::new(Changes)),
     entry("view.history", "History", "View", Some("cmd-shift-3"), Item, || Box::new(CommitHistory)),
     entry("view.files", "Files", "View", None, Item, || Box::new(ShowFiles)),
-    entry("file.find", "Find in File", "View", Some("cmd-f"), Group, || Box::new(FindInFile)),
+    entry("file.find", "Find", "View", Some("cmd-f"), Group, || Box::new(FindInFile)),
     entry("file.find_next", "Find Next", "View", Some("cmd-g"), Item, || Box::new(FindNext)),
     entry("file.find_previous", "Find Previous", "View", Some("cmd-shift-g"), Item, || Box::new(FindPrevious)),
     entry("thread.next", "Next Thread", "View", Some("cmd-alt-down"), Group, || Box::new(NextThread)),

@@ -253,9 +253,14 @@ impl Plait {
     /// Run a branch write chosen in the palette. Something may have started
     /// while the palette was open, so the reason is checked again here and
     /// reported where the write's result would be.
-    pub(super) fn branch_write(&mut self, op: WriteOp, cx: &mut Context<Self>) {
+    pub(super) fn branch_write(
+        &mut self,
+        op: WriteOp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         // Changes holds the result line, as for the menu's other Git writes.
-        self.show_tab(Workspace::Changes, cx);
+        self.show_tab(Workspace::Changes, window, cx);
         if let Some(reason) = self.branch_blocker() {
             self.state.repository.write.note = Some((reason.into(), true));
             return cx.notify();

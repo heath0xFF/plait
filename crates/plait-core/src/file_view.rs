@@ -160,33 +160,10 @@ fn hash(text: &str) -> u64 {
     hasher.finish()
 }
 
-/// Byte ranges of `query` in `text`, at most `FIND_LIMIT`. An ASCII query
-/// ignores ASCII case; any other query matches exactly, so ranges never
-/// split a character.
+/// Byte ranges of `query` in `text`, at most `FIND_LIMIT`, ignoring letter
+/// case as find in the conversation does, outside ASCII too.
 pub fn find(text: &str, query: &str) -> Vec<Range<usize>> {
-    let mut found = Vec::new();
-    if query.is_empty() {
-        return found;
-    }
-    let (haystack, needle) = (text.as_bytes(), query.as_bytes());
-    if query.is_ascii() {
-        let mut at = 0;
-        while at + needle.len() <= haystack.len() && found.len() < FIND_LIMIT {
-            if haystack[at..at + needle.len()].eq_ignore_ascii_case(needle) {
-                found.push(at..at + needle.len());
-                at += needle.len();
-            } else {
-                at += 1;
-            }
-        }
-    } else {
-        found.extend(
-            text.match_indices(query)
-                .take(FIND_LIMIT)
-                .map(|(at, matched)| at..at + matched.len()),
-        );
-    }
-    found
+    crate::conversation_find::find(text, query, FIND_LIMIT)
 }
 
 /// The line holding byte `offset`.
@@ -293,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn find_ignores_ascii_case_and_stops_at_the_limit() {
+    fn find_ignores_case_and_stops_at_the_limit() {
         assert_eq!(find("Foo foo FOO", "foo"), vec![0..3, 4..7, 8..11]);
         assert_eq!(
             find("aaaa", "aa"),
@@ -301,10 +278,11 @@ mod tests {
             "matches do not overlap"
         );
         assert_eq!(
-            find("Ébé ébé", "ébé"),
-            vec![6..11],
-            "non-ASCII matches exactly"
+            find("Ébé ébé ÉBÉ", "ébé"),
+            vec![0..5, 6..11, 12..17],
+            "case is ignored outside ASCII too"
         );
+        assert_eq!(find("let café = CAFÉ;", "Café"), vec![4..9, 12..17]);
         assert!(find("abc", "").is_empty());
         assert_eq!(find(&"x".repeat(5000), "x").len(), FIND_LIMIT);
     }

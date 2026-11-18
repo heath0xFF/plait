@@ -341,6 +341,22 @@ Version 3 history also loads as you scroll toward the top; use **Load earlier**
 for an explicit page request and **Retry** after a failed read. Older hosts retain
 bounded previews. Completed reasoning expands from its **Reasoning** line.
 
+**Find** (Cmd-F) over the conversation opens the same bar as in Files: it
+highlights every match in the requests and replies that are loaded and counts
+them ("3 of 17", or "No matches"). Enter or Cmd-G moves to the next match,
+Shift-Enter or Cmd-Shift-G to the previous, wrapping at the ends, and the list
+scrolls to each one. Escape closes the bar and puts focus back where it was. A
+new search starts at the first match from the top of the view, or at the
+newest when the conversation is at its end. While the bar is open, a reply
+that arrives is searched too, without moving the list. Find ignores letter
+case, including outside ASCII, and matches plain text, not patterns. It counts
+up to 1,000 matches, keeping the newest. It searches the text as drawn, not
+the Markdown behind it, and does not search the reply still being written,
+reasoning, tool calls and their output, or a turn's closing line. Only loaded
+messages are searched; when earlier messages, or the rest of a long one, are
+not loaded, the bar says **Loaded messages only**, with the reason on hover.
+Find does not load pages to search them.
+
 
 ### Application shortcuts
 
@@ -381,7 +397,7 @@ path alongside separate `PLAIT_HOST_STORE` and `PLAIT_DESKTOP_STATE_DIR` paths.
 | Cmd-Shift-1 | Conversation | `view.conversation` |
 | Cmd-Shift-2 | Changes | `view.changes` |
 | Cmd-Shift-3 | History | `view.history` |
-| Cmd-F | Find in File | `file.find` |
+| Cmd-F | Find | `file.find` |
 | Cmd-G | Find Next | `file.find_next` |
 | Cmd-Shift-G | Find Previous | `file.find_previous` |
 | Cmd-Option-Down | Next Thread | `thread.next` |
@@ -611,10 +627,11 @@ There is no merge, rebase, or amend yet; use your own Git tools for those.
 **Files** shows one checkout file, read-only, with line numbers and the same
 syntax colors as the conversation. Open one with **Open File…** (Cmd-P), which
 searches the checkout's files by name and folder, or with **Open** in a Changes
-diff header. **Find in File** (Cmd-F) highlights every match and counts them;
+diff header. **Find** (Cmd-F) highlights every match and counts them;
 Enter or Cmd-G moves to the next, Shift-Enter or Cmd-Shift-G to the previous,
-wrapping at the ends, and Escape closes it. Find ignores letter case for plain
-ASCII text and matches other text exactly; it counts up to 1,000 matches.
+wrapping at the ends, and Escape closes it; opening it again searches the same
+text again. As in the conversation, Find ignores letter case, including
+outside ASCII, and it counts up to 1,000 matches.
 
 Plait rereads an open file when it may have changed: after a Git status read,
 when the window comes forward, and when you return to Files. It compares size

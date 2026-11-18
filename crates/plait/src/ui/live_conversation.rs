@@ -995,6 +995,7 @@ Tone::Filled,
             .flex_1()
             .min_w_0()
             .min_h_0()
+            .children(self.conversation_find_bar(cx))
             .children(self.live_banners(pending, cx))
             .child(self.history_heading(cx))
             .child(if snapshot.is_none() {

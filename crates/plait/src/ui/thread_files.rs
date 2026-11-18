@@ -198,7 +198,7 @@ impl Plait {
         match found {
             Some((index, mode)) => self.select_file(index, mode, window, cx),
             None => {
-                self.show_tab(Workspace::Changes, cx);
+                self.show_tab(Workspace::Changes, window, cx);
                 self.state.repository.refresh();
                 self.pump(cx);
             }

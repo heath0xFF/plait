@@ -181,6 +181,7 @@ impl Plait {
         self.tab = super::Workspace::Conversation;
         self.refresh_live_list(None);
         self.formatted = Default::default();
+        self.conversation_rows_changed(cx);
         if !self.composers.contains_key(&id) {
             let composer = cx.new(|cx| Composer::new(window, cx));
             self.restore_composer(&id, &composer, cx);

@@ -7,6 +7,7 @@ mod commit_panel;
 mod commits;
 mod composer;
 mod conversation;
+mod conversation_find;
 mod file_view;
 mod harnesses;
 mod history;
@@ -170,6 +171,9 @@ pub struct Plait {
     panels: panels::Panels,
     thread_controls: thread_controls::ThreadControls,
     focus: FocusHandle,
+    /// The composer or find field that had the keyboard when another tab
+    /// hid the conversation; it gets it back when the conversation returns.
+    conversation_focus: Option<FocusHandle>,
     expanded_live_tools: HashSet<String>,
     reading: selection::Reading,
     file_scroll: UniformListScrollHandle,
@@ -191,6 +195,7 @@ pub struct Plait {
     themes: appearance::Themes,
     code_font: appearance::CodeFont,
     file_viewer: file_view::FileViewer,
+    conversation_find: conversation_find::ConversationFind,
     updates: update::UpdateState,
     session: session::SessionState,
     picker_open: bool,
@@ -248,6 +253,7 @@ impl Plait {
             panels: Default::default(),
             thread_controls: Default::default(),
             focus,
+            conversation_focus: None,
             expanded_live_tools: HashSet::new(),
             reading: Default::default(),
             file_scroll: UniformListScrollHandle::new(),
@@ -265,6 +271,7 @@ impl Plait {
             themes: Default::default(),
             code_font: Default::default(),
             file_viewer: Default::default(),
+            conversation_find: Default::default(),
             updates: update::UpdateState::default(),
             session: session::SessionState::default(),
             picker_open: false,
@@ -293,6 +300,11 @@ impl Plait {
             this.sync_provider_settings(cx);
         })
         .detach();
+        // Keys dispatch from the focused element. One that is no longer drawn,
+        // such as a field on a tab that was left, sends them from outside the
+        // app's key context, where no shortcut or menu action is handled.
+        cx.on_focus_lost(window, |this, window, cx| window.focus(&this.focus, cx))
+            .detach();
         this.watch_approval_keys(window, cx);
         this.reconnect_host(window, cx);
         // Test scenes stay offline.
@@ -568,9 +580,9 @@ impl Plait {
             .child(
                 toned_button("inspector-note-changes", "Show Changes", Tone::Filled).on_activate(
                     cx,
-                    |this, _, cx| {
+                    |this, window, cx| {
                         this.inspector_note = false;
-                        this.show_tab(Workspace::Changes, cx);
+                        this.show_tab(Workspace::Changes, window, cx);
                     },
                 ),
             )
@@ -589,7 +601,13 @@ impl Plait {
         cx.notify();
     }
 
-    fn show_tab(&mut self, tab: Workspace, cx: &mut Context<Self>) {
+    fn show_tab(&mut self, tab: Workspace, window: &mut Window, cx: &mut Context<Self>) {
+        let conversation = Workspace::Conversation;
+        if self.tab == conversation && tab != conversation {
+            self.leave_conversation_focus(window, cx);
+        } else if self.tab != conversation && tab == conversation {
+            self.return_conversation_focus(window, cx);
+        }
         self.tab = tab;
         if tab == Workspace::History {
             self.state.repository.request_history();
@@ -607,6 +625,44 @@ impl Plait {
             self.mark_thread_read(&id, cx);
         }
         cx.notify();
+    }
+
+    /// Where the conversation can hold the keyboard: its composer, and its
+    /// find field while the bar is open.
+    fn conversation_fields(&self, cx: &App) -> [Option<FocusHandle>; 2] {
+        let find = &self.conversation_find;
+        [
+            self.visible_composer()
+                .map(|composer| composer.focus_handle(cx)),
+            find.field
+                .as_ref()
+                .filter(|_| find.open)
+                .map(|field| field.focus_handle(cx)),
+        ]
+    }
+
+    /// Another tab hides the conversation: the keyboard leaves its fields for
+    /// the root, which every tab draws, and they remember it for the return.
+    fn leave_conversation_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.conversation_focus = self
+            .conversation_fields(cx)
+            .into_iter()
+            .flatten()
+            .find(|field| field.contains_focused(window, cx));
+        if self.conversation_focus.is_some() {
+            window.focus(&self.focus, cx);
+        }
+    }
+
+    /// The conversation is shown again: give the keyboard back to the field
+    /// that had it, if it is still there.
+    fn return_conversation_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(field) = self.conversation_focus.take() else {
+            return;
+        };
+        if !self.settings_open && self.conversation_fields(cx).contains(&Some(field.clone())) {
+            window.focus(&field, cx);
+        }
     }
 
     /// One compact chrome row: where you are, its state, and the workspaces.
@@ -708,7 +764,9 @@ impl Plait {
                     self.tab == Workspace::Conversation,
                 )
                 .aria_keyshortcuts(self.shortcut_aria("view.conversation"))
-                .on_click(cx.listener(|this, _, _, cx| this.show_tab(Workspace::Conversation, cx))),
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.show_tab(Workspace::Conversation, window, cx)
+                })),
             )
             .child(
                 segment("changes-tab", "Changes", self.tab == Workspace::Changes)
@@ -722,17 +780,23 @@ impl Plait {
                                 .child(count.to_string()),
                         )
                     })
-                    .on_click(cx.listener(|this, _, _, cx| this.show_tab(Workspace::Changes, cx))),
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_tab(Workspace::Changes, window, cx)
+                    })),
             )
             .child(
                 segment("history-tab", "History", self.tab == Workspace::History)
                     .aria_keyshortcuts(self.shortcut_aria("view.history"))
-                    .on_click(cx.listener(|this, _, _, cx| this.show_tab(Workspace::History, cx))),
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_tab(Workspace::History, window, cx)
+                    })),
             )
             .child(
                 segment("files-tab", "Files", self.tab == Workspace::Files)
                     .aria_keyshortcuts(self.shortcut_aria("view.files"))
-                    .on_click(cx.listener(|this, _, _, cx| this.show_tab(Workspace::Files, cx))),
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.show_tab(Workspace::Files, window, cx)
+                    })),
             )
     }
 
@@ -820,6 +884,7 @@ impl Render for Plait {
         let fullscreen = window.is_fullscreen();
         self.panels.viewport = f32::from(window.viewport_size().width);
         self.advance_reveals(window);
+        self.settle_find_reveal(window);
         let project = self.active_project();
         let machine = &project.machines[0];
         let real = self.host.selected.is_some();
@@ -947,44 +1012,56 @@ impl Render for Plait {
                 this.diagnostics = !this.diagnostics;
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &Conversation, _, cx| {
-                this.show_tab(Workspace::Conversation, cx)
+            .on_action(cx.listener(|this, _: &Conversation, window, cx| {
+                this.show_tab(Workspace::Conversation, window, cx)
             }))
-            .on_action(
-                cx.listener(|this, _: &Changes, _, cx| this.show_tab(Workspace::Changes, cx)),
-            )
-            .on_action(
-                cx.listener(|this, _: &CommitHistory, _, cx| this.show_tab(Workspace::History, cx)),
-            )
-            .on_action(
-                cx.listener(|this, _: &ShowFiles, _, cx| this.show_tab(Workspace::Files, cx)),
-            )
+            .on_action(cx.listener(|this, _: &Changes, window, cx| {
+                this.show_tab(Workspace::Changes, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CommitHistory, window, cx| {
+                this.show_tab(Workspace::History, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ShowFiles, window, cx| {
+                this.show_tab(Workspace::Files, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &QuickOpen, window, cx| this.quick_open(window, cx)))
-            .on_action(cx.listener(|this, _: &FindInFile, window, cx| this.open_find(window, cx)))
-            .on_action(cx.listener(|this, _: &FindNext, _, cx| this.step_find(true, cx)))
-            .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.step_find(false, cx)))
+            .on_action(cx.listener(|this, _: &FindInFile, window, cx| {
+                if let Some(target) = this.find_target() {
+                    this.open_find_in(target, window, cx)
+                }
+            }))
+            .on_action(cx.listener(|this, _: &FindNext, _, cx| {
+                if let Some(target) = this.find_target() {
+                    this.step_find_in(target, true, cx)
+                }
+            }))
+            .on_action(cx.listener(|this, _: &FindPrevious, _, cx| {
+                if let Some(target) = this.find_target() {
+                    this.step_find_in(target, false, cx)
+                }
+            }))
             // Show Changes, where the result and any error appear.
-            .on_action(cx.listener(|this, _: &StageAll, _, cx| {
-                this.show_tab(Workspace::Changes, cx);
+            .on_action(cx.listener(|this, _: &StageAll, window, cx| {
+                this.show_tab(Workspace::Changes, window, cx);
                 this.git_write(plait_core::git::WriteOp::StageAll, cx)
             }))
-            .on_action(cx.listener(|this, _: &UnstageAll, _, cx| {
-                this.show_tab(Workspace::Changes, cx);
+            .on_action(cx.listener(|this, _: &UnstageAll, window, cx| {
+                this.show_tab(Workspace::Changes, window, cx);
                 this.git_write(plait_core::git::WriteOp::UnstageAll, cx)
             }))
             .on_action(
                 cx.listener(|this, _: &CommitStaged, window, cx| this.focus_commit(window, cx)),
             )
-            .on_action(cx.listener(|this, _: &Push, _, cx| {
-                this.show_tab(Workspace::Changes, cx);
+            .on_action(cx.listener(|this, _: &Push, window, cx| {
+                this.show_tab(Workspace::Changes, window, cx);
                 this.push(cx)
             }))
-            .on_action(cx.listener(|this, _: &Pull, _, cx| {
-                this.show_tab(Workspace::Changes, cx);
+            .on_action(cx.listener(|this, _: &Pull, window, cx| {
+                this.show_tab(Workspace::Changes, window, cx);
                 this.pull(cx)
             }))
-            .on_action(cx.listener(|this, _: &Fetch, _, cx| {
-                this.show_tab(Workspace::Changes, cx);
+            .on_action(cx.listener(|this, _: &Fetch, window, cx| {
+                this.show_tab(Workspace::Changes, window, cx);
                 this.git_write(plait_core::git::WriteOp::Fetch, cx)
             }))
             .on_action(cx.listener(|this, _: &SwitchBranch, window, cx| {

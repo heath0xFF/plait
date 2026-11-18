@@ -42,6 +42,13 @@ pub(super) struct FileViewer {
     pub reveal: Option<usize>,
 }
 
+/// What a find bar searches. Both share one bar, its keys, and its counts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FindIn {
+    File,
+    Conversation,
+}
+
 #[derive(Default)]
 pub(super) struct Find {
     pub open: bool,
@@ -263,14 +270,21 @@ impl Plait {
                 field
             }
         };
-        self.file_viewer.find.open = true;
+        if !self.file_viewer.find.open {
+            self.file_viewer.find.open = true;
+            // A query kept from last time is searched again over the file as it is now.
+            self.update_find(cx);
+        }
         window.focus(&field.focus_handle(cx), cx);
         cx.notify();
     }
 
     pub(super) fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.file_viewer.find.open = false;
-        self.file_viewer.find.matches = Arc::default();
+        let find = &mut self.file_viewer.find;
+        find.open = false;
+        find.matches = Arc::default();
+        // Whatever search is running now answers nothing.
+        find.generation += 1;
         window.focus(&self.focus, cx);
         cx.notify();
     }
@@ -447,16 +461,77 @@ impl Plait {
             .flex_1()
             .min_h_0()
             .child(header)
-            .children(viewer.find.open.then(|| self.find_bar(cx)))
+            .children(viewer.find.open.then(|| self.find_bar(FindIn::File, cx)))
             .child(body)
             .into_any_element()
     }
 
-    fn find_bar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let find = &self.file_viewer.find;
-        let count = find.matches.len();
-        let query_empty = find
-            .field
+    /// Where Find, Find Next, and Find Previous act: the file or the
+    /// conversation on screen, or nothing.
+    pub(super) fn find_target(&self) -> Option<FindIn> {
+        if self.settings_open {
+            return None;
+        }
+        match self.tab {
+            Workspace::Files => Some(FindIn::File),
+            Workspace::Conversation if self.host.selected.is_some() => Some(FindIn::Conversation),
+            _ => None,
+        }
+    }
+
+    pub(super) fn open_find_in(
+        &mut self,
+        target: FindIn,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match target {
+            FindIn::File => self.open_find(window, cx),
+            FindIn::Conversation => self.open_conversation_find(window, cx),
+        }
+    }
+
+    pub(super) fn step_find_in(&mut self, target: FindIn, forward: bool, cx: &mut Context<Self>) {
+        match target {
+            FindIn::File => self.step_find(forward, cx),
+            FindIn::Conversation => self.step_conversation_find(forward, cx),
+        }
+    }
+
+    fn close_find_in(&mut self, target: FindIn, window: &mut Window, cx: &mut Context<Self>) {
+        match target {
+            FindIn::File => self.close_find(window, cx),
+            FindIn::Conversation => self.close_conversation_find(window, cx),
+        }
+    }
+
+    /// One bar for both: the field, "3 of 17", previous, next, and close. The
+    /// conversation's also says, briefly, when not all of it is loaded.
+    pub(super) fn find_bar(&self, target: FindIn, cx: &mut Context<Self>) -> AnyElement {
+        let (prefix, field, current, count, unsearched) = match target {
+            FindIn::File => {
+                let find = &self.file_viewer.find;
+                (
+                    "file-find",
+                    &find.field,
+                    find.current,
+                    find.matches.len(),
+                    None,
+                )
+            }
+            FindIn::Conversation => {
+                let find = &self.conversation_find;
+                (
+                    "conversation-find",
+                    &find.field,
+                    find.current,
+                    find.matches.len(),
+                    self.unsearched(),
+                )
+            }
+        };
+        let id = |part: &str| SharedString::from(format!("{prefix}-{part}"));
+        let query_empty = field
             .as_ref()
             .is_none_or(|field| field.read(cx).text().is_empty());
         let status = if query_empty {
@@ -466,13 +541,13 @@ impl Plait {
         } else {
             format!(
                 "{} of {}{}",
-                find.current + 1,
+                current + 1,
                 count,
                 if count >= FIND_LIMIT { "+" } else { "" }
             )
         };
         row()
-            .id("file-find-bar")
+            .id(id("bar"))
             .role(Role::Search)
             .px_4()
             .py_1()
@@ -480,19 +555,15 @@ impl Plait {
             .flex_shrink_0()
             .border_b_1()
             .border_color(rgb(colors().border))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
-                    "enter" => this.step_find(!event.keystroke.modifiers.shift, cx),
-                    "escape" => this.close_find(window, cx),
+                    "enter" => this.step_find_in(target, !event.keystroke.modifiers.shift, cx),
+                    "escape" => this.close_find_in(target, window, cx),
                     _ => return,
                 }
                 cx.stop_propagation();
             }))
-            .children(
-                find.field
-                    .clone()
-                    .map(|field| div().w(px(280.)).child(field)),
-            )
+            .children(field.clone().map(|field| div().w(px(280.)).child(field)))
             .child(
                 div()
                     .min_w(px(72.))
@@ -501,17 +572,34 @@ impl Plait {
                     .child(status),
             )
             .child(
-                icon_button("file-find-previous", "up", "Previous match")
-                    .on_activate(cx, |this, _, cx| this.step_find(false, cx)),
+                icon_button(id("previous"), "up", "Previous match")
+                    .on_activate(cx, move |this, _, cx| this.step_find_in(target, false, cx)),
             )
             .child(
-                icon_button("file-find-next", "down", "Next match")
-                    .on_activate(cx, |this, _, cx| this.step_find(true, cx)),
+                icon_button(id("next"), "down", "Next match")
+                    .on_activate(cx, move |this, _, cx| this.step_find_in(target, true, cx)),
             )
             .child(div().flex_1())
+            .when_some(unsearched, |el, why| {
+                el.child(
+                    div()
+                        .id(id("unsearched"))
+                        .flex_shrink_0()
+                        .text_size(px(12.))
+                        .text_color(rgb(colors().subtle))
+                        .aria_description(why)
+                        .tooltip(move |_, cx| {
+                            cx.new(|_| super::thread_controls::TextTooltip(why.into()))
+                                .into()
+                        })
+                        .child("Loaded messages only"),
+                )
+            })
             .child(
-                icon_button("file-find-close", "close", "Close find")
-                    .on_activate(cx, |this, window, cx| this.close_find(window, cx)),
+                icon_button(id("close"), "close", "Close find")
+                    .on_activate(cx, move |this, window, cx| {
+                        this.close_find_in(target, window, cx)
+                    }),
             )
             .into_any_element()
     }
@@ -599,16 +687,34 @@ pub(super) struct RunStyle {
 
 impl RunStyle {
     fn highlight(self) -> HighlightStyle {
-        let found = match self.found {
-            0 => None,
-            1 => Some(colors().amber << 8 | 0x38),
-            _ => Some(colors().amber << 8 | 0x90),
-        };
-        HighlightStyle {
+        let mut style = HighlightStyle {
             color: self.token.map(|token| rgb(token_color(token)).into()),
-            background_color: found.map(|fill| rgba(fill).into()),
             ..HighlightStyle::default()
+        };
+        if self.found > 0 {
+            find_highlight(&mut style, self.found == 2);
         }
+        style
+    }
+}
+
+/// How a find match is drawn, in a file and in the conversation alike. Every
+/// match uses the selection's neutral fill; the current one has the same fill
+/// at twice the strength and an underline, so it never depends on color.
+pub(super) fn find_highlight(style: &mut HighlightStyle, current: bool) {
+    let fill = colors().selection;
+    let alpha = if current {
+        ((fill & 0xff) * 2).min(0xff)
+    } else {
+        fill & 0xff
+    };
+    style.background_color = Some(rgba(fill & !0xff | alpha).into());
+    if current {
+        style.underline = Some(UnderlineStyle {
+            thickness: px(1.),
+            color: Some(rgb(colors().text).into()),
+            wavy: false,
+        });
     }
 }
 
@@ -752,6 +858,28 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    #[core::prelude::v1::test]
+    fn matches_use_the_neutral_selection_fill_and_the_current_one_is_underlined() {
+        let fill = colors().selection;
+        let found = |found| {
+            RunStyle {
+                token: Some(Token::Keyword),
+                found,
+            }
+            .highlight()
+        };
+        let (other, current) = (found(1), found(2));
+        assert_eq!(other.background_color, Some(rgba(fill).into()));
+        assert_eq!(
+            current.background_color,
+            Some(rgba(fill & !0xff | ((fill & 0xff) * 2).min(0xff)).into())
+        );
+        assert!(other.underline.is_none() && current.underline.is_some());
+        // The syntax color stays; only the fill and underline mark a match.
+        assert_eq!(other.color, found(0).color);
+        assert_eq!(found(0).background_color, None);
     }
 
     #[core::prelude::v1::test]

@@ -169,6 +169,7 @@ impl Plait {
                 if this.reconcile_live_list(previous.as_deref()) {
                     this.remeasure_records(previous.as_deref(), &before);
                 }
+                this.conversation_rows_changed(cx);
                 if this.history.enabled
                     && this.history.loading.is_none()
                     && let Some(live) = this.host.snapshot.as_ref()

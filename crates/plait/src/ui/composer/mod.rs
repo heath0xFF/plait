@@ -1025,6 +1025,11 @@ impl Composer {
     pub fn text(&self) -> &str {
         &self.draft.value.text
     }
+
+    /// The caret, or the selection when there is one.
+    pub fn caret(&self) -> std::ops::Range<usize> {
+        self.draft.selection()
+    }
 }
 
 impl Focusable for Composer {

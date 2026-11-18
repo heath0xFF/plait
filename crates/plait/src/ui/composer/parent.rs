@@ -33,8 +33,10 @@ impl Plait {
     fn run_composer_command(&mut self, id: CommandId, window: &mut Window, cx: &mut Context<Self>) {
         match id {
             CommandId::NewThread => self.open_draft(window, cx),
-            CommandId::ShowChanges => self.show_tab(super::super::Workspace::Changes, cx),
-            CommandId::ShowConversation => self.show_tab(super::super::Workspace::Conversation, cx),
+            CommandId::ShowChanges => self.show_tab(super::super::Workspace::Changes, window, cx),
+            CommandId::ShowConversation => {
+                self.show_tab(super::super::Workspace::Conversation, window, cx)
+            }
             CommandId::StopRun => self.control_thread(None, window, cx),
             CommandId::OpenSettings => self.show_settings(true, window, cx),
             // Unlike the menu item, keep focus in the composer that asked.

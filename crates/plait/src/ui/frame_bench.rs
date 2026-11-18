@@ -346,7 +346,7 @@ fn scroll_conversation(harness: &mut Harness, fraction: f32) {
 }
 
 fn show(harness: &mut Harness, tab: Workspace) {
-    harness.update(move |plait, _, cx| plait.show_tab(tab, cx));
+    harness.update(move |plait, window, cx| plait.show_tab(tab, window, cx));
 }
 
 fn select(harness: &mut Harness, index: usize) {
@@ -436,6 +436,25 @@ pub fn run() -> Vec<Row> {
         point(px(700.), px(400.)),
         -60.,
     ));
+    // Find in that conversation: every reply's code matches, so each row
+    // drawn carries highlights. Typing waits for the background search.
+    let set_query = |harness: &mut Harness, query: &'static str| {
+        harness.update(move |plait, _, cx| {
+            let field = plait.conversation_find.field.clone().unwrap();
+            field.update(cx, |field, cx| field.set_text(query, cx));
+        });
+    };
+    harness.update(|plait, window, cx| plait.open_conversation_find(window, cx));
+    set_query(&mut harness, "sample code");
+    scroll_conversation(&mut harness, 0.5);
+    rows.push(harness.steady("c4 conversation, middle, find with matches highlighted"));
+    let queries = ["explain", "fixture", "sample code"];
+    rows.push(harness.switching(
+        "c5 find, a new query over every row, to its frame",
+        9,
+        |h, round| set_query(h, queries[round % 3]),
+    ));
+    harness.update(|plait, window, cx| plait.close_conversation_find(window, cx));
     scroll_conversation(&mut harness, 1.0);
 
     // a. Changes: 2,000 files, an injected 20k-line diff.

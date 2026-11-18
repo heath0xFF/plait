@@ -40,6 +40,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
   history.rs            paged history reads off the UI thread, and their parts
   markdown.rs           drawing precomputed conversation blocks and code
   selection.rs          text selection, copy, and link clicks in the conversation
+  conversation_find.rs  find in the conversation: background search and highlights
   tool_card.rs          one line per tool call, its details, and grouped runs
   thread_controls.rs    model, thinking, context, run settings, and queued inputs
   thread_files.rs       files the thread changed, above its composer
@@ -65,6 +66,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
   snapshot.rs           headless scene snapshots of the root view (tests only)
   snapshot/showcase.rs  README screenshots over a sample project (tests only)
   snapshot/ways_out.rs  which file and line the ways out pick; Settings → Editor (tests only)
+  snapshot/find.rs      find in the conversation: scenes and tests (tests only)
   composer/             native input, IME, clipboard, undo, and its events
     draft.rs            text, selection, undo, acceptance guard, prompt recall
     history.rs          prompts already sent in the thread
@@ -109,6 +111,7 @@ patch.rs                which rows a Git patch draws, each mapped to its patch l
 review.rs               quoting picked diff lines into a message
 tool_view.rs            what each tool call shows, and grouping of long runs
 selection.rs            selection order, ranges, word bounds, and copied text
+conversation_find.rs    case-insensitive matches in drawn conversation blocks
 git.rs                  synchronous Git adapter: hardened reads; background only
   git/write.rs          stage, unstage, commit, push, pull, fetch, discard
   git/branch.rs         list local branches; create and switch (via write)
@@ -708,6 +711,24 @@ they take keyboard focus. Dragging past the top or bottom edge scrolls the list
 one step for each pointer movement; it does not keep scrolling while the
 pointer rests. Rows between the two ends are copied whether or not they are on
 screen; a tool's details are copied only while they are open.
+
+Find in the conversation (`conversation_find.rs`, with the matching in
+`plait-core::conversation_find`) searches the parsed blocks the view draws,
+not the Markdown source, so each match is a byte range of one block. The
+search runs on the background executor over the display snapshot and its
+projection, both shared and replaced rather than changed, so starting one
+copies nothing on the UI thread. One search runs at a time. A new query and
+new rows (a reply, a history page, another thread) bump a generation; a result
+is shown only if its generation and its projection are still current, and
+otherwise the search runs again. Results come grouped by message ID, so drawing
+a row looks up only its own matches and restyles them with the same run
+splitting as the selection. Moving to a match scrolls the list to its row, then
+places the match in view on the next frame from where its text was drawn,
+since only drawn text knows where a match sits inside a tall row. A new result
+for the same query keeps the current match by its message, block, and range and
+leaves the scroll position alone. Requests and replies are searched; the
+streaming reply, reasoning, tool rows, and turn records are not, and pages that
+are not loaded are never read for a search.
 
 Conversation events use GPUI's variable-height `list`. The conversation is
 drawn as a log of turns: a request heads its turn at a ring on the turn line,

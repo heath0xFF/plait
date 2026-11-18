@@ -541,12 +541,15 @@ coalesced to one per 16 ms and are not written to disk.
 
 Core tests read text, binary, non-UTF-8, and oversized files; refuse symlinks,
 paths outside the checkout, directories, missing files, and a FIFO; split CRLF
-and final lines; notice a changed stamp; and find with ASCII case folding, exact
-non-ASCII matches, no overlaps, and the 1,000-match cap. Desktop tests expand
-tabs and clip long lines on character boundaries, and a harness test opens a
-real file, finds in it, rereads it after an edit on disk, keeps the last version
-after deletion, describes a binary file, and lists files in quick open. Scenes
-draw the tab, find, and quick open. In the frame bench a 20,000-line highlighted
+and final lines; notice a changed stamp; and find with letter case ignored
+inside and outside ASCII, no overlaps, and the 1,000-match cap. Desktop tests
+expand tabs and clip long lines on character boundaries and draw matches in the
+conversation's neutral fill, the current one underlined, and a harness test
+opens a real file, finds in it, finds the kept query again on reopening,
+rereads it after an edit on disk, keeps the last version after deletion, finds
+non-ASCII text in either case, describes a binary file, and lists files in
+quick open. Scenes draw the tab, find with the current match apart from the
+others, and quick open. In the frame bench a 20,000-line highlighted
 file drew in 0.6 ms at rest and 1.2 ms per frame while wheel-scrolling. Native
 pointer use, find shortcuts, and reloading after an agent's edit are open in the
 [preview.8 acceptance](#v010-preview8-acceptance) list.
@@ -584,6 +587,34 @@ headers with their Editor and Finder controls.
 None of this has been run against a real editor, Finder, Terminal, or Rex:
 whether Rex opens the tab and Neovim lands on the line, what each app does
 when it is not running, and the two-second failure window are unchecked.
+
+## Find in the conversation
+
+Core tests match with letter case ignored, inside and outside ASCII, with
+ranges on character boundaries; find several matches in one block, without
+overlaps; keep matches in conversation order across blocks and messages with
+each one's row; skip list markers, the streaming reply, reasoning, and tool
+output; return nothing for an empty query; stop at 1,000 matches, keeping the
+newest; and step next and previous with wrap-around. Desktop harness tests
+check that Cmd-F opens the conversation's bar and not the Files bar, and the
+reverse in Files; that Escape closes it and returns focus to the composer; that
+a tab that hides the composer, chosen by shortcut or by click, takes the
+keyboard from it so later shortcuts and Cmd-F in Files work, and that coming
+back by shortcut gives the composer the keyboard again with its draft and
+caret; that
+a result for an older query or an older projection is dropped and the search
+runs again; that next and previous scroll each match into the list, across
+rows far apart and wrapping at both ends; and that a new reply is searched
+while the current match and scroll position stay. Scenes draw the bar with
+matches highlighted, with no matches, and with earlier messages not loaded, at
+both window sizes. In the frame bench (release profile, November 2026), the
+3,750-row conversation drew in 1.13 ms per frame at the median with 750
+matches highlighted, against 1.02 ms without find, and a new query searched
+every row in the background and drew its result in 4.6 ms at the median.
+The scene harness gives "loaded messages only" its state
+directly; reaching it through a version 3 host's paged history, and the hover
+text, have not been checked in the installed app, nor have Cmd-G from the menu
+bar and VoiceOver's reading of the bar.
 
 ## Themes
 

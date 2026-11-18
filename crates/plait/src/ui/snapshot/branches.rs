@@ -143,14 +143,14 @@ fn a_branch_write_is_refused_while_git_or_a_thread_is_busy_here() {
     let (scratch, repository) = repository("branch-refused");
     let mut harness = Harness::new(&repository, None, 900., 600.);
     // Another write queued: refused until it finishes, checked in one turn.
-    harness.update(|plait, _, cx| {
+    harness.update(|plait, window, cx| {
         assert!(plait.branch_blocker().is_none());
         assert!(plait.state.repository.request_write(WriteOp::Fetch));
         let reason = plait.branch_blocker().expect("refused while Git works");
         assert!(reason.contains("Git is still working"));
         let (items, _, _) = plait.branch_items();
         assert!(items.iter().all(|item| !item.enabled));
-        plait.branch_write(WriteOp::SwitchBranch("feature/login".into()), cx);
+        plait.branch_write(WriteOp::SwitchBranch("feature/login".into()), window, cx);
         let (note, failed) = plait.state.repository.write.note.clone().unwrap();
         assert!(failed && note.contains("Git is still working"), "{note}");
         // Only the fetch is queued; let it run.
@@ -181,8 +181,8 @@ fn a_branch_write_is_refused_while_git_or_a_thread_is_busy_here() {
         assert!(!items.is_empty() && items.iter().all(|item| !item.enabled));
         plait.close_overlay(true, window, cx);
     });
-    harness.update(|plait, _, cx| {
-        plait.branch_write(WriteOp::SwitchBranch("feature/login".into()), cx);
+    harness.update(|plait, window, cx| {
+        plait.branch_write(WriteOp::SwitchBranch("feature/login".into()), window, cx);
         let (note, failed) = plait.state.repository.write.note.clone().unwrap();
         assert!(failed && note.contains("thread is running"), "{note}");
         assert!(!plait.state.repository.write.busy(), "nothing was queued");
@@ -254,11 +254,11 @@ pub(super) fn branches_walk(harness: &mut Harness, repository: &Path, suffix: &s
     harness.connect(repository, false);
     // No thread is running here, so the control is ready.
     harness.change_snapshot(|snapshot| snapshot.status = ThreadStatus::Idle);
-    harness.update(|plait, _, cx| {
+    harness.update(|plait, window, cx| {
         for thread in &mut plait.host.threads {
             thread.status = ThreadStatus::Idle;
         }
-        plait.show_tab(Workspace::Changes, cx);
+        plait.show_tab(Workspace::Changes, window, cx);
     });
     harness.capture(&format!("branch-control-{suffix}"));
     open(harness, false);

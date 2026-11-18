@@ -42,6 +42,7 @@ use std::{
 };
 
 mod branches;
+mod find;
 mod showcase;
 mod ways_out;
 
@@ -587,6 +588,7 @@ impl Harness {
                 plait.host.snapshot.as_ref().unwrap(),
             ));
             plait.refresh_live_list(Some(&previous));
+            plait.conversation_rows_changed(cx);
             let snapshot = plait.host.snapshot.as_ref().unwrap();
             if let Some(thread) = plait
                 .host
@@ -967,6 +969,17 @@ fn files_tab_reads_finds_and_reloads_a_real_file() {
         );
     });
     harness.draw();
+    // Closing clears the matches; reopening searches the kept query again.
+    harness.update(|plait, window, cx| {
+        plait.close_find(window, cx);
+        assert!(plait.file_viewer.find.matches.is_empty());
+        plait.open_find(window, cx);
+    });
+    harness.update(|plait, _, cx| {
+        let find = &plait.file_viewer.find;
+        assert_eq!(find.field.as_ref().unwrap().read(cx).text(), "STATUS");
+        assert_eq!(find.matches.len(), 1, "reopening finds the kept query");
+    });
     // A change on disk is noticed by size and time, then reread.
     std::fs::write(repository.join("src/review.rs"), "pub fn refresh() {}\n").unwrap();
     harness.update(|plait, _, cx| plait.check_file(cx));
@@ -994,6 +1007,16 @@ fn files_tab_reads_finds_and_reloads_a_real_file() {
                 .unwrap()
                 .contains("version read before")
         );
+    });
+    // Letter case is ignored outside ASCII too, as in the conversation.
+    std::fs::write(repository.join("notes.txt"), "Café\ncafé CAFÉ\n").unwrap();
+    harness.update(|plait, _, cx| plait.open_file("notes.txt".into(), None, cx));
+    harness.update(|plait, _, cx| {
+        let field = plait.file_viewer.find.field.clone().unwrap();
+        field.update(cx, |field, cx| field.set_text("CAFÉ", cx));
+    });
+    harness.update(|plait, _, _| {
+        assert_eq!(*plait.file_viewer.find.matches, vec![0..5, 6..11, 12..17]);
     });
     // Binary files are described, not drawn.
     std::fs::write(repository.join("logo.png"), [0x89, b'P', 0, 0]).unwrap();
@@ -1025,8 +1048,11 @@ fn files_walk(harness: &mut Harness, suffix: &str) {
     harness.update(|plait, window, cx| {
         plait.open_find(window, cx);
         let field = plait.file_viewer.find.field.clone().unwrap();
-        field.update(cx, |field, cx| field.set_text("status", cx));
+        field.update(cx, |field, cx| field.set_text("re", cx));
     });
+    // Two matches in "refresh", and the current one in "ready", underlined.
+    harness.update(|plait, _, cx| plait.step_find(false, cx));
+    harness.update(|plait, _, _| assert_eq!(plait.file_viewer.find.matches.len(), 3));
     harness.capture(&format!("files-find-{suffix}"));
     harness.update(|plait, window, cx| {
         plait.close_find(window, cx);
@@ -1035,7 +1061,7 @@ fn files_walk(harness: &mut Harness, suffix: &str) {
     harness.capture(&format!("quick-open-{suffix}"));
     harness.update(|plait, window, cx| {
         plait.close_overlay(true, window, cx);
-        plait.show_tab(super::Workspace::Conversation, cx);
+        plait.show_tab(super::Workspace::Conversation, window, cx);
     });
 }
 
@@ -1731,7 +1757,7 @@ fn asking_about_picked_lines_quotes_them_into_the_thread_composer() {
         assert_eq!(plait.tab, super::Workspace::Conversation);
 
         // A pick belongs to its file and side.
-        plait.show_tab(super::Workspace::Changes, cx);
+        plait.show_tab(super::Workspace::Changes, window, cx);
         plait.pick_line(first, false, cx);
         assert!(plait.line_pick.is_some());
         plait.select_file(1, DiffMode::Staged, window, cx);
@@ -1935,12 +1961,12 @@ fn walk(output: Option<&Path>) {
             plait.line_pick = None;
             cx.notify();
         });
-        harness.update(|plait, _, cx| {
+        harness.update(|plait, window, cx| {
             plait
                 .commit_message
                 .update(cx, |field, cx| field.set_text("", cx));
             plait.state.repository.write.note = None;
-            plait.show_tab(super::Workspace::History, cx);
+            plait.show_tab(super::Workspace::History, window, cx);
         });
         harness.capture(&format!("history-list-{suffix}"));
         harness.update(|plait, _, cx| {
@@ -1993,6 +2019,7 @@ fn walk(output: Option<&Path>) {
         streaming_walk(&mut harness, &repository, suffix);
         tool_states_walk(&mut harness, &repository, suffix);
         reading_walk(&mut harness, &repository, suffix);
+        find::find_walk(&mut harness, &repository, suffix);
         history_walk(&mut harness, &repository, suffix);
         tool_cards_walk(&mut harness, &repository, suffix);
         draft_walk(&mut harness, &repository, suffix);

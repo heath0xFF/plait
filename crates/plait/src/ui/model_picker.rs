@@ -6,6 +6,7 @@
 use super::{
     Plait,
     commands::Command,
+    composer::Composer,
     jump::PreferenceGroup,
     palette::{Item, Options, Palette},
     theme::*,
@@ -373,12 +374,16 @@ impl Plait {
 
     /// Put the keyboard in the selected thread's composer, or the draft's.
     pub(super) fn focus_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let composer = match &self.host.selected {
+        if let Some(composer) = self.visible_composer() {
+            window.focus(&composer.focus_handle(cx), cx);
+        }
+    }
+
+    /// The composer the conversation tab shows: the selected thread's, or the draft's.
+    pub(super) fn visible_composer(&self) -> Option<&Entity<Composer>> {
+        match &self.host.selected {
             Some(id) => self.composers.get(id),
             None => self.draft.composer.as_ref().filter(|_| self.draft.open),
-        };
-        if let Some(composer) = composer {
-            window.focus(&composer.focus_handle(cx), cx);
         }
     }
 

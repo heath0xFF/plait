@@ -411,10 +411,10 @@ impl Plait {
             }
             Command::OpenFile(path) => self.open_file(path.into(), None, cx),
             Command::SwitchBranch(name) => {
-                self.branch_write(plait_core::git::WriteOp::SwitchBranch(name), cx)
+                self.branch_write(plait_core::git::WriteOp::SwitchBranch(name), window, cx)
             }
             Command::CreateBranch(name) => {
-                self.branch_write(plait_core::git::WriteOp::CreateBranch(name), cx)
+                self.branch_write(plait_core::git::WriteOp::CreateBranch(name), window, cx)
             }
             Command::DefaultThinking(level) => {
                 let mut preferences = self.preferences.value.clone();
