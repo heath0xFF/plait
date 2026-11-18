@@ -116,36 +116,32 @@ impl Record {
             .enumerate()
             .map(|(i, f)| (f.path.clone(), i))
             .collect();
-        let short = short_id(records, source);
-        let label = if restored {
-            "Restored".into()
-        } else {
-            format!("Turn {short}")
-        };
-        let detail = if restored {
-            format!(
-                "Show files restored by undo {short} of turn {}.",
-                target.original
-            )
-        } else {
-            format!(
-                "Show files recorded during {}, in thread {}.",
-                source.request_ids.first().unwrap_or(&source.id),
-                target.thread
-            )
-        };
-        Ok(Self {
+        let mut record = Self {
             id: source.id.clone(),
             original: target.original.clone(),
-            label: crate::display_text::escape(&label),
-            detail: crate::display_text::escape(&detail),
+            label: String::new(),
+            detail: String::new(),
             restored,
             files,
             indices,
-        })
+        };
+        record.describe(records, None);
+        Ok(record)
     }
     /// Titles and relative time are prepared once when a record is loaded.
     pub fn describe(&mut self, records: &[TurnRecord], snapshot: Option<&crate::host::Snapshot>) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        self.describe_at(records, snapshot, now);
+    }
+    fn describe_at(
+        &mut self,
+        records: &[TurnRecord],
+        snapshot: Option<&crate::host::Snapshot>,
+        now: u64,
+    ) {
         let Some(source) = records.iter().find(|r| r.id == self.id) else {
             return;
         };
@@ -157,32 +153,30 @@ impl Record {
         } else {
             source
         };
-        let request = run.request_ids.first().unwrap_or(&run.id);
-        let request_id = format!("request-{request}");
-        let title = snapshot
-            .and_then(|s| s.messages.iter().find(|m| m.id == request_id))
-            .map_or(request.as_str(), |m| m.text.as_str());
-        let title = crate::history::records::preview_name(title);
+        let title = run.request_ids.first().and_then(|request| {
+            let request_id = format!("request-{request}");
+            snapshot?
+                .messages
+                .iter()
+                .find(|m| m.id == request_id)
+                .map(|m| m.text.trim())
+                .filter(|text| !text.is_empty())
+        });
         let thread = snapshot
             .and_then(|s| s.title.as_deref())
             .unwrap_or("this thread");
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
         let age = crate::navigation::age(Some(source.created_at), now);
         let time = if age == "now" {
             "just now".into()
         } else {
             format!("{age} ago")
         };
+        self.label = format!("Turn · {}", title.map_or_else(|| time.clone(), scope_title));
+        let title = title.unwrap_or("this run");
         self.detail = if self.restored {
-            format!(
-                "Undo {} restored files from {title}, {time}, in {thread}.",
-                short_id(records, source)
-            )
+            format!("Files an undo put back from {title}, {time}, in {thread}.")
         } else {
-            format!("Show files recorded during {title}, {time}, in {thread}.")
+            format!("Files recorded during {title}, {time}, in {thread}.")
         };
         for omitted in source
             .not_covered
@@ -227,20 +221,117 @@ impl Record {
             .or_else(|| (!self.files.is_empty()).then_some(0))
     }
 }
-fn short_id<'a>(records: &[TurnRecord], source: &'a TurnRecord) -> &'a str {
-    let size = (4..=source.id.len())
-        .find(|&n| {
-            source.id.is_char_boundary(n)
-                && records
-                    .iter()
-                    .all(|other| other.id == source.id || !other.id.starts_with(&source.id[..n]))
-        })
-        .unwrap_or(source.id.len());
-    &source.id[..size]
+fn scope_title(title: &str) -> String {
+    // Leave room for Turn and the chevron in the narrow Changes column.
+    let title = crate::display_text::escape(title)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let Some((end, next)) = title.char_indices().nth(22) else {
+        return title;
+    };
+    let prefix = &title[..end];
+    let end = if next.is_whitespace() {
+        end
+    } else {
+        prefix.rfind(char::is_whitespace).unwrap_or(end)
+    };
+    format!("{}…", title[..end].trim_end())
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn record() -> TurnRecord {
+        serde_json::from_value(serde_json::json!({
+            "id":"private-record-id", "request_ids":["private-request-id"],
+            "request_ids_offset":0, "request_ids_total":1, "kind":"turn",
+            "undoes":null, "state":"ready", "head_moved":false, "after_restart":false,
+            "paths":[], "paths_offset":0, "paths_total":0,
+            "not_covered":[], "not_covered_offset":0, "not_covered_total":0,
+            "created_at":300_000
+        }))
+        .unwrap()
+    }
+    #[test]
+    fn scope_uses_the_request_and_keeps_its_full_text_in_the_description() {
+        let records = [record()];
+        let mut target = target();
+        target.record = records[0].id.clone();
+        target.original = records[0].id.clone();
+        let mut saved = Record::prepare(&records, &target).unwrap();
+        let request = format!(
+            "Document the behavior and regenerate the file list.\n{}",
+            "More detail. ".repeat(40)
+        );
+        let snapshot = crate::host::Snapshot {
+            title: Some("Review thread".into()),
+            messages: vec![crate::host::Message {
+                id: "request-private-request-id".into(),
+                text: request.clone(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        saved.describe_at(&records, Some(&snapshot), 600_000);
+        assert_eq!(saved.label, "Turn · Document the behavior…");
+        assert_eq!(
+            saved.detail,
+            format!(
+                "Files recorded during {}, 5m ago, in Review thread.",
+                request.trim()
+            )
+        );
+        assert!(!saved.detail.contains("private-"));
+        assert_eq!(saved.id, "private-record-id");
+        assert_eq!(saved.original, "private-record-id");
+    }
+    #[test]
+    fn scope_without_loaded_request_text_uses_age_and_never_an_id() {
+        let mut records = [record()];
+        let mut target = target();
+        target.record = records[0].id.clone();
+        target.original = records[0].id.clone();
+        let mut saved = Record::prepare(&records, &target).unwrap();
+        for snapshot in [
+            None,
+            Some(crate::host::Snapshot::default()),
+            Some(crate::host::Snapshot {
+                messages: vec![crate::host::Message {
+                    id: "request-private-request-id".into(),
+                    text: " \n ".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        ] {
+            saved.describe_at(&records, snapshot.as_ref(), 600_000);
+            assert_eq!(saved.label, "Turn · 5m ago");
+            assert_eq!(
+                saved.detail,
+                "Files recorded during this run, 5m ago, in this thread."
+            );
+        }
+        records[0].request_ids.clear();
+        saved.describe_at(&records, None, 600_000);
+        assert_eq!(saved.label, "Turn · 5m ago");
+        assert!(!saved.detail.contains("private-"));
+    }
+    #[test]
+    fn scope_title_prefers_whole_words_and_handles_long_unicode_words() {
+        assert_eq!(scope_title("Fix the build"), "Fix the build");
+        assert_eq!(
+            scope_title("Document\nthe behavior and regenerate"),
+            "Document the behavior…"
+        );
+        assert_eq!(
+            scope_title("Update implementation details"),
+            "Update implementation…"
+        );
+        assert_eq!(
+            scope_title(&"界".repeat(30)),
+            format!("{}…", "界".repeat(22))
+        );
+    }
     fn target() -> Target {
         Target {
             thread: "thread".into(),

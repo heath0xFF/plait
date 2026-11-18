@@ -445,13 +445,15 @@ impl Plait {
     }
     pub(super) fn review_scope_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let (label, detail) = self.review_scope_text();
-        button("review-scope", label)
+        button("review-scope", "")
+            .aria_label(label.clone())
             .h(px(28.))
             .min_w_0()
             .flex_shrink_1()
             .aria_description(detail.clone())
             .tooltip(move |_, cx| cx.new(|_| TextTooltip(detail.clone())).into())
-            .child(icon("down").size(px(12.)))
+            .child(div().min_w_0().truncate().child(label))
+            .child(icon("down").size(px(12.)).flex_shrink_0())
             .on_activate(cx, |this, window, cx| this.open_review_scopes(window, cx))
     }
     pub(super) fn open_review_scopes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -459,11 +461,12 @@ impl Plait {
             return;
         };
         let data = self.turn_records.data.clone();
-        let target = self.turn_review.target.clone();
         let history = self.host.snapshot.clone();
         let task = cx.background_executor().spawn(async move {
             let mut choices = Vec::new();
-            for r in data.iter() {
+            let mut newest: Vec<_> = data.iter().collect();
+            newest.sort_by_key(|r| std::cmp::Reverse(r.created_at));
+            for r in newest {
                 let original = if r.kind == host::RecordKind::Turn {
                     r.id.clone()
                 } else {
@@ -491,13 +494,10 @@ impl Plait {
                 if let Ok(mut record) = Record::prepare(&data, &next) {
                     record.describe(&data, history.as_deref());
                     let detail = review_picker_detail(&record);
-                    let label = if target
-                        .as_ref()
-                        .is_some_and(|t| t.original == r.id && t.record != r.id)
-                    {
-                        "Original".into()
+                    let label = if record.restored {
+                        "Restored"
                     } else {
-                        record.label
+                        "Original"
                     };
                     choices.push((label, detail, next));
                 }

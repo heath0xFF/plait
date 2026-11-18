@@ -429,11 +429,17 @@ net file changes has a **Changes** link and says **No recorded changes**.
 Committed, clean and deleted files remain in this list while the record is
 retained. This view stays on the same record after later runs and undo.
 
-The scope below the branch is **Turn** plus the record's short ID. Open it to
-choose **All changes** or another retained record from this thread. An undo's
-closing line opens **Restored**, the files that undo actually restored; choose
-**Original** in the scope picker to see the run before undo. A partial undo's
-Restored list can be smaller than Original.
+The scope below the branch names the run by its request, such as
+**Turn · Document the behavior…**. Without loaded request text it gives the
+age, such as **Turn · 5m ago**. Hover and accessible text keep the full request,
+age and thread; record IDs are never shown. Open it to choose **All changes**
+or another retained record from this thread. Picker rows say **Original** for
+files recorded during the run and **Restored** for files an undo put back.
+Descriptions give the request, age and thread, with newest records first;
+several undos of one run differ by age and order. An undo's closing line opens
+the files that undo actually restored; choose **Original** in the scope picker
+to see the run before undo. A partial undo's Restored list can be smaller than
+Original.
 
 **Recorded** compares saved bytes and offers no staging or discard controls.
 **Current** shows the same file's present Git changes, with the usual Staged

@@ -77,10 +77,26 @@ pub(super) fn walk(h: &mut Harness, repository: &Path, suffix: &str) {
             data["paths"] = json!([{ "path": if name == "latin1" { "latin1" } else { "empty" }, "change": change, "added": if name == "latin1" { 1 } else { 0 }, "removed": if name == "latin1" { 1 } else { 0 } }]);
             data["paths_total"] = json!(1);
             inject(p, vec![data]);
-            p.turn_review.record = Some(Arc::new(Record::prepare(&p.turn_records.data, p.turn_review.target.as_ref().unwrap()).unwrap()));
+            let mut saved = Record::prepare(&p.turn_records.data, p.turn_review.target.as_ref().unwrap()).unwrap();
+            saved.describe(&p.turn_records.data, p.host.snapshot.as_deref());
+            p.turn_review.record = Some(Arc::new(saved));
         });
         h.capture(&format!("turn-recorded-{name}-{suffix}"));
     }
+    scene(h, repository, "ready", None);
+    h.update(|p, _, _| {
+        let mut data = record("last", &["unloaded-request"], "ready");
+        data["created_at"] = json!(now_ms() - 300_000);
+        inject(p, vec![data]);
+        let mut saved =
+            Record::prepare(&p.turn_records.data, p.turn_review.target.as_ref().unwrap()).unwrap();
+        saved.describe(&p.turn_records.data, p.host.snapshot.as_deref());
+        p.turn_review.record = Some(Arc::new(saved));
+    });
+    h.capture(&format!("turn-recorded-request-unloaded-{suffix}"));
+    scene(h, repository, "ready", None);
+    h.update(|p, w, cx| p.open_review_scopes(w, cx));
+    h.capture(&format!("turn-recorded-original-picker-{suffix}"));
     scene(h, repository, "undo", None);
     h.update(|p, w, cx| {
         let mut restored = record("restore", &["undo-one"], "ready");
@@ -88,10 +104,7 @@ pub(super) fn walk(h: &mut Harness, repository: &Path, suffix: &str) {
         restored["undoes"] = json!("last");
         let mut another = restored.clone();
         another["id"] = json!("another-undo");
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        let now = now_ms();
         another["created_at"] = json!(now - 60_000);
         restored["created_at"] = json!(now - 120_000);
         let mut original = record("last", &["last"], "undone");
@@ -550,6 +563,85 @@ fn set_changes(p: &mut Plait, changes: Vec<plait_core::model::Change>) {
     }));
 }
 
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+#[core::prelude::v1::test]
+fn undo_picker_names_the_request_and_keeps_newest_first() {
+    if !isolated("turn_review::undo_picker_names_the_request_and_keeps_newest_first") {
+        return;
+    }
+    let (scratch, _, mut h) = setup("review-undo-names");
+    let host = Host::start(answer);
+    h.update(|p, w, cx| {
+        let now = now_ms();
+        let mut original = record("last", &["last"], "undone");
+        original["created_at"] = json!(now - 300_000);
+        let mut older = record("private-older-undo", &["private-request"], "ready");
+        older["kind"] = json!("undo");
+        older["undoes"] = json!("last");
+        older["created_at"] = json!(now - 120_000);
+        let mut newer = older.clone();
+        newer["id"] = json!("private-newer-undo");
+        newer["created_at"] = json!(now - 60_000);
+        // Deliberately unordered input: the picker must put newest first.
+        inject(p, vec![older, original, newer]);
+        for (id, age) in [("last", "5m"), ("private-newer-undo", "1m"), ("private-older-undo", "2m")] {
+            let mut saved = Record::prepare(&p.turn_records.data, &target(p, id, None)).unwrap();
+            saved.describe(&p.turn_records.data, p.host.snapshot.as_deref());
+            assert_eq!(saved.label, "Turn · Document the behavior…");
+            let prefix = if saved.restored { "Files an undo put back from" } else { "Files recorded during" };
+            assert!(saved.detail.starts_with(&format!("{prefix} Document the behavior and regenerate the file list., {age} ago, in this thread.")));
+            assert!(!saved.detail.contains("private-"));
+            assert_eq!(saved.id, id);
+        }
+        p.open_review_scopes(w, cx);
+    });
+    wait(&mut h, |p| p.overlay.is_some());
+    assert_eq!(
+        shown(&mut h),
+        ["All changes", "Restored", "Restored", "Original"]
+    );
+    press(&mut h, "down");
+    press(&mut h, "enter");
+    wait(&mut h, |p| !p.turn_review.running);
+    h.update(|p, w, cx| {
+        assert_eq!(
+            p.turn_review.target.as_ref().unwrap().record,
+            "private-newer-undo"
+        );
+        assert_eq!(p.review_scope_text().0, "Turn · Document the behavior…");
+        p.open_review_scopes(w, cx);
+    });
+    wait(&mut h, |p| p.overlay.is_some());
+    set_query(&mut h, "2m ago");
+    assert_eq!(shown(&mut h), ["Restored"]);
+    press(&mut h, "enter");
+    wait(&mut h, |p| !p.turn_review.running);
+    h.update(|p, _, _| {
+        assert_eq!(
+            p.turn_review.target.as_ref().unwrap().record,
+            "private-older-undo"
+        )
+    });
+    for id in ["private-newer-undo", "private-older-undo"] {
+        assert!(
+            host.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|r| r["op"] == "turn_diff" && r["record_id"] == id)
+        );
+    }
+    drop(host);
+    drop(h);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
 #[core::prelude::v1::test]
 fn first_old_host_file_click_opens_current() {
     if !isolated("turn_review::first_old_host_file_click_opens_current") {
@@ -649,7 +741,9 @@ fn recorded_wording_names_only_available_states() {
         one["undoes"] = json!("last");
         let mut two = one.clone();
         two["id"] = json!("undo-two");
-        two["created_at"] = json!(100_000);
+        let now = now_ms();
+        one["created_at"] = json!(now - 120_000);
+        two["created_at"] = json!(now - 60_000);
         inject(p, vec![two, one, original]);
         let mut original = Record::prepare(&p.turn_records.data, &target(p, "last", None)).unwrap();
         assert_eq!(

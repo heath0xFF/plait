@@ -277,8 +277,11 @@ fn recorded_display_escapes_controls_without_changing_identity() {
     );
     assert_eq!(saved.files[0].directory, "src\\u2066");
     assert_eq!(saved.files[0].name, file.name);
-    assert!(saved.label.starts_with("Turn \\u202e"));
+    assert!(saved.label.starts_with("Turn · "));
+    assert!(!saved.label.contains("record"));
+    assert!(!saved.detail.contains("\\u202erecord"));
     saved.describe(&records, Some(&snapshot));
+    assert!(saved.label.starts_with("Turn · Review\\u2066"));
     assert!(saved.detail.contains("Review\\u2066this\\udb40\\udc01"));
     assert!(saved.detail.contains("Thread\\u2028name"));
     assert!(saved.detail.contains("build\\u0085/"));

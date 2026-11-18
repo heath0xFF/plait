@@ -234,10 +234,14 @@ conversation keeps a readable minimum width.
   readable in hint color, hover says why, and the palette names the reason
   with every row unavailable.
 
-- **Recorded Changes.** A 28-point scope row below the branch names All changes,
-  Turn plus a short stable ID, or Restored. Its picker offers the current
-  thread's retained records and Original for an undo's source run; it does not
-  imply an all-thread catalogue. Hover gives the request, time and thread.
+- **Recorded Changes.** A 28-point scope row below the branch names All changes
+  or Turn · followed by the start of the request, shortened at a word boundary
+  where possible. Without loaded request text it gives the age, such as
+  Turn · 5m ago. Its picker offers the current thread's retained records as
+  Original or Restored, newest first; descriptions give the request, age and
+  thread. Multiple undos of a run differ by age and order. It does not imply
+  an all-thread catalogue. Hover and accessible text keep the full request,
+  age and thread; record IDs are never shown.
   Recorded lists every saved path, including deleted and now-clean files, with
   recorded counts and current layer availability in accessible hover text.
   Recorded/Current appears for a selected recorded file and says which comparison
