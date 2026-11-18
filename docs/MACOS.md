@@ -345,7 +345,7 @@ color until they meet a minimum contrast, so a few schemes look slightly crisper
 in Plait than elsewhere. A theme removed from the folder falls back to Plait's
 own.
 
-## Undo a run (unreleased)
+## Undo a run
 
 With a version 5 host, each finished run ends with its tool-step count and the
 files the host recorded changing, including command writes. File links open
@@ -381,7 +381,7 @@ other permissions, extended attributes, hard-link relationships, empty-directory
 history, Git history, or effects outside the checkout. The host checks for
 later changes, but an external editor racing the final checks can still lose
 a change, and failures after writes begin can be partial. Read the explicit
-[verification limits](VERIFICATION.md#turn-undo-stage-3-unreleased).
+[verification limits](VERIFICATION.md#turn-undo-desktop-controls).
 
 ## Keyboard controls
 

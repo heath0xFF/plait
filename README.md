@@ -41,6 +41,10 @@ thread and draft.
   command. Commands run as you, as they would in your terminal, or opt a
   project into a macOS sandbox that cannot write your checkout or reach the
   network.
+- **Undo a run.** The host records your checkout before and after every run,
+  whichever harness ran it. One press puts back the files that run changed,
+  including what its commands wrote, and leaves alone anything it finds you
+  changed since. See [what undo does not restore](docs/MACOS.md#undo-a-run).
 - **Git review built in.** Stage and discard by file or hunk (with undo),
   commit, push, fetch, fast-forward pull, and create or switch branches. Click
   diff line numbers to ask the agent about exactly those lines.
@@ -153,7 +157,7 @@ Dashed boxes are planned, not shipped.
 ## Status
 
 Plait is an early preview, built in the open and used daily to build itself.
-The latest release is **v0.1.0-preview.13**.
+The latest release is **v0.1.0-preview.14**.
 
 - **Mac only, local only.** Remote hosts and Linux execution are
   [planned](docs/ROADMAP.md).

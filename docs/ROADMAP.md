@@ -6,8 +6,10 @@ for acceptance evidence and open checks. **M2.5 shipped in v0.1.0-preview.8.
 M8 steps 1 and 2 (skills, prompt templates, and user instructions) shipped in
 v0.1.0-preview.9. M7 steps 1 (choosing a harness, and Codex) and 2 (each
 harness's own permissions, and Claude Code threads) shipped in
-v0.1.0-preview.10. M9 steps 1 to 3, M8 steps 3 and 4, and the rest of
-"Agreed next, for daily use" below are the current work.**
+v0.1.0-preview.10. Ways out, branches, and search in a conversation shipped in
+v0.1.0-preview.13. M9 step 1 (per-turn undo) shipped in v0.1.0-preview.14. M9
+steps 2 and 3, M8 steps 3 and 4, and the rest of "Agreed next, for daily use"
+below are the current work.**
 
 ## Milestones
 
@@ -22,7 +24,7 @@ v0.1.0-preview.10. M9 steps 1 to 3, M8 steps 3 and 4, and the rest of
 | M6 — Multiple machines | Unified project navigation across independent hosts, including disconnected/reconnecting states | Planned |
 | M7 — Any agent harness | Threads run by other agent harnesses (Claude Code, Codex, Pi, omp, Antigravity, and others) beside Pi, with the same conversation, approval, Git, and navigation views | Current work. Steps 1 and 2 (harness choice, Codex, each harness's own permissions, and Claude Code; protocol version 4) shipped in v0.1.0-preview.10; an ACP client follows, agreed first |
 | M8 — Skills, tools, and CLIs | Pi threads use the skills, prompt templates, global instructions, MCP servers, and command-line tools the person already set up for their agent, with each one visible in Settings and every call under Plait's approvals | Steps 1 (skills and user instructions) and 2 (prompt templates, Settings → Agent, and `/` completion) shipped in v0.1.0-preview.9; steps 3 (named CLIs) and 4 (MCP) follow M7 |
-| M9 — Turn records | The host keeps its own record of the checkout before and after every turn, in every harness: per-turn undo first, then committing by turn, review of what changed since the person last looked, and checks the host runs itself | Steps 1 to 3 are agreed and are the current work, step 1 first, ahead of M7's ACP client; the later steps are proposed |
+| M9 — Turn records | The host keeps its own record of the checkout before and after every turn, in every harness: per-turn undo first, then committing by turn, review of what changed since the person last looked, and checks the host runs itself | Step 1 shipped in v0.1.0-preview.14; steps 2 and 3 are agreed and are the current work, ahead of M7's ACP client; the later steps are proposed |
 
 Do not build the whole roadmap at once. Each change must compile, run, and have
 its own checks. Protocol, storage, and shared-contract changes need agreement
@@ -293,9 +295,11 @@ waits until a sandboxed project needs it.
 
 **Direction for M9, turn records:** the host records the checkout around every
 run, for Pi, Codex, and Claude Code in every permission mode. This protection
-does not depend on the harness reporting its edits. Recording and the host undo
-operations and their desktop controls are implemented in source.
-None of M9 is released yet.
+does not depend on the harness reporting its edits. Step 1, per-turn undo,
+shipped in v0.1.0-preview.14: recording, the host's undo operations, and their
+desktop controls. None of it has been checked in the installed app yet; the
+[verification record](VERIFICATION.md#turn-undo-desktop-controls) says what
+was. Steps 2 and 3 are not built.
 
 - **A run is the unit.** One submitted message, steering messages that join it,
   and all harness turns inside it share one before/after pair. A queued
@@ -316,7 +320,7 @@ None of M9 is released yet.
   for restoration.
 - **Cheap and off the UI thread.** A warm record of an unchanged 50,000-file
   checkout targets under 300 ms on Apple silicon. The
-  [verification record](VERIFICATION.md#checkout-recording-stage-1-unreleased)
+  [verification record](VERIFICATION.md#checkout-recording)
   separates measured costs from this target.
 
 **Agreed for M9 step 1, per-turn undo:** the host makes a before record before
@@ -331,21 +335,21 @@ unknown. A created-then-deleted file leaves no difference.
   missing after record in the background under the checkout lease, or at the
   next leased run if the checkout was busy. That record is marked “after
   restart”: it may include changes made while the host was down.
-- **Undo this run, host operations in source.** Restore changed and
+- **Undo this run.** Restore changed and
   deleted files and remove created files, only when each path still matches
   the run's after record. Paths changed since are never overwritten; the
   person chooses “Undo the rest” or “Cancel”. An undo is recorded and can
   itself be undone. Undo changes files, not Git history.
-- **Presentation, in source.** A finished run shows recorded file changes and
+- **Presentation.** A finished run shows recorded file changes and
   line counts, including command writes, with Undo on its last closing line.
   Steering shares that control; a queued follow-up gets its own. Undone runs
   offer Redo. Changed-since conflicts open an inline panel with Undo the rest
   and Cancel; coverage and restart/HEAD warnings are explained on hover.
-  The changed-files card uses record paths. Stage 3 adds desktop controls and
-  headless scenes; installed-app acceptance remains outstanding.
-- **Order and release.** Undo precedes M7's ACP client. Codex and Claude Code
-  in v0.1.0-preview.10 and v0.1.0-preview.11 have no per-run undo; this work is
-  not a claim that those releases can undo turns.
+  The changed-files card uses record paths. Headless scenes cover these
+  states; installed-app acceptance remains outstanding.
+- **Order and release.** Shipped in v0.1.0-preview.14, ahead of M7's ACP
+  client. Earlier releases record nothing, so a run made with an older host
+  cannot be undone.
 
 Agreed for implementation:
 
@@ -364,10 +368,10 @@ Agreed for implementation:
   pruning. Remove expired refs, stale private indexes, and unreachable private
   objects, including packed objects. No expired before record is removed while
   its run is active or its after record is still within retention.
-- **Protocol.** Stage 1 retains versions 1–4 and existing snapshots. The only
+- **Protocol.** Versions 1–4 keep their existing snapshots. Their only
   visible addition is the failed-before error (`runtime_error` to versions 1
-  and 2). Listing records and undo are source-level operations in protocol
-  version 5, documented in the [host contract](HOST.md#protocol-version-5-m9-undo-operations-unreleased).
+  and 2). Listing records and undo are operations in protocol version 5,
+  documented in the [host contract](HOST.md#protocol-version-5).
   Lists page within the frame; applied undos deduplicate by request ID, and
   interrupted operations are never replayed. The 10-second budget can leave a
   partial undo if a failure happens after restoring starts. The checkout lease

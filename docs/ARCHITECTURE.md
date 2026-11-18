@@ -145,7 +145,7 @@ probe succeeded, but a read-only bind mount still permitted access to an outside
 pathname Unix socket. See [the evidence, alternatives, and enablement gates](LINUX-SANDBOX.md).
 Landlock ABI 9 is one option, not a fixed product requirement.
 
-## Checkout recording (M9 stage 1, unreleased)
+## Checkout recording and undo
 
 The TypeScript runtime owns run boundaries for every harness. `records.ts`
 records before entering a harness and after releasing it, keeping the checkout
@@ -164,14 +164,14 @@ person's repository is read-only, including its object timestamps. Only a
 run's before and after commits are linked, so expiring old pairs can release
 objects. Startup and daily pruning pause recording and reclaim expired refs,
 private caches, loose objects, and packs after 30 days, including for archived
-threads. The [host contract](HOST.md#checkout-records-m9-stage-1-unreleased)
+threads. The [host contract](HOST.md#checkout-records)
 describes the layout, limits, exact-byte policy, recovery, and platform boundary.
 
-Stage 2 adds protocol version 5 record listing and undo, still unreleased.
+Protocol version 5 adds record listing and undo.
 `record-views.ts` pages complete paths, coverage and request membership within
 the client frame. Snapshot `records_revision` changes when records change;
-older snapshot shapes are unchanged. Stage 3 adds the native closing-line
-control. `history/records.rs` assembles page fragments at their offsets and maps
+older snapshot shapes are unchanged. The desktop draws the closing-line
+control from these. `history/records.rs` assembles page fragments at their offsets and maps
 run request IDs, including steering, to the last loaded message or tool. It
 follows undo links to the usable record and prepares file names, counts and
 hover text off the UI thread. Detached history does not claim its final run
@@ -210,7 +210,7 @@ partial; callers refresh records and inspect the checkout. The lease excludes
 host writers, not editors or other external processes. Immediate revalidation
 and exclusive creation protect detected changes, but replacing/deleting an
 existing path still has a check-to-mutation race. See the
-[version 5 contract](HOST.md#protocol-version-5-m9-undo-operations-unreleased)
+[version 5 contract](HOST.md#protocol-version-5)
 for paging, recovery, deduplication and these verification limits.
 
 ## Local agent boundary

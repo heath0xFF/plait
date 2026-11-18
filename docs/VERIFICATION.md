@@ -898,12 +898,15 @@ number of frames, and then stops requesting frames. How smooth it looks on a
 real display, against a live provider, has not been checked in the installed
 app.
 
-## Checkout recording stage 1 (unreleased)
+## Checkout recording
 
-Stage 1 introduced internal run records without undo, record-listing
+Per-turn undo shipped in v0.1.0-preview.14. It was built in three stages, each
+checked on its own: recording, the host's undo operations, and the desktop
+controls. Stage 1 introduced internal run records without undo, record-listing
 operations, protocol version 5, or desktop controls. The later
-[stage 2 checks](#turn-undo-stage-2-unreleased) cover the host operations. The checks below are
-source-level evidence, not a release or installed-app acceptance claim.
+[stage 2 checks](#turn-undo-host-operations) cover the host operations, and the
+[stage 3 checks](#turn-undo-desktop-controls) the desktop and the release. The
+checks below are source-level evidence, not installed-app acceptance.
 
 The real-repository core tests cover additions, deletions, mode-only changes,
 created-then-deleted files, binaries, symlinks, exact CRLF bytes, an LFS-style
@@ -987,7 +990,7 @@ a deleted repository. Stage 2 must validate availability and coverage before
 restoring anything, page the stored path lists within protocol frame limits,
 and expose the after-restart warning and unsupported metadata plainly.
 
-## Turn undo stage 2 (unreleased)
+## Turn undo: host operations
 
 Stage 2 exposes protocol version 5 listing and undo in the host, with shared
 Rust client types. It adds no desktop control. The checks below use disposable
@@ -1065,7 +1068,7 @@ These release-build measurements include the added directory-name checks;
 they measure recording, not undo or native rendering. They were taken during
 development without otherwise isolating the machine.
 
-## Turn undo stage 3 (unreleased)
+## Turn undo: desktop controls
 
 On 2026-11-18, `bash scripts/check.sh` exited 0: formatting, headless dependency
 separation, Clippy with warnings denied, 610 Rust tests, 344 runtime tests,

@@ -3,7 +3,7 @@
 This is the version 1 contract plus the opt-in additions described in
 [Protocol version 2](#protocol-version-2) and
 [Protocol version 3](#protocol-version-3), [Protocol version 4](#protocol-version-4),
-and [Protocol version 5](#protocol-version-5-m9-undo-operations-unreleased). Changes require compatibility review.
+and [Protocol version 5](#protocol-version-5). Changes require compatibility review.
 All values below are JSON. The desktop has no dependency on the host crate and
 does not own its process.
 
@@ -1350,17 +1350,16 @@ Use [Contributing](../CONTRIBUTING.md#required-checks) for focused commands and
 and live-model checks. Do not substitute scripted lifecycle fixtures for the
 actual platform containment tests.
 
-## Checkout records (M9 stage 1, unreleased)
+## Checkout records
 
 The runtime records the checkout before and after every run in Pi, Codex,
 and Claude Code, regardless of permission mode. A run includes its steering
 messages and every harness turn inside it; a queued follow-up gets a separate
 pair. The before record completes before a harness starts. The after record
 is taken after harness cleanup, including on Stop and failure, before releasing
-the checkout lease or draining the next input. Stage 1 introduced these
-internal records without client operations or snapshot changes. Stage 2
-exposes them through [version 5](#protocol-version-5-m9-undo-operations-unreleased);
-native presentation is still planned.
+the checkout lease or draining the next input. The records themselves add no
+client operations or snapshot changes. [Version 5](#protocol-version-5)
+exposes them, and the desktop draws them at each run's closing line.
 
 If the before record cannot be made, the run ends in `error` with
 `record_failed` and its queue remains held. Versions 1 and 2 see the existing
@@ -1451,14 +1450,14 @@ objects are read-only alternates during this work. Pruning failures are retried
 at the next interval; they do not authorize repository writes. Stores can thus
 retain expired data longer if pruning fails. No thread-deletion policy exists.
 
-## Protocol version 5 (M9 undo operations, unreleased)
+## Protocol version 5
 
 Version 5 adds `turn_records`, `undo_turn`, and `records_revision` on snapshots.
 It is negotiated per request. Versions 1–4 retain their reply shapes; an older
 host rejects version 5 with `invalid_request`. Clients negotiate status from 5
 downward, and must tell the person that undo needs a newer host when 5 is not
-available. Undo requests are never retried at an older version. Native controls
-are the next implementation stage; these operations are not a release claim.
+available. Undo requests are never retried at an older version. These
+operations and their desktop controls shipped in v0.1.0-preview.14.
 
 ### Listing a thread's records
 
