@@ -1755,3 +1755,28 @@ fn recorded_empty_file_creation_and_deletion_are_not_mode_changes() {
         }
     }
 }
+
+#[test]
+fn recorded_latin1_text_uses_the_recorders_line_counts() {
+    let repo = Repo::new();
+    let store = Scratch::new();
+    repo.write("latin1", b"caf\xe9\n");
+    repo.write("binary", b"old\0\n");
+    let before = take(&repo, &store, "before", None);
+    repo.write("latin1", b"caf\xe8\n");
+    repo.write("binary", b"new\0\n");
+    let after = take(&repo, &store, "after", Some(&before));
+    for changed in after.paths.unwrap() {
+        let read = read_recorded_path(&repo, &store, &changed);
+        if changed.path == "latin1" {
+            assert_eq!((changed.added, changed.removed), (Some(1), Some(1)));
+            assert_eq!(read.status, "ready");
+            assert!(read.patch.windows(12).any(|s| s == b"-caf\xe9\n+caf\xe8\n"));
+            let diff = crate::git::recorded_diff(&read.patch, false, std::time::Duration::ZERO);
+            assert!(diff.lines.iter().any(|l| l.text.contains("+caf\u{fffd}")));
+        } else {
+            assert_eq!((changed.added, changed.removed), (None, None));
+            assert_eq!(read.status, "binary");
+        }
+    }
+}

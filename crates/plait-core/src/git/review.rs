@@ -142,7 +142,8 @@ pub fn read(request: &Request) -> Result<Read> {
     }
     let mut bytes = out.out.bytes.as_slice();
     let mut lengths = Vec::new();
-    let mut binary = false;
+    // Use the recorder's Git numstat decision, including non-UTF-8 text.
+    let binary = changed.added.is_none() || changed.removed.is_none();
     for id in &ids {
         let newline = bytes
             .iter()
@@ -159,8 +160,6 @@ pub fn read(request: &Request) -> Result<Read> {
         if length > 100 * 1024 * 1024 || bytes.len() <= length || bytes[length] != b'\n' {
             return Err("The saved content is unavailable.".into());
         }
-        binary |= bytes[..length.min(8000)].contains(&0)
-            || std::str::from_utf8(&bytes[..length]).is_err();
         lengths.push(length);
         bytes = &bytes[length + 1..];
     }
@@ -323,7 +322,7 @@ fn hunks(patch: &[u8]) -> Result<Vec<Hunk>> {
         if let Some(previous) = hunks.last_mut() {
             previous.last_line = index - 1;
         }
-        let text = std::str::from_utf8(line).map_err(|_| "Invalid patch header.")?;
+        let text = String::from_utf8_lossy(line);
         let mut words = text.split_whitespace().skip(1);
         let range = |text: Option<&str>, sign: char| -> Result<(usize, usize)> {
             let text = text
