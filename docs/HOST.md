@@ -2051,10 +2051,11 @@ local client asks over the owner-only host socket.
   reusing `request_id` with different input returns `conflict`.
 - **`linear_update_issue_state`** moves `issue_id` to `state_id` with
   caller-chosen `request_id`. Before sending the mutation, the host verifies
-  against cached team workflow states that `state_id` belongs to the issue's
-  team (rejecting mismatches with `invalid_request`). Invalidates cached
-  entries for the issue and its team, deduplicates by `request_id` as above,
-  and returns `{"issue":DETAIL|null,"partial":false,"warning":null}`.
+  against team workflow states that `state_id` belongs to the issue's team
+  (refreshing teams if the cache is missing, expired, or lacks the state, and
+  rejecting mismatches with `invalid_request`). Invalidates cached entries for
+  the issue and its team, deduplicates by `request_id` as above, and returns
+  `{"issue":DETAIL|null,"partial":false,"warning":null}`.
 
 ### Caching, limits, and errors
 

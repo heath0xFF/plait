@@ -335,3 +335,45 @@ test('same-millisecond boundary eviction retains newest write, detail, and page 
   assert.notEqual(h.runtime.store.linear.getIssuesPage('z-newest', now), null, 'newest page must survive same-ms eviction');
   assert.equal(h.runtime.store.linear.getIssuesPage('a-0000', now), null, 'oldest page must be evicted');
 });
+
+test('linear_update_issue_state refreshes stale or missing team states before validating', async t => {
+  const h = await setup(t);
+  assert.equal((await h.call({ op: 'linear_set_key', key: h.fake.validKey })).ok, true);
+  assert.equal((await h.call({ op: 'linear_list_teams' })).ok, true);
+  assert.equal((await h.call({ op: 'linear_get_issue', issue_id: 'issue-142' })).ok, true);
+
+  // 1. Add a new workflow state to team-pla and advance past the 15-minute teams TTL.
+  h.fake.teams[0].states.push({ id: 'state-review', name: 'In Review', type: 'started', position: 5 });
+  h.advance(16 * 60 * 1000);
+  const movedNewState = await h.call({
+    op: 'linear_update_issue_state',
+    issue_id: 'issue-142',
+    state_id: 'state-review',
+    request_id: 'req-new-state',
+  });
+  assert.equal(movedNewState.ok, true, JSON.stringify(movedNewState));
+  assert.equal(movedNewState.result.issue.state.id, 'state-review');
+
+  // 2. Add a brand-new team and issue while the teams cache is fresh -> must refresh and discover it.
+  h.fake.teams.push({
+    id: 'team-new',
+    key: 'NEW',
+    name: 'New Team',
+    states: [{ id: 'state-new-open', name: 'Open', type: 'unstarted', position: 0 }],
+  });
+  h.fake.issues.push({
+    ...h.fake.issues[0],
+    id: 'issue-new-team',
+    identifier: 'NEW-1',
+    teamId: 'team-new',
+    stateId: 'state-new-open',
+  });
+  const movedNewTeam = await h.call({
+    op: 'linear_update_issue_state',
+    issue_id: 'issue-new-team',
+    state_id: 'state-new-open',
+    request_id: 'req-new-team',
+  });
+  assert.equal(movedNewTeam.ok, true, JSON.stringify(movedNewTeam));
+  assert.equal(movedNewTeam.result.issue.state.id, 'state-new-open');
+});

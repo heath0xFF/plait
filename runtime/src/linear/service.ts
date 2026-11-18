@@ -549,9 +549,12 @@ export class LinearService {
     return this.deduplicatedWrite(params.requestId, op, hash, async () => {
       const { auth, authGen } = await this.requireAuth();
       const teamId = await this.resolveIssueTeamId(params.issueId, auth.api_key, authGen);
-      const team = await this.resolveTeamForValidation(teamId);
+      const team = await this.resolveTeamForValidation(teamId, params.stateId, authGen);
       if (!team || !team.states.some(state => state.id === params.stateId)) {
         fail('invalid_request', 'Workflow state does not belong to this issue\'s team.');
+      }
+      if (this.authGeneration !== authGen) {
+        throw new LinearError('not_signed_in', 'Linear sign-in changed while the request was in flight.');
       }
       try {
         await this.client.updateIssueState(auth.api_key, params.issueId, params.stateId);
@@ -597,11 +600,19 @@ export class LinearService {
     }
   }
 
-  private async resolveTeamForValidation(teamId: string): Promise<LinearTeam | null> {
-    const cached = this.store.linear.getTeam(teamId);
-    if (cached) return cached;
-    await this.listTeams(false);
-    return this.store.linear.getTeam(teamId);
+  private async resolveTeamForValidation(teamId: string, stateId: string, authGen: number): Promise<LinearTeam | null> {
+    const cached = this.store.linear.getTeams();
+    const fresh = cached !== null && this.now() - cached.cached_at < LINEAR_CACHE_TEAMS_TTL_MS;
+    const cachedTeam = fresh ? cached.teams.find(team => team.id === teamId) ?? null : null;
+    if (cachedTeam && cachedTeam.states.some(state => state.id === stateId)) {
+      return cachedTeam;
+    }
+    // Refresh from Linear when teams are missing, expired past TTL, or do not yet list the target state.
+    const refreshed = await this.listTeams(true);
+    if (this.authGeneration !== authGen) {
+      throw new LinearError('not_signed_in', 'Linear sign-in changed while the request was in flight.');
+    }
+    return refreshed.teams.find(team => team.id === teamId) ?? null;
   }
 
   private async refreshAfterWrite(
