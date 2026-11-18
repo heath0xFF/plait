@@ -33,6 +33,12 @@ case "$(uname -s)" in
 esac
 
 cargo fmt --all -- --check
+# Only pure acceptance logic: no window, permission query, clipboard or input.
+if [[ $(uname -s) == Darwin ]]; then
+    bash scripts/acceptance-macos.sh --self-test
+else
+    python3 -m unittest discover -s scripts/acceptance -p 'test_*.py'
+fi
 # The daemon and shared core must stay independent of desktop dependencies.
 dependencies=$(cargo tree --locked -p plait-core -p plait-host --edges normal,build,dev --prefix none)
 if grep -Eq '^gpui([-_ ]|$)' <<< "$dependencies"; then

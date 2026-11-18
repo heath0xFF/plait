@@ -6,6 +6,7 @@ import json
 import os
 import plistlib
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -46,6 +47,17 @@ def summary(results):
     return f'SUMMARY pass={counts["PASS"]} fail={counts["FAIL"]} skipped={counts["SKIPPED"]}'
 
 
+def failure_lines(results):
+    return [f'FAILED ITEM {r["item"]}: {" ".join(r["observed"].split())}'
+            for r in results if r['status'] == 'FAIL']
+
+
+def inspector_skip(width):
+    if width < 1150:
+        return f'Git inspector needs a wider window (1150 pt minimum; own window is {width:g} pt after sizing to the available display)'
+    return None
+
+
 class Acceptance:
     def __init__(self, args, base, driver):
         self.args, self.base, self.driver = args, base, driver
@@ -53,7 +65,6 @@ class Acceptance:
         self.app = None
         self.results = []
         self.ready = False
-        self.recorders_ready = False
         self.double_action = 'Maximize'
 
     def ax(self, action, *args, timeout=15):
@@ -63,8 +74,8 @@ class Acceptance:
     def find(self, name, role=None):
         return self.ax('find', '--name', name, *(['--role', role] if role else []))
 
-    def exists(self, name):
-        return self.ax('count', '--name', name) != '0'
+    def exists(self, name, role=None):
+        return self.ax('count', '--name', name, *(['--role', role] if role else [])) != '0'
 
     def press(self, name, role='control'):
         return self.ax('press', '--name', name, '--role', role)
@@ -92,8 +103,10 @@ class Acceptance:
         until(lambda: self.ax('selected', '--name', name, '--role', 'control'), lambda value: value == '1')
 
     def tab(self, name):
-        if self.exists('Done'):
+        # A finished sidebar thread also has static text named Done.
+        if self.exists('Done', 'AXButton'):
             self.press('Done')
+            self.ax('absent', '--name', 'Done', '--role', 'AXButton')
         self.press(name)
         self.selected(name)
 
@@ -104,8 +117,11 @@ class Acceptance:
 
     def inspector(self, wanted):
         self.tab('Conversation')
-        if not self.exists('Toggle Git inspector'):
-            raise Skipped('display is too narrow for the Git inspector (needs a wide window)')
+        self.ax('place', '1380', '860')
+        reason = inspector_skip(self.window()[2])
+        if reason:
+            raise Skipped(reason)
+        self.find('Toggle Git inspector', 'control')
         if self.exists('Resize Git inspector') != wanted:
             self.press('Toggle Git inspector')
         self.find('Resize Git inspector') if wanted else self.ax('absent', '--name', 'Resize Git inspector')
@@ -114,18 +130,43 @@ class Acceptance:
         if self.args.no_pointer:
             raise Skipped('--no-pointer: this item needs real pointer events')
 
-    def recover(self):
-        if self.app and self.app.poll() is None:
-            for action in [('minimized', 'off'), ('fullscreen', 'off'), ('key', 'escape')]:
-                try:
-                    self.ax(*action)
-                except (AssertionError, subprocess.TimeoutExpired):
-                    pass
+    def select_thread(self):
+        self.tab('Conversation')
+        self.sidebar(True)
+        self.field('Filter projects and threads', '')
+        self.ax('press', '--prefix', f'Thread {self.fixture.thread["id"]} ·', '--role', 'AXRow')
+        until(lambda: self.ax('selected', '--prefix', f'Thread {self.fixture.thread["id"]} ·', '--role', 'AXRow'), lambda value: value == '1')
+        self.find('Message to agent', 'field')
+
+    def reset(self):
+        # Establish each precondition, even after a previous item passed halfway.
+        self.fixture.reset()
+        window = self.window()
+        if window[5]:
+            self.ax('minimized', 'off')
+        if window[4]:
+            self.ax('fullscreen', 'off', '--timeout', '10')
+        self.ax('front')
+        self.ax('place', '1380', '860')
+        self.key('escape')
+        if self.exists('Close', 'AXButton'):
+            self.press('Close')  # Sidebar action menu has its own close control.
+        self.select_thread()
+        # Find can stay open across tabs, and each field retains its last query.
+        for tab in ('Files', 'Conversation'):
+            self.tab(tab)
+            if self.exists('Close find', 'AXButton'):
+                self.press('Close find')
+        self.field('Message to agent', '')
+        self.key('cmd+r')
+        self.ax('find', '--prefix', f'Assistant message: {ANSWER}', '--role', 'AXGroup')
 
     def record(self, name, fn, native=True):
         try:
             if native and not self.ready:
                 raise Skipped('native setup unavailable; see setup/permissions result')
+            if native:
+                self.reset()
             detail = fn() or 'expected state observed'
             status = 'PASS'
         except Skipped as error:
@@ -134,7 +175,6 @@ class Acceptance:
             status, detail = 'FAIL', str(error)
             if self.app:
                 self.capture(name)
-                self.recover()
         self.results.append({'item': name, 'status': status, 'observed': detail})
         # Exactly one result line per item; verbose evidence goes into files.
         print(f'{status} {name}: {" ".join(detail.split())}', flush=True)
@@ -149,6 +189,10 @@ class Acceptance:
             (self.base / f'{name}-ax.txt').write_text(self.ax('dump', timeout=30))
         except Exception as error:
             errors.append(f'AX dump: {error}')
+        try:
+            (self.base / f'{name}-windows.txt').write_text(self.ax('windows'))
+        except Exception as error:
+            errors.append(f'Window diagnostics: {error}')
         try:
             window_id = self.ax('window-id')
             require(window_id.isdecimal(), f'invalid window ID: {window_id}')
@@ -194,11 +238,8 @@ class Acceptance:
     def lights(self):
         self.tab('Conversation')
         self.sidebar(False)
-        try:
-            values = [float(v) for v in self.ax('lights').split()]
-            return check_lights(values, self.frame('Toggle sidebar'))
-        finally:
-            self.sidebar(True)
+        values = [float(v) for v in self.ax('lights').split()]
+        return check_lights(values, self.frame('Toggle sidebar'))
 
     def gap(self, sidebar=False):
         x, y, width, _height = self.window()[:4]
@@ -230,18 +271,14 @@ class Acceptance:
         before = self.window()
         self.ax('double-click', *self.gap(sidebar=True))
         time.sleep(1)
-        try:
-            if action == 'Minimize':
-                require(self.ax('minimized', 'get') == '1', f'setting {action}; observed {self.window()}')
-            elif action == 'None':
-                after = self.window()
-                require(all(abs(a - b) < 3 for a, b in zip(before, after)), f'setting None; before={before}, after={after}')
-            else:
-                until(self.window, lambda rect: abs(rect[2] - before[2]) > 10 or abs(rect[3] - before[3]) > 10)
-            return f'system setting {action}; matching minimize/no-op/resize observed (other settings not changed or tested)'
-        finally:
-            self.ax('minimized', 'off')
-            self.ax('place', '1380', '860')
+        if action == 'Minimize':
+            require(self.ax('minimized', 'get') == '1', f'setting {action}; observed {self.window()}')
+        elif action == 'None':
+            after = self.window()
+            require(all(abs(a - b) < 3 for a, b in zip(before, after)), f'setting None; before={before}, after={after}')
+        else:
+            until(self.window, lambda rect: abs(rect[2] - before[2]) > 10 or abs(rect[3] - before[3]) > 10)
+        return f'system setting {action}; matching minimize/no-op/resize observed (other settings not changed or tested)'
 
     def fullscreen(self):
         self.ax('fullscreen', 'on', '--timeout', '10', timeout=15)
@@ -273,11 +310,12 @@ class Acceptance:
         (self.sidebar if panel == 'sidebar' else self.inspector)(True)
         name = 'Resize sidebar' if panel == 'sidebar' else 'Resize Git inspector'
         before = self.frame(name)
+        old_width = json.loads(self.fixture.preferences.read_text()).get(f'{panel}_width')
         x, y = before[0] + before[2] / 2, before[1] + before[3] / 2
         delta = 50 if panel == 'sidebar' else -50
         self.ax('drag', x, y, x + delta, y)
         after = until(lambda: self.frame(name), lambda rect: abs(rect[0] - before[0]) >= 20)
-        saved = until(lambda: json.loads(self.fixture.preferences.read_text()), lambda prefs: prefs.get(f'{panel}_width') is not None)
+        saved = until(lambda: json.loads(self.fixture.preferences.read_text()), lambda prefs: prefs.get(f'{panel}_width') is not None and prefs[f'{panel}_width'] != old_width)
         return f'edge moved {after[0] - before[0]:.1f} pt; saved width {saved[f"{panel}_width"]}'
 
     def workspace(self, name):
@@ -293,7 +331,7 @@ class Acceptance:
         return f'{name} selected with its content present'
 
     def settings(self, tab=None):
-        if not self.exists('Done'):
+        if not self.exists('Done', 'AXButton'):
             self.key('cmd+comma')
         self.find('Done', 'control')
         if tab:
@@ -339,16 +377,20 @@ class Acceptance:
             self.open_file()
         name = 'Find in conversation' if conversation else 'Find in file'
         self.key('cmd+f')
+        self.field(name, '')
         self.field(name, 'needle', typed=True)
-        self.find('1 of 3')
+        # Conversation find starts at the newest match when pinned to the end.
+        found = self.ax('find', '--regex', '^[1-3] of 3$')
+        current = int(re.search(r'\b([1-3]) of 3\b', found)[1])
+        following = current % 3 + 1
         self.key('cmd+g')
-        self.find('2 of 3')
+        self.find(f'{following} of 3')
         self.key('cmd+shift+g')
-        self.find('1 of 3')
+        self.find(f'{current} of 3')
         self.press('Next match')
-        self.find('2 of 3')
+        self.find(f'{following} of 3')
         self.press('Previous match')
-        self.find('1 of 3')
+        self.find(f'{current} of 3')
         self.key('escape')
         self.ax('absent', '--name', name, '--role', 'field')
         return 'Cmd-F found 3 matches; Cmd-G, Cmd-Shift-G and both buttons stepped; Escape closed find'
@@ -364,7 +406,7 @@ class Acceptance:
         self.selected('Conversation')
         self.ax('type', '--text', ' retained')
         require(self.ax('value', '--name', 'Message to agent', '--role', 'field') == 'focus routing draft retained', 'composer focus/draft not restored by shortcut')
-        self.press('Files')
+        self.open_file()
         self.selected('Files')
         self.key('cmd+f')
         self.find('Find in file', 'field')
@@ -401,8 +443,10 @@ class Acceptance:
         return 'first hunk staged in Git; second hunk remains unstaged'
 
     def commit(self):
-        if not self.fixture.git('diff', '--cached', '--name-only'):
-            raise Skipped('no staged hunk; the staging item failed')
+        self.fixture.stage_first_hunk()
+        self.tab('Changes')
+        self.key('cmd+r')
+        self.find('Commit 1 file', 'control')
         before = self.fixture.git('rev-parse', 'HEAD')
         self.field('Commit message', 'Native acceptance commit', typed=True)
         self.press('Commit 1 file')
@@ -417,15 +461,14 @@ class Acceptance:
         self.field('Open files with', self.fixture.editor_command, typed=True)
         self.field('Open terminals with', self.fixture.terminal_command, typed=True)
         expected = {'open_files_with': self.fixture.editor_command, 'open_terminals_with': self.fixture.terminal_command}
-        prefs = json.loads(self.fixture.preferences.read_text())
-        require(all(prefs.get(k) == {'with': 'custom', 'command': v} for k, v in expected.items()), 'saved handoff settings differ from recording commands')
-        self.recorders_ready = True
+        until(lambda: json.loads(self.fixture.preferences.read_text()),
+              lambda prefs: all(prefs.get(k) == {'with': 'custom', 'command': v} for k, v in expected.items()))
         self.press('Done')
         return 'both custom fields contain saved, inert argument recorders'
 
     def handoff(self, terminal):
-        if not self.recorders_ready:
-            raise Skipped('custom-command verification failed; refusing any handoff')
+        # Re-establish and verify safe commands; never inherit another item's result.
+        self.custom_commands()
         self.open_file()
         path = self.base / ('terminal-args.txt' if terminal else 'editor-args.txt')
         path.unlink(missing_ok=True)
@@ -469,33 +512,63 @@ class Acceptance:
         return self.ax('select-text', '--prefix', f'Assistant message: {ANSWER}', '--text', ANSWER)
 
     def approval(self, allow):
+        self.fixture.new_thread()
+        self.select_thread()
         self.tab('Conversation')
-        if not allow and (self.fixture.repo / 'approval.txt').read_text() != 'allowed\n':
-            raise Skipped('allow shortcut did not establish the denied-edit preimage')
         pending = self.fixture.pending(allow)
         self.find('Allow once' if allow else 'Deny once', 'control')
         self.key('cmd+opt+y' if allow else 'cmd+opt+period')
         done = self.fixture.idle()
         require(not done.get('pending_approval'), f'approval still pending: {pending["pending_approval"]}')
-        require((self.fixture.repo / 'approval.txt').read_text() == 'allowed\n', 'approval shortcut produced wrong file contents')
+        require((self.fixture.repo / 'approval.txt').read_text() == ('allowed\n' if allow else 'before\n'), 'approval shortcut produced wrong file contents')
         self.ax('absent', '--name', 'Allow once', '--role', 'control')
         return f'{"Allow" if allow else "Deny"} shortcut resolved host approval; exact file effect checked'
 
     def streaming(self):
+        self.fixture.new_thread()
+        self.select_thread()
         self.tab('Conversation')
         self.fixture.idle()
         text = 'Scripted streaming acceptance. ' * 16
+        error_start = len(self.fixture.replay.errors)
         self.fixture.replay.add({'text': text, 'chunk': 12, 'delay': .15})
         self.fixture.submit('Stream the scripted response slowly.')
         growth = self.ax('growth', '--prefix', 'Assistant is writing:', '--timeout', '15', timeout=20)
         self.fixture.idle()
         self.ax('find', '--prefix', 'Assistant message: Scripted streaming acceptance.')
-        require(not self.fixture.replay.errors, f'replay errors: {self.fixture.replay.errors}')
+        errors = self.fixture.replay.errors[error_start:]
+        require(not errors, f'replay errors: {errors}')
         return f'{growth}; final reply appeared (no smoothness or latency claim)'
 
-    def run(self):
-        self.record('fixture-isolation', self.setup, native=False)
-        self.record('native-setup-permissions', self.launch, native=False)
+    def turn_undo(self, action):
+        record = self.fixture.finished_edit()
+        self.select_thread()
+        self.key('cmd+r')
+        path = self.fixture.repo / 'approval.txt'
+        head = self.fixture.git('rev-parse', 'HEAD')
+        index = self.fixture.git('ls-files', '--stage')
+        unrelated = (self.fixture.repo / 'review.txt').read_bytes()
+        if action == 'redo':
+            self.fixture.undo(record['id'])
+            self.key('cmd+r')
+            self.find('Redo', 'control')
+            self.press('Redo')
+            until(path.read_text, lambda text: text == 'allowed\n')
+            self.find('Undo', 'control')
+        else:
+            self.find('Undo', 'control')
+            self.key('cmd+opt+u') if action == 'shortcut' else self.press('Undo')
+            until(path.read_text, lambda text: text == 'before\n')
+            self.find('Redo', 'control')
+            if action == 'shortcut':
+                self.key('cmd+opt+u')
+                until(path.read_text, lambda text: text == 'allowed\n')
+                self.find('Undo', 'control')
+        require(self.fixture.git('rev-parse', 'HEAD') == head and self.fixture.git('ls-files', '--stage') == index, 'turn undo changed Git HEAD or index')
+        require((self.fixture.repo / 'review.txt').read_bytes() == unrelated, 'turn undo changed unrelated fixture bytes')
+        return f'{action}: closing-line control and exact recorded file restoration observed; HEAD, index and unrelated changes retained'
+
+    def checks(self):
         checks = [
             ('traffic-lights-sidebar-hidden', self.lights),
             ('drag-sidebar-bar', lambda: self.bar_drag(True)),
@@ -528,9 +601,17 @@ class Acceptance:
             ('approval-allow-shortcut', lambda: self.approval(True)),
             ('approval-deny-shortcut', lambda: self.approval(False)),
             ('streaming-reply', self.streaming),
+            ('turn-undo', lambda: self.turn_undo('undo')),
+            ('turn-redo', lambda: self.turn_undo('redo')),
+            ('turn-undo-redo-shortcut', lambda: self.turn_undo('shortcut')),
             ('follow-conversation-link', lambda: (_ for _ in ()).throw(Skipped('opens the system browser; no URL-opening override exists; left for manual acceptance'))),
         ]
-        for name, fn in checks:
+        return checks
+
+    def run(self):
+        self.record('fixture-isolation', self.setup, native=False)
+        self.record('native-setup-permissions', self.launch, native=False)
+        for name, fn in self.checks():
             self.record(name, fn)
         print(summary(self.results), flush=True)
         return 1 if any(r['status'] == 'FAIL' for r in self.results) else 0
@@ -588,10 +669,28 @@ def main():
                 fixture.start()
                 require(any(m['text'] == ANSWER for m in fixture.watch()['messages']), 'seeded answer absent')
                 for allow in (True, False):
+                    fixture.reset()
+                    fixture.new_thread()
                     state = fixture.pending(allow)
                     request(fixture.store, op='approve', thread_id=fixture.thread['id'], approval_id=state['pending_approval']['id'], allow=allow)
                     fixture.idle()
-                    require((fixture.repo / 'approval.txt').read_text() == 'allowed\n', 'fixture approval effect wrong')
+                    require((fixture.repo / 'approval.txt').read_text() == ('allowed\n' if allow else 'before\n'), 'fixture approval effect wrong')
+                fixture.reset()
+                fixture.new_thread()
+                fixture.pending(True)
+                fixture.reset()  # Abandon an unanswered approval as a failed item would.
+                require((fixture.repo / 'approval.txt').read_text() == 'before\n', 'reset raced the stopped run')
+                record = fixture.finished_edit()
+                head, index = fixture.git('rev-parse', 'HEAD'), fixture.git('ls-files', '--stage')
+                unrelated = (fixture.repo / 'review.txt').read_bytes()
+                undo = fixture.undo(record['id'])
+                require((fixture.repo / 'approval.txt').read_text() == 'before\n', 'recorded undo did not restore exact bytes')
+                fixture.undo(undo)
+                require((fixture.repo / 'approval.txt').read_text() == 'allowed\n', 'recorded redo did not restore exact bytes')
+                require(fixture.git('rev-parse', 'HEAD') == head and fixture.git('ls-files', '--stage') == index, 'undo/redo changed HEAD or index')
+                require((fixture.repo / 'review.txt').read_bytes() == unrelated, 'undo/redo changed unrelated fixture bytes')
+                fixture.reset()
+                fixture.new_thread()
                 stream_text = 'Scripted streaming acceptance. ' * 8
                 fixture.replay.add({'text': stream_text, 'chunk': 12, 'delay': .08})
                 fixture.submit('Stream the scripted response slowly.')
@@ -608,7 +707,7 @@ def main():
                 command([fixture.recorder, output, 'a file with spaces', '3', 'a project with spaces'])
                 require(output.read_text().splitlines() == ['a file with spaces', '3', 'a project with spaces'], 'argument recorder changed its input')
                 require(not fixture.replay.errors, f'replay errors: {fixture.replay.errors}')
-                print('PASS fixture-test: production host/replay transcript, allow/deny edit effects, growing stream and argument recorder; no window or input')
+                print('PASS fixture-test: production host/replay, independent allow/deny, stopped-run reset, recorded undo/redo, growing stream and argument recorder; no window or input')
                 result = 0
             finally:
                 fixture.close()
@@ -637,6 +736,9 @@ def main():
             print(f'Disposable folder retained: {base}', flush=True)
         else:
             shutil.rmtree(base)
+        if runner:
+            for line in failure_lines(runner.results):
+                print(line, flush=True)
     return result
 
 

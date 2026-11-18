@@ -3,6 +3,7 @@
 The SSE shape follows runtime/test/support/replay.ts. This is a scripted local
 provider, not a model or a replacement desktop view. Nothing here ships.
 """
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -38,11 +39,11 @@ def until(read, accept, timeout=15):
     raise AssertionError(f'timed out; last observed: {str(last)[:1500]}')
 
 
-def request(store, **body):
+def request(store, protocol_version=4, **body):
     with socket.socket(socket.AF_UNIX) as connection:
-        connection.settimeout(5)
+        connection.settimeout(20)
         connection.connect(str(store / 'host.sock'))
-        connection.sendall((json.dumps(dict(protocol_version=4, **body)) + '\n').encode())
+        connection.sendall((json.dumps(dict(protocol_version=protocol_version, **body)) + '\n').encode())
         data = b''
         while b'\n' not in data:
             chunk = connection.recv(65536)
@@ -105,6 +106,9 @@ class Replay:
                             time.sleep(answer.get('delay', 0))
                         self.wfile.write(f'event: {kind}\ndata: {json.dumps(dict(type=kind, **fields))}\n\n'.encode())
                         self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    # Stopping a failed item cancels its in-flight provider read.
+                    pass
                 except Exception as error:
                     replay.errors.append(str(error))
                     self.send_error(500, 'Unexpected acceptance fixture request')
@@ -121,6 +125,14 @@ class Replay:
     def add(self, *answers):
         for answer in answers:
             self.answers.put(answer)
+
+    def clear(self):
+        # Call only after the host has stopped its run and released the checkout.
+        while True:
+            try:
+                self.answers.get_nowait()
+            except queue.Empty:
+                return
 
     def close(self):
         self.server.shutdown()
@@ -163,9 +175,8 @@ class Fixture:
     def git(self, *args):
         return subprocess.check_output(['/usr/bin/git', '-C', str(self.repo), *args], env=self.env, text=True, stderr=subprocess.STDOUT).strip()
 
-    def start(self):
-        for path in [self.repo, self.store, self.home, self.desktop, self.base / 'tmp', Path(self.env['PI_CODING_AGENT_DIR'])]:
-            path.mkdir(parents=True, mode=0o700, exist_ok=True)
+    def prepare_checkout(self):
+        self.repo.mkdir(parents=True, mode=0o700, exist_ok=True)
         self.git('init', '-q', '-b', 'main')
         for key, value in [('user.name', 'Plait Acceptance'), ('user.email', 'acceptance@example.invalid'), ('commit.gpgsign', 'false'), ('core.hooksPath', '/dev/null')]:
             self.git('config', key, value)
@@ -175,8 +186,14 @@ class Fixture:
         (self.repo / 'AGENTS.md').write_text('Disposable native acceptance fixture. Only scripted edits to approval.txt are requested.\n')
         self.git('add', '.')
         self.git('commit', '-qm', 'Acceptance baseline')
+        self.baseline = self.git('rev-parse', 'HEAD')
         self.git('branch', 'other')
-        (self.repo / 'review.txt').write_text((self.repo / 'review.txt').read_text().replace('first old', 'first new').replace('last old', 'last new'))
+        self.write_review()
+
+    def start(self):
+        for path in [self.store, self.home, self.desktop, self.base / 'tmp', Path(self.env['PI_CODING_AGENT_DIR'])]:
+            path.mkdir(parents=True, mode=0o700, exist_ok=True)
+        self.prepare_checkout()
         self.replay = Replay()
         write_json(Path(self.env['PI_CODING_AGENT_DIR']) / 'models.json', {'providers': {PROVIDER: {
             'baseUrl': self.replay.url, 'api': 'anthropic-messages', 'apiKey': KEY,
@@ -186,6 +203,7 @@ class Fixture:
             self.host = subprocess.Popen([str(self.host_binary), 'run', '--store', str(self.store)], env=self.env, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
         until(lambda: request(self.store, op='status'), lambda status: any(m['provider'] == PROVIDER and m['authenticated'] for m in status.get('models', [])), 30)
         self.thread = request(self.store, op='create_thread', checkout=str(self.repo), provider=PROVIDER, model_id=MODEL, request_id='acceptance-create')['thread']
+        self.seed_thread = self.thread
         self.replay.add({'text': ANSWER})
         self.submit('Native acceptance fixture, with scripted replies and no real model.')
         self.idle()
@@ -214,11 +232,69 @@ class Fixture:
         return state
 
     def pending(self, allow):
-        before = 'before\n' if allow else 'allowed\n'
+        before = (self.repo / 'approval.txt').read_text()
         after = 'allowed\n' if allow else 'denied\n'
         self.replay.add({'tool': {'id': f'acceptance_edit_{self.sequence}', 'name': 'edit', 'input': {'path': 'approval.txt', 'old_text': before, 'new_text': after}}}, {'text': 'The scripted approval turn is complete.'})
         self.submit('Propose the scripted fixture edit.')
         return until(self.watch, lambda state: state.get('pending_approval'))
+
+    def reset(self):
+        # A failed approval/stream item must not hold the checkout lease or leave
+        # scripted answers for a later, unrelated run to consume.
+        state = self.watch()
+        if state['status'] not in ('idle', 'error', 'stopped', 'interrupted') or state.get('pending_approval') or state.get('queued'):
+            request(self.store, op='stop', thread_id=self.thread['id'])
+        # This repository was made by start(), inside the owned temporary folder.
+        require(self.repo == self.base / 'acceptance project' and self.repo.is_dir() and not self.repo.is_symlink(), 'fixture checkout identity changed')
+        lease = os.open(self.repo, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            # Stop replies before the final capture. The host locks this inode;
+            # wait for its lease, not the early 'stopped' snapshot, before writes.
+            until(lambda: fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB), lambda _: True, 25)
+            self.replay.clear()
+            self.thread = self.seed_thread
+            self.git('reset', '--hard', self.baseline)
+            self.git('switch', '--discard-changes', 'main')
+            self.git('reset', '--hard', self.baseline)
+            if self.git('branch', '--list', 'acceptance-created'):
+                self.git('branch', '-D', 'acceptance-created')
+            self.write_review()
+        finally:
+            os.close(lease)
+
+    def write_review(self, last=True):
+        text = self.git('show', f'{self.baseline}:review.txt') + '\n'
+        (self.repo / 'review.txt').write_text(text.replace('first old', 'first new').replace('last old', 'last new' if last else 'last old'))
+
+    def stage_first_hunk(self):
+        self.write_review(last=False)
+        self.git('add', '--', 'review.txt')
+        self.write_review()
+
+    def new_thread(self):
+        self.sequence += 1
+        self.thread = request(self.store, op='create_thread', checkout=str(self.repo), provider=PROVIDER, model_id=MODEL, request_id=f'acceptance-create-{self.sequence}')['thread']
+
+    def records(self):
+        page = request(self.store, protocol_version=5, op='turn_records', thread_id=self.thread['id'])
+        require(page.get('before') is None, 'fixture unexpectedly needs record pagination')
+        return page['records']
+
+    def finished_edit(self):
+        self.new_thread()
+        pending = self.pending(True)
+        request(self.store, op='approve', thread_id=self.thread['id'], approval_id=pending['pending_approval']['id'], allow=True)
+        self.idle()
+        require((self.repo / 'approval.txt').read_text() == 'allowed\n', 'scripted edit did not finish')
+        records = until(self.records, lambda rows: len(rows) == 1 and rows[0]['state'] == 'ready')
+        require([p['path'] for p in records[0]['paths']] == ['approval.txt'], 'run record does not cover exactly the scripted edit')
+        return records[0]
+
+    def undo(self, record_id):
+        self.sequence += 1
+        result = request(self.store, protocol_version=5, op='undo_turn', thread_id=self.thread['id'], record_id=record_id, request_id=f'acceptance-undo-{self.sequence}')
+        require(result['state'] == 'undone', f'fixture undo refused: {result}')
+        return result['record_id']
 
     def close(self):
         if self.host:

@@ -357,16 +357,40 @@ recorded here:
 
 ## Native acceptance check
 
-`scripts/acceptance-macos.sh` is a development check of a separate native
-process. **It has not yet been run against a window.** Its checks below are
-intended coverage, not native acceptance evidence. The first real run will
-most likely stop at Accessibility permission or expose a difference in GPUI's
-live accessibility tree, field focus, or window geometry. Palette roles were
-checked against the pinned `accesskit_macos` source, but their live names and
-press actions still need that run. The text-selection coordinates, a free
-stretch of the header, and macOS full-screen transitions are especially likely
-to need adjustment. A failure keeps the observation instead of converting it
-to a pass or silently using a pointer click.
+`scripts/acceptance-macos.sh` drives a separate development copy of Plait.
+**The first native run passed 4 of 42 items, failed 34, and skipped 4.** The
+fixture, permissions, full-screen round trip, and sidebar toggle passed. The
+host supplied the scripted conversation and the window exposed its controls
+and message rows. Accessibility and Screen Recording were both granted.
+
+Thirty failures came from the check mistaking a sidebar's static “Done” status
+for the Settings Done button: it either tried to press a nonexistent button or
+never opened Settings. Four pointer items were refused by a rectangle-based
+WindowServer ownership check even though their points were inside Plait's
+window; the preceding accessibility hit test succeeded for both bar drags.
+The saved artifacts did not identify the covering window, so they cannot name
+which overlay or window caused that disagreement. The 984 × 639-point window
+also explicitly said the Git inspector needed a wider window.
+
+The repaired check matches Done by button role, establishes window, view,
+thread, draft and disposable checkout state before every item, and gives
+commit, handoff and approval checks independent prerequisites. Reset stops
+unfinished fixture runs and waits for their checkout lease before writing.
+Pointer safety now uses AppKit's actual mouse-down window hit test, converts
+AX top-left points to AppKit bottom-left points without pixel scaling, and
+requires both the development window's ID and accessibility owner to match.
+Another app, another window, a menu-bar point or an unknown target is still
+refused. Inspector checks size their own window first and skip with its
+observed width if it remains below 1150 points. Find accepts the conversation's
+newest-first initial match and verifies relative next/previous movement.
+
+**The repaired check has not yet run against a window.** These changes and
+the three new recorded-run Undo/Redo items are intended coverage, not native
+acceptance evidence. The first artifacts show no proven missing accessible
+name, wrong control role or failed press action in the app; most controls were
+never reached. Field focus, press actions, title-bar gestures, text selection,
+and the new closing-line controls still need the next native run. Failures
+remain failures, with no pointer-click substitute for a broken AXPress.
 
 Build the normal development executables and runtime dependencies with
 `bash scripts/check.sh`, then run the check when the computer is free:
@@ -395,7 +419,8 @@ The normal run announces that it takes the pointer for a few minutes.
 it is not a background check to run while typing elsewhere. Controls are
 pressed with the accessibility API, keys go to the launched PID, and only the
 six pointer items below post pointer events. Before a pointer gesture the
-helper checks that its starting point belongs to that PID, then restores the
+helper checks that the mouse target and accessibility hit belong to its own
+window, then restores the
 pointer's original position. The text-selection check temporarily uses the
 clipboard and restores every representation it could read; clipboard contents
 are never written to diagnostics.
@@ -468,6 +493,9 @@ seven Settings tabs each have separate results):
 | Allow approval shortcut | Cmd-Option-Y resolves host approval and changes the exact fixture file | No |
 | Deny approval shortcut | Cmd-Option-period resolves host approval and leaves the file unchanged | No |
 | Streaming reply | At least two lengths of the writing label, followed by final assistant text | No |
+| Undo a run | Own scripted edit has a ready host record; closing-line Undo restores exact bytes and offers Redo, leaving HEAD, index and unrelated changes intact | No |
+| Redo a run | Own recorded edit is undone through the fixture; closing-line Redo reapplies it and offers Undo | No |
+| Undo/Redo shortcut | Cmd-Option-U undoes and redoes a fresh recorded edit with the same file and Git checks | No |
 | Follow conversation link | Explicitly skipped because it would open the default browser | No |
 
 The script cannot substitute a custom command for **Show in Finder**:
@@ -489,7 +517,12 @@ verify navigation and named contents, not provider sign-in or every control.
 Live models, authentication, recovery, Stop, updates, signed commits, hooks,
 Git LFS and older systems remain separate checks.
 
-Output has one `PASS`, `FAIL` or `SKIPPED` line per item and a summary. Any
+Output has one `PASS`, `FAIL` or `SKIPPED` line for each of 45 items and a
+summary. The log ends with a `FAILED ITEM` line for every failure, preserving
+its first missing selector or refused point. Pointer refusals name the actual
+mouse target, the first covering WindowServer rectangle, and the frontmost
+application's owner and frame. Each failure also saves a window inventory
+(owners, IDs and frames, without other applications' window titles). Any
 failure exits nonzero; an all-skipped native run exits zero with explicit skips.
 Each failure attempts an AX dump and **only that PID's window screenshot**,
 using its window ID with `screencapture -l`; a capture failure gets its own
@@ -503,9 +536,12 @@ The check and diagnostics upload both have `continue-on-error` and time limits;
 they add no macOS job or Rust build. Tagged releases skip both steps.
 
 Verified without a window: Swift compilation and its pure selector/key/Unicode/
-gap tests; Python tests of environment isolation, failure/skip reporting,
+gap, screen-coordinate and ownership-guard tests; Python tests of role-aware
+Done matching, item ordering, reset after failure, narrow-window skip reasons,
+disposable Git reset/staging, environment isolation, failure digests,
 traffic-light bounds and replay frames; the production host/replay transcript
-and allow/deny edit effects, growing stream, and argument recorder; shell syntax; workflow YAML and its non-gating,
+and independent allow/deny edit effects, stopped-run reset, version 5 recorded
+undo/redo, growing stream, and argument recorder; shell syntax; workflow YAML and its non-gating,
 main-only condition; and `bash scripts/check.sh` (format, Clippy, workspace and
 runtime tests, release builds). The existing smoke AppleScript was compiled
 with `osacompile`, not executed; this check adds no AppleScript or JXA.
@@ -517,8 +553,13 @@ bash scripts/acceptance-macos.sh --self-test
 bash scripts/acceptance-macos.sh --fixture-test --host target/debug/plait-host
 ```
 
-Neither entry point launches the desktop, reads an accessibility tree, or
-sends keyboard/pointer events. They do not replace the first real native run.
+`scripts/check.sh` runs the Python tests and, on macOS, compiles the Swift
+helper and runs its pure self-test. Neither windowless entry point launches
+the desktop, reads an accessibility tree, or sends keyboard/pointer events.
+They do not replace the next native run. On a display as narrow as the first
+runner, the two inspector items plus Finder and URL activation are expected
+to skip with reasons; the other 41 items can attempt their checks. This is an
+expectation, not a passing result.
 
 ## Manual release acceptance
 

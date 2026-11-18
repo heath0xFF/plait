@@ -199,6 +199,39 @@ func widestGap(occupied: [(CGFloat, CGFloat)], from: CGFloat, to: CGFloat, minim
     return (best.0 + best.1) / 2
 }
 
+/// AX and CGEvent use top-left screen points; AppKit hit testing uses bottom-left.
+/// Never apply the display's pixel scale to either coordinate system.
+func flipScreenPoint(_ point: CGPoint, primaryTop: CGFloat) -> CGPoint {
+    CGPoint(x: point.x, y: primaryTop - point.y)
+}
+
+func topLeftFrame(_ rect: CGRect, primaryTop: CGFloat) -> CGRect {
+    CGRect(x: rect.minX, y: primaryTop - rect.maxY, width: rect.width, height: rect.height)
+}
+
+func placement(width: CGFloat, height: CGFloat, visible: CGRect) -> CGRect {
+    CGRect(x: visible.minX + 20, y: visible.minY + 20,
+           width: min(width, visible.width - 40), height: min(height, visible.height - 40))
+}
+
+struct WindowInfo {
+    let number: Int
+    let pid: pid_t
+    let owner: String
+    let frame: CGRect
+    let layer: Int
+    let alpha: Double
+
+    var description: String {
+        "owner=\(owner) pid=\(pid) window=\(number) frame=[\(fmt(frame))] layer=\(layer)"
+    }
+}
+
+func permitsPointer(target: WindowInfo?, pid: pid_t, window: Int?, frame: CGRect, point: CGPoint) -> Bool {
+    guard let target, let window else { return false }
+    return target.pid == pid && target.number == window && frame.contains(point) && target.frame.contains(point)
+}
+
 // MARK: - Accessibility tree
 
 struct Node {
@@ -379,34 +412,64 @@ func front(_ pid: pid_t) {
 func visibleFrame() -> CGRect {
     guard let screen = NSScreen.main, let primary = NSScreen.screens.first else { return .zero }
     let visible = screen.visibleFrame
-    return CGRect(x: visible.minX, y: primary.frame.height - visible.maxY, width: visible.width, height: visible.height)
+    return topLeftFrame(visible, primaryTop: primary.frame.maxY)
+}
+
+func windowList(_ options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]) -> [WindowInfo] {
+    let list = (CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]) ?? []
+    return list.compactMap { info in
+        guard let bounds = info[kCGWindowBounds as String] as! CFDictionary?,
+              let rect = CGRect(dictionaryRepresentation: bounds),
+              let number = info[kCGWindowNumber as String] as? NSNumber,
+              let pid = info[kCGWindowOwnerPID as String] as? NSNumber else { return nil }
+        return WindowInfo(number: number.intValue, pid: pid.int32Value,
+                          owner: info[kCGWindowOwnerName as String] as? String ?? "unknown",
+                          frame: rect, layer: (info[kCGWindowLayer as String] as? NSNumber)?.intValue ?? -1,
+                          alpha: (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1)
+    }
 }
 
 func windowNumber(_ pid: pid_t) -> Int? {
-    let list = (CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]]) ?? []
-    let mine = list.filter {
-        ($0[kCGWindowOwnerPID as String] as? Int32) == pid && ($0[kCGWindowLayer as String] as? Int) == 0
-    }
-    let largest = mine.max { area($0) < area($1) }
-    return largest?[kCGWindowNumber as String] as? Int
+    guard let window = mainWindow(pid), let rect = frame(of: window) else { return nil }
+    return windowList([.optionAll]).first {
+        $0.pid == pid && $0.layer == 0 && abs($0.frame.minX - rect.minX) < 2 &&
+            abs($0.frame.minY - rect.minY) < 2 && abs($0.frame.width - rect.width) < 2 &&
+            abs($0.frame.height - rect.height) < 2
+    }?.number
 }
 
-func area(_ info: [String: Any]) -> CGFloat {
-    guard let bounds = info[kCGWindowBounds as String] as! CFDictionary?,
-          let rect = CGRect(dictionaryRepresentation: bounds) else { return 0 }
-    return rect.width * rect.height
+/// AppKit asks WindowServer which window would receive mouseDown, including
+/// another app or the menu bar. Rectangle order also includes click-through
+/// overlays and is not a hit test (AX hit succeeded on the first CI run).
+func windowAt(_ point: CGPoint) -> WindowInfo? {
+    guard let primary = NSScreen.screens.first else { return nil }
+    let number = NSWindow.windowNumber(at: flipScreenPoint(point, primaryTop: primary.frame.maxY), belowWindowWithWindowNumber: 0)
+    return windowList().first { $0.number == number }
 }
 
-/// The owner of the frontmost on-screen window under `point`.
-func ownerOfWindow(at point: CGPoint) -> pid_t? {
-    let list = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
-    for info in list {
-        guard let bounds = info[kCGWindowBounds as String] as! CFDictionary?,
-              let rect = CGRect(dictionaryRepresentation: bounds), rect.contains(point) else { continue }
-        if let alpha = info[kCGWindowAlpha as String] as? Double, alpha == 0 { continue }
-        return info[kCGWindowOwnerPID as String] as? pid_t
+func frontDescription() -> String {
+    guard let app = NSWorkspace.shared.frontmostApplication else { return "frontmost=unknown frame=unknown" }
+    let window = windowList().first { $0.pid == app.processIdentifier && $0.layer == 0 }
+    return "frontmost=\(app.localizedName ?? "unknown") pid=\(app.processIdentifier) frame=[\(window.map { fmt($0.frame) } ?? "unknown")]"
+}
+
+func pointDescription(_ point: CGPoint) -> String {
+    let rectangle = windowList().first { $0.alpha > 0 && $0.frame.contains(point) }
+    return "point=[\(fmt(point.x)) \(fmt(point.y))]; mouse target: \(windowAt(point)?.description ?? "unknown"); first covering rectangle: \(rectangle?.description ?? "unknown"); \(frontDescription())"
+}
+
+func requireOwnPoint(_ pid: pid_t, _ point: CGPoint) {
+    guard let rect = frame(of: requireWindow(pid)),
+          permitsPointer(target: windowAt(point), pid: pid, window: windowNumber(pid), frame: rect, point: point) else {
+        die("refused: the window under \(fmt(point.x)), \(fmt(point.y)) is not the development copy's; \(pointDescription(point))", 3)
     }
-    return nil
+    var element: AXUIElement?
+    let result = AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &element)
+    var owner: pid_t = 0
+    if let element { AXUIElementGetPid(element, &owner) }
+    guard result == .success && owner == pid else {
+        die("refused: accessibility hit owner=\(owner); \(pointDescription(point))", 3)
+    }
 }
 
 // MARK: - Input
@@ -444,13 +507,11 @@ func postText(_ pid: pid_t, _ text: String, delay: Double) {
 /// only when that is the development copy's, and the pointer is put back.
 func pointer(_ pid: pid_t, at points: [CGPoint], _ body: () -> Void) {
     for point in points {
-        guard ownerOfWindow(at: point) == pid else {
-            die("refused: the window under \(fmt(point.x)), \(fmt(point.y)) is not the development copy's", 3)
-        }
+        requireOwnPoint(pid, point)
     }
     let flipped = NSEvent.mouseLocation
-    let primary = NSScreen.screens.first?.frame.height ?? 0
-    let original = CGPoint(x: flipped.x, y: primary - flipped.y)
+    let primary = NSScreen.screens.first?.frame.maxY ?? 0
+    let original = flipScreenPoint(flipped, primaryTop: primary)
     body()
     Thread.sleep(forTimeInterval: 0.1)
     CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: original, mouseButton: .left)?
@@ -524,6 +585,26 @@ func selfTest() {
     check(widestGap(occupied: [(0, 10), (60, 100)], from: 0, to: 100, minimum: 10) == 35, "widest gap between")
     check(widestGap(occupied: [(0, 95)], from: 0, to: 100, minimum: 10) == nil, "too narrow")
     check(widestGap(occupied: [(5, 20), (10, 30)], from: 0, to: 40, minimum: 4) == 35, "overlaps merge")
+    let done = Selector(roles: expandRoles("control"), exact: "Done")
+    check(done.matches(role: "AXButton", names: ["Done"]), "Done settings button matches")
+    check(!done.matches(role: "AXStaticText", names: ["Done"]), "Done thread status is not a button")
+    check(!done.matches(role: "AXRow", names: ["Thread 123 · Done · fixture"]), "Done must be the whole name")
+    let point = CGPoint(x: 177.5, y: 73)
+    check(flipScreenPoint(point, primaryTop: 768) == CGPoint(x: 177.5, y: 695), "AX point to AppKit, no pixel scaling")
+    check(flipScreenPoint(flipScreenPoint(point, primaryTop: 768), primaryTop: 768) == point, "screen conversion is its own inverse")
+    check(topLeftFrame(CGRect(x: -1200, y: 800, width: 1200, height: 900), primaryTop: 768) == CGRect(x: -1200, y: -932, width: 1200, height: 900), "display above and left of primary")
+    let visible = CGRect(x: 0, y: 31, width: 1024, height: 679)
+    let rect = placement(width: 1380, height: 860, visible: visible)
+    check(rect == CGRect(x: 20, y: 51, width: 984, height: 639), "first runner geometry including menu bar and margins")
+    let own = WindowInfo(number: 8, pid: 42, owner: "fixture", frame: rect, layer: 0, alpha: 1)
+    let other = WindowInfo(number: 9, pid: 43, owner: "other", frame: rect, layer: 0, alpha: 1)
+    let sameApp = WindowInfo(number: 10, pid: 42, owner: "fixture", frame: rect, layer: 0, alpha: 1)
+    check(permitsPointer(target: own, pid: 42, window: 8, frame: rect, point: point), "own mouse target, even under a click-through covering rectangle")
+    check(!permitsPointer(target: other, pid: 42, window: 8, frame: rect, point: point), "another app in front refused")
+    check(!permitsPointer(target: sameApp, pid: 42, window: 8, frame: rect, point: point), "another window of same PID refused")
+    check(!permitsPointer(target: own, pid: 42, window: 8, frame: rect, point: CGPoint(x: 177.5, y: 15)), "menu bar point refused")
+    check(!permitsPointer(target: nil, pid: 42, window: 8, frame: rect, point: point), "unknown mouse target refused")
+    check(!permitsPointer(target: own, pid: 42, window: nil, frame: rect, point: point), "unknown own window refused")
     if failures > 0 { exit(1) }
     print("axdrive self-test passed")
 }
@@ -534,7 +615,7 @@ let usage = """
 usage: axdrive self-test | preflight
        axdrive COMMAND PID [selector] [arguments]
 commands with a PID:
-  wait-window, window, window-id, place W H, lights, front, dump,
+  wait-window, window, window-id, windows, place W H, lights, front, dump,
   find, frame, absent, count, press, focus, focused, selected, value, set-value --text T,
   growth, key COMBO, type --text T [--delay S], fullscreen on|off,
   minimized on|off|get, hit X Y, bar-gap FROM TO,
@@ -577,16 +658,19 @@ func run(_ arguments: [String]) throws {
     case "window-id":
         guard let number = windowNumber(pid) else { die("no on-screen window for process \(pid)") }
         say(String(number))
+    case "windows":
+        say(frontDescription())
+        for info in windowList() { say(info.description) }
     case "place":
         guard rest.count == 2 else { die(usage, 2) }
         let window = requireWindow(pid)
         let visible = visibleFrame()
-        let width = min(number(rest[0]), visible.width - 40)
-        let height = min(number(rest[1]), visible.height - 40)
-        var origin = CGPoint(x: visible.minX + 20, y: visible.minY + 20)
-        var size = CGSize(width: width, height: height)
-        _ = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, AXValueCreate(.cgPoint, &origin)!)
-        _ = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, AXValueCreate(.cgSize, &size)!)
+        let target = placement(width: number(rest[0]), height: number(rest[1]), visible: visible)
+        var origin = target.origin
+        var size = target.size
+        let moved = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, AXValueCreate(.cgPoint, &origin)!)
+        let sized = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, AXValueCreate(.cgSize, &size)!)
+        guard moved == .success && sized == .success else { die("could not place own window: position=\(moved.rawValue) size=\(sized.rawValue)") }
         Thread.sleep(forTimeInterval: 0.5)
         guard let rect = frame(of: window) else { die("window has no frame") }
         say("\(fmt(rect)) screen \(fmt(visible.width)) \(fmt(visible.height))")
@@ -692,13 +776,15 @@ func run(_ arguments: [String]) throws {
         }
     case "hit":
         guard rest.count == 2 else { die(usage, 2) }
+        front(pid)
+        requireOwnPoint(pid, CGPoint(x: number(rest[0]), y: number(rest[1])))
         var element: AXUIElement?
         let result = AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(number(rest[0])), Float(number(rest[1])), &element)
         guard result == .success, let element else { die("nothing at that point") }
         var owner: pid_t = 0
         AXUIElementGetPid(element, &owner)
         // Check ownership before reading a name that could belong to another app.
-        guard owner == pid else { die("the point is not in the development copy", 3) }
+        guard owner == pid else { die("refused: accessibility hit owner=\(owner); \(pointDescription(CGPoint(x: number(rest[0]), y: number(rest[1]))))", 3) }
         let (node, _) = read(element, depth: 0)
         say("owner \(owner) \(node.role) \(node.name.prefix(80))")
         if expandRoles("control,field").contains(node.role) { exit(1) }
