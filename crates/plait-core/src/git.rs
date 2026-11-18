@@ -192,22 +192,27 @@ fn run(
     });
     let out = reader(stdout, limit);
     let err = reader(stderr, ERROR_LIMIT);
-    let start = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Ok(status),
-            Ok(None) if start.elapsed() < timeout => thread::sleep(Duration::from_millis(10)),
-            Ok(None) => {
-                stop_group(&mut child);
-                break Err(format!(
-                    "Git did not finish within {} seconds and was stopped.",
-                    timeout.as_secs()
-                ));
-            }
-            Err(e) => {
-                stop_group(&mut child);
-                break Err(format!("Cannot wait for Git: {e}"));
-            }
+    let group = i32::try_from(child.id()).ok();
+    let (done, finished) = mpsc::channel();
+    // A waiting thread wakes the moment Git exits; polling added up to a
+    // tick to every command, most of which take a few milliseconds.
+    thread::spawn(move || {
+        let _ = done.send(child.wait());
+    });
+    let status = match finished.recv_timeout(timeout) {
+        Ok(Ok(status)) => Ok(status),
+        Ok(Err(e)) => {
+            stop_group(group);
+            Err(format!("Cannot wait for Git: {e}"))
+        }
+        Err(_) => {
+            stop_group(group);
+            // The kill ends the wait, which reaps Git.
+            let _ = finished.recv_timeout(DRAIN_GRACE);
+            Err(format!(
+                "Git did not finish within {} seconds and was stopped.",
+                timeout.as_secs()
+            ))
         }
     };
     let status = status?;
@@ -243,17 +248,16 @@ fn collect(reader: mpsc::Receiver<std::io::Result<Output>>, name: &str) -> Resul
     }
 }
 
-/// Kill Git and everything it started (hooks, filters), then reap Git.
-fn stop_group(child: &mut std::process::Child) {
+/// Kill Git and everything it started (hooks, filters). The thread waiting
+/// on Git reaps it.
+fn stop_group(group: Option<i32>) {
     // The child leads its own group (see `process_group(0)`), so its PID is the group ID.
-    if let Ok(group) = i32::try_from(child.id()) {
+    if let Some(group) = group {
         // SAFETY: killpg only sends a signal; a stale group ID fails with ESRCH.
         unsafe {
             libc::killpg(group, libc::SIGKILL);
         }
     }
-    let _ = child.kill();
-    let _ = child.wait();
 }
 
 pub fn status(path: &Path) -> Result<Snapshot> {
@@ -719,6 +723,7 @@ fn format_diff(bytes: &[u8], mut truncated: bool, elapsed: Duration, headers: Fi
 mod branch;
 mod counts;
 mod log;
+pub mod record;
 mod worktree;
 mod write;
 #[cfg(test)]

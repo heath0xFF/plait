@@ -897,3 +897,91 @@ A scripted test checks that streamed text trails, catches up within a bounded
 number of frames, and then stops requesting frames. How smooth it looks on a
 real display, against a live provider, has not been checked in the installed
 app.
+
+## Checkout recording stage 1 (unreleased)
+
+Stage 1 records runs internally; it does not provide undo, record-listing
+operations, protocol version 5, or desktop controls. The checks below are
+source-level evidence, not a release or installed-app acceptance claim.
+
+The real-repository core tests cover additions, deletions, mode-only changes,
+created-then-deleted files, binaries, symlinks, exact CRLF bytes, an LFS-style
+clean filter, and precedence of private conversion attributes over checkout
+and repository-info attributes. That attribute precedence was an assumption in
+the design; the byte comparisons and a filter-execution marker confirm it.
+Tests also cover unborn HEAD, moved HEAD, linked worktrees, SHA-256 stores,
+held index locks, split indexes, assume-unchanged entries, force-tracked ignored
+files during full hashing, ignored directories, nested repositories,
+uninitialized submodules, and directories that become repositories or gitlinks.
+Configured excludes and repository-info excludes retain their precedence.
+They exercise the 1 MiB, 2,000-file, 64 MiB, and 100 MiB limits, including growth
+between records and clean oversized entries copied from an index. Coverage
+lists exceeding 10,000 omitted files are retained in full. Parser tests cover
+malformed status/diff records and unusual names; a concurrent writer exercises
+change detection and subsequent recapture.
+
+Read-only tests compare every path, size, mode, modification time, change time,
+inode, content, and symlink target in disposable repositories before and after
+recording and pruning. The host suite runs the real sandboxed helper and injects
+a Git wrapper that attempts to touch the person's index: Seatbelt refuses the
+write while the helper completes. Split-index tests exposed timestamp updates
+in Git's ordinary index reader even with optional locks off; the recorder now
+reads private copies of split-index files. Other tests prove only each run's
+pair is linked, changed before-content is privately owned, expired refs and
+packed content are reclaimed, privately owned before-content survives retention
+and removal of the source object store, and a new record works after pruning the latest
+checkout cache.
+
+Runtime tests use the existing scripted Codex and Claude Code processes and Pi
+replay through the real host. Each harness gets before/after pairs with the
+expected changed paths, including stopped and failed runs. Steering shares the
+active pair; queued follow-ups receive independent pairs. Tests kill the host's
+runtime between records, recover the missing after record, mark it as taken
+after restart, and defer recovery behind another checkout writer until the
+next leased run. Failed-before tests prevent each harness from running; Codex
+also exercises a held follow-up queue and failed-after state. Old protocol
+error mappings, startup pruning, archive retention, active-run retention, and
+pair retention across the cutoff are checked.
+
+`bash scripts/check.sh` exercises formatting, workspace clippy with warnings
+as errors, Rust tests, the host build, locked runtime installation, TypeScript
+checking, runtime tests, and the workspace release build. The final gate result
+and cost figures below apply to the stage-1 source in this change. On macOS the
+final script exited 0: 525 Rust tests and 329 runtime tests passed, with five
+opt-in Rust tests excluded from the ordinary gate (including the two timing
+tests run separately below). The workspace release build also passed.
+
+### Cost measurement
+
+Run `bash scripts/bench-records.sh` to reproduce the timing fixtures. The target
+is a warm unchanged 50,000-file record below 300 ms on Apple silicon. Each
+fixture uses small source files in nested directories in a temporary checkout;
+Git's index and filesystem caches are warm for seven unchanged records. Timings
+are release-build wall times. A pair changes one file between records, outside
+the measured helper time. The first pair also pays for newly written private
+trees and copies of earlier content.
+
+Measured on 2026-11-18 with Apple M5 Pro, 18 CPU cores, 48 GiB memory, macOS
+26.6.2, Apple Git 2.54.0, Rust 1.98.1, and Node 26.12.0. The full check suite had
+finished before this run; the machine was not otherwise isolated for benchmarking.
+
+| Fixture | Cold first record | Warm median (min–max), 7 records | First one-file pair | Later one-file pair |
+| --- | ---: | ---: | ---: | ---: |
+| Core, 50,000 files, seeded index | 430 ms | 136 ms (134–151) | 597 ms | 305 ms |
+| Sandboxed host helper, 50,000 files | 659 ms | 160 ms (158–168) | 655 ms | 379 ms |
+| Sandboxed host helper, 200 files | 83 ms | 65 ms (60–67) | 140 ms | 131 ms |
+
+The core's separate 50,000-file first record with full hashing took 5,343 ms.
+The sandboxed warm median met the 300 ms target. Helper timings include process
+startup, Seatbelt, Git, and reply parsing; they exclude runtime SQLite work,
+harness startup, model latency, and desktop rendering. The pair costs should
+not be read as the unchanged-record target.
+
+This work has not been tested with a paid live harness, an installed desktop,
+Linux containment, a power failure, or an undo operation. No native app was
+launched for this verification. A concurrent external writer prevents a truly
+atomic snapshot; detected changes are marked, and later undo must validate the
+current files again. Unchanged borrowed objects do not constitute a backup of
+a deleted repository. Stage 2 must validate availability and coverage before
+restoring anything, page the stored path lists within protocol frame limits,
+and expose the after-restart warning and unsupported metadata plainly.

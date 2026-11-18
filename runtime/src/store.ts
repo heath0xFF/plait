@@ -43,7 +43,14 @@ export class Store {
       CREATE TABLE IF NOT EXISTS requests(scope TEXT NOT NULL, id TEXT NOT NULL, hash TEXT NOT NULL, result TEXT NOT NULL, input TEXT, entry INTEGER, anchor INTEGER, PRIMARY KEY(scope,id));
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS roots(id TEXT PRIMARY KEY, identity TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS postimages(thread_id TEXT NOT NULL, path TEXT NOT NULL, image TEXT NOT NULL, PRIMARY KEY(thread_id,path));`);
+      CREATE TABLE IF NOT EXISTS postimages(thread_id TEXT NOT NULL, path TEXT NOT NULL, image TEXT NOT NULL, PRIMARY KEY(thread_id,path));
+      CREATE TABLE IF NOT EXISTS records(id TEXT PRIMARY KEY, thread TEXT NOT NULL, run_request TEXT NOT NULL, kind TEXT NOT NULL, checkout TEXT NOT NULL,
+        before TEXT, commit_id TEXT, tree TEXT, head TEXT, head_ref TEXT, state TEXT NOT NULL, not_covered TEXT, not_covered_total INTEGER,
+        after_restart INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS records_thread ON records(thread, created_at);
+      CREATE INDEX IF NOT EXISTS records_before ON records(before);
+      CREATE TABLE IF NOT EXISTS record_paths(record TEXT NOT NULL, path TEXT NOT NULL, before_mode TEXT, before_oid TEXT, after_mode TEXT, after_oid TEXT,
+        added INTEGER, removed INTEGER, PRIMARY KEY(record,path));`);
     for (const [table, column, type] of columns) {
       if (!this.db.prepare(`PRAGMA table_info(${table})`).all().some(row => row.name === column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
     }

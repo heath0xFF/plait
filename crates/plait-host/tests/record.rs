@@ -1,0 +1,386 @@
+//! `plait-host record` and `prune` as the runtime calls them: the real binary,
+//! contained by its sandbox on macOS, against real repositories.
+
+use serde_json::{Value, json};
+use std::{
+    collections::BTreeMap,
+    fs,
+    io::Write,
+    os::unix::{ffi::OsStrExt, fs::MetadataExt},
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    sync::atomic::{AtomicU64, Ordering},
+};
+
+struct Scratch(PathBuf);
+impl Scratch {
+    fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "plait-host-records-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        Self(fs::canonicalize(path).unwrap())
+    }
+}
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn git(root: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+fn repository(base: &Path) -> PathBuf {
+    let root = base.join("repo");
+    fs::create_dir(&root).unwrap();
+    git(&root, &["init", "-q", "-b", "main"]);
+    fs::write(root.join("notes.txt"), "before\n").unwrap();
+    fs::write(root.join(".gitignore"), "*.env\n").unwrap();
+    git(&root, &["add", "."]);
+    git(
+        &root,
+        &[
+            "-c",
+            "user.name=T",
+            "-c",
+            "user.email=t@e.invalid",
+            "commit",
+            "-qm",
+            "x",
+        ],
+    );
+    fs::write(root.join("local.env"), "SECRET=1\n").unwrap();
+    root
+}
+
+fn helper(operation: &str, request: &Value) -> (bool, Value, String) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_plait-host"))
+        .arg(operation)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(request.to_string().as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    let reply = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
+    (
+        out.status.success(),
+        reply,
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+type Stat = (bool, u64, u32, i64, i64, i64, i64, u64, Option<Vec<u8>>);
+
+fn snapshot(root: &Path) -> BTreeMap<PathBuf, Stat> {
+    let mut all = BTreeMap::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let meta = fs::symlink_metadata(&path).unwrap();
+        all.insert(
+            path.clone(),
+            (
+                meta.is_dir(),
+                meta.len(),
+                meta.mode(),
+                meta.mtime(),
+                meta.mtime_nsec(),
+                meta.ctime(),
+                meta.ctime_nsec(),
+                meta.ino(),
+                if meta.is_file() {
+                    Some(fs::read(&path).unwrap())
+                } else if meta.file_type().is_symlink() {
+                    Some(
+                        fs::read_link(&path)
+                            .unwrap()
+                            .as_os_str()
+                            .as_bytes()
+                            .to_vec(),
+                    )
+                } else {
+                    None
+                },
+            ),
+        );
+        if meta.is_dir() {
+            pending.extend(fs::read_dir(&path).unwrap().map(|e| e.unwrap().path()));
+        }
+    }
+    all
+}
+
+#[test]
+fn records_and_prunes_without_writing_to_the_repository() {
+    let base = Scratch::new();
+    let root = repository(&base.0);
+    let store = base.0.join("store");
+    fs::create_dir(&store).unwrap();
+    let before_snapshot = snapshot(&root);
+    let (ok, before, error) = helper(
+        "record",
+        &json!({"checkout": root, "store": store, "id": "before-1"}),
+    );
+    assert!(ok, "{error}");
+    assert_eq!(before["head_ref"], "refs/heads/main");
+    assert!(before["paths"].is_null());
+    assert_eq!(
+        snapshot(&root),
+        before_snapshot,
+        "a record wrote to the repository"
+    );
+    // What a run changes, untouched by the recorder on the way.
+    fs::write(root.join("notes.txt"), "after\n").unwrap();
+    fs::write(root.join("local.env"), "SECRET=2\n").unwrap();
+    fs::write(root.join("new.txt"), "new\n").unwrap();
+    let changed = snapshot(&root);
+    let (ok, after, error) = helper(
+        "record",
+        &json!({"checkout": root, "store": store, "id": "after-1", "before": before["commit"]}),
+    );
+    assert!(ok, "{error}");
+    let paths: Vec<&str> = after["paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths, ["local.env", "new.txt", "notes.txt"]);
+    assert_eq!(after["paths"][2]["added"], 1);
+    assert_eq!(after["paths"][2]["removed"], 1);
+    assert_eq!(snapshot(&root), changed, "a record wrote to the repository");
+    let (ok, pruned, error) = helper(
+        "prune",
+        &json!({"store": store, "remove": ["before-1", "after-1"]}),
+    );
+    assert!(ok, "{error}");
+    assert_eq!(
+        pruned,
+        json!({"refs_removed": 2, "checkouts_removed": 0, "pruned": true})
+    );
+    assert_eq!(snapshot(&root), changed, "a prune wrote to the repository");
+}
+
+#[test]
+fn a_record_that_cannot_be_made_fails_and_says_why() {
+    let base = Scratch::new();
+    let plain = base.0.join("plain");
+    fs::create_dir(&plain).unwrap();
+    let store = base.0.join("store");
+    let (ok, _, error) = helper(
+        "record",
+        &json!({"checkout": plain, "store": store, "id": "x"}),
+    );
+    assert!(!ok);
+    assert!(error.starts_with("plait-host: "), "{error}");
+    for request in [
+        json!({"checkout": plain, "store": "relative", "id": "x"}),
+        json!({"checkout": plain}),
+        json!("not an object"),
+    ] {
+        assert!(!helper("record", &request).0);
+    }
+    // Pruning a store that has never recorded does nothing.
+    let (ok, pruned, error) = helper("prune", &json!({"store": store, "remove": ["x"]}));
+    assert!(ok, "{error}");
+    assert_eq!(pruned["pruned"], false);
+}
+
+/// A checkout of `files` small files in nested folders, committed.
+fn checkout_of(base: &Path, files: usize) -> PathBuf {
+    let root = base.join(format!("repo-{files}"));
+    for n in 0..files {
+        let dir = root.join(format!("src/d{}/m{}", n / 5000, n / 100));
+        if n % 100 == 0 {
+            fs::create_dir_all(&dir).unwrap();
+        }
+        fs::write(
+            dir.join(format!("f{n}.rs")),
+            format!("// file {n}\nfn f{n}() {{}}\n"),
+        )
+        .unwrap();
+    }
+    git(&root, &["init", "-q", "-b", "main"]);
+    git(&root, &["add", "."]);
+    git(
+        &root,
+        &[
+            "-c",
+            "user.name=T",
+            "-c",
+            "user.email=t@e.invalid",
+            "commit",
+            "-qm",
+            "x",
+        ],
+    );
+    root
+}
+
+fn timed(request: &Value) -> (Value, std::time::Duration) {
+    let start = std::time::Instant::now();
+    let (ok, reply, error) = helper("record", request);
+    assert!(ok, "{error}");
+    (reply, start.elapsed())
+}
+
+/// What a record costs through the helper the runtime starts, sandbox and
+/// all. Run by `scripts/bench-records.sh`.
+#[test]
+#[ignore = "timing run"]
+fn host_record_timing() {
+    let files: usize = std::env::var("PLAIT_BENCH_FILES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(50_000);
+    let base = Scratch::new();
+    let store = base.0.join("store");
+    for (size, label) in [(files, "large"), (200, "small")] {
+        let root = checkout_of(&base.0, size);
+        let request = |id: &str, before: Option<&Value>| json!({"checkout": root, "store": store, "id": id, "before": before});
+        let (_, cold) = timed(&request(&format!("{label}-cold"), None));
+        let mut warm: Vec<_> = (0..7)
+            .map(|n| timed(&request(&format!("{label}-warm{n}"), None)).1)
+            .collect();
+        warm.sort();
+        // A run that changes one file, after the first change has been recorded once.
+        let run = |n: usize| {
+            let (before, first) = timed(&request(&format!("{label}-run{n}-b"), None));
+            fs::write(root.join("src/d0/m0/f0.rs"), format!("// run {n}\n")).unwrap();
+            let (after, second) = timed(&request(
+                &format!("{label}-run{n}-a"),
+                Some(&before["commit"]),
+            ));
+            assert_eq!(after["paths"].as_array().unwrap().len(), 1);
+            first + second
+        };
+        let first_run = run(1);
+        let later_run = run(2);
+        println!(
+            "host {label}: files={size} cold_ms={} warm_median_ms={} warm_min_ms={} warm_max_ms={} first_run_ms={} later_run_ms={}",
+            cold.as_millis(),
+            warm[warm.len() / 2].as_millis(),
+            warm[0].as_millis(),
+            warm[warm.len() - 1].as_millis(),
+            first_run.as_millis(),
+            later_run.as_millis(),
+        );
+        if label == "large" {
+            assert!(
+                warm[warm.len() / 2] < std::time::Duration::from_millis(300),
+                "a warm record took {:?}",
+                warm[warm.len() / 2]
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_recorder_runs_inside_its_sandbox() {
+    // The profile the host builds for this checkout stops any process under
+    // it from writing the checkout or its Git directory, and leaves the store open.
+    let base = Scratch::new();
+    let root = repository(&base.0);
+    let records = base.0.join("store/records");
+    fs::create_dir_all(&records).unwrap();
+    let located = plait_core::git::record::locate(&root).unwrap();
+    let profile = plait_core::git::record::sandbox_profile(
+        &plait_core::git::record::protected_paths(&located),
+        &records,
+    )
+    .unwrap();
+    let write = |path: &Path| {
+        Command::new("/usr/bin/sandbox-exec")
+            .args(["-p", &profile, "/bin/sh", "-c", "printf x > \"$0\""])
+            .arg(path)
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    };
+    assert!(!write(&root.join(".git/HEAD")));
+    assert!(!write(&root.join("notes.txt")));
+    assert!(write(&records.join("ok")));
+    assert_eq!(
+        fs::read_to_string(root.join(".git/HEAD")).unwrap(),
+        "ref: refs/heads/main\n"
+    );
+}
+
+#[test]
+fn a_store_inside_the_checkout_is_refused_before_it_is_created() {
+    let base = Scratch::new();
+    let root = repository(&base.0);
+    let before = snapshot(&root);
+    for store in [root.join("store"), root.join(".git/private-store")] {
+        let (ok, _, error) = helper(
+            "record",
+            &json!({"checkout": root, "store": store, "id": "refused"}),
+        );
+        assert!(!ok, "{error}");
+        assert_eq!(snapshot(&root), before);
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_real_helper_denies_git_timestamp_writes() {
+    use std::os::unix::fs::PermissionsExt;
+    let base = Scratch::new();
+    let root = repository(&base.0);
+    let store = base.0.join("store");
+    fs::create_dir(&store).unwrap();
+    let wrapper = base.0.join("git-probe");
+    let real = plait_core::git::record::git_binary();
+    // Attempt the write only in private-store commands, after containment starts.
+    fs::write(&wrapper, format!("#!/bin/sh\nif [ -n \"$GIT_DIR\" ]; then\n  if /usr/bin/touch '{}' 2>/dev/null; then exit 71; fi\n  /usr/bin/touch '{}/records/denied-write-observed' || exit 72\nfi\nexec '{}' \"$@\"\n", root.join(".git/index").display(), store.display(), real.display())).unwrap();
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700)).unwrap();
+    let before = snapshot(&root);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_plait-host"))
+        .arg("record")
+        .env("PLAIT_GIT", &wrapper)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            json!({"checkout": root, "store": store, "id": "probe"})
+                .to_string()
+                .as_bytes(),
+        )
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(store.join("records/denied-write-observed").exists());
+    assert_eq!(snapshot(&root), before);
+}

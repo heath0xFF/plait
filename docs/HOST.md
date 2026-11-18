@@ -1348,3 +1348,103 @@ Use [Contributing](../CONTRIBUTING.md#required-checks) for focused commands and
 [manual release acceptance](VERIFICATION.md#manual-release-acceptance) for native
 and live-model checks. Do not substitute scripted lifecycle fixtures for the
 actual platform containment tests.
+
+## Checkout records (M9 stage 1, unreleased)
+
+The runtime records the checkout before and after every run in Pi, Codex,
+and Claude Code, regardless of permission mode. A run includes its steering
+messages and every harness turn inside it; a queued follow-up gets a separate
+pair. The before record completes before a harness starts. The after record
+is taken after harness cleanup, including on Stop and failure, before releasing
+the checkout lease or draining the next input. These are internal records:
+there is no listing operation, undo operation, snapshot addition, or desktop
+presentation in this stage. Protocol versions remain 1–4.
+
+If the before record cannot be made, the run ends in `error` with
+`record_failed` and its queue remains held. Versions 1 and 2 see the existing
+`runtime_error` code with the same explanation. Nothing in that run reaches a
+harness. A failed after record is stored as failed, so future undo cannot use
+it. After a host crash, a missing after record is attempted in the background
+under the checkout lease. If another writer holds the lease, the next run
+retries the recovery immediately before its own before record. Recovery is
+marked `after_restart`: the recorded changes may include work done while the
+host was down. Interrupted work is never resumed or repeated automatically.
+
+### Contents and limits
+
+A record is a Git commit whose tree contains working-tree bytes, executable
+bits, and symlink targets. Clean filters, LFS conversion, textconv, external
+diff, hooks, and line-ending conversion do not run. Private attributes override
+the checkout's conversion attributes; copied index entries needing conversion
+are rehashed. Split, sparse, assume-unchanged, skip-worktree, and autocrlf
+indexes fall back to hashing tracked paths and the untracked listing. A
+checkout without a first commit is supported. HEAD's commit and symbolic
+branch are recorded separately; recording never moves them.
+
+Tracked files and untracked files are included, with untracked directories
+visited file by file. Limits use binary units: an individually ignored file
+is included up to 1 MiB; ignored files together are limited to 2,000 files and
+64 MiB per record. Any single file over 100 MiB is excluded. Ignored
+directories, nested repositories, submodules, unsupported file types, names
+that cannot be represented as UTF-8, and unreadable files are not covered.
+Each omitted path or directory and its reason is stored, without truncating
+the coverage list. A tracked exception inside an ignored directory remains
+covered. Ignore rules and size limits are reconsidered on later records.
+Files detected changing during capture are marked, and excluded from the
+run's usable changed-path list. Recording is not an atomic filesystem snapshot;
+a separate writer can change files while the recorder reads them.
+
+The after record stores each changed path's before/after mode and object ID,
+plus added/removed line counts (unknown for binaries). It also carries the
+coverage exclusions from both sides. A file created and deleted within a run
+has no net change. The host copies earlier content for changed paths into its
+own object store; subsequent repository pruning cannot remove those copies.
+Unchanged borrowed blobs are not a complete repository backup. Restoring
+files, executable bits, and links is planned for the next stage; other mode
+bits, extended attributes, and hard-link relationships will not be restored.
+Git history and effects outside the checkout are not restorable this way.
+
+### Store and read-only enforcement
+
+Within the owner-only host store:
+
+```text
+host.sqlite                               records and record_paths tables
+records/sha1/                             private Git object store and refs
+records/sha256/                           separate SHA-256 object store
+records/<format>/refs/records/<id>         one ref per record
+records/<format>/worktrees/<checkout-key>/
+  HEAD, index, commondir, gitdir           private Git bookkeeping
+  exclude, plait-source.json, plait-ready  local excludes, origin, seed marker
+  source-index, sharedindex.*              optional split-index read copies
+```
+
+The checkout key hashes its canonical path, device and inode. The private
+linked-worktree directory points at the checkout for reads; nothing is added
+to the person's Git worktree registry. Only the after commit has the run's
+before commit as parent. Other run ordering, identity, state, recovery marker,
+and time live in SQLite. SHA-1 and SHA-256 repositories never share objects.
+
+The runtime starts the Rust host's internal `record` and `prune` helpers with
+the store lock inherited; records also inherit the checkout lease. On macOS,
+the helpers use the host's Seatbelt invocation machinery and a recorder profile
+that denies network access and all writes outside the records directory and
+`/dev/null`. The checkout, common Git directory, worktree Git directory, and
+borrowed object directories remain read-only. Store and checkout overlap is
+rejected before creating the records directory. Git reads use a cleared
+environment, no optional locks on the person's repository, and disabled
+fsmonitor, untracked cache, replacement objects, and hooks. Private object
+writes have no alternates, preventing even Git's object-freshening timestamp
+write in the person's store. Object copies stream through Git pack/unpack
+commands from read-only alternates to the private store. Linux exercises this
+same recording code but has no recorder sandbox; it is not macOS containment
+evidence and does not enable Linux agent commands.
+
+Records of archived threads are retained too. Startup and daily pruning remove
+pairs older than 30 days, waiting for active record helpers and holding back
+new helpers. A pair expires together after its later record; active runs keep
+their before record. Pruning removes refs, expired checkout caches and indexes,
+rebuilds private packs, then deletes unreachable loose objects. Known repository
+objects are read-only alternates during this work. Pruning failures are retried
+at the next interval; they do not authorize repository writes. Stores can thus
+retain expired data longer if pruning fails. No thread-deletion policy exists.

@@ -291,84 +291,81 @@ Next: step 4 adds MCP servers, and its details are agreed under "Agreed next,
 for daily use". Step 3, named CLIs for sandboxed projects, is agreed and
 waits until a sandboxed project needs it.
 
-**Direction for M9, turn records:** Plait's guard on files that had changes,
-its exact approvals, and its command sandbox protect a checkout only in Pi
-threads. Codex and Claude Code write wherever their own permissions allow, and
-most people run them without prompts. M9 gives every harness one protection
-that depends neither on prompts nor on the harness: the host records the
-checkout itself.
+**Direction for M9, turn records:** the host records the checkout around every
+run, for Pi, Codex, and Claude Code in every permission mode. This protection
+does not depend on the harness reporting its edits. Recording is the first
+implementation stage; undo operations and their desktop presentation follow.
+None of M9 is released yet.
 
-- **A record before and after every turn.** Each record is the working tree as
-  Git would store it: every tracked and untracked file that Git does not
-  ignore. Records are commits in a chain. The difference between a turn's two
-  records is what that turn changed, whichever tool or command changed it. The
-  difference between one turn's end and the next turn's start is what the
-  person, or anything else, changed in between.
-- **Kept by the host, not in the repository.** A private copy of the index
-  takes the files, and the resulting objects are written to the host's store,
-  which reads the repository's own objects without adding to them. The person's
-  repository gains no objects and no refs; their index, `HEAD`, branches, and
-  files are only read.
-- **Undo first, then review.** The same records give per-turn undo (step 1),
-  then staging and committing by turn, review of what changed since the person
-  last looked, and checks the host runs itself. Each later step is agreed
-  before it starts.
-- **The same on every machine.** Records are made by whichever host runs the
-  turn, so a remote host (M3) gives the same undo and review as a local one.
-- **Cheap.** A record of an unchanged checkout costs about one pass over its
-  file metadata. It is measured against an agreed target on a large checkout
-  before shipping, and runs on the host's background work, never in a frame.
+- **A run is the unit.** One submitted message, steering messages that join it,
+  and all harness turns inside it share one before/after pair. A queued
+  follow-up starts a new run and gets its own pair.
+- **Kept by the host.** Records are commits in a private Git store, separated
+  by object format, with a private index for each checkout. Only a run's after
+  commit has its before commit as a parent. Runs are ordered in SQLite, not
+  linked into an ever-growing Git history.
+- **Read-only checkout.** Records never write the person's files, index,
+  objects, refs, or Git metadata, including modification times. On macOS the
+  recorder runs under a sandbox denying these writes. The store and checkout
+  must not overlap. Repository objects may be borrowed for reads; writes go
+  only to the host's store.
+- **Exact content.** Records hold working-tree bytes, executable bits, and
+  symlink targets with filters and line-ending conversion disabled. The host
+  keeps its own copy of the before-content of each changed path. Other
+  permissions, extended attributes, and hard-link relationships are not saved
+  for restoration.
+- **Cheap and off the UI thread.** A warm record of an unchanged 50,000-file
+  checkout targets under 300 ms on Apple silicon. The
+  [verification record](VERIFICATION.md#checkout-recording-stage-1-unreleased)
+  separates measured costs from this target.
 
-**Agreed for M9 step 1, per-turn undo:** any turn, in any harness and any
-permission mode, can be undone, so the person's work is recoverable even when
-an agent ran with full access. This is the same promise for every harness,
-made by the host rather than the harness.
+**Agreed for M9 step 1, per-turn undo:** the host makes a before record before
+starting any harness and an after record after every outcome, including Stop
+and failure, while retaining the checkout lease. The difference lists the
+paths the run changed and lines added and removed per path; binary counts are
+unknown. A created-then-deleted file leaves no difference.
 
-- **Before each turn,** the host records the checkout as above. The turn
-  starts only after the record is made, and a turn whose record fails says so
-  before it starts rather than running unrecorded.
-- **After the turn,** the host records the tree again and keeps the list of
-  paths that differ.
-- **Undo this turn** puts those paths back as they were before the turn:
-  changed files restored, created files removed, deleted files returned. A
-  path the person or a later turn has changed since is not overwritten: the
-  undo lists it and stops until the person chooses. An undo is recorded first,
-  so it can itself be undone.
-- **Shown** on each finished turn with its file list and size, beside changed
-  files, for every harness. Changed files then includes what commands wrote,
-  which Codex and Claude Code threads do not list today.
-- **Not covered, and said so in the app:** files Git ignores (such as `.env`
-  files and build output), anything outside the checkout, commits, branch
-  changes, and pushes the agent made, and effects beyond the machine. A turn
-  that moved `HEAD` says so; undo restores files, not history.
-- **Writes.** Undo's restore of working-tree files is the only write to the
-  person's checkout, and there is no Git write to their repository. Records
-  are pruned with the thread and after an age to be agreed.
-- **Order.** Undo is built before M7 step 3, so each harness added later starts
-  with it.
-- **Release.** Codex and Claude Code threads shipped in v0.1.0-preview.10
-  without undo, and v0.1.0-preview.11 does not add it. Until undo ships, a
-  turn in those threads cannot be undone.
+- **Failure.** If the before record fails, the run ends with `record_failed`
+  before its harness starts and its queue stays held. A failed after record
+  makes the run unavailable for undo. After a host crash, recovery takes a
+  missing after record in the background under the checkout lease, or at the
+  next leased run if the checkout was busy. That record is marked “after
+  restart”: it may include changes made while the host was down.
+- **Undo this run, in the next implementation stage.** Restore changed and
+  deleted files and remove created files, only when each path still matches
+  the run's after record. Paths changed since are never overwritten; the
+  person chooses “Undo the rest” or “Cancel”. An undo is recorded and can
+  itself be undone. Undo changes files, not Git history.
+- **Presentation, after the operations.** A finished run will show its file
+  list and size and offer Undo. The changed-files view will include command
+  writes recorded by the host. A run that moved HEAD will say so. Stage 1
+  adds no desktop view, operation, or snapshot field.
+- **Order and release.** Undo precedes M7's ACP client. Codex and Claude Code
+  in v0.1.0-preview.10 and v0.1.0-preview.11 have no per-run undo; this work is
+  not a claim that those releases can undo turns.
 
 Agreed for implementation:
 
-- **Ignored files.** A file ignored one at a time, such as `.env`, is recorded
-  when it is at most 1 MB. Ignored directories, such as build output, are
-  not recorded, and a turn's record says which paths it does not cover.
-- **Exact bytes.** A record holds the working-tree bytes as they are, with Git
-  filters (such as LFS) and line-ending conversion off, so an undo writes back
-  exactly what was there.
-- **Its own copy.** The host's store holds its own copy of the earlier content
-  of every path a turn changed, so pruning or rewriting history in the
-  repository cannot break an undo.
-- **Kept** until the thread is deleted, or 30 days after the turn, whichever
-  comes first.
-- **Cost.** Recording an unchanged checkout of 50,000 files takes under 300 ms
-  on an Apple silicon Mac, measured by a test before it ships.
-- **Protocol.** Listing a thread's records and undoing a turn are new host
-  operations in a new protocol version, named in the
-  [host contract](HOST.md) when they are built. An older host offers no undo,
-  and the desktop says so.
+- **Coverage.** Tracked and untracked checkout files are recorded, including
+  untracked directories file by file. Individually ignored files are included
+  up to 1 MiB each, at most 2,000 files and 64 MiB total per record. A single
+  file over 100 MiB is excluded. Ignored directories, nested repositories,
+  submodules, and unreadable or unsupported files are not covered. Every
+  omitted path or directory is listed, with its reason. Files observed changing
+  during capture are also marked unavailable for undo.
+- **Beyond files.** Outside-checkout effects, commits, branch changes, pushes,
+  and effects beyond the machine are not undone. HEAD and its branch are
+  recorded so movement can be reported.
+- **Retention.** Keep pairs for 30 days, including archived threads; there is
+  no thread deletion. Prune at startup and daily, with recording paused during
+  pruning. Remove expired refs, stale private indexes, and unreachable private
+  objects, including packed objects. No expired before record is removed while
+  its run is active or its after record is still within retention.
+- **Protocol.** Stage 1 retains versions 1–4 and existing snapshots. The only
+  visible addition is the failed-before error (`runtime_error` to versions 1
+  and 2). Listing records and undo will be new operations in protocol version
+  5, documented in the [host contract](HOST.md) when implemented. Older hosts
+  offer no undo, and the desktop must say so.
 
 Use existing tools for editing, interactive shells, and debugging; "Ways out"
 below is how Plait hands off to them. A native mobile companion is a

@@ -5,6 +5,7 @@
 // FAKE_CLAUDE_SCENARIO picks the behavior; FAKE_CLAUDE_LOG, when set, receives argv and every stdin line as JSON lines.
 // Like Claude Code, Auto and Bypass never ask, Accept edits asks only for commands, and the mode is read when the tool is called.
 // `hold` waits before the tool until the mode changes (or 5 s), so a test can switch modes mid-turn.
+// FAKE_CLAUDE_WRITE, when set, makes each turn write `claude-N.txt` in its working directory as it starts.
 import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -125,6 +126,7 @@ function serve() {
     const turn: Turn = { interrupted: false, consumed: [first.uuid] };
     active = turn;
     const n = ++turns;
+    if (process.env.FAKE_CLAUDE_WRITE) writeFileSync(join(cwd, `claude-${n}.txt`), `turn ${n}\n`);
     write({
       type: 'system', subtype: 'init', cwd, tools: ['Bash', 'Edit', 'Read'], mcp_servers: [], model, permissionMode: mode, slash_commands: [],
       output_style: 'default', skills: [], plugins: [], apiKeySource: 'none', claude_code_version: version,

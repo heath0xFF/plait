@@ -92,11 +92,19 @@ fn trusted_command(_: &[String]) -> io::Result<Command> {
 
 #[cfg(target_os = "macos")]
 fn sandbox_command(args: &[String]) -> io::Result<Command> {
-    let mut command = Command::new("/usr/bin/sandbox-exec");
+    let mut command = with_profile(&args[1]);
     command
-        .args(["-p", &args[1], "/bin/sh", "-c", &args[2]])
+        .args(["/bin/sh", "-c", &args[2]])
         .current_dir(&args[0]);
     Ok(command)
+}
+
+/// Both command execution and recording enter Seatbelt through the host.
+#[cfg(target_os = "macos")]
+pub(crate) fn with_profile(profile: &str) -> Command {
+    let mut command = Command::new("/usr/bin/sandbox-exec");
+    command.args(["-p", profile]);
+    command
 }
 
 #[cfg(not(target_os = "macos"))]

@@ -118,6 +118,7 @@ git.rs                  synchronous Git adapter: hardened reads; background only
   git/log.rs            commit history and one commit's patch (read-only)
   git/counts.rs         uncommitted line counts for named paths (read-only)
   git/worktree.rs       add and remove optional per-thread worktrees
+  git/record.rs         private checkout records, coverage, changed paths, pruning (M9)
 fuzzy.rs                case-insensitive subsequence matching for pickers
 ```
 
@@ -140,6 +141,36 @@ The Linux sandbox mechanism is an open decision. An unprivileged namespace
 probe succeeded, but a read-only bind mount still permitted access to an outside
 pathname Unix socket. See [the evidence, alternatives, and enablement gates](LINUX-SANDBOX.md).
 Landlock ABI 9 is one option, not a fixed product requirement.
+
+## Checkout recording (M9 stage 1, unreleased)
+
+The TypeScript runtime owns run boundaries for every harness. `records.ts`
+records before entering a harness and after releasing it, keeping the checkout
+lease until the latter completes. Steering joins the active pair; queued
+follow-ups get new pairs. The `records` and `record_paths` tables in
+`host.sqlite` hold ordering, states, exact changed entries, line counts, and
+coverage exclusions. Before-record failure prevents harness startup and holds
+the queue; after-record failure disables future undo for that run. Startup
+recovery marks a late after record as possibly including changes while the host
+was down, and uses the checkout lease.
+
+The Rust host exposes internal `record` and `prune` helpers, running the headless
+core's Git recorder in a macOS Seatbelt process. Private Git stores are separated
+by object format and have one private index/HEAD per checkout identity. The
+person's repository is read-only, including its object timestamps. Only a
+run's before and after commits are linked, so expiring old pairs can release
+objects. Startup and daily pruning pause recording and reclaim expired refs,
+private caches, loose objects, and packs after 30 days, including for archived
+threads. The [host contract](HOST.md#checkout-records-m9-stage-1-unreleased)
+describes the layout, limits, exact-byte policy, recovery, and platform boundary.
+
+This stage has no new client operations or snapshot fields. The existing
+conversation closing-line summaries count observed tools; they are not these
+checkout records. Protocol version 5, safe file restoration, record listing,
+and native undo controls are subsequent implementation stages, not available
+through this recording work. Undo will restore bytes, executable bits, and
+symlinks only; other permissions, extended attributes, and hard links are outside
+that promise. Paths changed since a run require “Undo the rest” or “Cancel”.
 
 ## Local agent boundary
 

@@ -4,9 +4,9 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-struct Repo(PathBuf);
+pub(super) struct Repo(pub(super) PathBuf);
 impl Repo {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
             "plait-test-{}-{}-{}",
@@ -25,7 +25,7 @@ impl Repo {
         repo.git(&["config", "commit.gpgsign", "false"]);
         repo
     }
-    fn git(&self, args: &[&str]) {
+    pub(super) fn git(&self, args: &[&str]) {
         let out = Command::new("git")
             .arg("-C")
             .arg(&self.0)
@@ -40,10 +40,10 @@ impl Repo {
             String::from_utf8_lossy(&out.stderr)
         );
     }
-    fn write(&self, path: &str, text: impl AsRef<[u8]>) {
+    pub(super) fn write(&self, path: &str, text: impl AsRef<[u8]>) {
         fs::write(self.0.join(path), text).unwrap();
     }
-    fn commit(&self) {
+    pub(super) fn commit(&self) {
         self.git(&["add", "."]);
         self.git(&["commit", "-m", "fixture"]);
     }

@@ -3,6 +3,7 @@ mod files;
 mod fingerprint;
 mod installation;
 mod lease;
+mod record;
 mod service;
 mod startup;
 mod transport;
@@ -39,6 +40,14 @@ fn run() -> io::Result<()> {
     }
     if operation == "trusted-command" {
         return command::run_trusted(args.collect());
+    }
+    // The host's records of a checkout; JSON on stdin and stdout.
+    match operation.as_str() {
+        "record" => return record::run(),
+        "record-contained" => return record::run_contained(),
+        "prune" => return record::prune(),
+        "prune-contained" => return record::prune_contained(),
+        _ => {}
     }
     if operation == "version" {
         serde_json::to_writer(

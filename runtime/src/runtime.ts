@@ -13,6 +13,7 @@ import { openNodeSqliteDatabase } from '@earendil-works/pi-durable/storage/sqlit
 import { fail, failure, queuedView, summaryView, THINKING_LEVELS, validate, version, view } from './protocol.ts';
 import type { ApprovalMode, HarnessId, ModelChoice, Protocol, QueueMode, Request, Snapshot, InputRecord, ThinkingLevel } from './protocol.ts';
 import { Store } from './store.ts';
+import { Records } from './records.ts';
 import { checkout, dirtyPaths, fileAction, identities, acquireCheckout, rootIdentity, checkRoot, pathKey } from './safety.ts';
 import { registry } from './tools.ts';
 import { mcpPolicy, setMcpEnabled } from './mcp/policy.ts';
@@ -67,6 +68,8 @@ function capabilities(model: Model<Api>) {
 }
 export class Runtime {
   store: Store;
+  /** The checkout as each run found and left it, in the host's own store. */
+  records: Records;
   sessions = new Map<string, Session>();
   active = new Map<string, string>();
   models: Models;
@@ -103,6 +106,8 @@ export class Runtime {
   constructor(directory: string, models: Models, authenticated: Set<string>) {
     this.directory = directory; this.models = models; this.authenticated = authenticated;
     this.store = new Store(directory);
+    this.records = new Records(this.store, directory);
+    this.records.start();
     this.codex = new CodexHarness(this.store);
     this.claude = new ClaudeHarness(this.store, { sdk: sdkDirectory(directory), cwd: directory });
   }
@@ -456,7 +461,9 @@ export class Runtime {
     let authorization: RunAuthorization | undefined;
     try {
       await checkRoot(snapshot.checkout, this.store.rootIdentity(id));
-      lease = await acquireCheckout(snapshot.checkout);
+      // Recovery owns this host's lease until its record finishes. Accept now;
+      // the detached run waits for it instead of blocking the request deadline.
+      if (!this.records.busy(snapshot.checkout)) lease = await acquireCheckout(snapshot.checkout);
       const save = () => this.save(snapshot);
       const approvals = new InteractiveApproval(snapshot, save);
       // The mode belongs to this admission only; the next submission chooses again.
@@ -566,7 +573,16 @@ export class Runtime {
   }
   async run(session: Session, requestId: string, text: string) {
     const snapshot = session.snapshot;
+    let record: string | undefined;
     try {
+      if (!session.lease) {
+        await this.records.settled(snapshot.checkout);
+        await checkRoot(snapshot.checkout, session.rootIdentity);
+        session.lease = await acquireCheckout(snapshot.checkout);
+      }
+      // Before any harness starts: a run the host cannot record does not run.
+      record = await this.records.before(snapshot.id, requestId, snapshot.checkout, session.lease?.fd);
+      if (session.authorization.signal.aborted) return;
       if (snapshot.harness?.id === 'codex') return await this.runCodex(session, requestId, text);
       if (snapshot.harness?.id === 'claude') return await this.runClaude(session, requestId, text);
       const baseline = await dirtyPaths(snapshot.checkout);
@@ -608,6 +624,8 @@ export class Runtime {
       session.authorization.revoke();
       snapshot.pending_approval = null; snapshot.live_text = ''; snapshot.live_reasoning = ''; snapshot.retry = null;
       await this.gate(snapshot.id, () => this.release(session));
+      // After every outcome, with the harness gone and the checkout still this run's.
+      if (record !== undefined) await this.records.after(record, session.lease?.fd);
       await session.lease?.close(); session.lease = undefined;
       this.active.delete(snapshot.checkout);
       // Idle means a following submit can acquire the checkout immediately.
@@ -699,6 +717,7 @@ export class Runtime {
     }
     await this.providers?.close();
     await this.codex.close();
+    await this.records.close();
     this.store.close();
   }
   async reply(input: unknown) {

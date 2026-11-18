@@ -2,7 +2,9 @@
 //   node fake-codex.ts --version     prints `codex-cli $FAKE_CODEX_VERSION` (default 0.169.0)
 //   node fake-codex.ts app-server    speaks the app-server JSON line protocol on stdio
 // FAKE_CODEX_SCENARIO picks the behavior; FAKE_CODEX_LOG, when set, receives every client frame as a JSON line.
-import { appendFileSync } from 'node:fs';
+// FAKE_CODEX_WRITE, when set, names a directory where each turn writes `codex-<message ID>.txt` as it starts.
+import { appendFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
 type Frame = { id?: string | number; method?: string; params?: any; result?: any; error?: any };
@@ -154,8 +156,11 @@ function handle(frame: Frame) {
     case 'thread/resume':
       return params.threadId === threadId ? reply(id, threadResponse(params)) : failRequest(id, `no rollout found for thread id ${params.threadId}`);
     case 'turn/start': {
-      if (scenario === 'exit-on-turn') process.exit(3);
       const turnId = `turn-${++turns}`;
+      // Stands for the work a turn does in the checkout; steering joins a turn and writes nothing.
+      // Named for the message, as a later run may start a new app-server whose turns count from 1 again.
+      if (process.env.FAKE_CODEX_WRITE) writeFileSync(join(process.env.FAKE_CODEX_WRITE, `codex-${params.clientUserMessageId ?? turnId}.txt`), `${turnId}\n`);
+      if (scenario === 'exit-on-turn') process.exit(3);
       policy = params.approvalPolicy ?? policy;
       active = { id: turnId, interrupted: false };
       reply(id, { turn: turnOf(turnId) });
