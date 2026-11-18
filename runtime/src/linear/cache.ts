@@ -76,7 +76,8 @@ export class LinearCache {
         has_more INTEGER NOT NULL,
         next_cursor TEXT,
         cached_at INTEGER NOT NULL,
-        accessed_at INTEGER NOT NULL
+        accessed_at INTEGER NOT NULL,
+        touched_seq INTEGER NOT NULL DEFAULT 0
       );
       CREATE INDEX IF NOT EXISTS linear_cache_pages_team ON linear_cache_pages(team_id);
       CREATE TABLE IF NOT EXISTS linear_cache_details(
@@ -84,7 +85,8 @@ export class LinearCache {
         team_id TEXT NOT NULL,
         payload TEXT NOT NULL,
         cached_at INTEGER NOT NULL,
-        accessed_at INTEGER NOT NULL
+        accessed_at INTEGER NOT NULL,
+        touched_seq INTEGER NOT NULL DEFAULT 0
       );
       CREATE TABLE IF NOT EXISTS linear_thread_links(
         thread_id TEXT PRIMARY KEY,
@@ -106,10 +108,25 @@ export class LinearCache {
         op TEXT NOT NULL,
         hash TEXT NOT NULL,
         result TEXT NOT NULL,
-        created_at INTEGER NOT NULL
+        created_at INTEGER NOT NULL,
+        touched_seq INTEGER NOT NULL DEFAULT 0
       );
       CREATE INDEX IF NOT EXISTS linear_writes_recent ON linear_writes(created_at DESC);
     `);
+    for (const table of ['linear_cache_pages', 'linear_cache_details', 'linear_writes']) {
+      if (!this.db.prepare(`PRAGMA table_info(${table})`).all().some(row => row.name === 'touched_seq')) {
+        this.db.exec(`ALTER TABLE ${table} ADD COLUMN touched_seq INTEGER NOT NULL DEFAULT 0`);
+      }
+    }
+    const maxSeq = this.db.prepare(`
+      SELECT MAX(seq) AS m FROM (
+        SELECT MAX(touched_seq) AS seq FROM linear_cache_issues
+        UNION ALL SELECT MAX(touched_seq) FROM linear_cache_pages
+        UNION ALL SELECT MAX(touched_seq) FROM linear_cache_details
+        UNION ALL SELECT MAX(touched_seq) FROM linear_writes
+      )
+    `).get();
+    this.touchSeq = Number(maxSeq?.m ?? 0);
   }
 
   private transaction<T>(work: () => T): T {
@@ -196,7 +213,7 @@ export class LinearCache {
       if (!row) return null;
       issues.push(JSON.parse(String(row.payload)) as LinearIssueSummary);
     }
-    this.db.prepare('UPDATE linear_cache_pages SET accessed_at=? WHERE cache_key=?').run(now, cacheKey);
+    this.db.prepare('UPDATE linear_cache_pages SET accessed_at=?, touched_seq=? WHERE cache_key=?').run(now, ++this.touchSeq, cacheKey);
     return {
       issues,
       has_more: page.has_more === 1,
@@ -239,21 +256,22 @@ export class LinearCache {
       `).run(teamId, teamId, LINEAR_CACHE_MAX_ISSUES_PER_TEAM);
 
       this.db.prepare(`
-        INSERT INTO linear_cache_pages(cache_key, team_id, issue_ids, has_more, next_cursor, cached_at, accessed_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO linear_cache_pages(cache_key, team_id, issue_ids, has_more, next_cursor, cached_at, accessed_at, touched_seq)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(cache_key) DO UPDATE SET
           team_id=excluded.team_id,
           issue_ids=excluded.issue_ids,
           has_more=excluded.has_more,
           next_cursor=excluded.next_cursor,
           cached_at=excluded.cached_at,
-          accessed_at=excluded.accessed_at
-      `).run(cacheKey, teamId, JSON.stringify(issues.map(issue => issue.id)), hasMore ? 1 : 0, nextCursor, cachedAt, cachedAt);
+          accessed_at=excluded.accessed_at,
+          touched_seq=excluded.touched_seq
+      `).run(cacheKey, teamId, JSON.stringify(issues.map(issue => issue.id)), hasMore ? 1 : 0, nextCursor, cachedAt, cachedAt, seq);
 
       this.db.prepare(`
         DELETE FROM linear_cache_pages
         WHERE cache_key NOT IN (
-          SELECT cache_key FROM linear_cache_pages ORDER BY accessed_at DESC, cache_key ASC LIMIT ?
+          SELECT cache_key FROM linear_cache_pages ORDER BY accessed_at DESC, touched_seq DESC, rowid DESC LIMIT ?
         )
       `).run(LINEAR_CACHE_MAX_PAGES);
     });
@@ -262,7 +280,7 @@ export class LinearCache {
   getIssueDetail(issueId: string, now: number): CachedIssueDetail | null {
     const row = this.db.prepare('SELECT payload, cached_at FROM linear_cache_details WHERE issue_id=?').get(issueId);
     if (!row) return null;
-    this.db.prepare('UPDATE linear_cache_details SET accessed_at=? WHERE issue_id=?').run(now, issueId);
+    this.db.prepare('UPDATE linear_cache_details SET accessed_at=?, touched_seq=? WHERE issue_id=?').run(now, ++this.touchSeq, issueId);
     return {
       issue: JSON.parse(String(row.payload)) as LinearIssueDetail,
       cached_at: Number(row.cached_at),
@@ -271,21 +289,23 @@ export class LinearCache {
 
   saveIssueDetail(issue: LinearIssueDetail, cachedAt: number): void {
     this.transaction(() => {
+      const seq = ++this.touchSeq;
       this.db.prepare(`
-        INSERT INTO linear_cache_details(issue_id, team_id, payload, cached_at, accessed_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO linear_cache_details(issue_id, team_id, payload, cached_at, accessed_at, touched_seq)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(issue_id) DO UPDATE SET
           team_id=excluded.team_id,
           payload=excluded.payload,
           cached_at=excluded.cached_at,
-          accessed_at=excluded.accessed_at
-      `).run(issue.id, issue.team_id, JSON.stringify(issue), cachedAt, cachedAt);
+          accessed_at=excluded.accessed_at,
+          touched_seq=excluded.touched_seq
+      `).run(issue.id, issue.team_id, JSON.stringify(issue), cachedAt, cachedAt, seq);
 
       // Keep LRU cap of LINEAR_CACHE_MAX_DETAILS issue details.
       this.db.prepare(`
         DELETE FROM linear_cache_details
         WHERE issue_id NOT IN (
-          SELECT issue_id FROM linear_cache_details ORDER BY accessed_at DESC, issue_id ASC LIMIT ?
+          SELECT issue_id FROM linear_cache_details ORDER BY accessed_at DESC, touched_seq DESC, rowid DESC LIMIT ?
         )
       `).run(LINEAR_CACHE_MAX_DETAILS);
 
@@ -354,18 +374,20 @@ export class LinearCache {
 
   saveWrite(requestId: string, op: string, hash: string, result: unknown, createdAt: number): void {
     this.transaction(() => {
+      const seq = ++this.touchSeq;
       this.db.prepare(`
-        INSERT INTO linear_writes(request_id, op, hash, result, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO linear_writes(request_id, op, hash, result, created_at, touched_seq)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(request_id) DO UPDATE SET
           result=excluded.result,
-          created_at=excluded.created_at
-      `).run(requestId, op, hash, JSON.stringify(result), createdAt);
+          created_at=excluded.created_at,
+          touched_seq=excluded.touched_seq
+      `).run(requestId, op, hash, JSON.stringify(result), createdAt, seq);
 
       this.db.prepare(`
         DELETE FROM linear_writes
         WHERE request_id NOT IN (
-          SELECT request_id FROM linear_writes ORDER BY created_at DESC, request_id ASC LIMIT ?
+          SELECT request_id FROM linear_writes ORDER BY created_at DESC, touched_seq DESC, rowid DESC LIMIT ?
         )
       `).run(LINEAR_MAX_RECENT_WRITES);
     });

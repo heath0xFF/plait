@@ -297,3 +297,41 @@ test('in-flight write is never joined after sign-out or workspace switch', async
   assert.equal(whileSignedOut.ok, false);
   assert.equal(whileSignedOut.error.code, 'linear_not_signed_in');
 });
+
+test('same-millisecond boundary eviction retains newest write, detail, and page entries', async t => {
+  const h = await setup(t);
+  const now = 1_763_500_000_000;
+
+  // 1. linear_writes: 500 writes a-0000..a-0499 at `now`, then z-newest at the exact same `now`.
+  for (let i = 0; i < 500; i++) {
+    h.runtime.store.linear.saveWrite(`a-${String(i).padStart(4, '0')}`, 'linear_post_comment', 'h', { comment_id: `c-${i}` }, now);
+  }
+  h.runtime.store.linear.saveWrite('z-newest', 'linear_post_comment', 'h', { comment_id: 'c-new' }, now);
+  assert.notEqual(h.runtime.store.linear.getWrite('z-newest'), null, 'newest write must not be evicted on same-ms tie');
+  assert.equal(h.runtime.store.linear.getWrite('a-0000'), null, 'oldest write must be evicted');
+
+  // 2. linear_cache_details: 200 details a-0000..a-0199 at `now`, touch a-0000, then insert z-newest at `now`.
+  const template = {
+    id: 'x', identifier: 'PLA-1', title: 'T', url: 'https://linear.app/a', priority: 0,
+    updated_at: '2026-11-18T00:00:00Z', team_id: 't1', state: { id: 's1', name: 'S', type: 'started' },
+    assignee: null, labels: [], description: null, attachments: [], comments: [],
+    comments_has_more: false, comments_next_cursor: null,
+  };
+  for (let i = 0; i < 200; i++) {
+    h.runtime.store.linear.saveIssueDetail({ ...template, id: `a-${String(i).padStart(4, '0')}` }, now);
+  }
+  // Touch a-0000 so it becomes MRU; a-0001 becomes LRU.
+  assert.notEqual(h.runtime.store.linear.getIssueDetail('a-0000', now), null);
+  h.runtime.store.linear.saveIssueDetail({ ...template, id: 'z-newest' }, now);
+  assert.notEqual(h.runtime.store.linear.getIssueDetail('z-newest', now), null, 'newest detail must survive same-ms eviction');
+  assert.notEqual(h.runtime.store.linear.getIssueDetail('a-0000', now), null, 'recently touched detail must survive LRU eviction');
+  assert.equal(h.runtime.store.linear.getIssueDetail('a-0001', now), null, 'least-recently-used detail must be evicted');
+
+  // 3. linear_cache_pages: 100 pages a-0000..a-0099 at `now`, then z-newest at `now`.
+  for (let i = 0; i < 100; i++) {
+    h.runtime.store.linear.saveIssuesPage(`a-${String(i).padStart(4, '0')}`, 't1', [], false, null, now);
+  }
+  h.runtime.store.linear.saveIssuesPage('z-newest', 't1', [], false, null, now);
+  assert.notEqual(h.runtime.store.linear.getIssuesPage('z-newest', now), null, 'newest page must survive same-ms eviction');
+  assert.equal(h.runtime.store.linear.getIssuesPage('a-0000', now), null, 'oldest page must be evicted');
+});
