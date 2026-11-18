@@ -40,19 +40,22 @@ export async function codex(t: Context, scenario = 'turn') {
   const store = join(base, 'store');
   await mkdir(store, { recursive: true });
   const log = join(store, 'frames.jsonl');
-  const runtime = new Runtime(store, models(), new Set(['faux']));
-  runtime.codex = new CodexHarness(runtime.store, {
-    environment: async () => codexEnv({ FAKE_CODEX_SCENARIO: scenario, FAKE_CODEX_LOG: log, FAKE_CODEX_WRITE: root }),
-    find: async () => ({ state: 'ready', path: FAKE_CODEX, version: '0.169.0', message: 'ready' }),
-    start: (path, env) => AppServer.start(path, { env, requestTimeoutMs: 10_000 }),
-    idleMs: 50,
-  });
+  const open = () => {
+    const runtime = new Runtime(store, models(), new Set(['faux']));
+    runtime.codex = new CodexHarness(runtime.store, {
+      environment: async () => codexEnv({ FAKE_CODEX_SCENARIO: scenario, FAKE_CODEX_LOG: log, FAKE_CODEX_WRITE: root }),
+      find: async () => ({ state: 'ready', path: FAKE_CODEX, version: '0.169.0', message: 'ready' }),
+      start: (path, env) => AppServer.start(path, { env, requestTimeoutMs: 10_000 }),
+      idleMs: 50,
+    });
+    return harnessed(t, runtime, root, store, { provider: 'codex', model_id: 'gpt-fake', harness: 'codex', mode: 'ask' });
+  };
   // Ask mode, so a run waits on its first command until the test allows it.
-  const h = harnessed(t, runtime, root, store, { provider: 'codex', model_id: 'gpt-fake', harness: 'codex', mode: 'ask' });
+  const h = open();
   /** Turns Codex was asked to start. */
   const turns = async () => (await readFile(log, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean)
     .filter(line => JSON.parse(line).method === 'turn/start').length;
-  return { ...h, turns };
+  return { ...h, turns, reopen: open };
 }
 
 /** A runtime whose Claude Code is the fake, writing a file in the checkout as each turn starts. */
@@ -61,17 +64,20 @@ export async function claude(t: Context, scenario = 'turn', mode = 'auto') {
   const store = join(base, 'store');
   const sessions = join(store, 'fake-sessions');
   await mkdir(sessions, { recursive: true });
-  const runtime = new Runtime(store, models(), new Set(['faux']));
-  runtime.codex = new CodexHarness(runtime.store, {
-    environment: async () => ({ PATH: '/nonexistent' }), find: async () => ({ state: 'not_installed', message: 'Codex was not found.' }),
-  });
-  runtime.claude = new ClaudeHarness(runtime.store, {
-    sdk: DEV_SDK, cwd: store,
-    environment: async () => claudeEnv({ FAKE_CLAUDE_SCENARIO: scenario, FAKE_CLAUDE_STATE: sessions, FAKE_CLAUDE_WRITE: '1' }),
-    find: async () => ({ state: 'ready', path: FAKE_CLAUDE, version: '2.1.326', message: 'ready' }),
-    fetch: (async () => { throw new Error('No test downloads anything.'); }) as unknown as typeof fetch,
-  });
-  return harnessed(t, runtime, root, store, { provider: 'claude', model_id: 'default', harness: 'claude', mode });
+  const open = () => {
+    const runtime = new Runtime(store, models(), new Set(['faux']));
+    runtime.codex = new CodexHarness(runtime.store, {
+      environment: async () => ({ PATH: '/nonexistent' }), find: async () => ({ state: 'not_installed', message: 'Codex was not found.' }),
+    });
+    runtime.claude = new ClaudeHarness(runtime.store, {
+      sdk: DEV_SDK, cwd: store,
+      environment: async () => claudeEnv({ FAKE_CLAUDE_SCENARIO: scenario, FAKE_CLAUDE_LOG: join(store, 'claude-images.jsonl'), FAKE_CLAUDE_STATE: sessions, FAKE_CLAUDE_WRITE: '1' }),
+      find: async () => ({ state: 'ready', path: FAKE_CLAUDE, version: '2.1.326', message: 'ready' }),
+      fetch: (async () => { throw new Error('No test downloads anything.'); }) as unknown as typeof fetch,
+    });
+    return harnessed(t, runtime, root, store, { provider: 'claude', model_id: 'default', harness: 'claude', mode });
+  };
+  return { ...open(), reopen: open };
 }
 
 function harnessed(t: Context, runtime: Runtime, root: string, store: string, thread: Record<string, string>) {

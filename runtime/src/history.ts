@@ -1,3 +1,4 @@
+import type { ImageRef } from './images.ts';
 import type { EntryRecord } from '@earendil-works/pi-durable';
 import type { Placed } from './store.ts';
 import { fail } from './protocol.ts';
@@ -17,7 +18,7 @@ const FIELDS = ['text', 'reasoning', 'input', 'output'] as const;
 
 type Field = typeof FIELDS[number];
 type More = { field: Field; ref: string; offset: number; length: number };
-type MessageItem = { type: 'message'; id: string; role: 'user' | 'assistant'; text: string; reasoning: string; more?: More[] };
+type MessageItem = { type: 'message'; id: string; role: 'user' | 'assistant'; text: string; reasoning: string; more?: More[]; images?: ImageRef[] };
 type ToolItem = { type: 'tool'; id: string; name: string; status: 'running' | 'done' | 'error' | 'interrupted'; input: string; output: string; more?: More[] };
 export type HistoryItem = MessageItem | ToolItem;
 /** Where a thread's complete conversation is read from. `entries` is absent before the first run. */
@@ -61,9 +62,9 @@ function entryUnit(entry: EntryRecord, placed: Map<number, Placed>): Unit {
       const input = message.role === 'user' ? placed.get(id) : undefined;
       const typed = input?.text !== undefined;
       const text = typed ? input!.text! : messageText(message); const reasoning = message.role === 'assistant' ? reasoningText(message) : '';
-      if (text || reasoning) {
+      if (text || reasoning || input?.images?.length) {
         // The same stable IDs the snapshot uses.
-        const item: MessageItem = { type: 'message', id: input ? `request-${input.request_id}` : `${id}-${index}`, role: message.role, text: '', reasoning: '' };
+        const item: MessageItem = { type: 'message', id: input ? `request-${input.request_id}` : `${id}-${index}`, role: message.role, text: '', reasoning: '', ...(input?.images?.length ? { images: input.images } : {}) };
         assign(item, 'text', text, typed ? `p${id}` : `${ref}.text`); assign(item, 'reasoning', reasoning, `${ref}.reasoning`);
         unit.items.push(item);
       }
@@ -81,7 +82,7 @@ function entryUnit(entry: EntryRecord, placed: Map<number, Placed>): Unit {
   return unit;
 }
 function pendingUnit(input: PendingInput): Unit {
-  const item: MessageItem = { type: 'message', id: `request-${input.request_id}`, role: 'user', text: '', reasoning: '' };
+  const item: MessageItem = { type: 'message', id: `request-${input.request_id}`, role: 'user', text: '', reasoning: '', ...(input.images?.length ? { images: input.images } : {}) };
   assign(item, 'text', input.text, `q${input.rowid}`);
   return { key: `${input.anchor}:1:${input.rowid}`, items: [item], results: new Map(), bytes: bytes(item) };
 }

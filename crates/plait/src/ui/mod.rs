@@ -12,6 +12,7 @@ mod file_view;
 mod harnesses;
 mod history;
 mod host;
+mod images;
 mod jump;
 mod live_conversation;
 mod markdown;
@@ -158,6 +159,7 @@ pub struct Plait {
     new_thread_open: bool,
     /// The new thread being written, before anything exists on the host.
     draft: new_thread::Draft,
+    images: images::ImageCache,
     /// A worktree is being created or removed.
     worktree_busy: bool,
     /// Diff lines picked in Changes to ask the selected thread about.
@@ -246,6 +248,7 @@ impl Plait {
             providers: Default::default(),
             new_thread_open: false,
             draft: Default::default(),
+            images: Default::default(),
             worktree_busy: false,
             line_pick: None,
             thread_files: Default::default(),
@@ -998,6 +1001,13 @@ impl Render for Plait {
             .on_action(cx.listener(|this, _: &CommandPalette, window, cx| {
                 this.toggle_command_palette(window, cx)
             }))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" && this.images.enlarged.take().is_some() {
+                    this.focus_composer(window, cx);
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
             .on_action(cx.listener(|this, _: &NewThread, window, cx| this.open_draft(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleChangedFiles, _, cx| {
                 let hidden = !this.preferences.value.hide_changed_files;
@@ -1182,6 +1192,9 @@ impl Render for Plait {
             .when_some(self.overlay.as_ref(), |el, overlay| {
                 el.child(overlay.palette.clone())
             });
+        let root = root.when_some(self.image_overlay(window, cx), |el, overlay| {
+            el.child(overlay)
+        });
         self.last_render_us = start.elapsed().as_micros();
         self.max_render_us = self.max_render_us.max(self.last_render_us);
         root

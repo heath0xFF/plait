@@ -13,7 +13,7 @@ export type CodexInstall = {
   /** One short sentence for the person, saying how to fix it when something is wrong. */
   message: string;
 };
-export type CodexModel = { id: string; name: string; efforts: string[]; defaultEffort: string | null; isDefault: boolean };
+export type CodexModel = { id: string; name: string; efforts: string[]; defaultEffort: string | null; isDefault: boolean; input?: string[] };
 
 const VERSION_TIMEOUT_MS = 5000;
 const VERSION_OUTPUT_BYTES = 4096;
@@ -125,6 +125,7 @@ export async function codexModels(server: AppServer): Promise<CodexModel[]> {
       models.push({
         // `model` is the slug turn/start takes; `id` names the catalog entry (equal in 0.169.0).
         id: model.model || model.id, name: model.displayName || model.id,
+        ...(model.inputModalities ? { input: model.inputModalities } : {}),
         efforts: model.supportedReasoningEfforts.map(option => option.reasoningEffort),
         defaultEffort: model.defaultReasoningEffort || null, isDefault: model.isDefault,
       });

@@ -66,7 +66,7 @@ fn run() -> io::Result<()> {
                 "component": "host", "version": env!("CARGO_PKG_VERSION"),
                 "revision": option_env!("PLAIT_BUILD_REVISION").unwrap_or("development"),
                 "release": plait_core::update::current_version().map(|version| version.to_string()),
-                "protocol_version": 5,
+                "protocol_version": 6,
             }),
         )?;
         return Ok(());

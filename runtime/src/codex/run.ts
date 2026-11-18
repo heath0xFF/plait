@@ -1,3 +1,4 @@
+import type { ImageData } from '../images.ts';
 // One Plait run of a Codex thread: a single Codex turn on the shared app-server.
 //
 // Codex owns the work: its sandbox, its tools, and its approvals policy. Plait
@@ -51,7 +52,7 @@ export type CodexRunContext = {
   changed(path: string): void;
 };
 
-const text = (value: string): UserInput[] => [{ type: 'text', text: value, text_elements: [] }];
+const content = (value: string, images: ImageData[]): UserInput[] => [{ type: 'text', text: value, text_elements: [] }, ...images.map(image => ({ type: 'image' as const, url: `data:${image.ref.media_type};base64,${image.data}` }))];
 
 export class CodexRun {
   private readonly context: CodexRunContext;
@@ -75,8 +76,8 @@ export class CodexRun {
   }
 
   /** Runs one turn for `text`; resolves when Codex ends it, and throws when it fails. */
-  async run(requestId: string, input: string, model: string, effort: string | undefined) {
-    try { await this.turnFor(requestId, input, model, effort); }
+  async run(requestId: string, input: string, model: string, effort: string | undefined, images: ImageData[] = []) {
+    try { await this.turnFor(requestId, input, model, effort, images); }
     catch (error) {
       // Codex's own errors and output can quote the provider or the machine, so the client gets a fixed message.
       if (error instanceof HostError) throw error;
@@ -84,7 +85,7 @@ export class CodexRun {
     }
   }
 
-  private async turnFor(requestId: string, input: string, model: string, effort: string | undefined) {
+  private async turnFor(requestId: string, input: string, model: string, effort: string | undefined, images: ImageData[] = []) {
     const { snapshot, lease, signal } = this.context;
     const cwd = snapshot.checkout;
     // The mode's settings are sent in full each turn, so a change between turns applies to the next one.
@@ -113,7 +114,7 @@ export class CodexRun {
     this.unplaced = requestId;
     const ended = new Promise<NonNullable<ReturnType<typeof isTerminalTurn>>>(resolve => { this.finish = resolve; });
     const params: TurnStartParams = {
-      threadId: this.thread, input: text(input), clientUserMessageId: requestId, cwd, approvalPolicy, sandboxPolicy, approvalsReviewer, model,
+      threadId: this.thread, input: content(input, images), clientUserMessageId: requestId, cwd, approvalPolicy, sandboxPolicy, approvalsReviewer, model,
       effort: effort ?? null, summary: 'auto',
     };
     const { turn } = await lease.server.request<TurnStartResponse>('turn/start', params);
@@ -138,9 +139,9 @@ export class CodexRun {
   }
 
   /** Joins a message to the turn that is running now. False when there is no turn to join. */
-  async steer(requestId: string, input: string): Promise<boolean> {
+  async steer(requestId: string, input: string, images: ImageData[] = []): Promise<boolean> {
     if (!this.thread || !this.turn || this.context.signal.aborted) return false;
-    const params: TurnSteerParams = { threadId: this.thread, clientUserMessageId: requestId, input: text(input), expectedTurnId: this.turn };
+    const params: TurnSteerParams = { threadId: this.thread, clientUserMessageId: requestId, input: content(input, images), expectedTurnId: this.turn };
     return this.context.lease.server.request('turn/steer', params).then(() => true, () => false);
   }
 

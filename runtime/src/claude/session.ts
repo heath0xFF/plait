@@ -1,3 +1,4 @@
+import type { ImageData } from '../images.ts';
 // One Claude Code session for one Plait run, through the pinned Agent SDK in
 // streaming-input mode. Claude Code owns the work: its tools, its permission
 // mode, the person's settings, CLAUDE.md files, skills, slash commands, hooks,
@@ -139,9 +140,9 @@ export class ClaudeSession {
    * The request ID stays on Plait's side: every send gets a fresh uuid, since
    * Claude Code treats a repeated uuid as a re-send of the same message.
    */
-  send(text: string, _requestId: string): string {
+  send(text: string, _requestId: string, images: ImageData[] = []): string {
     const uuid = randomUUID();
-    this.input.push({ type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null, uuid });
+    this.input.push({ type: 'user', message: { role: 'user', content: images.length ? [{ type: 'text', text }, ...images.map(image => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: image.ref.media_type, data: image.data } }))] : text }, parent_tool_use_id: null, uuid });
     return uuid;
   }
 

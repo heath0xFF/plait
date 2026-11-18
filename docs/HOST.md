@@ -3,7 +3,8 @@
 This is the version 1 contract plus the opt-in additions described in
 [Protocol version 2](#protocol-version-2) and
 [Protocol version 3](#protocol-version-3), [Protocol version 4](#protocol-version-4),
-and [Protocol version 5](#protocol-version-5). Changes require compatibility review.
+[Protocol version 5](#protocol-version-5), and
+[Protocol version 6](#protocol-version-6-images-unreleased). Changes require compatibility review.
 All values below are JSON. The desktop has no dependency on the host crate and
 does not own its process.
 
@@ -42,7 +43,7 @@ runtime dependencies; it does not need a development checkout or shell Node.
 ## Transport
 
 Owner-only Unix stream socket, UTF-8 newline-delimited JSON, protocol version 1
-by default; versions 2–5 are opt-in per request.
+by default; versions 2–6 are opt-in per request.
 Clients and the daemon verify connected-peer user identity with `getpeereid` on
 macOS or `SO_PEERCRED` on Linux. Clients also check socket and parent ownership
 and private modes before connecting. This does not enable Linux commands.
@@ -156,7 +157,7 @@ arguments are never clipped. `truncated` flags clipping.
 ## Protocol version 2
 
 Version 2 is negotiated per request, so desktops and hosts can update separately.
-Every operation accepts an optional `"protocol_version":1`, `2`, `3`, `4`, or `5`; omitting it
+Every operation accepts an optional `"protocol_version":1`, `2`, `3`, `4`, `5`, or `6`; omitting it
 means version 1, and version 1 replies are byte-for-byte unchanged.
 
 - **Negotiation.** A client sends `{"op":"status","protocol_version":2}`. A
@@ -1750,3 +1751,99 @@ before U1 is captured. Detected races stop with `undo_incomplete`; these checks
 do not establish a guarantee against arbitrary concurrent external writers or
 power loss. Undo records exclude unrelated paths and failed restores, so their
 redo does not claim those concurrent edits.
+
+
+## Protocol version 6 (images, unreleased)
+
+Version 6 adds image attachments. Like version 5, it is negotiated per request:
+ask for status at 6, then step down on `invalid_request`. Versions 1–5 keep
+their request and reply shapes, omit image references and capability fields,
+and reject image operations and the `submit.images` field. Text still works
+with an older desktop or host. A desktop connected below 6 says **Update host**
+before sending images; image operations must never be retried at an older
+version. Storage migration is additive; downgrading the store is not supported.
+
+A version 6 model in `status.models` or `harnesses` has `image_input`, one of
+`yes`, `no`, or `unknown`. A thread snapshot has the same field for its selected
+model. Pi reports its catalog's input modalities; Codex reports its app-server
+model's `inputModalities`. The pinned Claude Agent SDK model catalog has no
+image capability field, so Claude Code reports `unknown`. Missing Codex
+modalities also mean `unknown`. A known `no` rejects submission with
+`model_unavailable`; `unknown` permits it, and a harness refusal ends the run
+with its usual safe error. The desktop has no separate model allowlist.
+
+Upload original bytes before submitting, in consecutive chunks of at most
+32,768 decoded bytes, encoded as canonical base64:
+
+```json
+{"op":"image_put","protocol_version":6,"thread_id":"THREAD_ID","image_id":"SHA256_HEX","offset":0,"total":1032,"data":"BASE64_CHUNK"}
+```
+
+`image_id` is the lowercase SHA-256 of the complete bytes. `total` is the
+original byte count. The result is `{"offset":1032,"image":REFERENCE}` on
+completion, or `{"offset":32768,"image":null}` while incomplete. The offset
+is the saved length. Retrying an identical chunk is safe; changed bytes,
+changed total, gaps, and a mismatched final hash are refused. The thread must
+exist. No path from the client is accepted or opened.
+
+A reference is `{"id":"SHA256_HEX","media_type":"image/png","size":1032,
+"width":320,"height":180}`. `media_type` is `image/png` or `image/jpeg`,
+determined from the bytes and their dimension header, never the filename.
+The host does not decompress pixels. The desktop additionally decodes under
+allocation and dimension limits before retaining an attachment.
+
+```json
+{"op":"submit","protocol_version":6,"thread_id":"THREAD_ID","request_id":"CLIENT_UUID","text":"Compare these screens","images":["SHA256_HEX"],"approval":"ask","when_busy":"follow_up"}
+```
+
+`images` is optional. With images, text may be empty. Every ID must name a
+complete upload to this thread. Acceptance durably associates the IDs with
+the request in the same transaction as its text and deduplication key. That
+key includes the ordered image IDs: repeating the request with different
+images returns `conflict`. Queued and steering inputs carry the same originals.
+An upload alone never starts a run.
+
+Version 6 snapshot and history user messages add optional `images:[REFERENCE]`.
+They never carry base64 or pixel bytes. Fetch only when preparing a visible
+thumbnail or larger view:
+
+```json
+{"op":"image_read","protocol_version":6,"thread_id":"THREAD_ID","image_id":"SHA256_HEX","offset":0}
+```
+
+The result is `{"image":REFERENCE,"offset":0,"data":"BASE64_CHUNK"}` with
+at most 32,768 decoded bytes. Continue at the returned offset plus decoded
+length, stopping at `size`. Offsets outside the image are refused. The desktop
+checks every returned reference, offset, chunk length, and the completed hash.
+
+### Limits and retention
+
+Both sides enforce at most four different images, 2 MiB (2,097,152 bytes) per
+image, 4 MiB (4,194,304 bytes) total per message, 8,192 pixels per axis, and
+16,777,216 pixels per image. Oversized images are refused with a reason; Plait
+never recompresses or resizes the sent original. Thumbnails are separate.
+
+These are conservative Plait limits, not a promise about every provider. All
+three pinned harness interfaces accept PNG/JPEG content blocks. Four MiB of
+raw bytes becomes about 5.34 MiB of base64, leaving room for text and framing
+under Plait's 8 MiB Codex adapter frame bound. A 32 KiB chunk becomes under
+44 KiB of base64, leaving room below the unchanged 64 KiB host request limit
+and 1 MiB reply limit. The image count, dimensions, and per-image bound limit
+decode memory and concurrent work. The SDK schemas specify no shared provider
+byte limit; a provider can still refuse an otherwise valid message.
+
+Originals are BLOBs in `STORE/host.sqlite`, keyed by thread and hash, with
+associations in `message_images`. The owner-only host store defaults to
+`~/.local/share/plait`; images are never written to the checkout, repository,
+or the checkout records used for Undo. They survive host restart. Accepted
+images last as long as the host store, including after archive or cancellation;
+removing the store removes them. Incomplete and unattached uploads expire
+after 24 hours, pruned on startup and upload, with at most 16 per thread and
+128 across the store. Harnesses may also retain content in their own native
+conversation storage as part of their ordinary history.
+
+Pi receives `{type:"image",mimeType,data}` alongside text. Codex receives
+`{type:"image",url:"data:image/png;base64,..."}` in `turn/start` or `turn/steer`.
+Claude Code receives Anthropic base64 image source blocks through the pinned
+Agent SDK's streaming `SDKUserMessage` input. [Verification](VERIFICATION.md#images-in-messages)
+records scripted coverage and the absence of live-model acceptance evidence.

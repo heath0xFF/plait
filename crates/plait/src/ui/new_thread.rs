@@ -49,6 +49,7 @@ pub(super) struct Sending {
     /// The creation request it waits on.
     pub(super) request_id: String,
     pub(super) text: String,
+    pub(super) images: Vec<plait_core::images::ImageRef>,
     /// The composer revision sent, so a later edit is not cleared by acceptance.
     pub(super) revision: u64,
     /// The approval mode the first run asks for, and the thread's own choice.
@@ -112,6 +113,21 @@ impl Plait {
 
     fn draft_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<Composer> {
         let composer = cx.new(|cx| Composer::new(window, cx));
+        if let Some((checkout, draft)) = self
+            .session
+            .data
+            .as_ref()
+            .and_then(|data| data.new_draft.as_ref())
+            && checkout == &self.host.checkout
+        {
+            let draft = draft.clone();
+            composer.update(cx, |composer, cx| {
+                composer.restore_draft(draft.text, draft.revision, draft.submitted, cx);
+                composer.restore_images(draft.images, cx);
+            });
+        }
+        cx.observe(&composer, |this, _, cx| this.capture_session(cx))
+            .detach();
         cx.subscribe_in(&composer, window, |this, emitter, event, window, cx| {
             // Once delivered, the composer belongs to its thread.
             if this.draft.composer.as_ref() != Some(emitter) || !this.draft.open {
@@ -133,6 +149,9 @@ impl Plait {
     /// finishes on the host, but its reply opens nothing and sends nothing.
     pub(super) fn discard_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
+        if let Some(data) = &mut self.session.data {
+            data.new_draft = None;
+        }
         self.draft = super::new_thread::Draft {
             generation: self.draft.generation + 1,
             ..Default::default()
@@ -331,6 +350,11 @@ impl Plait {
         let blocked = self.draft_blocked();
         let agent = self.agent_commands();
         composer.update(cx, |composer, cx| {
+            let support = self
+                .draft_model()
+                .and_then(|choice| self.draft_model_entry(&choice))
+                .and_then(|model| model.image_input.as_deref());
+            composer.set_image_support(self.host.protocol(), support, cx);
             composer.set_agent_commands(agent, cx);
             composer.set_send_blocked(blocked, cx);
             composer.set_enabled(reason.is_none(), reason, cx);
@@ -381,6 +405,12 @@ impl Plait {
             generation: self.draft.generation,
             request_id,
             text,
+            images: self
+                .draft
+                .composer
+                .as_ref()
+                .map(|composer| composer.read(cx).saved_images().to_vec())
+                .unwrap_or_default(),
             revision,
             approval,
             choice,
@@ -400,8 +430,9 @@ impl Plait {
             (text.to_owned(), revision)
         };
         if let Some(sending) = self.draft.sending.as_mut()
-            && !text.trim().is_empty()
+            && (!text.trim().is_empty() || !composer.read(cx).saved_images().is_empty())
         {
+            sending.images = composer.read(cx).saved_images().to_vec();
             sending.text = text;
             sending.revision = revision;
         }
@@ -440,6 +471,9 @@ impl Plait {
             return;
         };
         // The next New Thread starts afresh.
+        if let Some(data) = &mut self.session.data {
+            data.new_draft = None;
+        }
         self.draft = super::new_thread::Draft {
             generation: self.draft.generation + 1,
             ..Default::default()
@@ -449,12 +483,13 @@ impl Plait {
             self.set_thread_approval(id.clone(), sending.choice, cx);
         }
         let when_busy = (self.host.protocol() >= 3).then_some(QueueMode::FollowUp);
-        match self.host.submissions.begin_with(
+        match self.host.submissions.begin_images(
             &id,
             sending.text,
             sending.approval,
             when_busy,
             Some(sending.revision),
+            sending.images,
         ) {
             Ok(pending) => self.retry_submission_id(&id, &pending.request_id, window, cx),
             Err(error) => self.set_thread_notice(id.clone(), error, true),

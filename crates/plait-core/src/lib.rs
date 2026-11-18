@@ -12,6 +12,7 @@ pub mod handoff;
 pub mod highlight;
 pub mod host;
 pub mod host_state;
+pub mod images;
 pub mod local_socket;
 pub mod machine;
 pub mod markdown;

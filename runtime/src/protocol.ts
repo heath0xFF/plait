@@ -1,3 +1,4 @@
+import type { ImageRef } from './images.ts';
 import { clipTail } from './text.ts';
 
 export type QueueMode = 'follow_up' | 'steer';
@@ -7,11 +8,11 @@ export type QueueMode = 'follow_up' | 'steer';
  */
 export const readsAsTyped = (text: string | undefined): text is string => text?.startsWith('/skill:') === true;
 export type InputRecord = {
-  request_id: string; text: string; entry: number | null; anchor: number;
+  request_id: string; text: string; images?: ImageRef[]; entry: number | null; anchor: number;
   /** Set while the input waits behind a run; it is not part of the conversation yet. */
   queued?: { mode: QueueMode; approval: ApprovalMode };
 };
-export const inputMessage = (input: InputRecord) => ({ id: `request-${input.request_id}`, role: 'user' as const, text: clipTail(input.text, 4096) });
+export const inputMessage = (input: InputRecord) => ({ id: `request-${input.request_id}`, role: 'user' as const, text: clipTail(input.text, 4096), ...(input.images?.length ? { images: input.images } : {}) });
 
 export type ModelChoice = { provider: string; model_id: string };
 export type Status = 'idle' | 'running' | 'awaiting_approval' | 'stopped' | 'interrupted' | 'error';
@@ -39,7 +40,7 @@ export type Usage = {
   input: number; output: number; cache_read: number; cache_write: number; reasoning: number | null; total: number;
   context_used: number | null; context_window: number | null;
 };
-export type SnapshotMessage = { id: string; role: 'user' | 'assistant'; text: string; reasoning?: string };
+export type SnapshotMessage = { id: string; role: 'user' | 'assistant'; text: string; reasoning?: string; images?: ImageRef[] };
 export type SnapshotTool = {
   id: string; name: string; status: 'running' | 'done' | 'error' | 'interrupted'; input: string; output: string;
   after?: string | null;
@@ -63,6 +64,7 @@ export type Snapshot = {
   harness?: ThreadHarness;
   /** Version 5: changes to this thread's checkout records. */
   records_revision?: number;
+  image_input?: 'yes' | 'no' | 'unknown';
 };
 export type Summary = {
   id: string; checkout: string; model: ModelChoice; status: string;
@@ -70,12 +72,12 @@ export type Summary = {
   /** Version 4 only. */
   harness?: HarnessId;
 };
-export const PROTOCOL_VERSIONS = [1, 2, 3, 4, 5] as const;
+export const PROTOCOL_VERSIONS = [1, 2, 3, 4, 5, 6] as const;
 export type Protocol = typeof PROTOCOL_VERSIONS[number];
-export type Request = Record<string, string | boolean | number> & { op: string };
+export type Request = Record<string, string | boolean | number | string[]> & { op: string };
 export function version(request: Request): Protocol {
   const asked = request.protocol_version;
-  return asked === 5 ? 5 : asked === 4 ? 4 : asked === 3 ? 3 : asked === 2 ? 2 : 1;
+  return asked === 6 ? 6 : asked === 5 ? 5 : asked === 4 ? 4 : asked === 3 ? 3 : asked === 2 ? 2 : 1;
 }
 const TURN_LIMIT = 'Agent ended without an answer (turn_limit). Inspect the transcript before retrying.';
 /**
@@ -106,7 +108,7 @@ export function view(snapshot: Snapshot, protocol: Protocol) {
   if (protocol === 2) return { ...rest, tools, approval_mode: approval_mode ?? 'ask' };
   const third = {
     ...rest, error: snapshot.error,
-    messages: snapshot.messages.map(({ id, role, text, reasoning }) => ({ id, role, text, reasoning: reasoning ?? '' })),
+    messages: snapshot.messages.map(({ id, role, text, reasoning, images }) => ({ id, role, text, reasoning: reasoning ?? '', ...(protocol >= 6 && images?.length ? { images } : {}) })),
     tools: snapshot.tools.map(({ after3, ...tool }) => after3 === undefined ? tool : { ...tool, after: after3 }),
     approval_mode: approval_mode ?? 'ask',
     title: snapshot.title ?? '', created_at: snapshot.created_at ?? 0, updated_at: snapshot.updated_at ?? 0,
@@ -117,6 +119,7 @@ export function view(snapshot: Snapshot, protocol: Protocol) {
   // Version 4 adds the harness; Pi threads saved earlier have none recorded.
   const harness = snapshot.harness;
   return protocol === 3 ? third : {
+    ...(protocol >= 6 ? { image_input: snapshot.image_input ?? 'unknown' } : {}),
     ...(protocol >= 5 ? { records_revision: snapshot.records_revision ?? 0 } : {}),
     ...third,
     harness: { id: harness?.id ?? 'pi', version: harness?.version ?? null, mode: harness?.mode ?? null, reported: harness?.reported ?? null },
@@ -156,6 +159,8 @@ const fields3: Record<string, string[]> = {
 };
 // Version 4 adds harnesses: an operation to list them and a choice when a thread starts.
 const fields4: Record<string, string[]> = { harnesses: [], set_harness_path: ['harness'], set_harness_mode: ['harness', 'mode'], set_up_harness: ['harness'] };
+const fields6: Record<string, string[]> = { image_put: ['thread_id', 'image_id', 'offset', 'total', 'data'], image_read: ['thread_id', 'image_id', 'offset'] };
+const optional6: Record<string, string[]> = { submit: ['images'] };
 const fields5: Record<string, string[]> = { turn_records: ['thread_id'], undo_turn: ['thread_id', 'record_id', 'request_id'] };
 const optional5: Record<string, string[]> = { turn_records: ['before', 'limit'], undo_turn: ['leave_changed'] };
 export const RECORD_CURSOR = /^\d{1,16}:\d{1,16}:\d{1,16}:\d{1,16}$/;
@@ -195,13 +200,14 @@ export function validate(value: unknown): Request {
   const request = value as Request;
   const third = version(request) >= 3;
   const fourth = version(request) >= 4;
+  const sixth = version(request) >= 6;
   const fifth = version(request) >= 5;
   const known = typeof request.op === 'string' ? request.op : '';
-  const expected = fifth && Object.hasOwn(fields5, known) ? fields5[known] : fourth && Object.hasOwn(fields4, known) ? fields4[known]
+  const expected = sixth && Object.hasOwn(fields6, known) ? fields6[known] : fifth && Object.hasOwn(fields5, known) ? fields5[known] : fourth && Object.hasOwn(fields4, known) ? fields4[known]
     : third && Object.hasOwn(fields3, known) ? fields3[known] : Object.hasOwn(fields, known) ? fields[known] : undefined;
   // `approval` stays allowed on every version so version 1 keeps its specific error.
   const allowed = expected && [...expected, 'protocol_version', ...(known === 'submit' ? ['approval'] : []), ...(third ? optional3[known] ?? [] : []),
-    ...(fourth ? optional4[known] ?? [] : []), ...(fifth ? optional5[known] ?? [] : [])];
+    ...(fourth ? optional4[known] ?? [] : []), ...(fifth ? optional5[known] ?? [] : []), ...(sixth ? optional6[known] ?? [] : [])];
   if (!allowed || Object.keys(request).some(key => key !== 'op' && !allowed.includes(key))) fail('invalid_request', 'Unknown operation or field.');
   if (request.protocol_version !== undefined && !PROTOCOL_VERSIONS.includes(request.protocol_version as Protocol)) {
     fail('invalid_request', 'Unsupported protocol_version.');
@@ -212,10 +218,14 @@ export function validate(value: unknown): Request {
   for (const key of expected) {
     if (key === 'allow' || key === 'archived' || key === 'enabled') {
       if (typeof request[key] !== 'boolean') fail('invalid_request', `${key} must be boolean.`);
-    } else if (key === 'offset') {
+    } else if (key === 'offset' || key === 'total') {
       if (!Number.isSafeInteger(request[key]) || (request[key] as number) < 0) fail('invalid_request', 'offset must be a non-negative integer.');
+    } else if (key === 'text' && sixth && Array.isArray(request.images) && request.images.length && typeof request.text === 'string') {
+      // Image-only messages are valid in version 6.
     } else if (!text(request[key])) fail('invalid_request', `${key} must be a nonempty string.`);
   }
+  if (request.images !== undefined && (!Array.isArray(request.images) || request.images.length > 4 || request.images.some(id => typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id)))) fail('invalid_request', 'A message can have at most 4 image IDs.');
+  if (request.image_id !== undefined && (typeof request.image_id !== 'string' || !/^[a-f0-9]{64}$/.test(request.image_id))) fail('invalid_request', 'Invalid image ID.');
   if (third) validate3(request);
   if (request.harness !== undefined && !HARNESSES.includes(request.harness as HarnessId)) fail('invalid_request', `harness must be one of ${HARNESSES.join(', ')}.`);
   if (request.mode !== undefined && (typeof request.mode !== 'string' || !/^[a-z_]{1,32}$/.test(request.mode))) fail('invalid_request', 'Invalid mode.');

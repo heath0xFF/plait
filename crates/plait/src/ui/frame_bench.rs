@@ -420,6 +420,14 @@ pub fn run() -> Vec<Row> {
         "expected 2000+ changed files, got {changed}"
     );
 
+    super::images::install(&mut harness, 50);
+    rows.push(harness.steady("images: 50 attached images, prepared thumbnails, bottom"));
+    rows.push(harness.scrolling(
+        "images: 50 attached images, scrolling",
+        point(px(700.), px(300.)),
+        -12.,
+    ));
+
     // c. Long conversation, the open thread while the other tabs are measured.
     let long = long_thread(THREAD, &heavy, 1500);
     harness.change_snapshot(move |snapshot| *snapshot = long);

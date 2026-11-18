@@ -1385,3 +1385,73 @@ v0.1.0-preview.15 is the same application code with that fixture change.
 
 None of this is installed-app acceptance. Undo and Redo have not been tried
 against an installed host, and no paid harness was used.
+
+## Images in messages
+
+Protocol 6 is unreleased. Rust and runtime tests cover version 5/6 request
+encoding, reply decoding, negotiation down to an older host, and removal of
+image fields from older wire shapes. Scripted Pi, Codex, and Claude Code runs
+check the exact original base64 blocks each adapter sends, store reopen,
+runtime restart, history, and persisted references. Pi also crosses a complete
+Rust-host process restart and checks the next model context. No live or paid
+model was used.
+
+Both sides test type-by-bytes, size, count, total message size, and dimensions.
+Desktop file tests reject links and special files. Host tests cover hash,
+chunk offsets, incomplete uploads, and thread ownership. An isolated desktop
+test keeps the text, images, and revision on refusal, saves and reopens existing-thread and new-thread image
+drafts, and blocks known text-only models and older hosts. Cache completion
+tests reject another thread, connection epoch, or watch generation and enforce
+the 32-entry bound. The host refuses a known text-only Pi model before accepting
+the message. A headless input test dispatches Cmd-V through the composer,
+checks text precedence with mixed clipboard entries, and runs the file-drop
+preparation path with a misleading extension, checking persisted originals.
+Claude Code's pinned SDK has no model image-capability field;
+unknown support is deliberately allowed, not inferred from model names.
+
+`scripts/snapshots.sh` renders one and several composer images, Text only,
+Update host, a request with several images, and the larger view at 1380 and 900
+points. These scenes were inspected offscreen with Metal and Core Text.
+`scripts/bench-frames.sh`, release profile, measured 30 CPU frames of a
+50-image conversation: median 0.92 ms at rest (p95 1.04 ms) and 1.76 ms scrolling
+(p95 1.89 ms). Thumbnails were prepared in advance and the cache was bounded
+to 32 entries. This is render/layout/prepaint/paint cost, not GPU, network,
+decode, or input-to-display latency.
+
+### Native clipboard exception and probe
+
+GPUI reads the person's clipboard synchronously and allocates the complete
+representation before Plait can check its size. This documented bounded-read
+exception applies only to an explicit paste action; text paste already has
+that behavior. Plait immediately validates limits and drops refused bytes,
+without retaining them in a draft, cache, or log. Accepted image decoding and
+thumbnailing run on the background executor.
+
+Run `bash scripts/check-clipboard.sh` explicitly on macOS to pin native GPUI
+representation behavior and measure the read. It creates no app window, saves
+and restores readable pasteboard representations, and does not print their
+contents. It asserts PNG+TIFF → PNG, JPEG+TIFF → JPEG, TIFF-only → refusal, and
+PNG+text → text only. The text preference is a limit of the pinned GPUI, not
+an image conversion. A later GPUI change that alters these results fails the
+probe. It is opt-in so the ordinary test suite does not replace the clipboard.
+
+For valid, ancillary-data-padded PNG fixtures of 5,000,000 and 20,000,000 bytes,
+30 release samples after five warmups measured synchronous read + validation
+refusal + drop: respectively median 0.273 ms / p95 0.283 ms / max 0.284 ms and
+median 1.100 ms / p95 1.130 ms / max 1.176 ms. Both are over the 2 MiB limit;
+no pixels were decoded. These timings cover a local pasteboard owner, not the
+potential delay of another application's promised data provider.
+
+A native screenshot clipboard probe offered PNG and TIFF and GPUI selected
+PNG. Controlled mixed fixtures also offered plain text, which GPUI selected.
+Browser and Preview pasteboard types were not observed, so this check cannot
+claim which copy commands in those apps attach images. Any source offering
+only TIFF is refused; any source offering text beside its image pastes text.
+Drop the PNG/JPEG file, or copy the image alone, to attach it.
+
+Nothing about this feature was checked in the installed app, and Plait was
+not launched. Native window paste/drop interactions, accessibility-client
+activation, live provider acceptance and vision quality, and provider-specific
+limits remain unverified. The original bytes are passed to the harness; a
+harness or provider may apply its own transformations. The public SDK schemas
+and scripted transport do not establish live-model acceptance.

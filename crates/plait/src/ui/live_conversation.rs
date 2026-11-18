@@ -210,6 +210,9 @@ impl Plait {
                 cx,
             ))
             .child(body)
+            .when(!message.images.is_empty(), |el| {
+                el.child(self.image_row(&message.images, cx))
+            })
             // The latest turn's record sits with its state, where the line ends.
             .when_some(
                 self.conversation_snapshot().and_then(|shown| {

@@ -75,6 +75,15 @@ conversation keeps a readable minimum width.
   controls stay out of sight until the pointer is over their row or they take
   keyboard focus. Away from the newest row, one control at the bottom of the
   conversation jumps back to it.
+- **Images.** Requests show small thumbnails below their text, aligned to its
+  column. Activating one opens a larger view with Close; Escape returns to the
+  conversation. The message box shows attached thumbnails with Remove before
+  sending. Text only, Update host, Loading, and Refused name states in a word
+  or two; the reason is hover text. A refusal leaves the draft intact. No
+  attachment disappears silently, and no original is resized to fit a limit.
+  PNG/JPEG, byte/count/dimension limits, persistence, and clipboard exceptions
+  follow the [host contract](docs/HOST.md#protocol-version-6-images-unreleased)
+  and [Mac guide](docs/MACOS.md#images-in-messages-unreleased).
 - **Conversation text.** All message text is selectable; the selection is a
   neutral fill. Links are blue and underlined, and their address appears at the
   bottom edge of the conversation before a click. Lists hang their wrapped

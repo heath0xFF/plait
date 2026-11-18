@@ -37,6 +37,10 @@ thread and draft.
 - **Work that outlives the window.** The host owns each run and its history.
   Quit, update, or reboot the app; threads, drafts, and pending approvals are
   there when you come back.
+- **Images in messages (unreleased).** Paste or drop PNG/JPEG images, remove
+  attachments before sending, and open conversation thumbnails larger. Drafts
+  and sent originals persist privately. Requires host protocol 6; see the
+  [limits and clipboard behavior](docs/MACOS.md#images-in-messages-unreleased).
 - **Approvals you can read.** Let the agent work, or ask before each edit and
   command. Commands run as you, as they would in your terminal, or opt a
   project into a macOS sandbox that cannot write your checkout or reach the

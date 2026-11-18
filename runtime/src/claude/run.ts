@@ -1,3 +1,4 @@
+import type { ImageData } from '../images.ts';
 // One Plait run of a Claude Code thread: one Claude Code process, which takes
 // the run's message and any steering, and ends when no message is left.
 //
@@ -82,8 +83,8 @@ export class ClaudeRun {
   }
 
   /** Runs until Claude Code has answered every message; throws a fixed message when it fails. */
-  async run(requestId: string, input: string) {
-    try { await this.turns(requestId, input); }
+  async run(requestId: string, input: string, images: ImageData[] = []) {
+    try { await this.turns(requestId, input, images); }
     catch (error) {
       // Claude Code's own errors can quote the provider, the account, or the machine.
       if (error instanceof HostError) throw error;
@@ -96,10 +97,10 @@ export class ClaudeRun {
   }
 
   /** Sends a message into the running session. False when there is none to join. */
-  steer(requestId: string, input: string): boolean {
+  steer(requestId: string, input: string, images: ImageData[] = []): boolean {
     if (!this.open || !this.session || this.context.signal.aborted) return false;
     try {
-      this.transcript.sent(this.session.send(input, requestId), requestId, input);
+      this.transcript.sent(this.session.send(input, requestId, images), requestId, input);
       return true;
     } catch { return false; }
   }
@@ -114,7 +115,7 @@ export class ClaudeRun {
 
   close() { clearTimeout(this.timer); this.session?.close(); }
 
-  private async turns(requestId: string, input: string) {
+  private async turns(requestId: string, input: string, images: ImageData[]) {
     const { snapshot, launch, signal, entries } = this.context;
     const resume = entries.thread();
     const known = launch.models?.find(model => model.id === this.context.model);
@@ -150,7 +151,7 @@ export class ClaudeRun {
       if (wanted !== this.context.mode) await this.setMode(wanted);
       if (!resume) entries.setThread(session.sessionId);
       if (signal.aborted) { session.close(); await exited; return; }
-      this.transcript.sent(session.send(input, requestId), requestId, input);
+      this.transcript.sent(session.send(input, requestId, images), requestId, input);
       this.open = true;
       this.context.opened();
       await consumed;

@@ -343,6 +343,41 @@ starts. A harness that is not ready is shown dimmed and cannot be chosen; a
 draft whose default is not ready starts in Pi. What has been checked against
 real installs is in [Verification](VERIFICATION.md#claude-code).
 
+## Images in messages (unreleased)
+
+Paste an image with Cmd-V, or drop PNG or JPEG files onto the message box.
+Each attachment has a thumbnail and **Remove**. Several images can accompany
+text, or be sent on their own. Activate a conversation thumbnail for a larger
+view; **Close** or Escape returns to the conversation. Draft images survive
+closing the window, and sent images survive a host restart.
+
+Both desktop and host allow four different images, at most 2 MiB each and
+4 MiB combined, up to 8,192 pixels on either side and 16,777,216 pixels total.
+The bytes determine PNG or JPEG, not the file extension. **Refused** explains
+the reason on hover. Plait never shrinks or recompresses the original to make
+it fit. Choose a smaller file yourself if needed.
+
+**Text only** means the selected model reports that it cannot accept images;
+remove them or choose another model. **Update host** means images need a
+protocol 6 host. Neither state silently drops an attachment. Claude Code's
+model catalog cannot report image support, so sending is allowed and any
+harness refusal appears as the run's error.
+
+The pinned GPUI clipboard reader takes PNG first, then JPEG, when there is no
+text. TIFF-only images are refused rather than converted. When the clipboard
+offers both text and an image, text is pasted and the image is not attached.
+Drop the image file onto the message box, or copy the image alone, to attach it.
+Copied file paths keep their ordinary text-paste behavior. The clipboard read
+itself is synchronous; validation follows immediately and thumbnail preparation
+runs in the background.
+
+Sent originals live with the thread in the private host store, never in the
+repository or an Undo record. Draft originals live in the desktop's private
+session directory. Archive and Remove do not erase retained originals; removing
+the respective state store removes them. [The host contract](HOST.md#limits-and-retention)
+gives the paths and upload expiry rules. [Verification](VERIFICATION.md#images-in-messages)
+distinguishes offscreen and scripted checks from installed-app acceptance.
+
 ## Appearance and themes
 
 **Settings → Appearance → Light or dark** follows macOS between light and dark by

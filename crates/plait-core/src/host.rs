@@ -12,7 +12,7 @@ pub const REQUEST_LIMIT: usize = 64 * 1024;
 /// Newest protocol this client speaks. Version 2 adds ordered tools and approval modes.
 /// Version 3 adds full history, thread metadata, a live thread list, in-thread model and
 /// thinking changes, queued inputs, usage, and reasoning. Version 4 adds agent harnesses.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 const REPLY_LIMIT: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,6 +40,8 @@ pub struct Model {
     pub context_window: Option<u64>,
     #[serde(default)]
     pub input: Option<Vec<String>>,
+    #[serde(default)]
+    pub image_input: Option<String>,
 }
 
 /// How much a reasoning model thinks before it answers. `Off` is the default.
@@ -213,6 +215,8 @@ pub struct Snapshot {
     /// Version 5 only; refetch turn records when it changes.
     #[serde(default)]
     pub records_revision: Option<u64>,
+    #[serde(default)]
+    pub image_input: Option<String>,
 }
 
 /// What a submission does when its thread already has an active run.
@@ -268,6 +272,8 @@ pub enum ApprovalMode {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Message {
+    #[serde(default)]
+    pub images: Vec<crate::images::ImageRef>,
     pub id: String,
     pub role: MessageRole,
     /// Empty for a version 3 assistant message that only reasoned before its tool calls.
@@ -374,6 +380,20 @@ impl From<std::io::Error> for Error {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
+    ImagePut {
+        protocol_version: u32,
+        thread_id: String,
+        image_id: String,
+        offset: usize,
+        total: usize,
+        data: String,
+    },
+    ImageRead {
+        protocol_version: u32,
+        thread_id: String,
+        image_id: String,
+        offset: usize,
+    },
     Status {
         #[serde(skip_serializing_if = "Option::is_none")]
         protocol_version: Option<u32>,
@@ -403,6 +423,8 @@ pub enum Request {
         protocol_version: Option<u32>,
     },
     Submit {
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        images: Vec<String>,
         thread_id: String,
         request_id: String,
         text: String,
@@ -543,6 +565,7 @@ impl Request {
         approval: Option<ApprovalMode>,
     ) -> Self {
         Self::Submit {
+            images: Vec::new(),
             thread_id,
             request_id,
             text,
@@ -562,6 +585,7 @@ impl Request {
         when_busy: QueueMode,
     ) -> Self {
         Self::Submit {
+            images: Vec::new(),
             thread_id,
             request_id,
             text,
@@ -1223,11 +1247,50 @@ mod tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
 
+    #[test]
+    fn image_requests_and_replies_keep_version_five_text_shapes() {
+        let plain = Request::submit("t".into(), "r".into(), "look".into(), None);
+        assert!(
+            serde_json::to_value(&plain)
+                .unwrap()
+                .get("images")
+                .is_none()
+        );
+        let image = crate::images::ImageRef {
+            id: "a".repeat(64),
+            media_type: "image/png".into(),
+            size: 42,
+            width: 1,
+            height: 1,
+        };
+        let pending = crate::host_state::PendingSubmit {
+            request_id: "r".into(),
+            text: String::new(),
+            images: vec![image.clone()],
+            approval: None,
+            when_busy: None,
+            draft_revision: Some(1),
+        };
+        let wire = serde_json::to_value(pending.request("t")).unwrap();
+        assert_eq!(wire["protocol_version"], 6);
+        assert_eq!(wire["images"], serde_json::json!([image.id]));
+        let old = serde_json::json!({"id":"t","checkout":"/repo","model":{"provider":"p","model_id":"m"},"status":"idle","messages":[{"id":"r","role":"user","text":"look"}],"tools":[],"live_text":"","pending_approval":null,"error":null,"truncated":false,"records_revision":0});
+        let mut new = old.clone();
+        new["image_input"] = serde_json::json!("yes");
+        new["messages"][0]["images"] = serde_json::json!([image]);
+        let old: Snapshot = serde_json::from_value(old).unwrap();
+        let new: Snapshot = serde_json::from_value(new).unwrap();
+        assert!(old.messages[0].images.is_empty());
+        assert!(old.image_input.is_none());
+        assert_eq!(new.messages[0].images.len(), 1);
+        assert_eq!(new.image_input.as_deref(), Some("yes"));
+    }
+
     const UNKNOWN_VERSION: &str = r#"{"ok":false,"error":{"code":"invalid_request","message":"Unsupported protocol_version."}}"#;
     const UNKNOWN_FIELD: &str = r#"{"ok":false,"error":{"code":"invalid_request","message":"Unknown operation or field."}}"#;
 
     #[test]
-    fn negotiation_steps_down_from_five_to_one() {
+    fn negotiation_steps_down_from_six_to_one() {
         let newest = Request::Status {
             protocol_version: Some(PROTOCOL_VERSION),
         };
@@ -1237,10 +1300,26 @@ mod tests {
                 .map(|request| request["protocol_version"].clone())
                 .collect()
         };
-        // A version 4 host answers after rejecting version 5.
+        let (client, server, directory) = scripted(
+            "negotiate-5",
+            vec![
+                UNKNOWN_VERSION,
+                r#"{"ok":true,"result":{"protocol_version":5,"default_model":null,"models":[]}}"#,
+            ],
+        );
+        let status: Status = client.request(&newest).unwrap();
+        assert_eq!(status.protocol_version, 5);
+        assert_eq!(
+            asked(server.join().unwrap()),
+            [serde_json::json!(6), serde_json::json!(5)]
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+
+        // A version 4 host answers after rejecting versions 6 and 5.
         let (client, server, directory) = scripted(
             "negotiate-4",
             vec![
+                UNKNOWN_VERSION,
                 UNKNOWN_VERSION,
                 r#"{"ok":true,"result":{"protocol_version":4,"default_model":null,"models":[]}}"#,
             ],
@@ -1249,7 +1328,11 @@ mod tests {
         assert_eq!(status.protocol_version, 4);
         assert_eq!(
             asked(server.join().unwrap()),
-            [serde_json::json!(5), serde_json::json!(4)]
+            [
+                serde_json::json!(6),
+                serde_json::json!(5),
+                serde_json::json!(4)
+            ]
         );
         std::fs::remove_dir_all(directory).unwrap();
 
@@ -1257,6 +1340,7 @@ mod tests {
         let (client, server, directory) = scripted(
             "negotiate-3",
             vec![
+                UNKNOWN_VERSION,
                 UNKNOWN_VERSION,
                 UNKNOWN_VERSION,
                 r#"{"ok":true,"result":{"protocol_version":3,"default_model":null,"models":[{"provider":"p","model_id":"m","name":"M","authenticated":true,"reasoning":true,"thinking_levels":["off","xhigh","max"],"context_window":200000,"input":["text","image"]}]}}"#,
@@ -1272,6 +1356,7 @@ mod tests {
         assert_eq!(
             asked(server.join().unwrap()),
             [
+                serde_json::json!(6),
                 serde_json::json!(5),
                 serde_json::json!(4),
                 serde_json::json!(3)
@@ -1286,6 +1371,7 @@ mod tests {
                 UNKNOWN_VERSION,
                 UNKNOWN_VERSION,
                 UNKNOWN_VERSION,
+                UNKNOWN_VERSION,
                 r#"{"ok":true,"result":{"protocol_version":2,"default_model":null,"models":[]}}"#,
             ],
         );
@@ -1294,6 +1380,7 @@ mod tests {
         assert_eq!(
             asked(server.join().unwrap()),
             [
+                serde_json::json!(6),
                 serde_json::json!(5),
                 serde_json::json!(4),
                 serde_json::json!(3),
@@ -1307,6 +1394,7 @@ mod tests {
             "negotiate-1",
             vec![
                 UNKNOWN_VERSION,
+                UNKNOWN_VERSION,
                 UNKNOWN_FIELD,
                 UNKNOWN_FIELD,
                 UNKNOWN_FIELD,
@@ -1319,6 +1407,7 @@ mod tests {
         assert_eq!(
             asked(server.join().unwrap()),
             [
+                serde_json::json!(6),
                 serde_json::json!(5),
                 serde_json::json!(4),
                 serde_json::json!(3),

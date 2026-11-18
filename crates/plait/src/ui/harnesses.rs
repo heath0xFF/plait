@@ -586,7 +586,7 @@ impl Plait {
     }
 
     /// Every request answers with the whole list, checked again.
-    fn send_harnesses(&mut self, request: Request, cx: &mut Context<Self>) {
+    fn send_harnesses(&mut self, mut request: Request, cx: &mut Context<Self>) {
         if cfg!(test) {
             return;
         }
@@ -594,6 +594,20 @@ impl Plait {
             Request::SetUpHarness { harness, .. } => Some(*harness),
             _ => None,
         };
+        if self.host.protocol() >= 6 {
+            match &mut request {
+                Request::Harnesses { protocol_version }
+                | Request::SetHarnessPath {
+                    protocol_version, ..
+                }
+                | Request::SetHarnessMode {
+                    protocol_version, ..
+                }
+                | Request::SetUpHarness {
+                    protocol_version, ..
+                } => *protocol_version = 6,
+            }
+        }
         let Some(key) = self.begin_harnesses(setup) else {
             return;
         };

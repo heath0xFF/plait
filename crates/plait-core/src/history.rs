@@ -303,6 +303,7 @@ impl History {
                 }
                 match row {
                     Row::Message(m) | Row::Reasoning(m) => entries.push(HistoryItem::Message {
+                        images: m.images.clone(),
                         id: m.id.clone(),
                         role: m.role,
                         text: m.text.clone(),
@@ -325,6 +326,7 @@ impl History {
         for entry in entries {
             match entry {
                 HistoryItem::Message {
+                    images,
                     id,
                     role,
                     text,
@@ -333,6 +335,7 @@ impl History {
                 } => {
                     after = Some(id.clone());
                     output.messages.push(Message {
+                        images,
                         id,
                         role,
                         text,
@@ -373,8 +376,22 @@ fn field_mut(item: &mut HistoryItem, field: HistoryField) -> Result<&mut String,
 }
 
 pub fn read_page(client: &Client, id: &str, before: Option<String>) -> Result<Page, Error> {
-    let page: HistoryPage =
-        client.request(&Request::history(id.to_owned(), before.clone(), Some(100)))?;
+    read_page_version(client, id, before, 3)
+}
+pub fn read_page_version(
+    client: &Client,
+    id: &str,
+    before: Option<String>,
+    protocol: u32,
+) -> Result<Page, Error> {
+    let mut request = Request::history(id.to_owned(), before.clone(), Some(100));
+    if let Request::History {
+        protocol_version, ..
+    } = &mut request
+    {
+        *protocol_version = protocol;
+    }
+    let page: HistoryPage = client.request(&request)?;
     prepare_page(page, before, |reference, offset| {
         client.request(&Request::history_text(
             id.to_owned(),
@@ -630,6 +647,7 @@ mod tests {
 
     fn message(id: &str, text: &str) -> HistoryItem {
         HistoryItem::Message {
+            images: Vec::new(),
             id: id.into(),
             role: MessageRole::Assistant,
             text: text.into(),
@@ -662,6 +680,7 @@ mod tests {
             messages: ids
                 .iter()
                 .map(|id| Message {
+                    images: Vec::new(),
                     id: (*id).into(),
                     role: MessageRole::Assistant,
                     text: (*id).into(),
@@ -840,6 +859,7 @@ mod tests {
     #[test]
     fn history_text_is_hydrated_on_utf16_boundaries() {
         let item = HistoryItem::Message {
+            images: Vec::new(),
             id: "a".into(),
             role: MessageRole::Assistant,
             text: "a🙂".into(),
@@ -879,6 +899,7 @@ mod tests {
     fn huge_fields_stop_at_a_part_and_bad_offsets_are_rejected() {
         let text = "x".repeat(65536);
         let item = HistoryItem::Message {
+            images: Vec::new(),
             id: "a".into(),
             role: MessageRole::Assistant,
             text: text.clone(),
@@ -966,6 +987,7 @@ mod tests {
         let make = || {
             Entry::from_inline(
                 HistoryItem::Message {
+                    images: Vec::new(),
                     id: "a".into(),
                     role: MessageRole::Assistant,
                     text: "first".into(),

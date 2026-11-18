@@ -196,6 +196,8 @@ impl HostState {
 /// The exact request to retry after an uncertain response. It is journaled before I/O.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PendingSubmit {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<crate::images::ImageRef>,
     pub request_id: String,
     pub text: String,
     #[serde(default)]
@@ -208,7 +210,7 @@ pub struct PendingSubmit {
 
 impl PendingSubmit {
     pub fn request(&self, thread_id: &str) -> Request {
-        match self.when_busy {
+        let mut request = match self.when_busy {
             Some(mode) => Request::submit_when_busy(
                 thread_id.into(),
                 self.request_id.clone(),
@@ -222,7 +224,18 @@ impl PendingSubmit {
                 self.text.clone(),
                 self.approval,
             ),
+        };
+        if !self.images.is_empty()
+            && let Request::Submit {
+                images,
+                protocol_version,
+                ..
+            } = &mut request
+        {
+            *images = self.images.iter().map(|image| image.id.clone()).collect();
+            *protocol_version = Some(6);
         }
+        request
     }
 }
 
@@ -252,7 +265,27 @@ impl Submissions {
         when_busy: Option<QueueMode>,
         draft_revision: Option<u64>,
     ) -> Result<PendingSubmit, String> {
-        if text.trim().is_empty() {
+        self.begin_images(
+            thread_id,
+            text,
+            approval,
+            when_busy,
+            draft_revision,
+            Vec::new(),
+        )
+    }
+
+    pub fn begin_images(
+        &mut self,
+        thread_id: &str,
+        text: String,
+        approval: Option<ApprovalMode>,
+        when_busy: Option<QueueMode>,
+        draft_revision: Option<u64>,
+        images: Vec<crate::images::ImageRef>,
+    ) -> Result<PendingSubmit, String> {
+        crate::images::validate_message(&images)?;
+        if text.trim().is_empty() && images.is_empty() {
             return Err("Enter a message before sending.".into());
         }
         if self.all(thread_id).len() >= 16 {
@@ -267,14 +300,14 @@ impl Submissions {
             return Err("This draft is already awaiting acceptance. Use Retry safely.".into());
         }
         let submission = PendingSubmit {
+            images,
             request_id: request_id(),
             text,
             approval,
             when_busy,
             draft_revision,
         };
-        let request =
-            crate::host::Request::submit_bound(thread_id, &submission.request_id, &submission.text);
+        let request = submission.request(thread_id);
         let bytes = serde_json::to_vec(&request).map_err(|_| "Cannot encode this submission.")?;
         if bytes.len() + 1 > crate::host::REQUEST_LIMIT {
             return Err("Message exceeds the host's 64 KiB request limit. Shorten the draft before sending.".into());
@@ -441,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn negotiated_protocol_accepts_versions_one_through_four_only() {
+    fn negotiated_protocol_accepts_versions_one_through_six_only() {
         let mut state = HostState::new("/repo".into());
         assert_eq!(state.protocol(), 1);
         for (version, accepted) in [
@@ -450,7 +483,8 @@ mod tests {
             (3, true),
             (4, true),
             (5, true),
-            (6, false),
+            (6, true),
+            (7, false),
             (0, false),
         ] {
             state.reconnect();
@@ -551,6 +585,7 @@ mod tests {
             status(
                 Some(choice.clone()),
                 vec![crate::host::Model {
+                    image_input: None,
                     provider: "p".into(),
                     model_id: "m".into(),
                     name: "Model".into(),

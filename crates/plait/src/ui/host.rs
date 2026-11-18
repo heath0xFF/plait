@@ -49,6 +49,19 @@ impl Plait {
         if persist {
             self.capture_session(cx);
         }
+        let uploads = if let Request::Submit {
+            thread_id,
+            request_id,
+            ..
+        } = &request
+        {
+            self.host
+                .submissions
+                .get(thread_id, request_id)
+                .map(|pending| (thread_id.clone(), pending.images.clone()))
+        } else {
+            None
+        };
         let journal = self.session.journal.clone();
         let task = cx.background_executor().spawn(async move {
             if persist {
@@ -64,7 +77,11 @@ impl Plait {
             {
                 *checkout = std::fs::canonicalize(&*checkout)?;
             }
-            Client::from_environment()?.request(&request)
+            let client = Client::from_environment()?;
+            if let Some((thread, images)) = uploads {
+                client.upload_images(&thread, &images)?;
+            }
+            client.request(&request)
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
@@ -85,6 +102,7 @@ impl Plait {
             return;
         }
         self.host_watch = None;
+        self.images = Default::default();
         self.history = Default::default();
         self.navigation.watch = None;
         self.navigation.generation += 1;
@@ -172,6 +190,7 @@ impl Plait {
         self.navigation.rename = None;
         window.focus(&self.focus, cx);
         self.host_watch = None;
+        self.images = Default::default();
         self.host.select(Some(id.clone()));
         self.history = Default::default();
         self.settings_open = false;
@@ -565,12 +584,18 @@ impl Plait {
         } else {
             host::QueueMode::FollowUp
         });
-        match self.host.submissions.begin_with(
+        let images = self
+            .composers
+            .get(&id)
+            .map(|c| c.read(cx).saved_images().to_vec())
+            .unwrap_or_default();
+        match self.host.submissions.begin_images(
             &id,
             text,
             self.next_approval_mode(),
             mode,
             Some(revision),
+            images,
         ) {
             Ok(pending) => self.retry_submission_id(&id, &pending.request_id, window, cx),
             Err(error) => {
@@ -603,7 +628,8 @@ impl Plait {
         let Some(pending) = self.host.submissions.get(id, request_id).cloned() else {
             return;
         };
-        if (pending.when_busy.is_some() && self.host.protocol() < 3)
+        if (!pending.images.is_empty() && self.host.protocol() < 6)
+            || (pending.when_busy.is_some() && self.host.protocol() < 3)
             || (pending.approval.is_some() && self.host.protocol() < 2)
         {
             self.host.error =
@@ -826,6 +852,14 @@ impl Plait {
         };
         let agent = self.agent_commands();
         composer.update(cx, |composer, cx| {
+            composer.set_image_support(
+                self.host.protocol(),
+                self.host
+                    .snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.image_input.as_deref()),
+                cx,
+            );
             composer.set_agent_commands(agent, cx);
             composer.set_send_blocked(send_blocked, cx);
             composer.set_enabled(reason.is_none() && !self.host.controlling, reason, cx);

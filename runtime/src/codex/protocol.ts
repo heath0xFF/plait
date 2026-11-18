@@ -50,7 +50,7 @@ export type SandboxPolicy =
 
 // v2/TextElement.ts and v2/ByteRange.ts are not needed: Plait sends none.
 // v2/UserInput.ts (text variant only)
-export type UserInput = { type: 'text'; text: string; text_elements: [] };
+export type UserInput = { type: 'text'; text: string; text_elements: [] } | { type: 'image'; url: string };
 
 // v2/ThreadStartParams.ts
 // v2/ApprovalsReviewer.ts
@@ -256,7 +256,7 @@ export type ReasoningEffortOption = { reasoningEffort: ReasoningEffort; descript
 // v2/Model.ts (subset)
 export type Model = {
   id: string; model: string; displayName: string; description: string; hidden: boolean;
-  supportedReasoningEfforts: ReasoningEffortOption[]; defaultReasoningEffort: ReasoningEffort; isDefault: boolean;
+  inputModalities?: string[]; supportedReasoningEfforts: ReasoningEffortOption[]; defaultReasoningEffort: ReasoningEffort; isDefault: boolean;
 };
 // v2/ModelListResponse.ts
 export type ModelListResponse = { data: Model[]; nextCursor: string | null };

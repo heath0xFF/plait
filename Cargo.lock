@@ -3682,6 +3682,7 @@ dependencies = [
  "gpui_apple",
  "gpui_platform",
  "gpui_wgpu",
+ "image",
  "plait-core",
  "serde",
  "serde_json",
@@ -3692,6 +3693,7 @@ dependencies = [
 name = "plait-core"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "ed25519-dalek",
  "libc",
  "pulldown-cmark",

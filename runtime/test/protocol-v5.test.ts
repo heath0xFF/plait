@@ -24,7 +24,7 @@ test('version 5 validates its operations and strictly rejects malformed fields',
     { op: 'undo_turn', thread_id: 't', record_id: 'r', request_id: 'u', leave_changed: 'true' },
     { op: 'undo_turn', thread_id: 't', record_id: 'r' },
   ]) assert.throws(() => validate({ protocol_version: 5, ...input }));
-  for (const protocol_version of [1, 2, 3, 4, 6]) {
+  for (const protocol_version of [1, 2, 3, 4, 7]) {
     assert.throws(() => validate({ protocol_version, op: 'turn_records', thread_id: 't' }));
     assert.throws(() => validate({ protocol_version, op: 'undo_turn', thread_id: 't', record_id: 'r', request_id: 'u' }));
   }

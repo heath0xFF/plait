@@ -9,6 +9,8 @@ use super::{Client, Error, MessageRole, Request, ToolStatus};
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HistoryItem {
     Message {
+        #[serde(default)]
+        images: Vec<crate::images::ImageRef>,
         id: String,
         role: MessageRole,
         text: String,

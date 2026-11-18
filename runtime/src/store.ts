@@ -1,3 +1,5 @@
+import { Images } from './images.ts';
+import type { ImageRef } from './images.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
@@ -10,8 +12,8 @@ import type { FileIdentity, Postimage } from './safety.ts';
 
 type Row = Record<string, unknown>;
 /** An input placed in the conversation store. `text` is absent for an input saved without its text. */
-export type Placed = { request_id: string; text?: string };
-export type PendingInput = { rowid: number; request_id: string; text: string; anchor: number };
+export type Placed = { request_id: string; text?: string; images?: ImageRef[] };
+export type PendingInput = { rowid: number; request_id: string; text: string; anchor: number; images?: ImageRef[] };
 // Additive columns. Summary columns mirror the snapshot so listing never parses transcripts.
 const columns = [
   ['threads', 'head', 'INTEGER NOT NULL DEFAULT 0'], ['requests', 'input', 'TEXT'], ['requests', 'entry', 'INTEGER'], ['requests', 'anchor', 'INTEGER'],
@@ -38,6 +40,7 @@ const input = (row: Row): InputRecord => ({
 export class Store {
   db: DatabaseSync;
   outputs: CommandOutputs;
+  images: Images;
   constructor(directory: string) {
     this.db = new DatabaseSync(join(directory, 'host.sqlite'));
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
@@ -61,6 +64,7 @@ export class Store {
     }
     this.db.exec('CREATE INDEX IF NOT EXISTS threads_recent ON threads(updated_at DESC)');
     this.outputs = new CommandOutputs(this.db);
+    this.images = new Images(this.db);
     this.backfill();
     for (const snapshot of this.recoverable()) {
       if (snapshot.status === 'running' || snapshot.status === 'awaiting_approval') {
@@ -130,8 +134,12 @@ export class Store {
       .run(snapshot.id, JSON.stringify(boundSnapshot(snapshot)), head, snapshot.checkout, next.status, next.model, next.title, next.archived, next.pending, snapshot.created_at, next.updated_at, harness);
     return !previous || (Object.keys(next) as (keyof typeof next)[]).some(key => previous[key] !== next[key]);
   }
+  private input(id: string, row: Row): InputRecord {
+    const record = input(row); const images = this.images.forRequest(id, record.request_id);
+    return images.length ? { ...record, images } : record;
+  }
   inputs(id: string): InputRecord[] {
-    return this.db.prepare("SELECT id,input,entry,anchor,state,queue FROM requests WHERE scope=? AND input IS NOT NULL AND (state IS NULL OR state='queued') ORDER BY rowid DESC LIMIT 100").all(id).reverse().map(input);
+    return this.db.prepare("SELECT id,input,entry,anchor,state,queue FROM requests WHERE scope=? AND input IS NOT NULL AND (state IS NULL OR state='queued') ORDER BY rowid DESC LIMIT 100").all(id).reverse().map(row => this.input(id, row));
   }
   place(id: string, requestId: string, entry: number) {
     // A steering input the run took leaves the queue in the same write.
@@ -139,7 +147,7 @@ export class Store {
   }
   /** Inputs waiting behind a run, oldest first. */
   queue(id: string): InputRecord[] {
-    return this.db.prepare("SELECT id,input,entry,anchor,state,queue FROM requests WHERE scope=? AND state='queued' ORDER BY rowid").all(id).map(input);
+    return this.db.prepare("SELECT id,input,entry,anchor,state,queue FROM requests WHERE scope=? AND state='queued' ORDER BY rowid").all(id).map(row => this.input(id, row));
   }
   private head(id: string) { return Number(this.db.prepare('SELECT head FROM threads WHERE id=?').get(id)?.head ?? 0); }
   private transaction<T>(work: () => T): T {
@@ -149,10 +157,11 @@ export class Store {
   }
   private refreshQueue(snapshot: Snapshot) { snapshot.queued = this.queue(snapshot.id).map(queuedView); }
   /** Accepts an input behind the active run. It joins the conversation only when it starts. */
-  enqueue(id: string, text: string, result: unknown, queued: NonNullable<InputRecord['queued']>, snapshot: Snapshot) {
+  enqueue(id: string, text: string, result: unknown, queued: NonNullable<InputRecord['queued']>, snapshot: Snapshot, images: string[] = []) {
     return this.transaction(() => {
       this.db.prepare("INSERT INTO requests (scope,id,hash,result,input,anchor,state,queue) VALUES (?,?,?,?,?,?,'queued',?)")
-        .run(snapshot.id, id, digest(text), JSON.stringify(result), JSON.stringify(text), this.head(snapshot.id), JSON.stringify(queued));
+        .run(snapshot.id, id, digest(images.length ? { text, images } : text), JSON.stringify(result), JSON.stringify(text), this.head(snapshot.id), JSON.stringify(queued));
+      this.images.attach(snapshot.id, id, images);
       this.refreshQueue(snapshot);
       return this.save(snapshot);
     });
@@ -180,7 +189,7 @@ export class Store {
   pendingBefore(id: string, anchor: number, rowid: number, limit: number): PendingInput[] {
     return this.db.prepare(`SELECT rowid,id,input,COALESCE(anchor,0) AS anchor FROM requests WHERE scope=? AND input IS NOT NULL AND entry IS NULL AND state IS NULL
       AND (COALESCE(anchor,0)<? OR (COALESCE(anchor,0)=? AND rowid<?)) ORDER BY COALESCE(anchor,0) DESC, rowid DESC LIMIT ?`).all(id, anchor, anchor, rowid, limit)
-      .map(row => ({ rowid: Number(row.rowid), request_id: String(row.id), text: JSON.parse(String(row.input)), anchor: Number(row.anchor) }));
+      .map(row => ({ rowid: Number(row.rowid), request_id: String(row.id), text: JSON.parse(String(row.input)), anchor: Number(row.anchor), images: this.images.forRequest(id, String(row.id)) }));
   }
   /**
    * The inputs placed at the given conversation entries: request ID and, for an input
@@ -190,7 +199,7 @@ export class Store {
     return new Map(this.db.prepare('SELECT id,entry,input FROM requests WHERE scope=? AND entry BETWEEN ? AND ?').all(id, low, high)
       .map(row => {
         const text = row.input === null ? undefined : JSON.parse(String(row.input)) as string;
-        return [Number(row.entry), { request_id: String(row.id), ...(readsAsTyped(text) ? { text } : {}) }];
+        return [Number(row.entry), { request_id: String(row.id), images: this.images.forRequest(id, String(row.id)), ...(readsAsTyped(text) ? { text } : {}) }];
       }));
   }
   journal(id: string, rowid: number): string | undefined {
@@ -241,19 +250,20 @@ export class Store {
     if (row.hash !== digest(input)) fail('conflict', 'Request ID was already used for different input.');
     return JSON.parse(String(row.result));
   }
-  admit(scope: string, id: string, input: unknown, result: unknown, snapshot: Snapshot, root?: FileIdentity) {
+  admit(scope: string, id: string, input: unknown, result: unknown, snapshot: Snapshot, root?: FileIdentity, images: string[] = []) {
     // Acceptance and dedup commit before the harness can execute any effect.
     return this.transaction(() => {
       const head = this.head(snapshot.id);
       if (scope === snapshot.id && typeof input === 'string') {
-        pushMessage(snapshot, inputMessage({ request_id: id, text: input, entry: null, anchor: head }));
+        pushMessage(snapshot, inputMessage({ request_id: id, text: input, images: this.images.refs(snapshot.id, images), entry: null, anchor: head }));
         if (input.length > 4096) snapshot.truncated = true;
         // The first accepted message names the thread until the user renames it.
         if (!snapshot.renamed && !snapshot.title) snapshot.title = title(input);
       }
       const changed = this.save(snapshot);
       if (root) this.db.prepare('INSERT INTO roots VALUES (?,?)').run(snapshot.id, JSON.stringify(root));
-      this.db.prepare('INSERT INTO requests (scope,id,hash,result,input,anchor) VALUES (?,?,?,?,?,?)').run(scope, id, digest(input), JSON.stringify(result), JSON.stringify(input), head);
+      this.db.prepare('INSERT INTO requests (scope,id,hash,result,input,anchor) VALUES (?,?,?,?,?,?)').run(scope, id, digest(images.length ? { text: input, images } : input), JSON.stringify(result), JSON.stringify(input), head);
+      this.images.attach(snapshot.id, id, images);
       return changed;
     });
   }

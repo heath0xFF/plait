@@ -176,6 +176,11 @@ export class CodexHarness {
     if (check.entry.state !== 'ready') fail(check.entry.note ?? 'Codex is not ready.');
     if (!check.models.some(candidate => candidate.id === modelId)) fail('This Codex model is not offered by your Codex. Choose another.');
   }
+  /** Only the app-server catalog can establish image support. */
+  imageInput(modelId: string): 'yes' | 'no' | 'unknown' {
+    const input = this.latest?.models.find(model => model.id === modelId)?.input;
+    return input ? input.includes('image') ? 'yes' : 'no' : 'unknown';
+  }
   /** The shared app-server for one run; `release` when the run ends. */
   async acquire(): Promise<Lease> {
     if (!this.shared) {

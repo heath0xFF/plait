@@ -34,6 +34,7 @@ const recordContext = (context: { messages: unknown }) => {
 // Version 3 scenarios add a reasoning model; the long one streams fast enough for a large reply.
 const faux = fauxProvider({
   tokensPerSecond: fast ? 1e8 : 120, tokenSize: fast ? { min: 2048, max: 2048 } : { min: 1, max: 1 },
+  ...(mode === 'images' ? { models: [{id:'faux-1',name:'Images',input:['text','image'] as ('text'|'image')[]}] } : {}),
   ...(compacting ? { models: [{ id: 'faux-1', name: 'Faux Model', contextWindow: 65536 }] } : {}),
   ...(mode?.startsWith('v3') ? { models: [{ id: 'faux-1', name: 'Faux Model' }, { id: 'faux-think', name: 'Faux Thinking', reasoning: true, contextWindow: 64000 }] } : {}),
 });
@@ -49,7 +50,7 @@ const responses: FauxResponseStep[] = mode?.startsWith('mcp-') ? [
     return tool ? call(tool.name, { text: 'fixture echo' }, 'call-mcp') : fauxAssistantMessage('No MCP tool was offered.');
   },
   context => { appendFileSync(join(process.argv[2], 'mcp-context.jsonl'), JSON.stringify(context) + '\n'); return fauxAssistantMessage('Fixture MCP run complete.'); },
-] : compacting ? Array.from({ length: 40 }, () => async (context: { messages: unknown }) => {
+] : mode === 'images' ? [recordContext] : compacting ? Array.from({ length: 40 }, () => async (context: { messages: unknown }) => {
   const text = JSON.stringify(context.messages);
   const summary = text.includes('You are a context summarization assistant');
   appendFileSync(join(process.argv[2], 'compaction-observed.jsonl'), JSON.stringify({ summary, goal: text.includes('KEEP_SELF_HOST_GOAL'), length: text.length }) + '\n');

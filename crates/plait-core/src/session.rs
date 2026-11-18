@@ -23,6 +23,7 @@ const FILE_LIMIT: usize = 4 * 1024 * 1024;
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Draft {
+    pub images: Vec<crate::images::ImageRef>,
     pub text: String,
     pub revision: u64,
     pub submitted: Option<(String, u64)>,
@@ -48,6 +49,8 @@ pub struct Thread {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Session {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_draft: Option<(PathBuf, Draft)>,
     pub schema_version: u32,
     pub host_store: PathBuf,
     pub checkout: Option<PathBuf>,
@@ -81,6 +84,7 @@ impl Session {
     pub fn empty(host_store: PathBuf) -> Self {
         Self {
             schema_version: 1,
+            new_draft: None,
             host_store,
             checkout: None,
             selected: None,
@@ -101,7 +105,14 @@ impl Session {
         {
             return Err("Saved workspace has invalid paths or exceeds its thread limit.".into());
         }
+        if let Some((checkout, draft)) = &self.new_draft {
+            if !checkout.is_absolute() || draft.text.len() > 256 * 1024 {
+                return Err("Saved new-thread draft exceeds its limits.".into());
+            }
+            crate::images::validate_message(&draft.images)?;
+        }
         for (id, thread) in &self.threads {
+            crate::images::validate_message(&thread.draft.images)?;
             if !identifier(id)
                 || !thread.checkout.is_absolute()
                 || thread.title.len() > 1024
@@ -126,11 +137,12 @@ impl Session {
                 .chain(&thread.pending_submissions)
                 .chain(&thread.queued_submissions)
             {
+                crate::images::validate_message(&pending.images)?;
                 let request =
                     crate::host::Request::submit_bound(id, &pending.request_id, &pending.text);
                 if !seen.insert(&pending.request_id)
                     || !identifier(&pending.request_id)
-                    || pending.text.trim().is_empty()
+                    || (pending.text.trim().is_empty() && pending.images.is_empty())
                     || serde_json::to_vec(&request)
                         .map_err(|e| e.to_string())?
                         .len()
@@ -365,11 +377,13 @@ mod tests {
             },
             title: "Fix the parser".into(),
             draft: Draft {
+                images: Vec::new(),
                 text: "unfinished 🙂".into(),
                 revision: 7,
                 submitted: None,
             },
             pending: Some(PendingSubmit {
+                images: Vec::new(),
                 request_id: "request-1".into(),
                 text: "Do the task".into(),
                 approval: None,

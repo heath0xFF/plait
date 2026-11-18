@@ -8,6 +8,7 @@ mod commands;
 mod completion;
 mod draft;
 mod history;
+mod images;
 mod input;
 mod mentions;
 mod parent;
@@ -208,6 +209,7 @@ impl StopGesture {
 pub struct Composer {
     focus: FocusHandle,
     draft: Draft,
+    images: images::Attachments,
     enabled: bool,
     send_blocked: Option<String>,
     reason: Option<String>,
@@ -239,6 +241,7 @@ impl Composer {
             // Tracked focus uses the handle's tab settings, not the div's.
             focus: cx.focus_handle().tab_stop(true),
             draft: Draft::default(),
+            images: Default::default(),
             enabled: false,
             send_blocked: None,
             reason: Some("Connect a local thread to send messages.".into()),
@@ -362,6 +365,11 @@ impl Composer {
             None => self.draft.clear_if_unchanged(submitted),
         };
         if cleared {
+            self.images.references.clear();
+            self.images.pixels.clear();
+            self.images.generation += 1;
+            self.images.loading = false;
+            self.images.error = None;
             self.close_popup();
             self.reveal_cursor = true;
             self.input_changed = true;
@@ -386,7 +394,7 @@ impl Composer {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.draft.value.text.is_empty()
+        self.draft.value.text.is_empty() && self.images.references.is_empty()
     }
 
     pub fn restore_cancelled(&mut self, text: &str, revision: u64, cx: &mut Context<Self>) -> bool {
@@ -408,16 +416,25 @@ impl Composer {
     }
 
     fn submit(&mut self, steer: bool, cx: &mut Context<Self>) {
-        if self.send_blocked.is_some() {
+        if self.send_blocked.is_some() || self.image_send_blocked() {
             return;
         }
         if steer && !(self.busy && self.queue_enabled) {
             return;
         }
-        if let Some(text) = self
-            .draft
-            .submit(self.enabled, self.busy && !self.queue_enabled)
+        let submitted = if !self.images.references.is_empty()
+            && self.enabled
+            && !(self.busy && !self.queue_enabled)
+            && self.draft.marked.is_none()
         {
+            let text = self.draft.value.text.clone();
+            self.draft.submitted = Some((text.clone(), self.draft.revision));
+            Some(text)
+        } else {
+            self.draft
+                .submit(self.enabled, self.busy && !self.queue_enabled)
+        };
+        if let Some(text) = submitted {
             self.close_popup();
             cx.emit(ComposerEvent::Submit {
                 text,
@@ -629,15 +646,26 @@ impl Composer {
     }
 
     fn paste_clipboard(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
-            // Most clipboards need no conversion; skip the copies when they do not.
-            let text = if text.contains('\r') {
-                text.replace("\r\n", "\n").replace('\r', "\n")
-            } else {
-                text
-            };
-            self.edit(|draft| draft.insert(&text), window, cx);
-        }
+        let Some(item) = cx.read_from_clipboard() else {
+            return;
+        };
+        // Preserve native text paste when GPUI returns text alongside a file or image.
+        let Some(text) = item.text() else {
+            for entry in item.entries {
+                if let ClipboardEntry::Image(image) = entry {
+                    self.paste_images(image.bytes, cx);
+                    return;
+                }
+            }
+            return;
+        };
+        // Most clipboards need no conversion; skip the copies when they do not.
+        let text = if text.contains('\r') {
+            text.replace("\r\n", "\n").replace('\r', "\n")
+        } else {
+            text
+        };
+        self.edit(|draft| draft.insert(&text), window, cx);
     }
 
     fn rectangles(&self, range: Range<usize>) -> Vec<Bounds<Pixels>> {
@@ -1226,9 +1254,14 @@ impl Render for Composer {
         let input = cx.entity().downgrade();
         let enabled = self.enabled;
         let can_send = self.send_blocked.is_none()
-            && self
+            && !self.image_send_blocked()
+            && (self
                 .draft
-                .can_submit(enabled, self.busy && !self.queue_enabled);
+                .can_submit(enabled, self.busy && !self.queue_enabled)
+                || (enabled
+                    && !(self.busy && !self.queue_enabled)
+                    && self.draft.marked.is_none()
+                    && !self.images.references.is_empty()));
         let can_stop = self.stop_enabled && self.busy;
         let focused = self.focus.is_focused(window);
         // Suggestions belong to typing; they do not outlive keyboard focus.
@@ -1237,6 +1270,15 @@ impl Render for Composer {
         theme::column()
             .w_full()
             .min_w_0()
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                this.drop_images(paths.paths().to_vec(), cx)
+            }))
+            .when(
+                !self.images.references.is_empty()
+                    || self.images.loading
+                    || self.images.error.is_some(),
+                |el| el.child(div().px_3().pt_2().child(self.image_strip(cx))),
+            )
             .rounded_xl()
             .border_1()
             .border_color(rgb(if focused {

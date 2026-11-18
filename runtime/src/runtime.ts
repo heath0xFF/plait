@@ -1,3 +1,4 @@
+import type { ImageData } from './images.ts';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { lstat } from 'node:fs/promises';
@@ -115,9 +116,9 @@ export class Runtime {
     this.claude = new ClaudeHarness(this.store, { sdk: sdkDirectory(directory), cwd: directory });
   }
   /** Every harness, Pi first. */
-  private async harnesses(fresh?: HarnessId) {
+  private async harnesses(fresh?: HarnessId, protocol: Protocol = 4) {
     const [codex, claude] = await Promise.all([this.codex.entry(fresh === 'codex'), this.claude.entry(fresh === 'claude')]);
-    return { harnesses: [PI_ENTRY, codex, claude] };
+    return { harnesses: [PI_ENTRY, codex, claude].map(entry => protocol >= 6 ? { ...entry, models: entry.models?.map(model => ({ ...model, image_input: entry.id === 'codex' ? this.codex.imageInput(model.model_id) : 'unknown' })) ?? null } : entry) };
   }
   /** The mode list of a harness that has its own modes; Pi has none. */
   private modes(harness: HarnessId | undefined) {
@@ -136,6 +137,7 @@ export class Runtime {
     return this.models.getModels().map(model => ({
       provider: model.provider, model_id: model.id, name: model.name, authenticated: this.authenticated.has(model.provider),
       ...(protocol >= 3 ? capabilities(model) : {}),
+      ...(protocol >= 6 ? { image_input: model.input.includes('image') ? 'yes' : 'no' } : {}),
     }));
   }
   /** Refuses a model the thread's harness cannot run now. Synchronous, so admission timing is the same for both harnesses. */
@@ -149,14 +151,23 @@ export class Runtime {
       fail('model_unavailable', 'Exact model is missing or has no configured authentication. Sign in to its provider in Settings.');
     }
   }
-  snapshot(id: string) { const snapshot = this.sessions.get(id)?.snapshot ?? this.store.get(id); snapshot.records_revision = this.records.revision(id); return snapshot; }
+  snapshot(id: string) { const snapshot = this.sessions.get(id)?.snapshot ?? this.store.get(id); snapshot.records_revision = this.records.revision(id); snapshot.image_input = this.imageInput(snapshot); return snapshot; }
+  private imageInput(snapshot: Snapshot): 'yes' | 'no' | 'unknown' {
+    if (snapshot.harness?.id === 'claude') return 'unknown';
+    if (snapshot.harness?.id === 'codex') return this.codex.imageInput(snapshot.model.model_id);
+    const model = this.models.getModel(snapshot.model.provider, snapshot.model.model_id);
+    return model ? model.input.includes('image') ? 'yes' : 'no' : 'unknown';
+  }
+  private imageData(thread: string, request: string): ImageData[] {
+    return this.store.images.data(thread, this.store.images.forRequest(thread, request));
+  }
   async handle(input: unknown): Promise<unknown> {
     if (this.providers?.handles(input)) return this.providers.handle(input);
     const request = validate(input);
     const protocol = version(request);
     const result = await this.dispatch(request, protocol);
     // Every snapshot leaves through the negotiated wire shape.
-    if (result && typeof result === 'object' && 'thread' in result) return { ...result, thread: view({ ...(result.thread as Snapshot), records_revision: this.records.revision((result.thread as Snapshot).id) }, protocol) };
+    if (result && typeof result === 'object' && 'thread' in result) return { ...result, thread: view({ ...(result.thread as Snapshot), image_input: this.imageInput(result.thread as Snapshot), records_revision: this.records.revision((result.thread as Snapshot).id) }, protocol) };
     return result;
   }
   private async dispatch(request: ReturnType<typeof validate>, protocol: Protocol): Promise<unknown> {
@@ -202,26 +213,34 @@ export class Runtime {
         this.changed('#');
         return result;
       }
-      case 'harnesses': return this.harnesses();
+      case 'harnesses': return this.harnesses(undefined, protocol);
       case 'set_harness_path': {
         if (request.harness === 'pi') fail('invalid_request', 'Pi runs inside the host, not from a chosen path.');
         (request.harness === 'codex' ? this.codex : this.claude).setPath(request.path as string | undefined);
-        return this.harnesses(request.harness as HarnessId);
+        return this.harnesses(request.harness as HarnessId, protocol);
       }
       case 'set_harness_mode': {
         if (request.harness === 'pi') fail('invalid_request', "Pi threads use Plait's approval mode, not a harness mode.");
         (request.harness === 'codex' ? this.codex : this.claude).setDefaultMode(String(request.mode));
-        return this.harnesses();
+        return this.harnesses(undefined, protocol);
       }
       // The only operation that reaches the network for a harness: it downloads the pinned Agent SDK.
       case 'set_up_harness': {
         if (request.harness !== 'claude') fail('invalid_request', 'Only Claude Code threads need setting up.');
         await this.claude.setUp();
-        return this.harnesses('claude');
+        return this.harnesses('claude', protocol);
+      }
+      case 'image_put': {
+        const id = String(request.thread_id); this.snapshot(id);
+        return this.store.images.put(id, String(request.image_id), Number(request.offset), Number(request.total), String(request.data));
+      }
+      case 'image_read': {
+        const id = String(request.thread_id); this.snapshot(id);
+        return this.store.images.read(id, String(request.image_id), Number(request.offset));
       }
       case 'watch': return { thread: this.snapshot(String(request.thread_id)) };
       case 'submit': return this.submit(String(request.thread_id), String(request.request_id), String(request.text),
-        request.approval === 'auto' ? 'auto' : 'ask', request.when_busy as QueueMode | undefined);
+        request.approval === 'auto' ? 'auto' : 'ask', request.when_busy as QueueMode | undefined, request.images as string[] | undefined);
       case 'stop': {
         const id = String(request.thread_id);
         const snapshot = this.snapshot(id);
@@ -275,7 +294,10 @@ export class Runtime {
         const id = String(request.thread_id); this.snapshot(id);
         return this.read(id, async source => {
           const page = await historyPage(source, request.before as string | undefined, Number(request.limit ?? 100));
-          for (const item of page.items) if (item.type === 'tool' && item.name.startsWith('mcp__')) item.name = this.store.setting(nameKey(id, item.name)) ?? item.name;
+          for (const item of page.items) {
+            if (item.type === 'tool' && item.name.startsWith('mcp__')) item.name = this.store.setting(nameKey(id, item.name)) ?? item.name;
+            if (protocol < 6 && item.type === 'message') delete item.images;
+          }
           return page;
         });
       }
@@ -457,23 +479,28 @@ export class Runtime {
       this.save(snapshot, Math.max(0, ...call.value.entries.map(entry => Number(entry.id))));
     });
   }
-  async submit(id: string, requestId: string, text: string, mode: ApprovalMode = 'ask', whenBusy?: QueueMode) {
+  async submit(id: string, requestId: string, text: string, mode: ApprovalMode = 'ask', whenBusy?: QueueMode, images: string[] = []) {
     const snapshot = this.snapshot(id);
-    const duplicate = this.store.duplicate(id, requestId, text);
+    const duplicate = this.store.duplicate(id, requestId, images.length ? { text, images } : text);
     if (duplicate !== undefined) return duplicate;
     this.usable(snapshot);
+    this.store.images.refs(id, images);
+    if (images.length) {
+      if (snapshot.harness?.id === 'codex') await this.codex.model(snapshot.model.model_id);
+      if (this.imageInput(snapshot) === 'no') fail('model_unavailable', 'This model cannot take images. Remove the images or choose another model.');
+    }
     const result = { thread_id: id, request_id: requestId, accepted: true };
     const session = this.sessions.get(id);
     if (whenBusy && (session || this.store.queue(id).length)) {
       // An idle thread with a held queue resumes it now, which needs the checkout as any run does.
       if (!session && this.active.has(snapshot.checkout)) fail('busy', 'This checkout already has an active run.');
       if (this.store.queue(id).length >= QUEUE_LIMIT) fail('busy', `This thread already has ${QUEUE_LIMIT} queued messages.`);
-      this.notify(id, this.store.enqueue(requestId, text, result, { mode: whenBusy, approval: mode }, snapshot));
+      this.notify(id, this.store.enqueue(requestId, text, result, { mode: whenBusy, approval: mode }, snapshot, images));
       if (!session) this.drain(id, true);
       else { session.inputs = this.store.inputs(id); await this.steer(session); }
       return result;
     }
-    await this.start(snapshot, requestId, text, mode, () => this.store.admit(id, requestId, text, result, snapshot));
+    await this.start(snapshot, requestId, text, mode, () => this.store.admit(id, requestId, text, result, snapshot, undefined, images));
     return result;
   }
   /** Admits one run: reserves the checkout, creates its own authorization, then commits acceptance. */
@@ -527,7 +554,7 @@ export class Runtime {
       if (input.queued?.mode !== 'steer' || session.steered.has(input.request_id)) continue;
       try {
         session.steered.set(input.request_id, await session.root.submit(
-          { type: 'input', requestId: steerKey(input.request_id), content: await expandInput(input.text, session), whenBusy: 'steer', whenIdle: 'reject' }, context));
+          { type: 'input', requestId: steerKey(input.request_id), content: await this.piInput(session, input.request_id, input.text), whenBusy: 'steer', whenIdle: 'reject' }, context));
       } catch { /* The run is ending. The input stays queued and starts a run of its own. */ }
     }
   }
@@ -539,7 +566,7 @@ export class Runtime {
       if (input.queued?.mode !== 'steer' || session.steered.has(input.request_id)) continue;
       // Marked first, so a second submit during the request does not send it twice.
       session.steered.set(input.request_id, JOINED);
-      if (!await run.steer(input.request_id, input.text)) session.steered.delete(input.request_id);
+      if (!await run.steer(input.request_id, input.text, this.imageData(session.snapshot.id, input.request_id))) session.steered.delete(input.request_id);
     }
   }
   /** Claude Code takes a steering message at its next step, or as the next turn; either way it cannot be withdrawn. */
@@ -548,7 +575,7 @@ export class Runtime {
     if (!session.started || !run) return;
     for (const input of session.inputs) {
       if (input.queued?.mode !== 'steer' || session.steered.has(input.request_id)) continue;
-      if (run.steer(input.request_id, input.text)) session.steered.set(input.request_id, JOINED);
+      if (run.steer(input.request_id, input.text, this.imageData(session.snapshot.id, input.request_id))) session.steered.set(input.request_id, JOINED);
     }
   }
   /** Starts the next queued input as a new run with a new authorization in its own mode. */
@@ -571,9 +598,14 @@ export class Runtime {
     });
   }
   /** The run's own input, or a continuation when a crash hid that an earlier run already took it as steering. */
+  private async piInput(session: Session, requestId: string, text: string) {
+    const expanded = await expandInput(text, session);
+    const images = this.imageData(session.snapshot.id, requestId);
+    return images.length ? [{ type: 'text' as const, text: expanded }, ...images.map(image => ({ type: 'image' as const, mimeType: image.ref.media_type, data: image.data }))] : expanded;
+  }
   private async draft(session: Session, requestId: string, text: string): Promise<SubmissionDraft> {
     const earlier = await session.harness!.commit(tx => tx.submissionByRequest(session.root!.id, steerKey(requestId)), context);
-    if (earlier?.type !== 'input' || earlier.entry === undefined) return { type: 'input', requestId, content: await expandInput(text, session) };
+    if (earlier?.type !== 'input' || earlier.entry === undefined) return { type: 'input', requestId, content: await this.piInput(session, requestId, text) };
     this.store.place(session.snapshot.id, requestId, Number(earlier.entry));
     session.inputs = this.store.inputs(session.snapshot.id);
     return { type: 'continue' };
@@ -712,7 +744,7 @@ export class Runtime {
     this.save(snapshot);
     if (session.authorization.signal.aborted) return;
     session.authorization.activate();
-    const turn = run.run(requestId, text, model.id, codexEffort(snapshot.thinking_level, model.efforts));
+    const turn = run.run(requestId, text, model.id, codexEffort(snapshot.thinking_level, model.efforts), this.imageData(id, requestId));
     session.started = true;
     await this.steer(session);
     await turn;
@@ -746,7 +778,7 @@ export class Runtime {
     this.save(snapshot);
     if (session.authorization.signal.aborted) return;
     session.authorization.activate();
-    const turn = run.run(requestId, text);
+    const turn = run.run(requestId, text, this.imageData(id, requestId));
     session.started = true;
     await turn;
   }

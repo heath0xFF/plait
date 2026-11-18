@@ -257,7 +257,8 @@ impl Plait {
         {
             let draft = saved.draft.clone();
             composer.update(cx, |composer, cx| {
-                composer.restore_draft(draft.text, draft.revision, draft.submitted, cx)
+                composer.restore_draft(draft.text, draft.revision, draft.submitted, cx);
+                composer.restore_images(draft.images, cx)
             });
         }
     }
@@ -267,6 +268,19 @@ impl Plait {
             return;
         };
         let mut next = data.clone();
+        if let Some(composer) = &self.draft.composer {
+            let composer = composer.read(cx);
+            let (text, revision, submitted) = composer.saved_draft();
+            next.new_draft = Some((
+                self.host.checkout.clone(),
+                Draft {
+                    text: text.into(),
+                    revision,
+                    submitted: submitted.clone(),
+                    images: composer.saved_images().to_vec(),
+                },
+            ));
+        }
         if self.host.checkout.is_absolute() {
             next.checkout = Some(self.host.checkout.clone());
         }
@@ -307,6 +321,7 @@ impl Plait {
                     model: summary.model.clone(),
                     title,
                     draft: Draft {
+                        images: composer.saved_images().to_vec(),
                         text: text.to_owned(),
                         revision,
                         submitted: submitted.clone(),

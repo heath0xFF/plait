@@ -40,7 +40,8 @@ pub fn row_count(snapshot: &Snapshot) -> usize {
         .messages
         .iter()
         .map(|message| {
-            usize::from(!message.text.is_empty()) + usize::from(!message.reasoning.is_empty())
+            usize::from(!message.text.is_empty() || !message.images.is_empty())
+                + usize::from(!message.reasoning.is_empty())
         })
         .sum::<usize>()
         + snapshot.tools.len()
@@ -86,7 +87,9 @@ pub fn layout(snapshot: &Snapshot) -> Vec<Slot> {
         if !snapshot.messages[message].reasoning.is_empty() {
             slots.push(Slot::Reasoning(message));
         }
-        if !snapshot.messages[message].text.is_empty() {
+        if !snapshot.messages[message].text.is_empty()
+            || !snapshot.messages[message].images.is_empty()
+        {
             slots.push(Slot::Message(message));
         }
         slots.extend(tools.into_iter().map(Slot::Tool));
@@ -239,6 +242,7 @@ mod tests {
         snapshot.messages = ids
             .iter()
             .map(|id| Message {
+                images: Vec::new(),
                 id: id.to_string(),
                 role: MessageRole::Assistant,
                 text: format!("Message {id}"),
@@ -367,6 +371,7 @@ mod tests {
         assert_eq!(layout(&snapshot).len(), row_count(&snapshot));
         let mut next = snapshot.clone();
         next.messages.push(super::super::host::Message {
+            images: Vec::new(),
             id: "3".into(),
             role: MessageRole::Assistant,
             text: "Done.".into(),

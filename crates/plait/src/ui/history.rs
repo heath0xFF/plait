@@ -211,12 +211,17 @@ impl Plait {
         let cache = self.history.cache.clone();
         let operation = load.clone();
         let thread = id.clone();
+        let protocol = self.host.protocol();
         let task = cx.background_executor().spawn(async move {
             let client = Client::from_environment()?;
             let mut cache = (*cache).clone();
             match operation {
-                Load::Latest => cache.latest(history::read_page(&client, &thread, None)?),
-                Load::Older => cache.prepend(history::read_page(&client, &thread, before)?),
+                Load::Latest => cache.latest(history::read_page_version(
+                    &client, &thread, None, protocol,
+                )?),
+                Load::Older => cache.prepend(history::read_page_version(
+                    &client, &thread, before, protocol,
+                )?),
                 Load::Part(key, field, restart) => {
                     let entry = cache.get(&key).ok_or_else(|| {
                         plait_core::host::Error::Protocol(

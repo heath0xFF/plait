@@ -32,9 +32,9 @@ function pruneOrder(snapshot: Snapshot) {
   const ids = new Set(snapshot.messages.map(message => message.id));
   for (const tool of snapshot.tools) if (tool.after3 !== undefined && !ids.has(tool.after3)) delete tool.after3;
 }
-/** Latest 100 messages with text, as before, plus the latest 50 reasoning-only messages. */
+/** Latest 100 messages with text or images, plus the latest 50 reasoning-only messages. */
 function retain(messages: SnapshotMessage[]) {
-  const text = messages.filter(message => message.text); const reasoning = messages.filter(message => !message.text);
+  const text = messages.filter(message => message.text || message.images?.length); const reasoning = messages.filter(message => !message.text && !message.images?.length);
   const keep = new Set([...text.slice(-100), ...reasoning.slice(-50)]);
   return { messages: messages.filter(message => keep.has(message)), clipped: text.length > 100 };
 }
@@ -109,12 +109,13 @@ export function update(snapshot: Snapshot, view: ConversationView, inputs: Input
     for (const [index, message] of ((entry.model ?? []) as readonly Message[]).entries()) {
       if (message.role === 'user' || message.role === 'assistant') {
         // A placed `/skill:` input reads as typed; the model received it expanded.
-        const typed = message.role === 'user' ? placed.get(Number(entry.id))?.text : undefined;
+        const input = message.role === 'user' ? placed.get(Number(entry.id)) : undefined;
+        const typed = input?.text; const images = input?.images;
         const text = readsAsTyped(typed) ? typed : messageText(message);
         const reasoning = message.role === 'assistant' ? clipTail(reasoningText(message), 4096) : '';
-        if (text || reasoning) push({
+        if (text || reasoning || images?.length) push({
           id: message.role === 'user' && placed.has(Number(entry.id)) ? `request-${placed.get(Number(entry.id))!.request_id}` : `${entry.id}-${index}`,
-          role: message.role, text: clip(text), ...(reasoning ? { reasoning } : {}),
+          role: message.role, text: clip(text), ...(images?.length ? { images } : {}), ...(reasoning ? { reasoning } : {}),
         });
         if (message.role === 'assistant' && message.usage && message.stopReason !== 'error' && message.stopReason !== 'aborted') answered = message;
       }

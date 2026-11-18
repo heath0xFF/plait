@@ -68,7 +68,9 @@ ui/                     GPUI layout, actions, focus, lists, theme
   snapshot/showcase.rs  README screenshots over a sample project (tests only)
   snapshot/ways_out.rs  which file and line the ways out pick; Settings → Editor (tests only)
   snapshot/find.rs      find in the conversation: scenes and tests (tests only)
+  images.rs             bounded thumbnail cache and larger view; background decoding
   composer/             native input, IME, clipboard, undo, and its events
+    images.rs           paste/drop attachments, validation, private draft originals
     draft.rs            text, selection, undo, acceptance guard, prompt recall
     history.rs          prompts already sent in the thread
     input.rs            wrapped layout, auto-growing height, painting
@@ -726,6 +728,59 @@ types a mention, lists the fixture repository through Git, and accepts the
 result. The scenes do **not** exercise key events, IME, pointer selection,
 wheel scrolling, or the accessibility tree; those have had no check in a
 native window. The editing rules behind them are unit-tested.
+
+### Images in messages
+
+Protocol 6 carries image references in snapshots and history, with separate
+32 KiB upload/read operations. Originals belong to the thread in the host's
+private `host.sqlite`, outside the checkout and its Undo records. See the
+[host contract](HOST.md#protocol-version-6-images-unreleased) for limits,
+capabilities, transport, and retention. Pi and Codex capability information
+comes from their catalogs; Claude Code's pinned model catalog cannot tell.
+Unknown support permits sending, with any harness refusal shown as a run error.
+
+The desktop saves originals in `session/images/<sha256>` under its private
+state directory, mode 0700 with mode 0600 files. On macOS this defaults to
+`~/Library/Application Support/Plait/session/images`; `PLAIT_DESKTOP_STATE_DIR`
+can move the enclosing session directory. The journal holds only references
+in existing-thread drafts, the new-thread draft, and pending submissions.
+Original files are synced before references enter a draft. Sending flushes the
+journal, uploads originals, then submits their IDs. A refusal preserves the
+draft; only an acknowledgement for its unchanged revision clears it. Removing
+an attachment removes the reference; retained local originals are removed by
+resetting the desktop state directory, not by a cache eviction.
+
+File drops use bounded regular-file reads with no-follow and nonblocking open.
+Type, byte, count, and dimension checks precede decoding and storage. The
+existing pinned `image` crate decodes PNG/JPEG on the background executor with
+an allocation limit, applies orientation, and prepares a 192-pixel thumbnail.
+The original bytes are sent unchanged. No decoder process or shell is used.
+
+Clipboard reading is a deliberate exception to bounded reads: GPUI returns
+an already allocated image, just as text paste already reads the person's
+clipboard whole. It is read only on an explicit paste action, never during
+render, focus, or control enablement. Immediately on return, Plait checks the
+byte/type/dimension/count limits and drops refused bytes without caching,
+logging, or saving them. Pixel decoding and thumbnailing remain background
+work. The pinned native GPUI reader prefers text over images, then PNG over
+JPEG and other image representations. A text-plus-image paste therefore keeps
+ordinary text behavior. TIFF-only images are refused, without conversion.
+
+Conversation rendering draws prepared `RenderImage` pixels only. Visible rows
+schedule missing thumbnails after rendering returns; fetching, disk reads,
+and decoding happen on the background executor. At most four reads/decodes
+run at once and the cache holds at most 32 results, including errors. A larger
+view has one separately prepared image, up to 1,600 pixels per side. Results
+must match connection epoch, watch generation, thread ID, and cache selection;
+a larger-view result also matches its own generation. Changing thread or
+connection drops the cache. Draft thumbnail replies match composer generation.
+The journal and caches contain no image data in snapshot frames.
+
+The release frame benchmark includes 50 distinct image references with a
+bounded cache of prepared thumbnails. It measures CPU render/layout/prepaint/
+paint, excluding decode, transport, GPU submission, and native input latency.
+See [Verification](VERIFICATION.md#images-in-messages) for results and the
+explicit clipboard allocation measurements.
 
 ### Queue and per-thread controls
 

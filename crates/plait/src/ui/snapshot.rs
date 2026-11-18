@@ -1326,6 +1326,7 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
         plait.host.pending_create = Some((request.into(), choice()));
         plait.host.creating = true;
         plait.draft.sending = Some(Sending {
+            images: Vec::new(),
             generation: plait.draft.generation,
             request_id: request.into(),
             text: text.into(),
@@ -2027,6 +2028,7 @@ fn walk(output: Option<&Path>) {
         tool_cards_walk(&mut harness, &repository, suffix);
         draft_walk(&mut harness, &repository, suffix);
         composer_walk(&mut harness, &repository, suffix);
+        images::walk(&mut harness, &repository, suffix);
         composer_v3_walk(&mut harness, &repository, suffix);
         settings_walk(&mut harness, &repository, suffix);
         settings_controls_walk(&mut harness, &repository, suffix);
@@ -2883,6 +2885,7 @@ fn draft_scenes_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         plait.host.error =
             Some("Sample error. Retry creation to reuse the same request ID.".into());
         plait.draft.sending = Some(super::new_thread::Sending {
+            images: Vec::new(),
             generation: plait.draft.generation,
             request_id: "sample-request".into(),
             text: "Add retries with backoff to the status refresh".into(),
@@ -4217,6 +4220,7 @@ fn composer_v3_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
             plait.host.submissions.restore_accepted(
                 THREAD.into(),
                 plait_core::host_state::PendingSubmit {
+                    images: Vec::new(),
                     request_id: queued.request_id.clone(),
                     text: queued.text.clone(),
                     approval: Some(queued.approval),
@@ -4334,6 +4338,7 @@ fn stored_message(
     reasoning: &str,
 ) -> plait_core::host::HistoryItem {
     plait_core::host::HistoryItem::Message {
+        images: Vec::new(),
         id: id.into(),
         role,
         text: text.into(),
@@ -4349,6 +4354,7 @@ fn history_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.change_snapshot(|snapshot| {
         snapshot.status = ThreadStatus::Idle;
         snapshot.messages = vec![Message {
+            images: Vec::new(),
             id: "h-answer".into(),
             role: MessageRole::Assistant,
             text: "The saved reply is complete.".into(),
@@ -4415,7 +4421,8 @@ fn history_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.capture(&format!("history-full-message-{suffix}"));
     harness.update(|plait, _, _| {
         let text = "This is the first displayed part of a much larger stored message. Each part is explicit, and copying copies only the part on screen.";
-        let item = HistoryItem::Message { id: "h-answer".into(), role: MessageRole::Assistant, text: text.into(), reasoning: String::new(), more: vec![plait_core::host::More { field: plait_core::host::HistoryField::Text, reference: "fixture-part".into(), offset: text.len() as u64, length: 500_000 }] };
+        let item = HistoryItem::Message {
+ images: Vec::new(), id: "h-answer".into(), role: MessageRole::Assistant, text: text.into(), reasoning: String::new(), more: vec![plait_core::host::More { field: plait_core::host::HistoryField::Text, reference: "fixture-part".into(), offset: text.len() as u64, length: 500_000 }] };
         let entry = plait_core::history::Entry::from_inline(item, None).unwrap();
         let mut cache = History::default(); cache.latest(plait_core::history::Page { entries: vec![Arc::new(entry)], before: None });
         install_history(plait, cache);
@@ -5165,4 +5172,156 @@ fn frame_bench() {
         panic!("Set PLAIT_BENCH_OUT to a file for the table.");
     };
     std::fs::write(path, report).unwrap();
+}
+
+#[path = "snapshot/images.rs"]
+mod images;
+
+#[core::prelude::v1::test]
+fn image_drafts_survive_reopen_and_refusal_keeps_the_draft() {
+    if !isolated("image_drafts_survive_reopen_and_refusal_keeps_the_draft") {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("plait-image-draft-{}", std::process::id()));
+    let repository = fixture_repository(&root);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.fresh_composer(&repository);
+    images::install(&mut harness, 1);
+    let bytes = include_bytes!("../../../../runtime/test/support/images/0.png");
+    let reference = plait_core::images::persist(bytes).unwrap();
+    let fixture = images::fixtures();
+    harness.composer(|composer, window, cx| {
+        composer.type_text("Keep this draft", window, cx);
+        composer.scene_images(
+            vec![reference.clone()],
+            std::collections::HashMap::from([(reference.id.clone(), fixture[0].1.clone())]),
+            cx,
+        );
+        let revision = composer.saved_draft().1;
+        composer.scene_refuse(vec![0; plait_core::images::IMAGE_BYTES + 1], cx);
+        assert_eq!(composer.saved_draft().0, "Keep this draft");
+        assert_eq!(composer.saved_images(), std::slice::from_ref(&reference));
+        assert_eq!(composer.saved_draft().1, revision);
+        composer.set_image_support(6, Some("no"), cx);
+        composer.scene_submit(cx);
+        assert!(composer.saved_draft().2.is_none());
+        composer.set_image_support(5, Some("yes"), cx);
+        composer.scene_submit(cx);
+        assert!(composer.saved_draft().2.is_none());
+    });
+    harness.update(|plait, window, cx| {
+        plait.open_draft(window, cx);
+        let composer = plait.draft.composer.clone().unwrap();
+        composer.update(cx, |composer, cx| {
+            composer.type_text("New image draft", window, cx);
+            composer.scene_images(vec![reference.clone()], Default::default(), cx);
+        });
+    });
+    let (directory, host) = plait_core::session::locations().unwrap();
+    let (journal, mut saved) =
+        plait_core::session::Journal::open(&directory, host.clone()).unwrap();
+    harness.update(|plait, _, cx| {
+        plait.capture_session(cx);
+        saved = plait.session.data.as_ref().unwrap().clone();
+        saved.host_store = host.clone();
+    });
+    journal.queue(saved);
+    journal.flush().unwrap();
+    drop(journal);
+    let (_, reopened) = plait_core::session::Journal::open(&directory, host).unwrap();
+    let draft = &reopened.threads[THREAD].draft;
+    assert_eq!(draft.text, "Keep this draft");
+    assert_eq!(draft.images, std::slice::from_ref(&reference));
+    assert_eq!(plait_core::images::local(&reference).unwrap(), bytes);
+    let (checkout, new_draft) = reopened.new_draft.as_ref().unwrap();
+    assert_eq!(checkout, &repository);
+    assert_eq!(new_draft.text, "New image draft");
+    assert_eq!(new_draft.images, std::slice::from_ref(&reference));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[core::prelude::v1::test]
+fn image_replies_require_the_original_host_thread_and_generation() {
+    if !isolated("image_replies_require_the_original_host_thread_and_generation") {
+        return;
+    }
+    let expected = (4, 8, "first".to_owned());
+    let mut cache = super::images::ImageCache::scene(expected.clone(), Default::default());
+    assert!(cache.complete(
+        &expected,
+        &expected,
+        "original".into(),
+        Err("fixture".into())
+    ));
+    for actual in [
+        (4, 8, "second".to_owned()),
+        (4, 9, "first".to_owned()),
+        (5, 8, "first".to_owned()),
+    ] {
+        assert!(!cache.complete(&expected, &actual, "late".into(), Err("fixture".into())));
+        assert_eq!(cache.len(), 1);
+    }
+    for index in 0..50 {
+        assert!(cache.complete(
+            &expected,
+            &expected,
+            index.to_string(),
+            Err("fixture".into())
+        ));
+    }
+    assert_eq!(cache.len(), 32);
+}
+
+#[core::prelude::v1::test]
+fn image_paste_and_drop_prepare_originals_and_keep_text_paste() {
+    if !isolated("image_paste_and_drop_prepare_originals_and_keep_text_paste") {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("plait-image-paste-{}", std::process::id()));
+    let repository = fixture_repository(&root);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.fresh_composer(&repository);
+    images::install(&mut harness, 1);
+    let bytes = include_bytes!("../../../../runtime/test/support/images/0.png");
+    let image = gpui::Image::from_bytes(gpui::ImageFormat::Png, bytes.to_vec());
+    harness.update(|plait, window, cx| {
+        plait.focus_composer(window, cx);
+        cx.write_to_clipboard(ClipboardItem::new_image(&image));
+    });
+    harness.keystroke("cmd-v");
+    let wait = |harness: &mut Harness, count| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while harness.composer(|composer, _, _| composer.saved_images().len()) != count {
+            assert!(
+                Instant::now() < deadline,
+                "image preparation did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    wait(&mut harness, 1);
+    let original = harness.composer(|composer, _, _| composer.saved_images()[0].clone());
+    assert_eq!(plait_core::images::local(&original).unwrap(), bytes);
+    harness.update(|_, _, cx| {
+        cx.write_to_clipboard(ClipboardItem {
+            entries: vec![
+                ClipboardEntry::Image(image),
+                ClipboardEntry::String(ClipboardString::new("plain text".into())),
+            ],
+        })
+    });
+    harness.keystroke("cmd-v");
+    harness.composer(|composer, _, _| {
+        assert_eq!(composer.saved_draft().0, "plain text");
+        assert_eq!(composer.saved_images().len(), 1);
+    });
+    let path = root.join("misleading.jpg");
+    let second = include_bytes!("../../../../runtime/test/support/images/1.png");
+    std::fs::write(&path, second).unwrap();
+    harness.composer(|composer, _, cx| composer.scene_drop(vec![path], cx));
+    wait(&mut harness, 2);
+    let dropped = harness.composer(|composer, _, _| composer.saved_images()[1].clone());
+    assert_eq!(dropped.media_type, "image/png");
+    assert_eq!(plait_core::images::local(&dropped).unwrap(), second);
+    std::fs::remove_dir_all(root).unwrap();
 }
