@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { writeFile, readFile, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { HostError } from '../src/protocol.ts';
 import { TurnReview, validateReview } from '../src/turn-review.ts';
 import { codex } from './support/record-runtime.ts';
 import { exec } from './support/safety.ts';
@@ -61,4 +62,10 @@ test('immutable pages enforce offsets, retries, frame bounds and idle expiry', a
   }
   assert.deepEqual(all, items);
   now = 300_000; assert.throws(() => review.page(token, 0), /expired/);
+});
+
+test('turn review rejects inherited operation names with invalid_request', () => {
+  for (const op of ['toString', 'constructor', '__proto__', 'hasOwnProperty']) {
+    assert.throws(() => validateReview({ op }), (error: unknown) => error instanceof HostError && error.code === 'invalid_request');
+  }
 });

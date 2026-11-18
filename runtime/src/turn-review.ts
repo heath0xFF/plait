@@ -16,7 +16,7 @@ const id = (value: unknown): value is string => typeof value === 'string' && /^[
 export function validateReview(input: unknown): Record<string, unknown> & { op: string } {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail('invalid_request', 'Invalid turn review request.');
   const request = input as Record<string, unknown> & { op: string };
-  const fields = operations[request.op];
+  const fields = Object.hasOwn(operations, request.op) ? operations[request.op] : undefined;
   if (!fields || Object.keys(request).some(key => key !== 'op' && !fields.includes(key)) || fields.some(key => request[key] === undefined)
       || Buffer.byteLength(JSON.stringify(request)) > 65_000) fail('invalid_request', 'Unknown operation or field.');
   for (const key of ['thread_id', 'record_id', 'token']) if (fields.includes(key) && !id(request[key])) fail('invalid_request', `Invalid ${key}.`);
