@@ -287,9 +287,9 @@ clash; choosing one inserts its text and runs nothing. The project's settings
 list them read-only, with Open folder and Refresh; turning one off stays in Pi's
 settings. Recorded in the [host contract](HOST.md#skills-and-user-instructions).
 
-Next: step 3 adds named CLIs for sandboxed projects; step 4 adds MCP servers.
-Both are agreed to be built (see "Agreed next, for daily use"); the details of
-each are agreed before it starts.
+Next: step 4 adds MCP servers, and its details are agreed under "Agreed next,
+for daily use". Step 3, named CLIs for sandboxed projects, is agreed and
+waits until a sandboxed project needs it.
 
 **Direction for M9, turn records:** Plait's guard on files that had changes,
 its exact approvals, and its command sandbox protect a checkout only in Pi
@@ -426,10 +426,33 @@ recorded in the [host contract](HOST.md) when built.
 a file: matches in loaded messages, next and previous, and a count. Text that
 has not been loaded from the host is not searched, and the bar says so.
 
-**M8 steps 3 and 4, named CLIs and MCP servers.** As described under
-"Direction for M8": Pi threads use the command-line tools and then the MCP
-servers the person already set up for Pi, each listed in the project's
-settings and each call under Plait's approvals.
+**M8 step 4, MCP servers.** Pi threads use the MCP servers the person already
+set up for Pi (`~/.pi/agent/mcp.json`, and a project's `.pi/mcp.json` only
+when its commands are trusted). Plait starts only those servers, each for one
+run, and lists them on the project's settings page with a switch for that
+project.
+
+- **One call per tool.** The agent finds a tool by search and each call is its
+  own row in the conversation with its own approval, as MCP calls from Codex
+  and Claude Code already are. Pi's code mode, where one script calls several
+  tools, is not used.
+- **Approval.** In a trusted project a call follows the thread's approval
+  mode. In a sandboxed project a server is off until turned on for that
+  project, and every call asks, because it is the only way out to the network.
+  What a server says about itself never skips an approval.
+- **Sign-in.** A server that needs a key from the config file, or none, works
+  at once. One that needs a browser sign-in is listed as needing a sign-in
+  with Pi; once that is done Plait uses the same saved token. Plait has no
+  sign-in of its own for MCP servers yet.
+- **Never.** Plait does not start a server the person did not configure, does
+  not send a server's secrets to the model or the desktop, declines a server's
+  requests to sample the model or question the person, and does not repeat a
+  call after a host restart.
+
+**M8 step 3, named CLIs, is agreed but waits.** It matters only in a project
+the person has sandboxed: a trusted project, the default, already runs any
+tool as the person. It is built when a sandboxed project needs a tool with
+network access or the person's own credentials.
 
 ## Proposed, not yet agreed
 
