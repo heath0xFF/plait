@@ -264,3 +264,33 @@ test('a later record in another thread blocks an earlier run without disturbing 
   assert.equal(await readFile(join(h.root, 'shared'), 'utf8'), 'second thread');
   assert.equal(await readFile(join(h.root, 'safe'), 'utf8'), 'initial');
 });
+
+test('a zero-effect failed undo keeps the original action and survives restart without replay', async t => {
+  const { chmod } = await import('node:fs/promises');
+  const h = await codex(t); const thread = await h.create();
+  await h.submit(thread.id, 'r1'); await h.finish(thread.id);
+  const original = h.pairs()[0].after!.id;
+  const undo = { op: 'undo_turn', thread_id: thread.id, record_id: original, request_id: 'read-only' };
+  const path = join(h.root, 'codex-r1.txt'), bytes = await readFile(path);
+  await chmod(h.root, 0o555);
+  try { assert.equal((await h.call(undo, 5)).error?.code, 'undo_no_effect'); }
+  finally { await chmod(h.root, 0o755); }
+  const page = (await h.call({ op: 'turn_records', thread_id: thread.id }, 5)).result.records;
+  assert.equal(page[0].state, 'no_effect'); assert.equal(page[0].undoes, original);
+  assert.equal(page.find((r: any) => r.id === original).state, 'ready');
+  assert.deepEqual(await readFile(path), bytes);
+  await h.close();
+  const { Runtime } = await import('../src/runtime.ts');
+  const { models } = await import('./support/record-runtime.ts');
+  const recovered = new Runtime(h.store, models(), new Set(['faux'])); t.after(() => recovered.close());
+  await recovered.records.settled(h.root);
+  assert.equal((await recovered.reply({ ...undo, protocol_version: 5 }) as any).error.code, 'undo_no_effect');
+  assert.deepEqual(await readFile(path), bytes);
+  const records = recovered.records.page(thread.id).records;
+  assert.equal(records[0].state, 'no_effect');
+  assert.equal(records.find(r => r.id === original)!.state, 'ready');
+  await recovered.records.prune();
+  const retry = await recovered.reply({ ...undo, request_id: 'retry', protocol_version: 5 }) as any;
+  assert.equal(retry.result?.state, 'undone', JSON.stringify(retry));
+  await assert.rejects(readFile(path), { code: 'ENOENT' });
+});

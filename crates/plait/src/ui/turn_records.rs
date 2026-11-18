@@ -313,7 +313,7 @@ impl Plait {
                         this.pump(cx);
                     }
                     Err(host::Error::Rejected(error)) => {
-                        let label = match error.code.as_str() { "busy" => "Wait", "undo_incomplete" => "Incomplete", _ => "Unavailable" };
+                        let label = match error.code.as_str() { "busy" => "Wait", "undo_no_effect" => "Retry", "undo_incomplete" => "Incomplete", _ => "Unavailable" };
                         let detail = if error.code == "undo_incomplete" {
                             "Undo was interrupted; some files may have changed. Inspect Changes before another undo.".into()
                         } else { error.message };

@@ -207,3 +207,21 @@ fn reasoning_and_text_share_exactly_one_closing_line() {
         );
     }
 }
+
+#[test]
+fn a_failed_undo_without_file_effects_keeps_the_original_action() {
+    let mut failed = record("attempt", &["undo"], "no_effect");
+    failed["kind"] = json!("undo");
+    failed["undoes"] = json!("run");
+    failed["paths"] = json!([]);
+    failed["paths_total"] = json!(0);
+    let lines = project(
+        &snapshot(),
+        &[decode(failed), decode(record("run", &["next"], "ready"))],
+        true,
+    );
+    let line = lines.latest.unwrap();
+    assert_eq!(line.target.as_deref(), Some("run"));
+    assert_eq!(line.availability, Availability::Ready);
+    assert!(!line.undone);
+}

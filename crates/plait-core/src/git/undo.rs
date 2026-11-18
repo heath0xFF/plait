@@ -608,6 +608,10 @@ fn apply(
                 unlink(&directory, &name, true)?;
             }
             rename(&directory, &temp, &target, expected.is_none())?;
+            // The rename has effects even if syncing the directory fails.
+            outcome.applied += 1;
+            outcome.applied_paths.push(path.path.clone());
+            save(request, outcome)?;
             directory.sync_all().map_err(err)?;
             Ok(())
         })();
@@ -615,9 +619,6 @@ fn apply(
             let _ = unlink(&directory, &temporary, false);
         }
         result?;
-        outcome.applied += 1;
-        outcome.applied_paths.push(path.path.clone());
-        save(request, outcome)?;
     }
     Ok(())
 }

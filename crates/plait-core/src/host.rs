@@ -772,6 +772,8 @@ pub enum RecordKind {
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RecordState {
+    /// A failed undo with a terminal journal proving no file effects.
+    NoEffect,
     Recording,
     Ready,
     Failed,

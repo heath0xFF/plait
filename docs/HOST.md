@@ -1478,7 +1478,13 @@ maximum 50. Results are newest first, in the existing success envelope:
   lines by `request_ids`, not by this provisional ID. IDs include the initial
   request and inputs actually placed as steering, read from durable transcript
   positions. A queued follow-up belongs to its own run.
-- `state` is `recording`, `ready`, `failed`, or `undone`. Failed pairs cannot be
+- `state` is `recording`, `ready`, `failed`, `no_effect`, or `undone`.
+  `no_effect` is a failed undo whose terminal journal proves that no file changed.
+  It remains listed for diagnosis and request deduplication, but clients must skip
+  it when choosing the next Undo or Redo target and counting undo depth.
+  An interrupted undo with uncertain effects is never classified this way.
+  Such a failed request returns `undo_no_effect`; repeating its request ID never
+  replays it, but a new request ID can retry the original target. Failed pairs cannot be
   undone. `undone` records that an undo was applied, including “Undo the rest”;
   it does not assert that every path currently equals the earlier tree. The
   safety checks run again on every new request, including for an `undone` row.

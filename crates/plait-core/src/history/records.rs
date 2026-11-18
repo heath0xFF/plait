@@ -154,7 +154,7 @@ fn line(
     }
     let availability = match current.state {
         RecordState::Recording => Availability::Recording,
-        RecordState::Failed => Availability::Failed,
+        RecordState::Failed | RecordState::NoEffect => Availability::Failed,
         RecordState::Ready => Availability::Ready,
         RecordState::Undone => Availability::Unavailable,
     };
@@ -252,7 +252,9 @@ pub fn project(snapshot: &Snapshot, records: &[TurnRecord], live_end: bool) -> L
             for request in &record.request_ids {
                 members.insert(format!("request-{request}"), record);
             }
-        } else if let Some(target) = &record.undoes {
+        } else if record.state != RecordState::NoEffect
+            && let Some(target) = &record.undoes
+        {
             // Pages are newest first; keep the newest child if a host lists two.
             children.entry(target.as_str()).or_insert(record);
         }

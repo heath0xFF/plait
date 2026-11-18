@@ -67,7 +67,7 @@ function helper<T>(operation: 'record' | 'prune' | 'undo', input: unknown, lease
   });
 }
 
-type UndoOutcome = { state: 'blocked' | 'applying' | 'undone' | 'incomplete'; changed_since: string[]; not_covered: Uncovered[]; before: Made; after: Made | null };
+type UndoOutcome = { state: 'blocked' | 'applying' | 'undone' | 'incomplete'; applied: number; changed_since: string[]; not_covered: Uncovered[]; before: Made; after: Made | null };
 
 export class Records {
   private store: Store;
@@ -153,7 +153,7 @@ export class Records {
   private recover() {
     const db = this.store.db;
     const open = db.prepare(`SELECT b.id FROM records b WHERE b.kind='before' AND b.state='ready'
-      AND NOT EXISTS (SELECT 1 FROM records a WHERE a.kind IN ('after','undo') AND a.before=b.id AND (a.state IN ('ready','undone') OR (a.state='failed' AND a.after_restart=0))) ORDER BY b.created_at, b.rowid`).all().map(row => String(row.id));
+      AND NOT EXISTS (SELECT 1 FROM records a WHERE a.kind IN ('after','undo') AND a.before=b.id AND (a.state IN ('ready','undone','no_effect') OR (a.state='failed' AND a.after_restart=0))) ORDER BY b.created_at, b.rowid`).all().map(row => String(row.id));
     // A record cut short by the stop left nothing usable; the before record of a run that never started its harness stays failed.
     db.prepare("UPDATE records SET state='failed' WHERE kind='before' AND state='recording'").run();
     for (const before of open) this.track(this.after(before, undefined, true));
@@ -225,6 +225,9 @@ export class Records {
     if (existing) {
       if (existing.target !== target || existing.leave_changed !== Number(leaveChanged)) fail('conflict', 'Undo request ID already used for different input.');
       if (existing.result) return JSON.parse(String(existing.result));
+      if (this.store.db.prepare("SELECT 1 FROM records WHERE id=? AND state='no_effect'").get(existing.record_id)) {
+        fail('undo_no_effect', 'Undo could not restore any files. No files were changed; a new request may retry the original run.');
+      }
       fail('undo_incomplete', 'This undo was interrupted and will not be repeated. Refresh the records and inspect the checkout.');
     }
     if (active || this.busy(snapshot.checkout) || this.pruning) fail('busy', 'This checkout already has a host writer.');
@@ -263,6 +266,7 @@ export class Records {
           await rm(this.undoPath(id), { force: true });
           return undoReply('blocked', outcome.changed_since, outcome.not_covered, target, row.after_restart === 1);
         }
+        if (outcome.state === 'incomplete' && outcome.applied === 0) fail('undo_no_effect', 'Undo could not restore any files. No files were changed; a new request may retry the original run.');
         if (outcome.state !== 'undone') fail('undo_incomplete', 'Undo stopped after it may have changed files. Refresh the records and inspect the checkout; this request will not be repeated.');
         await rm(this.undoPath(id), { force: true });
         return undoReply('undone', outcome.changed_since, outcome.not_covered, id, row.after_restart === 1);
@@ -275,6 +279,12 @@ export class Records {
   }
   private acceptUndo(thread: string, request: string, target: string, before: string, id: string, outcome: UndoOutcome, restart: boolean) {
     this.ready(before, outcome.before);
+    if (outcome.state === 'incomplete' && outcome.applied === 0) {
+      // A terminal journal proves no file changed; keep dedup but no action child.
+      this.store.db.prepare("UPDATE records SET state='no_effect' WHERE id=?").run(id);
+      this.bump(thread);
+      return;
+    }
     if (outcome.after) this.ready(id, outcome.after);
     else this.store.db.prepare("UPDATE records SET state='failed',after_restart=1 WHERE id=?").run(id);
     if (outcome.state === 'undone') {
@@ -296,7 +306,7 @@ export class Records {
         this.store.db.prepare('DELETE FROM undo_operations WHERE thread=? AND request_id=?').run(row.thread, row.request_id);
       } else {
         const saved = this.store.db.prepare('SELECT state FROM records WHERE id=?').get(id);
-        if (outcome.state !== 'undone' && (saved?.state === 'ready' || saved?.state === 'undone')) continue;
+        if (outcome.state !== 'undone' && (saved?.state === 'ready' || saved?.state === 'undone' || saved?.state === 'no_effect')) continue;
         const target = this.store.db.prepare('SELECT after_restart FROM records WHERE id=?').get(row.target);
         this.acceptUndo(String(row.thread), String(row.request_id), String(row.target), before, id, outcome, target?.after_restart === 1);
         if (outcome.state === 'undone') await rm(this.undoPath(id), { force: true });
