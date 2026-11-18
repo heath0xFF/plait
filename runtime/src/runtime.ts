@@ -1,5 +1,6 @@
 import type { ImageData } from './images.ts';
 import { TurnReview } from './turn-review.ts';
+import { LinearService } from './linear/service.ts';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { lstat } from 'node:fs/promises';
@@ -75,6 +76,7 @@ export class Runtime {
   /** The checkout as each run found and left it, in the host's own store. */
   records: Records;
   turnReview: TurnReview;
+  linear: LinearService;
   sessions = new Map<string, Session>();
   active = new Map<string, string>();
   models: Models;
@@ -114,6 +116,7 @@ export class Runtime {
     this.store = new Store(directory);
     this.records = new Records(this.store, directory, id => this.changed(id));
     this.turnReview = new TurnReview(this.store, this.records, directory);
+    this.linear = new LinearService(this.store, directory);
     this.records.start();
     this.codex = new CodexHarness(this.store);
     this.claude = new ClaudeHarness(this.store, { sdk: sdkDirectory(directory), cwd: directory });
@@ -167,6 +170,7 @@ export class Runtime {
   async handle(input: unknown): Promise<unknown> {
     if (this.providers?.handles(input)) return this.providers.handle(input);
     if (this.turnReview.handles(input)) return this.turnReview.handle(input);
+    if (this.linear.handles(input)) return this.linear.handle(input);
     const request = validate(input);
     const protocol = version(request);
     const result = await this.dispatch(request, protocol);

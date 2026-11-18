@@ -8,6 +8,7 @@ import { fail, inputMessage, queuedView, readsAsTyped } from './protocol.ts';
 import { boundSnapshot, pushMessage } from './transcript.ts';
 import { title } from './text.ts';
 import { CommandOutputs } from './tool-output.ts';
+import { LinearCache } from './linear/cache.ts';
 import type { FileIdentity, Postimage } from './safety.ts';
 
 type Row = Record<string, unknown>;
@@ -41,6 +42,7 @@ export class Store {
   db: DatabaseSync;
   outputs: CommandOutputs;
   images: Images;
+  linear: LinearCache;
   constructor(directory: string) {
     this.db = new DatabaseSync(join(directory, 'host.sqlite'));
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
@@ -73,6 +75,7 @@ export class Store {
     this.db.exec('CREATE INDEX IF NOT EXISTS threads_recent ON threads(updated_at DESC)');
     this.outputs = new CommandOutputs(this.db);
     this.images = new Images(this.db);
+    this.linear = new LinearCache(this.db);
     // Repair queued cancellations made by earlier image-capable hosts, without reading BLOBs.
     this.transaction(() => {
       for (const row of this.db.prepare(`SELECT message_images.thread,message_images.request FROM message_images
