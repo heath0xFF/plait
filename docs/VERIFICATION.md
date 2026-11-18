@@ -1640,3 +1640,11 @@ deletions; Latin-1 text; and multiple undo choices. All 21 recorded-review scene
 were inspected at 1380 and 900 points. Inspection corrected a repeated Older
 host label, stale fixture ages, and overlapping multi-line picker details.
 These are headless, injected scenes; nothing was checked in the installed app.
+
+### Recorded review with MCP and images
+
+A regression covers format controls, line separators and C1 controls in
+recorded paths, run and thread names, omitted paths and patch text. Display
+escapes share the MCP helper; record IDs, selected paths, patch bytes and line
+numbers retain their meaning. Recorded review stays unversioned alongside
+protocol 6 image operations, with its dispatch ahead of legacy validation.

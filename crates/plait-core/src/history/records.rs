@@ -11,6 +11,7 @@ use std::path::PathBuf;
 /// Visible previews stay small even when the retained record lists every path.
 pub const PREVIEW_LIMIT: usize = 12;
 pub fn preview_name(name: &str) -> String {
+    let name = crate::display_text::escape(name);
     let mut text: String = name
         .chars()
         .take(240)
@@ -182,33 +183,37 @@ fn line(
     let files: Vec<_> = current
         .paths
         .iter()
-        .map(|file| File {
-            path: file.path.clone(),
-            name: file
-                .path
-                .file_name()
-                .unwrap_or(file.path.as_os_str())
-                .to_string_lossy()
+        .map(|file| {
+            let path = crate::display_text::escape(&file.path.to_string_lossy());
+            File {
+                path: file.path.clone(),
+                name: crate::display_text::escape(
+                    &file
+                        .path
+                        .file_name()
+                        .unwrap_or(file.path.as_os_str())
+                        .to_string_lossy(),
+                )
                 .replace(['\n', '\r', '\t'], " "),
-            current_detail: format!(
-                "Open {} in current Changes. Turn review needs a newer host.",
-                file.path.display()
-            ),
-            review_detail: if current.kind == RecordKind::Undo {
-                format!("Review {} restored by this undo.", file.path.display())
-            } else {
-                match (file.added, file.removed) {
-                    (Some(a), Some(r)) => format!(
-                        "Review {} recorded during this turn (+{a} −{r}).",
-                        file.path.display()
-                    ),
-                    _ => format!("Review {} recorded during this turn.", file.path.display()),
-                }
-            },
-            counts: match (file.added, file.removed) {
-                (Some(a), Some(r)) => format!("+{a} −{r}"),
-                _ => String::new(),
-            },
+                current_detail: format!(
+                    "Open {} in current Changes. Turn review needs a newer host.",
+                    path
+                ),
+                review_detail: if current.kind == RecordKind::Undo {
+                    format!("Review {} restored by this undo.", path)
+                } else {
+                    match (file.added, file.removed) {
+                        (Some(a), Some(r)) => {
+                            format!("Review {} recorded during this turn (+{a} −{r}).", path)
+                        }
+                        _ => format!("Review {} recorded during this turn.", path),
+                    }
+                },
+                counts: match (file.added, file.removed) {
+                    (Some(a), Some(r)) => format!("+{a} −{r}"),
+                    _ => String::new(),
+                },
+            }
         })
         .collect();
     let not_covered: Vec<_> = original

@@ -1224,3 +1224,8 @@ other failures remain unavailable or offline. The desktop never opens the
 host store. The retained-record picker is limited to the current thread's v5
 list; current Git reads and writes continue through the existing repository
 queue. Recorded diffs expose no write controls.
+
+Recorded review prepares visible paths, run descriptions and patch text with
+the shared display-text escaping used for MCP data. Format and control
+characters remain visible without changing the path or record identity sent
+to the host. This preparation runs off the UI thread.

@@ -649,9 +649,9 @@ impl Plait {
             )
     }
     pub(super) fn recorded_header(&self, cx: &mut Context<Self>) -> Div {
-        let path = self.recorded_file().map_or("Recorded changes".into(), |f| {
-            f.path.to_string_lossy().into_owned()
-        });
+        let path = self
+            .recorded_file()
+            .map_or("Recorded changes".into(), |f| f.display_path.clone());
         row()
             .min_h(px(44.))
             .px_4()

@@ -10,7 +10,7 @@ import { exec } from './support/safety.ts';
 test('turn review validates additive requests strictly', () => {
   const valid = { op: 'turn_diff', thread_id: 't', record_id: 'r', path: 'src/file.rs' };
   assert.equal(validateReview(valid).op, 'turn_diff');
-  for (const input of [null, [], { ...valid, protocol_version: 5 }, { ...valid, store: '/' }, { ...valid, record_id: '-x/..' }, { op: 'turn_review_page', token: 't', offset: -1 }, { op: 'turn_review_page', token: 't', offset: 1.5 }]) assert.throws(() => validateReview(input));
+  for (const input of [null, [], { ...valid, protocol_version: 5 }, { ...valid, protocol_version: 6 }, { ...valid, store: '/' }, { ...valid, record_id: '-x/..' }, { op: 'turn_review_page', token: 't', offset: -1 }, { op: 'turn_review_page', token: 't', offset: 1.5 }]) assert.throws(() => validateReview(input));
   for (const path of ['/a', '../a', '.git/config', 'a//b', './a', 'a\0b', 'x'.repeat(65001)]) assert.throws(() => validateReview({ ...valid, path }));
 });
 

@@ -756,5 +756,6 @@ mod tests;
 
 /// Prepare an immutable record patch with the same virtualized rows as Git Changes.
 pub fn recorded_diff(bytes: &[u8], truncated: bool, elapsed: Duration) -> Diff {
-    format_diff(bytes, truncated, elapsed, FileHeaders::Omit)
+    let display = crate::display_text::escape(&String::from_utf8_lossy(bytes));
+    format_diff(display.as_bytes(), truncated, elapsed, FileHeaders::Omit)
 }

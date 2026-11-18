@@ -1861,9 +1861,10 @@ Claude Code receives Anthropic base64 image source blocks through the pinned
 Agent SDK's streaming `SDKUserMessage` input. Image-only inputs contain no empty
 text block in any of the three adapters. [Verification](VERIFICATION.md#images-in-messages)
 records scripted coverage and the absence of live-model acceptance evidence.
+
 ## Recorded turn review
 
-These additive, read-only operations omit `protocol_version`. Versions 1–5
+These additive, read-only operations omit `protocol_version`. Versions 1–6
 retain their existing shapes. An older host rejects the operation with
 `invalid_request`; the desktop reports “Turn review needs a newer host.”
 Other failures retain their own unavailable or offline explanation.

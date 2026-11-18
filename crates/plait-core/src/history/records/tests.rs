@@ -237,3 +237,61 @@ fn large_exclusion_lists_prepare_a_bounded_hover_preview() {
     assert!(!line.detail.contains("excluded-00012"));
     assert!(line.detail.len() < 5000);
 }
+
+#[test]
+fn recorded_display_escapes_controls_without_changing_identity() {
+    let path = "src\u{2066}/review\u{202e}\u{200b}.rs";
+    let id = "\u{202e}record";
+    let mut data = record(id, &["next"], "ready");
+    data["paths"][0]["path"] = json!(path);
+    data["not_covered"] = json!([{"path":"build\u{0085}/", "reason":"ignored_directory"}]);
+    data["not_covered_total"] = json!(1);
+    let records = [decode(data)];
+    let mut snapshot = snapshot();
+    snapshot.title = Some("Thread\u{2028}name".into());
+    snapshot.messages[4].text = "Review\u{2066}this\u{e0001}".into();
+    let line = project(&snapshot, &records, true).latest.unwrap();
+    assert_eq!(line.run, id);
+    let file = &line.files[0];
+    assert_eq!(file.path, PathBuf::from(path));
+    assert_eq!(file.name, "review\\u202e\\u200b.rs");
+    for detail in [&file.review_detail, &file.current_detail, &line.detail] {
+        assert!(detail.contains("src\\u2066/review\\u202e\\u200b.rs"));
+    }
+    assert!(line.detail.contains("build\\u0085/"));
+
+    let target = crate::review::recorded::Target {
+        thread: "thread".into(),
+        checkout: "/checkout".into(),
+        record: id.into(),
+        original: id.into(),
+        path: Some(path.into()),
+    };
+    let mut saved = crate::review::recorded::Record::prepare(&records, &target).unwrap();
+    assert_eq!(saved.id, id);
+    assert_eq!(saved.selected(&target), Some(0));
+    assert_eq!(saved.files[0].path, PathBuf::from(path));
+    assert_eq!(
+        saved.files[0].display_path,
+        "src\\u2066/review\\u202e\\u200b.rs"
+    );
+    assert_eq!(saved.files[0].directory, "src\\u2066");
+    assert_eq!(saved.files[0].name, file.name);
+    assert!(saved.label.starts_with("Turn \\u202e"));
+    saved.describe(&records, Some(&snapshot));
+    assert!(saved.detail.contains("Review\\u2066this\\udb40\\udc01"));
+    assert!(saved.detail.contains("Thread\\u2028name"));
+    assert!(saved.detail.contains("build\\u0085/"));
+
+    let patch = format!(
+        "diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n-old\n+new\u{202e}\n"
+    );
+    let diff = crate::git::recorded_diff(patch.as_bytes(), false, std::time::Duration::ZERO);
+    assert!(diff.lines[0].text.contains("review\\u202e\\u200b.rs"));
+    assert_eq!(&*diff.lines.last().unwrap().text, "+new\\u202e");
+    assert_eq!(diff.lines.last().unwrap().new_line, Some(1));
+    assert!(
+        patch.contains('\u{202e}'),
+        "display preparation must not mutate the saved patch"
+    );
+}

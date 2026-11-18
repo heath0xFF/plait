@@ -24,6 +24,7 @@ pub struct Stamp {
 #[derive(Clone, Debug)]
 pub struct File {
     pub path: PathBuf,
+    pub display_path: String,
     pub name: String,
     pub directory: String,
     pub counts: String,
@@ -68,7 +69,7 @@ impl Record {
             .paths
             .iter()
             .map(|file| {
-                let path = file.path.to_string_lossy();
+                let path = crate::display_text::escape(&file.path.to_string_lossy());
                 let counts = match (file.added, file.removed) {
                     (Some(a), Some(r)) => format!("+{a} −{r}"),
                     _ => String::new(),
@@ -81,18 +82,16 @@ impl Record {
                 };
                 File {
                     path: file.path.clone(),
-                    name: file
-                        .path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned(),
-                    directory: file
-                        .path
-                        .parent()
-                        .unwrap_or_else(|| std::path::Path::new(""))
-                        .to_string_lossy()
-                        .into_owned(),
+                    name: crate::display_text::escape(
+                        &file.path.file_name().unwrap_or_default().to_string_lossy(),
+                    ),
+                    directory: crate::display_text::escape(
+                        &file
+                            .path
+                            .parent()
+                            .unwrap_or_else(|| std::path::Path::new(""))
+                            .to_string_lossy(),
+                    ),
                     detail: format!(
                         "{path}, {label}{}. {}",
                         if counts.is_empty() {
@@ -106,6 +105,7 @@ impl Record {
                             "Recorded during this run."
                         }
                     ),
+                    display_path: path,
                     counts,
                     label,
                 }
@@ -137,8 +137,8 @@ impl Record {
         Ok(Self {
             id: source.id.clone(),
             original: target.original.clone(),
-            label,
-            detail,
+            label: crate::display_text::escape(&label),
+            detail: crate::display_text::escape(&detail),
             restored,
             files,
             indices,
@@ -201,6 +201,7 @@ impl Record {
                 source.not_covered.len() - crate::history::records::PREVIEW_LIMIT
             ));
         }
+        self.detail = crate::display_text::escape(&self.detail);
     }
     /// Prepare current availability for row tooltips without scanning in render.
     pub fn current_layers(&mut self, snapshot: Option<&crate::model::Snapshot>) {
