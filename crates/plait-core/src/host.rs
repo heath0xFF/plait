@@ -1055,6 +1055,7 @@ pub mod agent;
 pub mod harness;
 pub mod policy;
 pub mod providers;
+pub mod review;
 pub mod sign_in;
 
 impl Client {

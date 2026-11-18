@@ -37,7 +37,7 @@ type Made = {
 };
 
 /** Runs one `plait-host` record helper: JSON in on stdin, JSON out on stdout. */
-function helper<T>(operation: 'record' | 'prune' | 'undo', input: unknown, lease?: number, timeout = RECORD_TIMEOUT_MS): Promise<T> {
+export function helper<T>(operation: 'record' | 'prune' | 'undo' | 'review', input: unknown, lease?: number, timeout = RECORD_TIMEOUT_MS): Promise<T> {
   const executable = process.env.PLAIT_HOST_EXE;
   if (!executable) return Promise.reject(new Error('Host record helper is not configured.'));
   return new Promise<T>((resolve, reject) => {
@@ -59,7 +59,7 @@ function helper<T>(operation: 'record' | 'prune' | 'undo', input: unknown, lease
     child.once('error', error => { clearTimeout(timer); reject(error); });
     child.once('close', code => {
       clearTimeout(timer);
-      if (operation === 'undo') stop(); // Reclaim a stray Git descendant too.
+      if (operation === 'undo' || operation === 'review') stop(); // Reclaim a stray Git descendant too.
       // The diagnostic stays inside the runtime; clients only ever see a fixed message.
       if (code !== 0 || size > REPLY_LIMIT) return reject(new Error(diagnostic.trim() || `plait-host ${operation} failed`));
       try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch { reject(new Error(`plait-host ${operation} replied badly`)); }
@@ -317,6 +317,14 @@ export class Records {
   private make(checkout: string, id: string, before: string | undefined, lease?: number) {
     const undo = this.store.db.prepare("SELECT 1 FROM records WHERE id=? AND kind='undo'").get(id) !== undefined;
     return helper<Made>('record', { checkout, store: this.directory, id, ...(before ? { before } : {}), ...(undo ? { undo: true } : {}) }, lease);
+  }
+  /** A read pins immutable record blobs against pruning without touching the recorder index. */
+  read<T>(work: () => Promise<T>): Promise<T> {
+    const waiting = this.pruning;
+    const task = (async () => { await waiting; return work(); })();
+    this.running.add(task); this.track(task.catch(() => {}));
+    void task.finally(() => this.running.delete(task)).catch(() => {});
+    return task;
   }
   private queue<T>(checkout: string, work: () => Promise<T>): Promise<T> {
     const turn = async () => {

@@ -1188,3 +1188,19 @@ bounded live preview. Ranged source reads use a descriptor-checked Rust helper;
 edit admission inspects a complete fingerprint without transferring the whole
 file across the helper pipe. Context summaries remain in Pi's durable store but
 are omitted from the presentation projection, which retains original messages.
+
+### Immutable record diffs
+
+`runtime/src/turn-review.ts` handles the additive `turn_review_info`,
+`turn_diff`, and `turn_review_page` operations before versioned dispatch.
+A small `review_checkouts` table names saved directory identities; record
+mutation triggers advance its catalog revision in the mutation transaction.
+The host ID is persisted in settings. Existing snapshots are unchanged.
+
+`git/review.rs` reads the selected path's owned blobs in one batch and compares
+those blobs under canonical Git flags. It never opens the recorder's index,
+walks complete record trees, or reads current file bytes. `plait-host review`
+uses the existing lifetime supervisor and a separate read sandbox. The runtime
+pins against pruning, then caches immutable bounded page documents. The desktop
+uses only the socket API; `host/review.rs` validates complete documents and
+prepares the existing virtualized patch model on the background executor.

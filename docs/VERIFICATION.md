@@ -1538,3 +1538,17 @@ activation, live provider acceptance and vision quality, and provider-specific
 limits remain unverified. The original bytes are passed to the harness; a
 harness or provider may apply its own transformations. The public SDK schemas
 and scripted transport do not establish live-model acceptance.
+
+## Recorded turn review
+
+### Recorded-diff backend
+
+Core tests compare owned changed blobs after removing the source repository's
+object directory, covering creation, deletion, executable mode, symlink target,
+binary bytes, CRLF and missing final newlines. They reject unsafe paths and
+missing objects. Runtime tests exercise the real sandboxed helper, compare
+checkout and Git metadata before and after reads, retain the same original
+patch after a commit and undo, and check same-checkout cross-thread reads.
+Pagination tests check complete assembly, repeat offsets, frame bounds, invalid
+offsets and five-minute expiry. The existing version 1–5 suites remain required.
+No installed-app or native-window acceptance is claimed for these operations.

@@ -739,6 +739,20 @@ fn a_sha256_repository_has_its_own_store() {
     fs::write(path.join("f.txt"), "g\n").unwrap();
     let after = take_at(&path, &store.0, "a", Some(&before));
     assert_eq!(summary(&after), ["M f.txt +1 -1"]);
+    use std::os::unix::fs::MetadataExt;
+    let root = path.canonicalize().unwrap();
+    let metadata = fs::metadata(&root).unwrap();
+    let diff = crate::git::review::read(&crate::git::review::Request {
+        store: store.0.clone(),
+        checkout: root,
+        dev: metadata.dev(),
+        ino: metadata.ino(),
+        object_format: "sha256".into(),
+        changed: after.paths.as_ref().unwrap()[0].clone(),
+    })
+    .unwrap();
+    assert!(String::from_utf8(diff.patch).unwrap().contains("-f\n+g\n"));
+
     assert!(records_dir(&store.0).join("sha256/HEAD").is_file());
     assert!(owned(
         &store.0,
@@ -1565,4 +1579,90 @@ fn equivalent_names_are_rejected() {
     if repo.0.join("caf\u{e9}").exists() {
         assert!(reject_aliases(&repo.0, &aliases, &mut HashMap::new()).is_err());
     }
+}
+
+#[test]
+fn recorded_diffs_read_owned_blobs_without_trees_or_current_files() {
+    use crate::git::review;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let repo = Repo::new();
+    let store = Scratch::new();
+    repo.write("text", b"old\r\nlast");
+    repo.write("deleted", "gone\n");
+    repo.write("mode", "same\n");
+    repo.write("binary", b"old\0");
+    symlink("old-target", repo.0.join("link")).unwrap();
+    repo.commit();
+    let before = take(&repo, &store, "before", None);
+    repo.write("text", b"new\r\nlast");
+    repo.write("created", "new file\n");
+    repo.write("binary", b"new\0");
+    fs::remove_file(repo.0.join("deleted")).unwrap();
+    fs::remove_file(repo.0.join("link")).unwrap();
+    symlink("new-target", repo.0.join("link")).unwrap();
+    fs::set_permissions(repo.0.join("mode"), fs::Permissions::from_mode(0o755)).unwrap();
+    let after = take(&repo, &store, "after", Some(&before));
+    let root = repo.0.canonicalize().unwrap();
+    let metadata = fs::metadata(&root).unwrap();
+    let read = |changed: &ChangedPath| {
+        review::read(&review::Request {
+            store: store.0.clone(),
+            checkout: root.clone(),
+            dev: metadata.dev(),
+            ino: metadata.ino(),
+            object_format: "sha1".into(),
+            changed: changed.clone(),
+        })
+    };
+    // Remove the source objects entirely. Unchanged borrowed trees cannot be read now.
+    fs::rename(repo.0.join(".git/objects"), repo.0.join("removed-objects")).unwrap();
+    for changed in after.paths.as_ref().unwrap() {
+        let result = untouched(&[&repo.0], || read(changed).unwrap());
+        let patch = String::from_utf8(result.patch).unwrap();
+        match changed.path.as_str() {
+            "text" => {
+                assert!(patch.contains("-old\r\n+new\r\n"), "{patch}");
+                assert!(patch.contains("\\ No newline"));
+                assert_eq!(result.processes, 2);
+            }
+            "created" => {
+                assert!(result.before.is_none());
+                assert!(patch.contains("new file mode"));
+            }
+            "deleted" => {
+                assert!(result.after.is_none());
+                assert!(patch.contains("deleted file mode"));
+            }
+            "mode" => {
+                assert_eq!(result.status, "mode");
+                assert!(patch.contains("old mode 100644\nnew mode 100755"));
+            }
+            "binary" => assert_eq!(result.status, "binary"),
+            "link" => assert!(patch.contains("+new-target")),
+            other => panic!("unexpected path {other}"),
+        }
+        assert!(!result.hunks.is_empty());
+    }
+    let mut changed = after.paths.unwrap().remove(0);
+    changed.before_oid = Some("f".repeat(40));
+    changed.before_mode = Some("100644".into());
+    assert!(read(&changed).is_err());
+}
+
+#[test]
+fn recorded_review_paths_reject_metadata_and_traversal() {
+    for path in [
+        "",
+        "/a",
+        "a//b",
+        "a/../b",
+        ".git/config",
+        "a/.GIT/objects",
+        "a\0b",
+        "./x",
+        "a\nb",
+    ] {
+        assert!(!crate::git::review::valid_path(path), "{path}");
+    }
+    assert!(crate::git::review::valid_path("src/a b.rs"));
 }

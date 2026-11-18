@@ -50,7 +50,7 @@ pub fn run() -> io::Result<()> {
 
 /// The outer helper keeps stdin open as the worker's lifetime lease. The
 /// worker and every descendant share a group, including discovery commands.
-fn supervise(operation: &str, budget: Duration) -> io::Result<()> {
+pub(crate) fn supervise(operation: &str, budget: Duration) -> io::Result<()> {
     let value = read_request()?;
     let mut command = Command::new(std::env::current_exe()?);
     command.arg(operation);
@@ -129,7 +129,7 @@ pub fn worker(operation: &str) -> io::Result<()> {
             }
         }
     });
-    let budget = if operation == "undo-worker" {
+    let budget = if operation == "undo-worker" || operation == "review-worker" {
         undo::BUDGET
     } else {
         record::BUDGET
@@ -138,6 +138,7 @@ pub fn worker(operation: &str) -> io::Result<()> {
         "record-worker" => record_value(value),
         "prune-worker" => prune_value(value),
         "undo-worker" => undo_request(value),
+        "review-worker" => super::review::worker(value),
         _ => Err(failure("Unknown checkout worker.".into())),
     })
 }

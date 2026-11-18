@@ -1861,3 +1861,67 @@ Claude Code receives Anthropic base64 image source blocks through the pinned
 Agent SDK's streaming `SDKUserMessage` input. Image-only inputs contain no empty
 text block in any of the three adapters. [Verification](VERIFICATION.md#images-in-messages)
 records scripted coverage and the absence of live-model acceptance evidence.
+## Recorded turn review
+
+These additive, read-only operations omit `protocol_version`. Versions 1–5
+retain their existing shapes. An older host rejects the operation with
+`invalid_request`; the desktop reports “Turn review needs a newer host.”
+Other failures retain their own unavailable or offline explanation.
+
+- `{"op":"turn_review_info","thread_id":"THREAD"}` returns
+  `{schema:1, checkout, features, retention_days:30}`. `checkout` contains
+  opaque `host_id`, `id`, and unsigned `catalog_revision` and `review_revision`.
+  Features are `record_diff:true`, `attribution:false`, `stage_turn:false`,
+  `since_review:false`. Review revision is zero until baselines are supported.
+- `{"op":"turn_diff","thread_id":"THREAD","record_id":"RECORD","path":"src/a.rs"}`
+  compares that exact record's saved before and after entries. The record may
+  belong to another thread on the same saved checkout identity. It never uses
+  today's status, index, or file content. Existing v5 `turn_records` pages
+  supply the complete file list.
+- `{"op":"turn_review_page","token":"TOKEN","offset":NEXT}` continues an
+  immutable document. It returns `{token,offset,total,items,next_offset}`.
+  Offsets must have been issued by the host; retries return identical content.
+  Tokens work across sockets for the same authenticated host owner, expire
+  after five idle minutes, and are lost on host restart. `expired_view` means
+  refresh the view. Pages contain at most 500 items and 750,000 JSON bytes.
+
+A diff reply has these keys (nullable keys are always present):
+
+```text
+schema: 1, checkout, view_id, path, side: null, basis: "record",
+source_record_id, before, after, status, reason,
+patch_bytes, patch: Page, hunks: Page,
+review: {state:"unreviewed",revision:0,reviewed_at:null,expires_at:null,
+         source_record_id:null,can_mark:false},
+truncated, elapsed_ms
+```
+
+An entry is null for absence, otherwise `{mode,fingerprint,bytes}`. Modes are
+`100644`, `100755`, or `120000`. Fingerprints are opaque. Status is `ready`,
+`empty`, `binary`, `mode`, or `unavailable`. A missing blob is unavailable,
+never an empty successful diff. Patch items are `{byte_offset,bytes_base64}`:
+consecutive chunks of at most 64 KiB, preserving exact line endings.
+`patch_bytes` counts decoded bytes, whereas page totals count items.
+
+Hunk items contain `id`, `first_line`, `last_line`, `old_start`, `old_count`,
+`new_start`, `new_count`, `origin`, `stageable:false`, and
+`refusal:"unsupported"`. Line indices include raw file headers. Binary and
+mode changes have a file-level descriptor. `origin` identifies the observed
+record interval with `kind:"turn"`, `record_id`, `thread_id`, `request_id`,
+nullable `title`, and `created_at` in host milliseconds. This does not establish
+who wrote the change. The desktop draws no origin or review controls in this
+stage. `reason` is null on success and a typed unavailable reason otherwise.
+
+Requests are strictly validated and bounded to 65,000 bytes. Paths are relative
+UTF-8, outside Git metadata, without traversal or control characters. Clients
+supply no store paths, object IDs, or patches. The runtime checks saved root
+identity and pins blobs against pruning while its Rust helper reads them.
+Changed blobs remain readable even if borrowed unchanged trees were pruned.
+The read helper does not open the recorder's private index or remove locks;
+its only possible store write creates an empty blob for an absent side.
+On macOS its sandbox denies checkout and Git metadata writes.
+
+Read caches are bounded to 32 MiB per checkout and 128 MiB per host. A preview
+at 512 KiB or 10,000 lines is limited. Complete page validation and patch
+preparation run off the UI thread. These operations provide no staging,
+attribution proof, or reviewed baseline, and make no change to undo semantics.

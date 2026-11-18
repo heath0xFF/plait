@@ -5,6 +5,7 @@ mod installation;
 mod lease;
 mod mcp;
 mod record;
+mod review;
 mod service;
 mod startup;
 mod transport;
@@ -51,8 +52,12 @@ fn run() -> io::Result<()> {
     // The host's records of a checkout; JSON on stdin and stdout.
     match operation.as_str() {
         "record" => return record::run(),
+        "review" => return review::run(),
+        "review-contained" => return review::contained(),
         "undo" => return record::undo(),
-        "record-worker" | "undo-worker" | "prune-worker" => return record::worker(&operation),
+        "record-worker" | "undo-worker" | "prune-worker" | "review-worker" => {
+            return record::worker(&operation);
+        }
         "undo-contained" => return record::undo_contained(),
         "record-contained" => return record::run_contained(),
         "prune" => return record::prune(),

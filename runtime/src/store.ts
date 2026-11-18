@@ -62,6 +62,14 @@ export class Store {
     for (const [table, column, type] of columns) {
       if (!this.db.prepare(`PRAGMA table_info(${table})`).all().some(row => row.name === column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
     }
+    this.db.exec(`CREATE TABLE IF NOT EXISTS review_checkouts(id TEXT PRIMARY KEY, canonical_root TEXT NOT NULL, root_dev TEXT NOT NULL, root_ino TEXT NOT NULL, catalog_revision INTEGER NOT NULL DEFAULT 0, UNIQUE(canonical_root,root_dev,root_ino));`);
+    for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
+      const row = operation === 'DELETE' ? 'OLD' : 'NEW';
+      this.db.exec(`CREATE TRIGGER IF NOT EXISTS review_records_${operation} AFTER ${operation} ON records BEGIN
+        UPDATE review_checkouts SET catalog_revision=catalog_revision+1 WHERE canonical_root=${row}.checkout
+          AND root_dev=(SELECT json_extract(identity,'$.dev') FROM roots WHERE id=${row}.thread)
+          AND root_ino=(SELECT json_extract(identity,'$.ino') FROM roots WHERE id=${row}.thread); END;`);
+    }
     this.db.exec('CREATE INDEX IF NOT EXISTS threads_recent ON threads(updated_at DESC)');
     this.outputs = new CommandOutputs(this.db);
     this.images = new Images(this.db);

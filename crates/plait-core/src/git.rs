@@ -734,6 +734,7 @@ mod branch;
 mod counts;
 mod log;
 pub mod record;
+pub mod review;
 pub mod undo;
 mod worktree;
 mod write;
@@ -752,3 +753,8 @@ use write::{hunk_patch, network_hint};
 
 #[cfg(test)]
 mod tests;
+
+/// Prepare an immutable record patch with the same virtualized rows as Git Changes.
+pub fn recorded_diff(bytes: &[u8], truncated: bool, elapsed: Duration) -> Diff {
+    format_diff(bytes, truncated, elapsed, FileHeaders::Omit)
+}
