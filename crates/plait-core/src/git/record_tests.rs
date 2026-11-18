@@ -1102,6 +1102,17 @@ fn bad_requests_are_refused_before_any_work() {
 }
 
 #[test]
+fn a_record_does_not_extend_its_helpers_deadline() {
+    let repo = committed();
+    let store = Scratch::new();
+    let located = locate(&repo.0).unwrap();
+    let result = within(Instant::now(), || {
+        record(&located, &request(&repo.0, &store.0, "late", None))
+    });
+    assert!(result.unwrap_err().contains("time budget"));
+}
+
+#[test]
 fn the_sandbox_profile_names_canonical_paths_and_refuses_a_checkout_in_the_store() {
     let profile = sandbox_profile(
         &[Path::new("/a/\"quoted\""), Path::new("/b")],

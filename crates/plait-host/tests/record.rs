@@ -12,6 +12,113 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+#[test]
+fn record_and_prune_descendants_release_both_leases_when_the_helper_dies() {
+    use std::os::{
+        fd::AsRawFd,
+        unix::{fs::PermissionsExt, process::CommandExt},
+    };
+    use std::time::{Duration, Instant};
+    for operation in ["record", "prune"] {
+        for termination in ["helper", "runtime", "worker"] {
+            let base = Scratch::new();
+            let root = repository(&base.0);
+            let store = base.0.join("store");
+            let request = json!({"checkout":root,"store":store,"id":"seed"});
+            assert!(helper("record", &request).0);
+            let marker = store.join("records/descendants");
+            let wrapper = base.0.join("git-wrapper");
+            let real = plait_core::git::record::git_binary();
+            fs::write(&wrapper, format!("#!/bin/sh\nif [ -n \"$GIT_DIR\" ]; then\n sleep 30 &\n echo \"$$ $!\" > '{}'\n wait\nfi\nexec '{}' \"$@\"\n", marker.display(), real.display())).unwrap();
+            fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700)).unwrap();
+            let store_lock = fs::File::create(store.join("test.lock")).unwrap();
+            let checkout_lock = fs::File::open(&root).unwrap();
+            for file in [&store_lock, &checkout_lock] {
+                assert_eq!(
+                    unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+                    0
+                );
+            }
+            let mut command = Command::new(env!("CARGO_BIN_EXE_plait-host"));
+            command
+                .arg(operation)
+                .env("PLAIT_GIT", &wrapper)
+                .process_group(0)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            let (store_fd, checkout_fd) = (store_lock.as_raw_fd(), checkout_lock.as_raw_fd());
+            unsafe {
+                command.pre_exec(move || {
+                    let a = libc::fcntl(store_fd, libc::F_DUPFD_CLOEXEC, 10);
+                    let b = libc::fcntl(checkout_fd, libc::F_DUPFD_CLOEXEC, 10);
+                    if a < 0 || b < 0 || libc::dup2(a, 3) < 0 || libc::dup2(b, 4) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let mut child = command.spawn().unwrap();
+            let request = if operation == "prune" {
+                json!({"store":store,"remove":["seed"]})
+            } else {
+                request
+            };
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(request.to_string().as_bytes())
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !marker.exists() {
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let pids: Vec<i32> = fs::read_to_string(&marker)
+                .unwrap()
+                .split_whitespace()
+                .map(|p| p.parse().unwrap())
+                .collect();
+            if termination == "runtime" {
+                unsafe {
+                    libc::killpg(child.id() as i32, libc::SIGKILL);
+                }
+            } else if termination == "worker" {
+                unsafe {
+                    libc::kill(libc::getpgid(pids[0]), libc::SIGKILL);
+                }
+            } else {
+                child.kill().unwrap();
+            }
+            child.wait().unwrap();
+            drop(store_lock);
+            drop(checkout_lock);
+            for path in [&store.join("test.lock"), &root] {
+                let file = fs::File::open(path).unwrap();
+                while unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+                    assert!(
+                        Instant::now() < deadline,
+                        "{operation} leaked a writer lease"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+            for pid in pids {
+                let status = Command::new("ps")
+                    .args(["-o", "stat=", "-p", &pid.to_string()])
+                    .output()
+                    .unwrap();
+                let status = String::from_utf8_lossy(&status.stdout);
+                assert!(
+                    status.trim().is_empty() || status.trim().starts_with('Z'),
+                    "descendant still running: {pid} {status}"
+                );
+            }
+        }
+    }
+}
+
 struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {

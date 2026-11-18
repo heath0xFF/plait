@@ -13,8 +13,11 @@ use plait_core::git::{
 };
 use serde_json::{Value, json};
 use std::{
-    io::{self, Read, Write},
+    io::{self, BufRead, Read, Write},
+    os::unix::process::CommandExt,
     path::Path,
+    process::{Child, Command, ExitStatus, Stdio},
+    time::{Duration, Instant},
 };
 
 /// Requests are small; anything larger is not from the runtime.
@@ -42,7 +45,104 @@ fn failure(message: String) -> io::Error {
 }
 
 pub fn run() -> io::Result<()> {
+    supervise("record-worker", record::BUDGET)
+}
+
+/// The outer helper keeps stdin open as the worker's lifetime lease. The
+/// worker and every descendant share a group, including discovery commands.
+fn supervise(operation: &str, budget: Duration) -> io::Result<()> {
     let value = read_request()?;
+    let mut command = Command::new(std::env::current_exe()?);
+    command.arg(operation);
+    supervise_command(command, value, budget)
+}
+
+fn supervise_command(mut command: Command, value: Value, budget: Duration) -> io::Result<()> {
+    let mut child = command.process_group(0).stdin(Stdio::piped()).spawn()?;
+    let mut lifetime = child
+        .stdin
+        .take()
+        .ok_or_else(|| failure("Worker stdin missing".into()))?;
+    let input = serde_json::to_vec(&value)?;
+    let written = lifetime
+        .write_all(&input)
+        .and_then(|()| lifetime.write_all(b"\n"));
+    if let Err(error) = written {
+        kill_group(child.id());
+        let _ = child.wait();
+        return Err(error);
+    }
+    let status = wait_worker(child, budget)?;
+    drop(lifetime);
+    if status.success() {
+        Ok(())
+    } else {
+        Err(failure("Checkout helper failed.".into()))
+    }
+}
+
+fn kill_group(pid: u32) {
+    unsafe {
+        libc::killpg(pid as i32, libc::SIGKILL);
+    }
+}
+
+fn wait_worker(mut child: Child, budget: Duration) -> io::Result<ExitStatus> {
+    let group = child.id();
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = send.send(child.wait());
+    });
+    let result = receive.recv_timeout(budget);
+    // Also reclaim descendants if their worker exited first.
+    kill_group(group);
+    match result {
+        Ok(status) => status,
+        Err(_) => {
+            let _ = receive.recv_timeout(Duration::from_secs(1));
+            Err(failure("Checkout helper exceeded its time budget.".into()))
+        }
+    }
+}
+
+pub fn worker(operation: &str) -> io::Result<()> {
+    let mut bytes = Vec::new();
+    io::stdin()
+        .lock()
+        .take(REQUEST_LIMIT + 1)
+        .read_until(b'\n', &mut bytes)?;
+    if bytes.len() as u64 > REQUEST_LIMIT {
+        return Err(failure("record request too large".into()));
+    }
+    let value = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+    let group = unsafe { libc::getpgrp() };
+    std::thread::spawn(move || {
+        loop {
+            match io::stdin().read(&mut [0u8; 1]) {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                _ => {
+                    unsafe {
+                        libc::killpg(group, libc::SIGKILL);
+                    }
+                    break;
+                }
+            }
+        }
+    });
+    let budget = if operation == "undo-worker" {
+        undo::BUDGET
+    } else {
+        record::BUDGET
+    };
+    record::within(Instant::now() + budget, || match operation {
+        "record-worker" => record_value(value),
+        "prune-worker" => prune_value(value),
+        "undo-worker" => undo_request(value),
+        _ => Err(failure("Unknown checkout worker.".into())),
+    })
+}
+
+fn record_value(value: Value) -> io::Result<()> {
     let request: Request = serde_json::from_value(value.clone()).map_err(io::Error::other)?;
     if !request.store.is_absolute() {
         return Err(failure("store must be absolute".into()));
@@ -84,8 +184,11 @@ fn capture(located: &Located, request: &Request, is_undo: bool) -> io::Result<re
 }
 
 pub fn prune() -> io::Result<()> {
-    let request: PruneRequest =
-        serde_json::from_value(read_request()?).map_err(io::Error::other)?;
+    supervise("prune-worker", record::BUDGET)
+}
+
+fn prune_value(value: Value) -> io::Result<()> {
+    let request: PruneRequest = serde_json::from_value(value).map_err(io::Error::other)?;
     if !request.store.is_absolute() {
         return Err(failure("store must be absolute".into()));
     }
@@ -234,11 +337,14 @@ fn undo_profile(located: &Located, records: &Path) -> io::Result<String> {
 }
 
 pub fn undo() -> io::Result<()> {
+    supervise("undo-worker", undo::BUDGET)
+}
+
+fn undo_request(value: Value) -> io::Result<()> {
     use std::os::{
         fd::AsRawFd,
         unix::{fs::MetadataExt, fs::OpenOptionsExt},
     };
-    let value = read_request()?;
     let request: undo::Request = serde_json::from_value(value.clone()).map_err(io::Error::other)?;
     if !request.store.is_absolute() {
         return Err(failure("store must be absolute".into()));
@@ -299,4 +405,22 @@ fn undo_value(value: Value) -> io::Result<()> {
 }
 pub fn undo_contained() -> io::Result<()> {
     undo_value(read_request()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_helper_deadline_stops_the_entire_git_group() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "\"$PLAIT_GIT\" --version; sleep 30 & wait"])
+            .env("PLAIT_GIT", record::git_binary())
+            .stdout(Stdio::null());
+        let start = Instant::now();
+        let result = supervise_command(command, json!({}), Duration::from_millis(100));
+        assert!(result.unwrap_err().to_string().contains("time budget"));
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
 }

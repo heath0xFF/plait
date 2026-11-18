@@ -45,6 +45,7 @@ fn run() -> io::Result<()> {
     match operation.as_str() {
         "record" => return record::run(),
         "undo" => return record::undo(),
+        "record-worker" | "undo-worker" | "prune-worker" => return record::worker(&operation),
         "undo-contained" => return record::undo_contained(),
         "record-contained" => return record::run_contained(),
         "prune" => return record::prune(),

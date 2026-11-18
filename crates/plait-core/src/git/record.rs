@@ -50,6 +50,8 @@ pub const FILE_LIMIT: u64 = 100 << 20;
 const BULK_PATHS: usize = 1_000;
 /// A record of a large checkout can take a while the first time; later ones are quick.
 const TIMEOUT: Duration = Duration::from_secs(120);
+/// Includes discovery and capture in the host; below the runtime's five minutes.
+pub const BUDGET: Duration = Duration::from_secs(240);
 const LIMIT: usize = 8 * 1024 * 1024;
 const LISTING_LIMIT: usize = 512 * 1024 * 1024;
 /// The search path for Git in every recording command; nothing from the host's shell.
@@ -303,12 +305,16 @@ pub fn protected_paths(located: &Located) -> Vec<&Path> {
 
 /// Records the checkout. See the module comment for what a record holds.
 pub fn record(located: &Located, request: &Request) -> Result<Record> {
-    record_with_paths(located, request, None)
+    within(Instant::now() + BUDGET, || {
+        record_with_paths(located, request, None)
+    })
 }
 
 /// Undo only claims writes it completed, even if another process edited the checkout.
 pub fn record_undo(located: &Located, request: &Request, paths: &[String]) -> Result<Record> {
-    record_with_paths(located, request, Some(paths))
+    within(Instant::now() + BUDGET, || {
+        record_with_paths(located, request, Some(paths))
+    })
 }
 
 fn record_with_paths(
@@ -1995,6 +2001,10 @@ pub fn sources(store: &Path) -> Vec<Source> {
 /// Forgets records and deletes the objects nothing else reaches. A checkout
 /// that no longer exists loses its private index too.
 pub fn prune(request: &PruneRequest) -> Result<Pruned> {
+    within(Instant::now() + BUDGET, || prune_within(request))
+}
+
+fn prune_within(request: &PruneRequest) -> Result<Pruned> {
     for id in &request.remove {
         valid_id(id)?;
     }
@@ -2108,13 +2118,15 @@ thread_local! {
     static DEADLINE: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
 }
 
-pub(super) fn within<T>(deadline: Instant, work: impl FnOnce() -> Result<T>) -> Result<T> {
+/// Share a helper's budget and supervised process group across all Git work.
+pub fn within<T>(deadline: Instant, work: impl FnOnce() -> T) -> T {
     struct Reset(Option<Instant>);
     impl Drop for Reset {
         fn drop(&mut self) {
             DEADLINE.set(self.0);
         }
     }
+    let deadline = DEADLINE.get().map_or(deadline, |outer| outer.min(deadline));
     let _reset = Reset(DEADLINE.replace(Some(deadline)));
     work()
 }
@@ -2127,7 +2139,8 @@ pub(super) fn remaining() -> Result<Duration> {
     DEADLINE.get().map_or(Ok(TIMEOUT), |end| {
         end.checked_duration_since(Instant::now())
             .filter(|d| !d.is_zero())
-            .ok_or_else(|| "Undo exceeded its time budget.".into())
+            .map(|d| d.min(TIMEOUT))
+            .ok_or_else(|| "Checkout operation exceeded its time budget.".into())
     })
 }
 
