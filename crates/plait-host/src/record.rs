@@ -413,14 +413,57 @@ mod tests {
 
     #[test]
     fn the_helper_deadline_stops_the_entire_git_group() {
+        use std::os::{fd::AsRawFd, unix::fs::PermissionsExt};
+        let scratch =
+            std::env::temp_dir().join(format!("plait-helper-budget-{}", std::process::id()));
+        std::fs::create_dir(&scratch).unwrap();
+        let lock = std::fs::File::open(&scratch).unwrap();
+        assert_eq!(
+            unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        let wrapper = scratch.join("git");
+        let marker = scratch.join("pid");
+        std::fs::write(
+            &wrapper,
+            format!(
+                "#!/bin/sh\necho $$ > '{}'\nsleep 30 &\nwait\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
         let mut command = Command::new("/bin/sh");
         command
-            .args(["-c", "\"$PLAIT_GIT\" --version; sleep 30 & wait"])
-            .env("PLAIT_GIT", record::git_binary())
+            .args(["-c", "\"$PLAIT_GIT\" --version"])
+            .env("PLAIT_GIT", &wrapper)
             .stdout(Stdio::null());
+        let fd = lock.as_raw_fd();
+        unsafe {
+            command.pre_exec(move || {
+                if libc::dup2(fd, 4) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                if libc::fcntl(4, libc::F_SETFD, 0) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
         let start = Instant::now();
-        let result = supervise_command(command, json!({}), Duration::from_millis(100));
+        let result = supervise_command(command, json!({}), Duration::from_millis(300));
         assert!(result.unwrap_err().to_string().contains("time budget"));
         assert!(start.elapsed() < Duration::from_secs(2));
+        assert!(marker.exists(), "injected Git was not started");
+        drop(lock);
+        let fresh = std::fs::File::open(&scratch).unwrap();
+        while unsafe { libc::flock(fresh.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            assert!(
+                start.elapsed() < Duration::from_secs(2),
+                "deadline leaked a descendant lock"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        std::fs::remove_dir_all(scratch).unwrap();
     }
 }

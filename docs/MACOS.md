@@ -350,7 +350,8 @@ own.
 With a version 5 host, each finished run ends with its tool-step count and the
 files the host recorded changing, including command writes. File links open
 Changes; the adjacent counts are lines added and removed. Three names fit on
-one line, with the remaining files counted and the complete list on hover.
+one line, with the remaining files counted. Hover previews up to 12 files and
+12 not-covered paths, with omitted counts.
 
 Press **Undo** at the line's right end, or **Cmd-Option-U** (Thread → Undo Last
 Turn). The latest run always shows its control; earlier controls appear on
@@ -364,7 +365,7 @@ If a path differs from the run's after record, the default operation changes
 nothing and opens **Changed since this turn** at that line. **Undo the rest**
 leaves those paths alone and restores only eligible files; **Cancel** closes
 the panel. A partial undo lists only the files actually restored. The panel
-labels any paths omitted from the host's bounded conflict preview. Hover text
+previews up to 12 changed and 12 not-covered paths and labels omitted counts. Hover text
 lists **Not covered** paths, with reasons; these also appear in the panel.
 
 **Recording** means the record is still being taken; **Unavailable** means it
@@ -374,7 +375,13 @@ was down. **HEAD moved** warns that Git history is outside undo's scope.
 Hover gives details. Older hosts show no control and explain that undo needs
 a newer host. Refresh (Cmd-R) rereads records. If an undo reply is lost, Retry
 checks the same request without applying it twice; Incomplete asks you to
-inspect Changes and never automatically replays the operation.
+inspect Changes and never automatically replays the operation. A failure that
+is known to have changed no files keeps the original run available; Retry
+starts a new attempt against that run.
+
+If the host cannot record the checkout before a run, that run does not start.
+The desktop reports a fixed failure message; the underlying recording reason
+is not retained in a user-readable log.
 
 Undo restores file content, executable bits, and symlinks. It does not restore
 other permissions, extended attributes, hard-link relationships, empty-directory

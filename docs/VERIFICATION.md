@@ -1129,3 +1129,54 @@ hard-link relationships, empty-directory history, Git history, outside-checkout
 effects, and excluded coverage are not restored. Replacing a file can discard
 metadata outside the content/executable/symlink promise. These limits prevent an
 absolute guarantee against every concurrent writer.
+
+
+### Undo safety regression coverage
+
+The core suite exercises bare and separately named Git directories before,
+after creation, and after deletion during a run. A later nested commit sharing
+objects with the run's commit stays valid under `git fsck` after Undo the rest;
+a repository appearing after capture blocks writes through older recorded paths.
+The inventory tests cover unreadable folders in both directions, untouched
+files becoming readable, FIFOs and Unix sockets. Unsupported device entries
+use the same file-type exclusion, but an actual device node was not created.
+
+Helper tests inject Git descendants and kill the helper directly, kill its
+process group as the runtime does, and kill its worker. Both the checkout lease
+and inherited store lock become available. The supervisor timeout kills its
+whole worker group. Record and prune have a 240-second overall deadline,
+individual Git commands are capped at 120 seconds within it, and the runtime
+retains its 300-second outer limit. Undo retains its shared 10-second budget.
+The 3,500-file undo fixture still verifies timeout before any file writes and
+lease release; this is a limit on large undos, not evidence they complete.
+
+A read-only checkout causes a real undo failure with zero file effects. Runtime
+and Rust projection tests verify the `no_effect` state, original action target,
+restart persistence, refusal to replay the same request, and a successful new
+request after permissions are restored. An interrupted journal is not proof of
+zero effects. Unicode tests on the case-insensitive macOS volume verify one
+entry for a decomposed name, normal undo restoration, rejection of equivalent
+aliases, and acceptance of distinct hard links. The equivalent-alias branch has
+not been exercised on a case-sensitive volume.
+
+Desktop model tests merge provenance and record paths in both reply orders,
+preserve provenance after record expiry, and reject old requests after a thread
+change or reset. Ten-thousand-entry coverage tests bound hover and panel previews
+to 12 entries per list, with omitted counts and text prepared before render.
+The wide and narrow `undo-many-exclusions` scenes cover the bounded panel.
+
+Known retention limit: after 30 days, pruning can remove an original run's pair
+while retaining a newer undo pair. The desktop projects controls from original
+run records, so it can hide a Redo whose retained pair would still work. This
+limit is not fixed here. The concurrent-writer, partial-restoration and crash
+limits above continue to apply; no installed app or paid harness was exercised.
+
+The regression benchmark (`scripts/bench-records.sh`, release build, 50,000
+files, seven warm samples) passed the unchanged-record target after these
+changes. On Apple M5 Pro with Git 2.54.0, the core median was 186 ms (184–199),
+the sandboxed helper median 243 ms (230–248), and the 200-file helper median
+73 ms (66–76). The same script on the preceding implementation measured
+211 ms (199–247), 211 ms (210–214), and 59 ms (58–62), respectively. These are
+local wall-clock samples, not isolated-system guarantees. The helper now starts
+one additional supervisor worker; the inventory reuses directory-name reads
+and does not run a Git process for each directory.

@@ -166,6 +166,14 @@ objects. Startup and daily pruning pause recording and reclaim expired refs,
 private caches, loose objects, and packs after 30 days, including for archived
 threads. The [host contract](HOST.md#checkout-records)
 describes the layout, limits, exact-byte policy, recovery, and platform boundary.
+A directory inventory excludes unreadable folders, unsupported entries, and
+embedded repositories, including bare Git directories. Private records keep the
+filesystem's name spelling and reject equivalent aliases in changed trees.
+A supervisor holds a lifetime pipe to a worker whose process group contains
+Git and sandbox descendants. Helper death closes the pipe; worker death or a
+240-second record/prune deadline kills the group and releases inherited locks.
+Git commands have at most 120 seconds within that budget; the runtime's outer
+record/prune timeout is 300 seconds.
 
 Protocol version 5 adds record listing and undo.
 `record-views.ts` pages complete paths, coverage and request membership within
@@ -182,13 +190,18 @@ connection epoch, watch epoch, revision and fetch generation reject stale pages.
 The conversation projection prepares a map; render only looks up its visible
 rows. Changed records and conflict panels remeasure affected list rows, including
 rows whose message-based summary disappeared because steering joined a run.
-The changed-files card uses the complete record paths with current uncommitted
-Git counts. Undo requests use version 5 only; older hosts keep their existing
+The changed-files card merges complete record paths with existing provenance
+paths, including when retained records are empty. Separate request generations
+keep record refreshes from invalidating provenance replies; thread and connection
+guards still reject stale replies. Git supplies current uncommitted counts.
+Hover and conflict-panel previews are prepared before rendering, show at most
+12 entries per list, and report omitted counts. Undo requests use version 5 only; older hosts keep their existing
 summaries without controls. An explicit retry of an unconfirmed undo keeps its
 request ID and flags; an interrupted undo is refreshed, never replayed.
 Cmd-Option-U is the Thread action Undo Last Turn and uses the same gate as the
 visible control, with settings and palette visibility checks and key-repeat
-suppression. The desktop changes no host or protocol contract.
+suppression. Failed undo records marked `no_effect` are skipped by action-chain
+projection, so the original target stays available without replaying a request.
 
 `plait-host undo` holds the checkout lease and runs the headless restoration
 code under a sandbox that allows working files but denies Git-directory
