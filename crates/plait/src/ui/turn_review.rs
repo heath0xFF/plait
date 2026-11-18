@@ -293,6 +293,9 @@ impl Plait {
             cx.notify();
             return;
         }
+        if self.recorded_file().is_none() {
+            return;
+        }
         self.turn_review.current = current;
         self.diff_scroll = UniformListScrollHandle::new();
         self.line_pick = None;
@@ -359,6 +362,20 @@ impl Plait {
                     })
                     .is_some_and(|c| c.path == file.path)
             })
+    }
+    pub(super) fn recorded_current_message(&self) -> (&'static str, &str) {
+        use plait_core::state::Load;
+        match &self.state.repository.snapshot {
+            Load::Empty | Load::Loading => (
+                "Reading diff…",
+                "The file preview is loading in the background.",
+            ),
+            Load::Error(error) => ("Unavailable", error),
+            Load::Ready(_) => (
+                "No current changes",
+                "This file has no current staged or unstaged changes.",
+            ),
+        }
     }
     pub(super) fn review_scope_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let (label, detail) = self
@@ -597,7 +614,9 @@ impl Plait {
                     .font_weight(FontWeight::MEDIUM)
                     .child(path),
             )
-            .child(self.recorded_switch(cx))
+            .when(self.recorded_file().is_some(), |el| {
+                el.child(self.recorded_switch(cx))
+            })
     }
     pub(super) fn recorded_switch(&self, cx: &Context<Self>) -> Div {
         segmented()

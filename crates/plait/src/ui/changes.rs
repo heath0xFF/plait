@@ -913,15 +913,14 @@ impl Plait {
                         .min_w_0()
                         .min_h_0()
                         .child(self.recorded_header(cx))
-                        .child(if self.turn_review.current {
-                            empty(
-                                "No current changes",
-                                "This file has no current staged or unstaged changes.",
-                            )
-                            .into_any_element()
-                        } else {
-                            self.recorded_diff(cx)
-                        })
+                        .child(
+                            if self.turn_review.current && self.recorded_file().is_some() {
+                                let (label, detail) = self.recorded_current_message();
+                                empty(label, detail.to_owned()).into_any_element()
+                            } else {
+                                self.recorded_diff(cx)
+                            },
+                        )
                         .into_any_element()
                 } else {
                     column()

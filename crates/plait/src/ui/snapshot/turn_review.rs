@@ -56,6 +56,27 @@ pub(super) fn walk(h: &mut Harness, repository: &Path, suffix: &str) {
         h.capture(&format!("{name}-{suffix}"));
     }
     scene(h, repository, "ready", None);
+    let snapshot = h
+        .window
+        .update(&mut h.cx, |p, _, _| {
+            p.turn_review.current = true;
+            p.state.repository.selected = None;
+            std::mem::replace(&mut p.state.repository.snapshot, Load::Loading)
+        })
+        .unwrap();
+    h.capture(&format!("turn-current-loading-{suffix}"));
+    h.window
+        .update(&mut h.cx, |p, _, _| p.state.repository.snapshot = snapshot)
+        .unwrap();
+    for kind in ["loading", "unavailable", "old"] {
+        scene(h, repository, kind, None);
+        h.update(|p, _, _| {
+            p.turn_review.record = None;
+            p.turn_review.selected = None;
+        });
+        h.capture(&format!("turn-record-{kind}-{suffix}"));
+    }
+    scene(h, repository, "ready", None);
     h.update(|p, _, cx| {
         p.themes.forced = Some(true);
         p.apply_theme(cx);
@@ -362,6 +383,39 @@ fn empty_and_more_links() {
         1
     );
     drop(host);
+    drop(h);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn current_waits_for_status_and_requires_a_file() {
+    if !isolated("turn_review::current_waits_for_status_and_requires_a_file") {
+        return;
+    }
+    let (scratch, repository, mut h) = setup("review-loading");
+    scene(&mut h, &repository, "ready", None);
+    h.update(|p, _, cx| {
+        p.host.connected = false;
+        p.review_comparison(true, cx);
+        assert!(p.turn_review.current);
+        p.state.repository.refresh();
+        assert!(!p.recorded_current_available());
+        assert_eq!(p.recorded_current_message().0, "Reading diff…");
+        p.pump(cx);
+    });
+    for kind in ["empty", "loading", "unavailable", "old"] {
+        scene(&mut h, &repository, kind, None);
+        h.update(|p, _, cx| {
+            p.turn_review.record = None;
+            p.turn_review.selected = None;
+            p.turn_review.current = false;
+            p.turn_review.older = false;
+            p.review_comparison(true, cx);
+            assert!(p.recorded_file().is_none());
+            assert!(!p.turn_review.current, "{kind}");
+        });
+        h.draw();
+    }
     drop(h);
     std::fs::remove_dir_all(scratch).unwrap();
 }
