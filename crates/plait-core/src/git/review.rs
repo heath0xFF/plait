@@ -274,10 +274,7 @@ pub fn read(request: &Request) -> Result<Read> {
     };
     truncated |=
         patch.len() >= DIFF_LIMIT || patch.iter().filter(|c| **c == b'\n').count() >= 10_000;
-    if patch.len() > DIFF_LIMIT {
-        patch.truncate(DIFF_LIMIT);
-    }
-    let hunks = hunks(&patch)?;
+    let hunks = limit_patch(&mut patch, truncated)?;
     Ok(Read {
         before,
         after,
@@ -288,6 +285,33 @@ pub fn read(request: &Request) -> Result<Read> {
         elapsed_ms: started.elapsed().as_millis() as u64,
         processes,
     })
+}
+// A preview may stop between hunks, never inside a line or an incomplete hunk.
+fn limit_patch(patch: &mut Vec<u8>, truncated: bool) -> Result<Vec<Hunk>> {
+    if truncated {
+        let end = patch[..patch.len().min(DIFF_LIMIT)]
+            .iter()
+            .rposition(|c| *c == b'\n')
+            .map_or(0, |i| i + 1);
+        patch.truncate(end);
+        let parsed = hunks(patch)?;
+        if let Some(last) = parsed.last() {
+            let lines: Vec<_> = patch.split_inclusive(|c| *c == b'\n').collect();
+            if lines[last.first_line].starts_with(b"@@ ") {
+                let mut old = 0;
+                let mut new = 0;
+                for line in &lines[last.first_line + 1..] {
+                    old += usize::from(matches!(line.first(), Some(b' ' | b'-')));
+                    new += usize::from(matches!(line.first(), Some(b' ' | b'+')));
+                }
+                if old != last.old_count || new != last.new_count {
+                    let end = lines[..last.first_line].iter().map(|line| line.len()).sum();
+                    patch.truncate(end);
+                }
+            }
+        }
+    }
+    hunks(patch)
 }
 fn hunks(patch: &[u8]) -> Result<Vec<Hunk>> {
     let mut hunks: Vec<Hunk> = Vec::new();

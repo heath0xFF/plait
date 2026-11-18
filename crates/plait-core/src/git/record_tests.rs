@@ -1666,3 +1666,56 @@ fn recorded_review_paths_reject_metadata_and_traversal() {
     }
     assert!(crate::git::review::valid_path("src/a b.rs"));
 }
+
+fn read_recorded_path(
+    repo: &Repo,
+    store: &Scratch,
+    changed: &ChangedPath,
+) -> crate::git::review::Read {
+    use std::os::unix::fs::MetadataExt;
+    let checkout = repo.0.canonicalize().unwrap();
+    let metadata = fs::metadata(&checkout).unwrap();
+    crate::git::review::read(&crate::git::review::Request {
+        store: store.0.clone(),
+        checkout,
+        dev: metadata.dev(),
+        ino: metadata.ino(),
+        object_format: "sha1".into(),
+        changed: changed.clone(),
+    })
+    .unwrap()
+}
+
+#[test]
+fn recorded_diff_limit_drops_partial_headers_and_hunks() {
+    let repo = Repo::new();
+    let store = Scratch::new();
+    let path = "x".repeat(212);
+    repo.write(&path, "old\na\nb\nc\nd\ne\nf\ng\ntail\n");
+    let before = take(&repo, &store, "before", None);
+    // Put the second hunk header across the synthesized patch's byte limit.
+    let prefix = format!(
+        "diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1,4 +1,4 @@\n-old\n+"
+    );
+    let length = crate::git::DIFF_LIMIT - 8 - prefix.len() - "\n a\n b\n c\n".len();
+    for (index, extra) in [0, -10, 100].into_iter().enumerate() {
+        let text = "x".repeat(length.checked_add_signed(extra).unwrap());
+        repo.write(&path, format!("{text}\na\nb\nc\nd\ne\nf\ng\nend\n"));
+        let after = take(&repo, &store, &format!("after-{index}"), Some(&before));
+        let read = read_recorded_path(&repo, &store, &after.paths.unwrap()[0]);
+        assert_eq!(read.status, "ready");
+        assert!(read.truncated);
+        assert!(read.patch.len() <= crate::git::DIFF_LIMIT);
+        assert_eq!(read.patch.last(), Some(&b'\n'));
+        let patch = String::from_utf8(read.patch).unwrap();
+        assert!(
+            !patch.contains("@@ -6"),
+            "partial second hunk must be omitted"
+        );
+        if extra == 0 {
+            assert_eq!(read.hunks.len(), 1);
+            assert_eq!(read.hunks[0].old_count, 4);
+            assert!(patch.ends_with(" c\n"));
+        }
+    }
+}
