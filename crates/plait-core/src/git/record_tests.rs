@@ -1719,3 +1719,39 @@ fn recorded_diff_limit_drops_partial_headers_and_hunks() {
         }
     }
 }
+
+#[test]
+fn recorded_empty_file_creation_and_deletion_are_not_mode_changes() {
+    let repo = Repo::new();
+    let store = Scratch::new();
+    repo.write("deleted", "");
+    repo.write("mode", "");
+    let before = take(&repo, &store, "before", None);
+    repo.write("created", "");
+    fs::remove_file(repo.0.join("deleted")).unwrap();
+    fs::set_permissions(repo.0.join("mode"), fs::Permissions::from_mode(0o755)).unwrap();
+    let after = take(&repo, &store, "after", Some(&before));
+    for changed in after.paths.unwrap() {
+        let read = read_recorded_path(&repo, &store, &changed);
+        let patch = String::from_utf8(read.patch).unwrap();
+        match changed.path.as_str() {
+            "created" => {
+                assert_eq!(read.status, "ready");
+                assert!(read.before.is_none());
+                assert_eq!(read.after.unwrap().bytes, 0);
+                assert!(patch.contains("new file mode 100644\n--- /dev/null\n+++ b/created\n"));
+            }
+            "deleted" => {
+                assert_eq!(read.status, "ready");
+                assert!(read.after.is_none());
+                assert_eq!(read.before.unwrap().bytes, 0);
+                assert!(patch.contains("deleted file mode 100644\n--- a/deleted\n+++ /dev/null\n"));
+            }
+            "mode" => {
+                assert_eq!(read.status, "mode");
+                assert!(patch.contains("old mode 100644\nnew mode 100755\n"));
+            }
+            _ => unreachable!(),
+        }
+    }
+}

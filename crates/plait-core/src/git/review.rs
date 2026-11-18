@@ -213,7 +213,7 @@ pub fn read(request: &Request) -> Result<Read> {
     let status = if binary {
         patch.extend_from_slice(b"Binary files differ\n");
         "binary"
-    } else if a == b {
+    } else if before.is_some() && after.is_some() && a == b {
         if changed.before_mode == changed.after_mode {
             patch.clear();
             "empty"
