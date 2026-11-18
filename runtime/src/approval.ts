@@ -1,3 +1,4 @@
+import { escapeDisplay } from './text.ts';
 import { randomUUID } from 'node:crypto';
 import type { AuthorizationPolicy, EffectCall } from './authorization.ts';
 import { fail } from './protocol.ts';
@@ -41,6 +42,7 @@ export class InteractiveApproval implements AuthorizationPolicy {
    * when `signal` ends the wait. Another harness's own requests come through here.
    */
   async ask(approval: Approval, signal: AbortSignal): Promise<boolean> {
+    approval = { ...approval, details: escapeDisplay(approval.details), summary: escapeDisplay(approval.summary) };
     if (signal.aborted) fail('permission_denied', 'Tool permission denied or revoked.');
     if (this.pending) fail('busy', 'Another tool is awaiting approval.');
     const allowed = await new Promise<boolean>((resolve, reject) => {

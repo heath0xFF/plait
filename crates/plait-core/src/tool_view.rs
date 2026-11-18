@@ -2,6 +2,7 @@
 //! calls folds under one summary line. Built with the conversation projection,
 //! off the render thread; the view only draws the result.
 
+use crate::display_text::escape;
 use crate::{
     diff::{self, Change},
     highlight,
@@ -124,7 +125,7 @@ fn failed(tool: &Tool) -> bool {
 fn plain(part: Part, text: &str, note: Option<&str>) -> Section {
     Section {
         part,
-        block: Block::code("", text.trim_end_matches('\n')),
+        block: Block::code("", escape(text.trim_end_matches('\n'))),
         note: note.map(str::to_owned),
     }
 }
@@ -138,7 +139,9 @@ fn failure(tool: &Tool, sections: &mut Vec<Section>) {
 
 fn edit(tool: &Tool, field: Field<'_>, facts: &mut Option<String>) -> Option<Vec<Section>> {
     field("path")?;
-    let lines = diff::lines(field("old_text")?, field("new_text")?);
+    let old = escape(field("old_text")?);
+    let new = escape(field("new_text")?);
+    let lines = diff::lines(&old, &new);
     let (added, removed) = diff::counts(&lines);
     *facts = Some(format!("+{added} −{removed}"));
     let mut sections = vec![Section {
@@ -191,7 +194,7 @@ fn write(tool: &Tool, field: Field<'_>, facts: &mut Option<String>) -> Option<Ve
     let language = highlight::language_for_path(path);
     let mut sections = vec![Section {
         part: Part::Content,
-        block: Block::code(language, content.trim_end_matches('\n')),
+        block: Block::code(language, escape(content.trim_end_matches('\n'))),
         note: None,
     }];
     failure(tool, &mut sections);
@@ -201,7 +204,7 @@ fn write(tool: &Tool, field: Field<'_>, facts: &mut Option<String>) -> Option<Ve
 fn command(tool: &Tool, field: Field<'_>, stored: bool) -> Option<Vec<Section>> {
     let mut sections = vec![Section {
         part: Part::Command,
-        block: Block::code("sh", field("command")?.trim()),
+        block: Block::code("sh", escape(field("command")?.trim())),
         note: None,
     }];
     if !tool.output.is_empty() {
@@ -246,7 +249,10 @@ fn read(
     };
     Some(vec![Section {
         part: Part::Preview,
-        block: Block::code(highlight::language_for_path(path), shown.join("\n")),
+        block: Block::code(
+            highlight::language_for_path(path),
+            escape(&shown.join("\n")),
+        ),
         note,
     }])
 }
@@ -763,5 +769,35 @@ mod stored_tests {
         let view = ToolView::from_history(&command);
         assert_eq!(view.sections[1].block.text, output);
         assert!(view.sections[1].note.is_none());
+    }
+}
+
+#[cfg(test)]
+mod control_tests {
+    use super::*;
+    #[test]
+    fn tool_rows_escape_controls_after_decoding_command_arguments() {
+        for name in ["command", "mcp:docs/echo"] {
+            let tool = Tool {
+                id: "controls".into(),
+                name: name.into(),
+                status: ToolStatus::Done,
+                input: serde_json::json!({"command":"safe\u{202e}delete\u{200b}"}).to_string(),
+                output: "result\u{0085}\u{2028}\u{feff}".into(),
+                after: None,
+            };
+            for view in [ToolView::new(&tool), ToolView::from_history(&tool)] {
+                let text = view.text();
+                assert!(text.contains("safe\\u202edelete\\u200b"));
+                assert!(text.contains("result\\u0085\\u2028\\ufeff"));
+                assert!(!text.contains('\u{202e}'));
+            }
+        }
+        let approval: crate::host::Approval = serde_json::from_value(serde_json::json!({
+            "id":"a","tool_id":"t","kind":"command","summary":"Use echo from docs",
+            "details":"safe\u{202e}delete\u{200b}","dirty_paths":[],"risk":"fixture"
+        }))
+        .unwrap();
+        assert_eq!(approval.details, "safe\\u202edelete\\u200b");
     }
 }

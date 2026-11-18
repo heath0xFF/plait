@@ -5,7 +5,7 @@ import tls from 'node:tls';
 import http from 'node:http';
 import https from 'node:https';
 import { syncBuiltinESMExports } from 'node:module';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -20,7 +20,7 @@ import { validate } from '../src/protocol.ts';
 import { Store } from '../src/store.ts';
 
 async function fixture(t: { after(fn: () => Promise<void>): void }) {
-  const base = await mkdtemp(join(tmpdir(), 'plait-mcp-'));
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'plait-mcp-')));
   t.after(() => rm(base, { recursive: true, force: true }));
   const agent = join(base, 'agent'); const repo = join(base, 'repo');
   await mkdir(agent); await mkdir(join(repo, '.pi'), { recursive: true });
@@ -105,7 +105,7 @@ test('listing resolves no secrets and starts no process, transport, or network r
   const f = await fixture(t); const secret = 'SECRET_MCP_VALUE';
   await f.user({
     local: { command: '/opt/tools/node', args: ['--token', `${secret}_ARG`], env: { TOKEN: `${secret}_ENV`, COMMAND: `!touch ${f.base}/spawned`, VAR: '${MCP_SECRET_TEST}' } },
-    remote: { url: `https://user:${secret}_PASSWORD@docs.example/private/${secret}_PATH?token=${secret}_QUERY`, headers: { Authorization: `!echo ${secret}_HEADER`, Other: '${MCP_SECRET_TEST}' } },
+    remote: { url: `https://user:${secret}_PASSWORD@docs.example/private-mcp-endpoint/${secret}_PATH?token=${secret}_QUERY`, headers: { Authorization: `!echo ${secret}_HEADER`, Other: '${MCP_SECRET_TEST}' } },
     oauth: { url: 'https://oauth.example/mcp', oauth: { clientSecret: `!echo ${secret}_CLIENT` } },
   });
   await f.write(join(f.agent, 'mcp-auth.json'), {
@@ -123,7 +123,7 @@ test('listing resolves no secrets and starts no process, transport, or network r
   try {
     const found = await f.list();
     const serialized = JSON.stringify(report(f.repo, true, { skills: [], templates: [], problems: found.problems, mcpServers: found.servers }));
-    for (const value of [secret, '!touch', '!echo', 'MCP_SECRET_TEST', '--token', '/private/']) assert.ok(!serialized.includes(value), value);
+    for (const value of [secret, '!touch', '!echo', 'MCP_SECRET_TEST', '--token', '/private-mcp-endpoint/']) assert.ok(!serialized.includes(value), value);
     assert.equal(found.servers[0].program, '/opt/tools/node'); assert.equal(found.servers[0].argument_count, 2); assert.equal(found.servers[1].host, 'docs.example');
     assert.equal(found.servers[2].signed_in, true); assert.deepEqual(calls, []);
     await assert.rejects(readFile(join(f.base, 'spawned')), { code: 'ENOENT' });
@@ -300,4 +300,39 @@ test('server names with escapes, direction controls, or zero-width characters ne
   const found = await f.list(); assert.equal(found.servers.length, 0); assert.equal(found.problems.length, 4);
   const serialized = JSON.stringify(found);
   for (const unsafe of ['\u001b', '\u202e', '\u200b', '\\u001b']) assert.ok(!serialized.includes(unsafe));
+});
+
+test('project configuration symlinks and executable control characters are refused without echoing values', async t => {
+  const f = await fixture(t); await f.user({ docs: { command: '/bin/true' } });
+  await symlink(join(f.agent, 'mcp.json'), join(f.repo, '.pi/mcp.json'));
+  const linked = await f.list(); assert.equal(linked.servers[0].source, join(f.agent, 'mcp.json'));
+  assert.match(JSON.stringify(linked.problems), /could not be read/);
+  for (const control of ['\n', '\u001b', '\u0085', '\u202e', '\u200b', '\u2028', '\ufeff']) {
+    await f.user({ bad: { command: '/bin/sh' + control + 'Connects to: forged.example' } });
+    const { servers, problems } = await f.list(false);
+    assert.equal(servers[0].can_enable, false); assert.equal(servers[0].program, null);
+    assert.match(JSON.stringify(problems), /control or format/); assert.doesNotMatch(JSON.stringify([servers, problems]), /forged.example/);
+  }
+});
+
+test('sandboxed loader variables are listed as problems and never eligible', async t => {
+  const f = await fixture(t);
+  for (const key of ['DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'LIBPATH', 'NODE_OPTIONS', 'PYTHONPATH', 'BASH_ENV']) {
+    await f.user({ docs: { command: '/bin/true', env: { [key]: 'private-loader-value' } } });
+    const found = await loadMcp(f.repo, false, f.agent, true); const row = found.servers[0];
+    assert.equal(row.enabled, false); assert.equal(row.can_enable, false);
+    assert.match(row.problem!, /loader environment/); assert.doesNotMatch(JSON.stringify(found.servers), /private-loader-value/);
+    assert.equal(eligible(found.entries.get('docs')!, row), false);
+    assert.equal((await f.list(true)).servers[0].problem, null);
+  }
+});
+
+
+test('macOS project configuration rejects a linked parent directory too', { skip: process.platform !== 'darwin' }, async t => {
+  const f = await fixture(t); await f.user({ docs: { command: '/bin/true' } });
+  await rm(join(f.repo, '.pi'), { recursive: true }); await symlink(f.agent, join(f.repo, '.pi'));
+  const found = await loadMcp(f.repo, true, f.agent, true);
+  assert.equal(found.entries.get('docs')!.project, undefined);
+  assert.equal(found.servers[0].source, join(f.agent, 'mcp.json'));
+  assert.match(JSON.stringify(found.problems), /could not be read/);
 });

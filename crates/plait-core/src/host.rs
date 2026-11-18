@@ -330,6 +330,7 @@ pub struct Approval {
     pub tool_id: String,
     pub kind: ApprovalKind,
     pub summary: String,
+    #[serde(deserialize_with = "crate::display_text::deserialize")]
     pub details: String,
     pub dirty_paths: Vec<String>,
     pub risk: String,

@@ -38,14 +38,19 @@ export const definitionDigest = (entry: Entry) => createHash('sha256').update(JS
 })).digest('hex');
 type State = { entries: Map<string, Entry>; namespaces: Map<string, string>; invalid: Map<string, McpServer>; problems: Problem[] };
 const FILE_LIMIT = 1024 * 1024;
+// Darwin sys/fcntl.h: all components; O_NOFOLLOW_ANY cannot be combined with O_NOFOLLOW.
+const NO_PROJECT_SYMLINKS = process.platform === 'darwin' ? 0x20000000 : constants.O_NOFOLLOW;
 export const MCP_NAME = /^[A-Za-z0-9_.:/-]{1,128}$/;
+export const unsafeProgram = (value: string) => /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value);
+export const unsafeLoaderEnvironment = (config: Config) => 'command' in config && Object.keys(config.env ?? {}).some(key =>
+  /^(?:DYLD_|LD_|LDR_)/.test(key) || ['LIBPATH', 'SHLIB_PATH', 'GCONV_PATH', 'NODE_OPTIONS', 'NODE_PATH', 'PYTHONPATH', 'PYTHONHOME', 'RUBYOPT', 'RUBYLIB', 'PERL5OPT', 'PERL5LIB', 'BASH_ENV', 'ENV'].includes(key));
 const OVERRIDES = new Set(['enabled', 'exposure', 'toolExposure']);
 const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /** A bounded read; parse errors never include snippets of credentials from the file. */
-async function json(path: string, problems: Problem[]): Promise<Record<string, unknown> | undefined> {
+async function json(path: string, problems: Problem[], noFollow = false): Promise<Record<string, unknown> | undefined> {
   try {
-    const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
+    const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK | (noFollow ? NO_PROJECT_SYMLINKS : 0));
     try {
       if (!(await file.stat()).isFile()) throw new Error();
       const data = Buffer.alloc(FILE_LIMIT + 1);
@@ -71,6 +76,7 @@ async function json(path: string, problems: Problem[]): Promise<Record<string, u
 
 function piFields(result: Exclude<McpServerConfigResult, { kind: 'invalid' }>): string | undefined {
   const config = result.config as McpServerConfig & Record<string, unknown>;
+  if ('command' in config && unsafeProgram(String(config.command))) return 'The configured executable contains control or format characters.';
   const exposure = (value: unknown) => ['codemode', 'codemode-deferred', 'deferred', 'direct', 'hidden'].includes(value as string);
   if (config.exposure !== undefined && !exposure(config.exposure)) return 'Invalid exposure; use codemode, deferred, direct, or hidden.';
   if (config.toolExposure !== undefined && (!record(config.toolExposure) || !Object.values(config.toolExposure).every(exposure))) {
@@ -104,7 +110,7 @@ function invalid(state: State, name: string, source: string, message: string) {
 }
 
 async function merge(path: string, project: boolean, state: State) {
-  const parsed = await json(path, state.problems);
+  const parsed = await json(path, state.problems, project);
   if (!parsed) return;
   if (parsed.mcpServers !== undefined && !record(parsed.mcpServers)) {
     state.problems.push({ path, message: 'MCP configuration needs an mcpServers object.' }); return;
@@ -152,7 +158,8 @@ function signIn(entry: Entry, auth: Record<string, unknown>) {
     return { needs_sign_in: false, signed_in: false };
   }
   const url = String(new URL(config.url));
-  const saved = auth[`${mcpNamespace(entry.name)}|${url}`] ?? auth[url];
+  const key = `${mcpNamespace(entry.name)}|${url}`;
+  const saved = (Object.hasOwn(auth, key) ? auth[key] : undefined) ?? (Object.hasOwn(auth, url) ? auth[url] : undefined);
   const state = record(saved) && saved.serverUrl === url ? saved : undefined;
   const tokens = state && record(state.tokens) ? state.tokens : undefined;
   const signed_in = !!tokens && (typeof tokens.access_token === 'string' && !!tokens.access_token
@@ -175,7 +182,9 @@ export async function loadMcp(checkout: string, trusted: boolean, agentDir: stri
   const auth = describe && [...state.entries.values()].some(entry => entry.transport === 'http')
     ? await json(join(agentDir, 'mcp-auth.json'), state.problems) ?? {} : {};
   const servers = [...state.entries.values()].map((entry): McpServer => {
-    const enabled = piEnabled && trusted && entry.project !== 'definition'
+    const loaderProblem = !trusted && unsafeLoaderEnvironment(entry.config) ? 'MCP loader environment is not allowed in a sandboxed project.' : null;
+    if (loaderProblem) state.problems.push({ path: entry.source, message: loaderProblem });
+    const enabled = !loaderProblem && piEnabled && trusted && entry.project !== 'definition'
       && entry.config.enabled !== false && entry.userConfig?.enabled !== false;
     const config = entry.config;
     return {
@@ -183,7 +192,7 @@ export async function loadMcp(checkout: string, trusted: boolean, agentDir: stri
       program: 'command' in config ? config.command : null,
       ...('command' in config ? { argument_count: config.args?.length ?? 0 } : {}),
       host: entry.transport === 'http' && 'url' in config ? new URL(config.url).host : null,
-      enabled, can_enable: piEnabled, ...signIn(entry, auth), problem: null,
+      enabled, can_enable: piEnabled && !loaderProblem, ...signIn(entry, auth), problem: loaderProblem,
       definition: definitionDigest(entry),
       ...(entry.project ? { consent: entry.project === 'definition' || entry.userConfig?.enabled === false ? 'required' as const : 'restricted' as const } : {}),
       disabled_reason: config.auth ? 'Provider authentication is planned; use a configured header key for now.'

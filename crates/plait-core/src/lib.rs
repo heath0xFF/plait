@@ -31,3 +31,5 @@ pub mod update;
 
 pub mod history;
 pub mod navigation;
+
+pub mod display_text;

@@ -253,7 +253,7 @@ test('oversized items are delivered in bounded parts through history_text', asyn
   assert.equal(await read(message, 'reasoning'), control);
   const tool = items.find(item => item.id === 'big')!;
   assert.equal(await read(tool, 'input'), JSON.stringify({ content: long }));
-  assert.equal(await read(tool, 'output'), control);
+  assert.equal(await read(tool, 'output'), '\\u0001'.repeat(70000));
   assert.equal(await read(items.find(item => item.id === 'request-huge')!, 'text'), long);
   for (const item of items.filter(item => item.id.startsWith('4-'))) assert.equal(await read(item, 'text'), control);
   assert.equal(items.filter(item => item.id.startsWith('4-')).length, 6);

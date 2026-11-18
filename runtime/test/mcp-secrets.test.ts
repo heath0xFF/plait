@@ -27,3 +27,24 @@ test('MCP redaction handles nested JSON, escaped strings, headers and URL encodi
   assert.equal(secrets.text('Found 12 results by runner with tiny'), 'Found 12 results by runner with tiny');
   assert.deepEqual(secrets.json({ 'fixture-token': 'fixture-token' }), { 'fixture-token': '[redacted]' }, 'Argument keys are never rewritten');
 });
+
+test('untrusted JSON has a depth bound without recursion or whole-list serialization', async () => {
+  const { boundJson } = await import('../src/mcp/json.ts');
+  const secrets = new Secrets(); const deep = JSON.parse('['.repeat(4000) + '0' + ']'.repeat(4000));
+  for (const inspect of [() => secrets.json(deep), () => secrets.schema(deep)]) assert.throws(inspect, /64-level depth limit/);
+  let serialized = false; const page = { tools: [], large: 'x'.repeat(2 * 1024 * 1024) };
+  Object.defineProperty(page, 'toJSON', { value: () => { serialized = true; throw new Error('must not serialize'); } });
+  assert.throws(() => boundJson(page, 1024 * 1024), /byte limit/); assert.equal(serialized, false);
+  assert.throws(() => expand('${toString}', {}), /unavailable/);
+  const own = JSON.parse('{"__proto__":"kept","constructor":"kept"}'); assert.deepEqual(secrets.json(own), own);
+});
+
+test('pipe budget limits message bursts and bytes before parsing and replenishes at a fixed rate', async () => {
+  const { PipeBudget, MCP_PIPE_BYTES, MCP_PIPE_MESSAGES } = await import('../src/mcp/pipe.ts');
+  const messages = new PipeBudget(); const now = performance.now();
+  assert.equal(messages.accept(Buffer.from('\n'.repeat(MCP_PIPE_MESSAGES)), true, now), true);
+  assert.equal(messages.accept(Buffer.from('\n'), true, now), false);
+  assert.equal(messages.accept(Buffer.from('\n'), true, now + 1000), true);
+  const bytes = new PipeBudget(); assert.equal(bytes.accept(Buffer.alloc(MCP_PIPE_BYTES), false, now), true);
+  assert.equal(bytes.accept(Buffer.alloc(1), false, now), false);
+});

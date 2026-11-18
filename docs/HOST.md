@@ -1310,8 +1310,17 @@ are always hidden in settings; inspect the defining file before opting in.
 
 A stdio server is started by `plait-host mcp-server`, not Pi's process transport.
 The guardian retains the store and checkout leases and closes all private file
-descriptors in the server. A separate lifetime pipe kills the server's process
-group on Stop, run completion, failure, or host/sidecar death. Its working
+descriptors in the server. The guardian starts with a fixed system PATH only;
+the server environment arrives
+through a bounded private pipe and never affects the guardian's loader. In a
+sandboxed project, `sandbox-exec` starts a clean host exec stage inside Seatbelt;
+only that stage reads the environment and replaces itself with the server.
+MCP credential commands use the same environment handoff.
+Private descriptors are close-on-exec before the server starts. A separate
+lifetime pipe kills the server's process group on Stop, run completion, failure,
+or host/sidecar death. As with commands, a descendant which deliberately leaves
+that group with `setsid()` or `setpgid()` can survive. A sandboxed survivor keeps
+its Seatbelt restrictions; trusted survivors retain full account access. The server's working
 directory follows Pi's configured `cwd`, relative to the checkout; `~` in the
 program, arguments, and working directory expands as in Pi.
 
@@ -1320,41 +1329,67 @@ In a sandboxed project the filesystem profile is the command profile:
 - Read checkout contents (including ignored files), private scratch, the
   thread's build cache, system paths (`/System`, `/usr`, `/bin`, `/sbin`,
   `/Library/Developer`, `/private/var/db`, installed Xcode, and `/opt/homebrew`),
-  the resolved Node executable and Apple/Rust toolchains, Cargo source caches,
+  the resolved Node and host executables and Apple/Rust toolchains, Cargo source caches,
   discovered skill folders, and a linked worktree's shared Git directory.
   File metadata may be read anywhere; other file contents remain denied.
 - Write only private scratch, that thread's Cargo/target cache, and `/dev/null`.
   Checkout and Git writes remain denied, as do outside files and sibling caches.
   Cache-root removal and permission changes are denied. HOME and TMPDIR stay
   private even when the configuration supplies those environment keys.
-- MCP additionally permits network access, including loopback, and the two
-  macOS network configuration services (`configd` and `networkd`). Commands
-  themselves retain their existing no-network profile.
+- MCP additionally permits IP networking, including loopback. Unix-domain sockets
+  remain confined to private scratch, with one exact outbound exception for the
+  system resolver: `/private/var/run/mDNSResponder`. There is no broad Unix-socket
+  or Mach-service permission; the host socket and other sockets outside scratch
+  remain denied. Commands retain their existing no-network profile.
+- Configured loader variables (`DYLD_*`, `LD_*`, `LDR_*`, `LIBPATH`, `SHLIB_PATH`,
+  `GCONV_PATH`, and Node/Python/Ruby/Perl or shell startup injection variables)
+  are refused in sandboxed server environments and listed as problems.
 
 Trusted stdio servers have the user's login-shell environment and full account
 access. The run shares its existing lazy login-environment lookup with commands.
 Thread-owned files are checked before and reconciled after trusted calls.
 Configured `${VAR}`, `$VAR`, escaping (`$$`, `$!`), and `!command` values in env
-and headers resolve only on first search. Credential commands run under a
+and headers resolve only on first search, against the policy's server environment,
+never against the sidecar's environment or host-private plumbing. All eligible
+entries finish credential preparation before any server connects or offers tools.
+A failed entry remains a problem while the other entries continue. Credential
+commands run under a
 guardian and the same project policy, with a 10-second deadline, and produce no
 transcript or command log. Credential redaction tracks only configured env/header
 values after expansion, credential-command results, URL userinfo, and the token
 part of Authorization values. It does not treat inherited login environment,
 arguments, URL paths, queries, or entire URLs as secrets. Values shorter than
 eight characters are not scrubbed; this is a deliberate limit to avoid corrupting
-ordinary output. Descriptions, results, stored output, approval argument values,
-and diagnostics are scrubbed. Names and schema keys are never rewritten: a tool
+ordinary output. Descriptions, results, stored output, and diagnostics are scrubbed.
+A call containing a tracked credential in its arguments is refused before
+approval or dispatch with a fixed message. Approval details and displayed tool
+inputs/outputs escape Unicode format, directional, zero-width, line/paragraph
+separator, and control characters as visible `\uXXXX` sequences; ordinary tabs
+and newlines in output remain readable. This applies to command approvals too.
+Configured executable paths containing control or format characters are invalid.
+The project's configuration file is opened without following symlinks; on macOS
+this includes every path component within the canonical checkout. Names and
+schema keys are never rewritten: a tool
 containing a known credential in its name, title, schema key, or non-description
 schema constraint is refused. HTTP uses the configured endpoint
 with redirects and authentication recovery disabled; it starts no server process.
 
-**Bounds and recovery.** Startup (including configuration value resolution and
-tool listing) has a 10-second deadline. Calls default to 60 seconds; a positive
-configured `timeout` in seconds overrides it, capped at 15 minutes. There are
-four concurrent startup attempts. Listing is bounded to 500 tools and 1 MiB
-of metadata per server. If all N enabled servers stay silent, first search waits
-about `10 × ceil(N / 4)` seconds, plus bounded shutdown and scheduling overhead;
-there is no separate whole-search deadline. Each wire message is bounded to 16 MiB.
+**Bounds and recovery.** Each server has 10 seconds of active startup work,
+shared by credential preparation and connection/tool listing. The wait at the
+credential barrier is excluded. Preparation and connection each run in groups
+of four; for N silent servers with immediate credentials the wait is about
+`10 × ceil(N / 4)` seconds. Mixed slow credential preparation and connections
+can take up to `20 × ceil(N / 4)` seconds, plus shutdown/filesystem/scheduling
+overhead. There is no separate whole-search deadline. Calls default to 60 seconds;
+a positive configured `timeout` overrides it, capped at 15 minutes.
+
+Listing is bounded to 500 tools, 32 pages, and 1 MiB of metadata per server.
+JSON is checked iteratively before serialization or copying, with a depth limit
+of 64 levels; each tool stays within 64 KiB and call arguments within 16 KiB.
+Each wire message is bounded to 16 MiB. Each stdio pipe has token buckets of
+32 MiB and 256 stdout lines, replenished at those rates per second. Stdout and
+stderr both spend the byte budget, and all stdout lines spend the message budget.
+Exceeding either closes the pipe and fails that server before parsing more output.
 Text and structured results use the existing `CommandOutputs` store (16 MiB per output,
 32 newest outputs per thread), with a 12 KB tail preview and `read_output`
 continuations. Non-text content is omitted with an explicit notice; message

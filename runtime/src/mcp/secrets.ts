@@ -1,3 +1,4 @@
+import { mapJson } from './json.ts';
 /** Only this run keeps resolved values. Scrub before storage, tool registration, or presentation. */
 export class Secrets {
   private values = new Set<string>();
@@ -16,28 +17,16 @@ export class Secrets {
     return value;
   }
   json<T>(value: T): T {
-    const clean = (item: unknown): unknown => typeof item === 'string' ? this.text(item)
-      : Array.isArray(item) ? item.map(clean)
-      : item && typeof item === 'object' ? Object.fromEntries(Object.entries(item).map(([key, child]) => [key, clean(child)])) : item;
-    return clean(value) as T;
+    return mapJson(value, item => this.text(item), () => {});
   }
 
   /** Preserve schema identifiers and constraints; only descriptions are free text. */
   schema<T>(value: T): T {
-    const clean = (item: unknown, description = false): unknown => {
-      if (typeof item === 'string') {
-        if (description) return this.text(item);
-        if (this.contains(item)) throw new Error('MCP schema contains a credential outside free text.');
-        return item;
-      }
-      if (Array.isArray(item)) return item.map(child => clean(child));
-      if (item && typeof item === 'object') return Object.fromEntries(Object.entries(item).map(([key, child]) => {
-        if (this.contains(key)) throw new Error('MCP schema contains a credential in a key.');
-        return [key, clean(child, key === 'description')];
-      }));
+    return mapJson(value, (item, key) => {
+      if (key === 'description') return this.text(item);
+      if (this.contains(item)) throw new Error('MCP schema contains a credential outside free text.');
       return item;
-    };
-    return clean(value) as T;
+    }, key => { if (this.contains(key)) throw new Error('MCP schema contains a credential in a key.'); });
   }
 }
 
@@ -46,7 +35,8 @@ export function expand(value: string, env: NodeJS.ProcessEnv): string {
   return value.replace(/\$\$|\$!|\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (match, brace: string, bare: string) => {
     if (match === '$$') return '$';
     if (match === '$!') return '!';
-    const found = env[brace ?? bare];
+    const name = brace ?? bare;
+    const found = Object.hasOwn(env, name) ? env[name] : undefined;
     if (!found) throw new Error('An MCP configuration variable is unavailable.');
     return found;
   });

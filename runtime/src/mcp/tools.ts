@@ -7,6 +7,7 @@ import type { Tool } from '@earendil-works/pi-mcp';
 import type { ToolState } from '../tools.ts';
 import { definitionDigest, MCP_NAME } from './config.ts';
 import type { Config, Entry, McpServer } from './config.ts';
+import { boundJson } from './json.ts';
 import { Secrets } from './secrets.ts';
 import { MCP_CALL_TIMEOUT_MS, MCP_START_TIMEOUT_MS, transport } from './transport.ts';
 import { fail } from '../protocol.ts';
@@ -17,13 +18,15 @@ import { checkRoot } from '../safety.ts';
 
 export type Observation = { state: 'connected' | 'stopped' | 'failed'; tool_count?: number; problem?: string; needs_sign_in?: boolean };
 type Connection = Awaited<ReturnType<typeof transport>>;
+type Prepared = { entry: Entry; pipe: Connection; deadline: AbortController; signal: AbortSignal; remaining: number };
+export const MCP_LIST_PAGES = 32;
 export const fingerprint = definitionDigest;
 export const nameKey = (thread: string, name: string) => `mcp_tool:${JSON.stringify([thread, name])}`;
 const decoded = (value: string) => { try { return decodeURIComponent(value); } catch { return value; } };
 
 function exposure(config: Config, name: string) {
   const overrides = config.toolExposure ?? {};
-  if (overrides[name]) return overrides[name];
+  if (Object.hasOwn(overrides, name)) return overrides[name];
   for (const [pattern, value] of Object.entries(overrides)) {
     if (pattern.includes('*') && new RegExp('^' + pattern.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$').test(name)) return value;
   }
@@ -87,43 +90,58 @@ export class McpRun {
     })] }));
   }
 
+  private async prepare(entry: Entry): Promise<Prepared | undefined> {
+    const deadline = new AbortController();
+    const signal = AbortSignal.any([this.state.authorization.signal, deadline.signal]);
+    const start = performance.now();
+    const timer = setTimeout(() => deadline.abort(), MCP_START_TIMEOUT_MS);
+    try {
+      const pipe = await transport(entry, this.state, this.secrets, signal);
+      return { entry, pipe, deadline, signal, remaining: Math.max(1, MCP_START_TIMEOUT_MS - (performance.now() - start)) };
+    } catch {
+      this.problem(entry, undefined, deadline.signal.aborted ? 'MCP credential preparation timed out after 10 seconds.' : 'MCP credentials or process policy could not be prepared.');
+      return undefined;
+    } finally { clearTimeout(timer); }
+  }
+
   private async discover(registry: Registry) {
-    // Parallel connection attempts do not make one silent server delay every healthy one.
+    // No connection can echo credentials until every eligible entry has resolved them.
+    const prepared: Prepared[] = [];
     for (let index = 0; index < this.entries.length; index += 4) {
-      await Promise.all(this.entries.slice(index, index + 4).map(entry => this.connect(entry)));
+      const batch = await Promise.all(this.entries.slice(index, index + 4).map(entry => this.prepare(entry)));
+      prepared.push(...batch.filter((item): item is Prepared => !!item));
+    }
+    for (let index = 0; index < prepared.length; index += 4) {
+      await Promise.all(prepared.slice(index, index + 4).map(item => this.connect(item)));
     }
     if (!this.closed) registry.install(defineExtension({ name: 'plait-mcp-tools', tools: this.tools }));
   }
 
   private problem(entry: Entry, pipe: Connection | undefined, message: string, signIn = false) {
     const tail = clipTail(this.secrets.text(pipe?.stderr() ?? '').split('\n').slice(-8).join('\n'), 2000);
-    const problem = `${message}${tail ? '\n' + tail : ''}`;
+    const problem = `${pipe?.failure() ?? message}${tail ? '\n' + tail : ''}`;
     this.problems.push(`${entry.name}: ${problem}`);
     this.observe(entry, { state: 'failed', problem, ...(signIn ? { needs_sign_in: true } : {}) });
     return problem;
   }
 
-  private async connect(entry: Entry) {
-    let pipe: Connection | undefined;
+  private async connect({ entry, pipe, deadline, signal, remaining }: Prepared) {
     const client = new McpClient({ name: 'plait', version: '1', capabilities: {}, requestTimeoutMs: MCP_START_TIMEOUT_MS });
-    const deadline = new AbortController();
-    const timer = setTimeout(() => deadline.abort(), MCP_START_TIMEOUT_MS);
-    const signal = AbortSignal.any([this.state.authorization.signal, deadline.signal]);
+    const timer = setTimeout(() => deadline.abort(), remaining);
     const stop = () => { void client.close().catch(() => {}); };
     signal.addEventListener('abort', stop, { once: true });
     try {
-      this.state.authorization.check(signal);
-      pipe = await transport(entry, this.state, this.secrets, signal);
       this.state.authorization.check(signal);
       // No handlers for sampling or elicitation: pinned McpClient replies -32601.
       await client.connect(pipe.connection);
       // Limit the total list, including pagination, independently of a server's page size.
       const listed: Tool[] = []; let cursor: string | undefined; let metadataBytes = 0;
-      const cursors = new Set<string>();
+      const cursors = new Set<string>(); let pages = 0;
       do {
+        if (++pages > MCP_LIST_PAGES) throw new Error('MCP tool listing exceeds 32 pages.');
         const page = await client.request<{ tools: Tool[]; nextCursor?: string }>('tools/list', cursor ? { cursor } : {}, { signal });
-        metadataBytes += Buffer.byteLength(JSON.stringify(page));
-        if (!Array.isArray(page.tools) || listed.length + page.tools.length > 500 || metadataBytes > 1024 * 1024) throw new Error();
+        if (!Array.isArray(page.tools) || listed.length + page.tools.length > 500) throw new Error();
+        metadataBytes += boundJson(page, 1024 * 1024 - metadataBytes);
         listed.push(...page.tools);
         cursor = page.nextCursor || undefined;
         if (cursor !== undefined && typeof cursor !== 'string') throw new Error();
@@ -139,7 +157,8 @@ export class McpRun {
           if (!tool || typeof tool.name !== 'string' || !MCP_NAME.test(tool.name) || used.has(tool.name)
             || this.secrets.contains(tool.name) || [tool.title, tool.annotations?.title].some(title => title !== undefined && (typeof title !== 'string' || this.secrets.contains(title)))
             || !tool.inputSchema || typeof tool.inputSchema !== 'object' || Array.isArray(tool.inputSchema)
-            || tool.inputSchema.type !== 'object' || Buffer.byteLength(JSON.stringify(tool)) > 65536) throw new Error();
+            || tool.inputSchema.type !== 'object') throw new Error();
+          boundJson(tool, 65536);
           used.add(tool.name);
           const parameters = this.secrets.schema(tool.inputSchema);
           if (toolExposure(entry, tool.name) !== 'hidden') offered.push(this.tool(entry, tool, client, parameters));
@@ -182,10 +201,12 @@ export class McpRun {
         const state = this.state;
         const signal = AbortSignal.any([state.authorization.signal, ...(context.abortSignal ? [context.abortSignal] : [])]);
         state.authorization.check(signal);
-        if (!input || typeof input !== 'object' || Array.isArray(input) || Buffer.byteLength(JSON.stringify(input)) > 16384) fail('permission_denied', 'MCP tool arguments exceed the bound.');
+        if (!input || typeof input !== 'object' || Array.isArray(input)) fail('permission_denied', 'MCP tool arguments must be an object.');
+        try { boundJson(input, 16384); } catch { fail('permission_denied', 'MCP tool arguments exceed the byte or 64-level depth limit.'); }
+        if (this.secrets.contains(JSON.stringify(input))) fail('permission_denied', 'MCP tool arguments contain a configured credential; the call was refused.');
         const args = structuredClone(input) as Record<string, unknown>;
         const call = Object.freeze({ toolId: api.callId, name: 'command' as const,
-          arguments: Object.freeze(this.secrets.json(args)), dirtyPaths: [],
+          arguments: Object.freeze(args), dirtyPaths: [],
           mcp: Object.freeze({ server: entry.name, tool: safeTool }),
           ...(state.commandPolicy === 'trusted' ? { commandPolicy: 'trusted' as const } : {}),
         });

@@ -704,8 +704,10 @@ server offers unused tools. Actual calls create one label per thread/tool;
 repeat calls reuse it. There is currently no automatic cleanup for these label
 settings, including on archive, so they accumulate with distinct tools actually
 called across threads. The first-search deadline applies per batch, not to the
-whole search: N silent enabled servers take about `10 × ceil(N / 4)` seconds,
-plus process shutdown and scheduling overhead.
+whole search: N silent enabled servers with immediate credentials take about
+`10 × ceil(N / 4)` seconds. With the credential barrier, mixed slow preparation
+and connections have a conservative `20 × ceil(N / 4)` bound, plus shutdown,
+filesystem, and scheduling overhead.
 
 Project-consent tests cover new and replacing repository definitions, enable
 overrides, and attempts to expose user-hidden tools in trusted Ask and Auto
@@ -717,11 +719,39 @@ all unresolved launch fields, exposure changes, legacy name-only switches,
 directory identity mismatch, and exact/wildcard visibility intersections. Saved
 switches contain only a digest and policy metadata, never configured values.
 
+Security regression fixtures check that sandboxed servers and credential commands
+cannot reach the actual host socket or another Unix socket outside scratch, while
+scratch sockets, `localhost` resolution, and loopback requests by name and address
+work. The resolver exception is the exact `/private/var/run/mDNSResponder` socket;
+ordinary command sandbox tests remain unchanged. A compiled constructor fixture
+proves that a configured dynamic library loads only in the explicitly trusted
+server, never its guardian; sandboxed loader settings are refused before startup.
+A second native probe deliberately bypasses that validation: its injected
+constructor runs only after Seatbelt, can write scratch but not an outside file,
+and the final program has no inherited descriptors numbered 3 through 15.
+Expansion tests reject sidecar-only plumbing and keys in both policies. Two- and
+five-server fixtures test credential preparation before any connection, including
+a delayed credential command, and reject another server's credential in metadata.
+
+Additional regressions cover control characters in programs and shared command/MCP
+approval details; escaped tool rows in live and full history; 4,000-level JSON;
+listing size before serialization and a 32-page cap; 20,000-notification and large
+byte floods while another thread calls a healthy server; inherited-property tool
+names under user-hidden/restricted exposure; and credential-bearing call arguments
+refused before approval or dispatch. The pipe's 32 MiB and 256-line token buckets
+replenish per second and fail a server on excess. Project config symlink tests
+prove a linked final file and, on macOS, a linked `.pi` directory are not followed.
+
+Process-group cleanup does not catch a descendant which deliberately calls
+`setsid()` or `setpgid()` to leave the group. This is the same boundary as commands:
+a sandboxed survivor remains confined, while a trusted survivor keeps user access.
+These tests prove same-group cleanup, not containment of arbitrary descendants.
+
 Core tests decode older hosts and unknown fields/transports and serialize the
 version 3 switch request. Desktop tests cover state wording, source details,
 and stale connection/checkout replies. `project-settings-mcp-*`,
 `project-settings-mcp-observed-*`, `project-settings-mcp-review-*`, `project-settings-no-mcp-*`, and
-`mcp-tool-approval-*` draw injected metadata and a separate tool/approval row at
+`mcp-tool-approval-*` and `mcp-tool-controls-*` draw injected metadata and a separate tool/approval row at
 1380×860 and 900×600. Headless Metal/Core Text rendering does not prove native
 pointer interaction, focus, accessibility, or installed-app behavior.
 Desktop tests check **Needs review**, **Changed**, **User limits**, redacted

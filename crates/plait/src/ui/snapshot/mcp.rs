@@ -134,6 +134,18 @@ pub(super) fn mcp_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         approval.risk = "Only this exact MCP call is approved. The server can use the network. Local servers can read the checkout and command toolchain paths; writes are limited to private scratch and the thread build cache. Server hints never waive approval.".into();
     });
     harness.capture(&format!("mcp-tool-approval-{suffix}"));
+    harness.change_snapshot(|snapshot| {
+        let input = serde_json::json!({"query": "safe\u{202e}delete\u{200b}\u{0085}"}).to_string();
+        snapshot.tools[1].input = input.clone();
+        snapshot.tools[1].output = "Result: safe\u{202e}delete\u{200b}\u{2028}".into();
+        snapshot.pending_approval.as_mut().unwrap().details =
+            plait_core::display_text::escape(&input);
+    });
+    harness.update(|plait, _, _| {
+        let tool = plait.host.snapshot.as_ref().unwrap().tools[1].id.clone();
+        plait.expanded_live_tools.insert(tool);
+    });
+    harness.capture(&format!("mcp-tool-controls-{suffix}"));
 }
 
 #[test]

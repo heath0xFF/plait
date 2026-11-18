@@ -69,3 +69,21 @@ for (const field of ['live_text', 'message'] as const) test(`snapshot byte-budge
   assert(state.truncated);
   assert(Buffer.byteLength(JSON.stringify(state)) <= 524288);
 });
+
+test('tool inputs and results escape layout controls in snapshots and full history', async () => {
+  const { escapeDisplay } = await import('../src/text.ts');
+  const { historyPage, historyText } = await import('../src/history.ts');
+  const dangerous = 'safe\u202edelete\u200b\u0085\u2028\u2066\ufeff';
+  const result = escapeDisplay(dangerous);
+  assert.equal(result, 'safe\\u202edelete\\u200b\\u0085\\u2028\\u2066\\ufeff');
+  const model = [{ role: 'assistant', content: [{ type: 'toolCall', id: 'danger', name: 'mcp:docs/echo', arguments: { text: dangerous } }] },
+    { role: 'toolResult', toolCallId: 'danger', content: dangerous }];
+  const state = snapshot(); update(state, { entries: [{ id: 1, model }], docs: {} } as unknown as ConversationView);
+  assert.equal(state.tools[0].output, result); assert.equal(state.tools[0].input, '{"text":"' + result + '"}');
+  // Full-history checks use the same durable entry as the live projection.
+  const source = { entries: async (query: { maxEntryId?: number }) => query.maxEntryId === 0 ? [] : [{ id: 1, kind: 'pi.message', model }],
+    pending: () => [], placed: () => new Map(), typed: () => undefined, journal: () => undefined, active: false };
+  const history = await historyPage(source as never, undefined, 10); assert.doesNotMatch(JSON.stringify(history), /[\u202e\u200b\u0085\u2028\u2066\ufeff]/);
+  assert.equal((await historyText(source as never, 'e1.1.output', 0)).text, result);
+  assert.equal((await historyText(source as never, 'e1.0.input.0', 0)).text, '{"text":"' + result + '"}');
+});

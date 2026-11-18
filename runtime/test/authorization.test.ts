@@ -251,3 +251,14 @@ for (const outcome of ['allow', 'cancel'] as const) test(`failed ${outcome} pers
   assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
   assert.throws(() => f.approvals.answer(id, true), stale);
 });
+
+for (const kind of ['command', 'mcp'] as const) test(`${kind} approval escapes layout controls while preserving the exact execution value`, async () => {
+  const f = fixture(); f.authorization.activate();
+  const text = 'safe\u202edelete\u200b\u0085\u2028\u2066\ufeff\u{e0001}';
+  const effect: EffectCall = { toolId: 'layout', name: 'command', arguments: { command: text }, dirtyPaths: [],
+    ...(kind === 'mcp' ? { mcp: { server: 'docs', tool: 'echo' } } : {}) };
+  const pending = f.authorization.authorize(effect);
+  assert.equal(f.snapshot.pending_approval!.details, '{"command":"safe\\u202edelete\\u200b\\u0085\\u2028\\u2066\\ufeff\\udb40\\udc01"}');
+  assert.equal(effect.arguments.command, text);
+  f.approvals.answer(f.snapshot.pending_approval!.id, true); await pending;
+});

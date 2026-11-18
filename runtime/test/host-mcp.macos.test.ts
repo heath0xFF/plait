@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
+import { createServer as unixServer } from 'node:net';
 import { DatabaseSync } from 'node:sqlite';
 import type { McpServer } from '../src/mcp/config.ts';
 import { join, resolve } from 'node:path';
@@ -140,3 +141,34 @@ for (const approval of ['ask', 'auto'] as const) for (const kind of ['definition
     assert.equal((await readFile(join(f.store, 'mcp-spawns.jsonl'), 'utf8')).match(/mcp-server/g)?.length, 1);
   });
 }
+
+test('sandboxed MCP and credential commands cannot reach host or outside Unix sockets but retain IP and localhost DNS', { timeout: 30000 }, async t => {
+  const f = await setup(t, 'mcp-normal'); await config(f, 'sockets');
+  let connections = 0; const outside = join(f.base, 'outside.sock');
+  const unix = unixServer(socket => { connections++; socket.end(); });
+  await new Promise<void>(resolve => unix.listen(outside, resolve)); t.after(() => { unix.close(); });
+  const http = createServer((_request, response) => response.end('loopback-ok'));
+  await new Promise<void>(resolve => http.listen(0, '127.0.0.1', resolve)); t.after(() => { http.closeAllConnections(); http.close(); });
+  const hostSocket = join(f.store, 'host.sock'); const probe = join(f.repo, 'credential.mjs');
+  await writeFile(probe, `import { connect } from 'node:net';
+    for (const path of process.argv.slice(2)) await new Promise((resolve, reject) => {
+      const socket = connect(path); socket.once('connect', () => { socket.end(); reject(new Error('escaped')); });
+      socket.once('error', error => error.code === 'EPERM' ? resolve() : reject(error));
+    }); process.stdout.write('credential-socket-denied');`);
+  const path = join(f.store, 'test-pi/mcp.json'); const raw = JSON.parse(await readFile(path, 'utf8'));
+  raw.mcpServers.docs.args = [join(f.repo, 'server.mjs'), 'sockets'];
+  raw.mcpServers.docs.env = { FIXTURE_HOST_SOCKET: hostSocket, FIXTURE_UNIX_SOCKET: outside,
+    FIXTURE_URL: `http://127.0.0.1:${(http.address() as { port: number }).port}`,
+    KEY: `!${JSON.stringify(process.execPath)} ${JSON.stringify(probe)} ${JSON.stringify(hostSocket)} ${JSON.stringify(outside)}` };
+  await writeFile(path, JSON.stringify(raw));
+  await request(f.store, { op: 'set_mcp_server', checkout: f.repo, name: 'docs', enabled: true, protocol_version: 3 });
+  const thread = await f.create(); await f.submit(thread.id);
+  const pending = await until(() => f.watch(thread.id), value => !!value.pending_approval || value.status === 'idle');
+  assert.ok(pending.pending_approval, JSON.stringify(pending)); await f.approve(thread.id, pending.pending_approval!.id);
+  const done = await until(() => f.watch(thread.id), value => value.status === 'idle');
+  const output = done.tools.find(tool => tool.name === 'mcp:docs/echo')!.output;
+  const result = JSON.parse(JSON.parse(output.split('\n[Command output:')[0]).content[0].text);
+  assert.deepEqual(result, { host: 'EPERM', outside: 'EPERM', scratch: 'allowed', lookup: 'allowed', name: 'loopback-ok', address: 'loopback-ok' });
+  assert.equal(connections, 0);
+  assert.match(JSON.stringify(await request(f.store, { op: 'agent_resources', checkout: f.repo, protocol_version: 3 })), /"trusted":false/);
+});

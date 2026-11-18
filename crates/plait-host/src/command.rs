@@ -24,7 +24,8 @@ pub fn run_trusted(args: Vec<String>) -> io::Result<()> {
     if args.len() != 2 {
         return Err(io::Error::other("trusted-command expects checkout script"));
     }
-    let command = trusted_command(&args)?;
+    let mut command = trusted_command(&args)?;
+    private_environment(&mut command)?;
     // The command has full user access, so no inherited descriptor may reach it:
     // not the leases, and not a host-private channel a parent failed to close.
     for fd in 3..inherited_descriptor_limit() {
@@ -97,10 +98,16 @@ fn trusted_command(_: &[String]) -> io::Result<Command> {
 
 #[cfg(target_os = "macos")]
 fn sandbox_command(args: &[String]) -> io::Result<Command> {
-    let mut command = with_profile(&args[1]);
-    command
-        .args(["/bin/sh", "-c", &args[2]])
-        .current_dir(&args[0]);
+    let mut command = if std::env::var_os("PLAIT_COMMAND_ENV_FD").is_some() {
+        let mut command = crate::mcp::sandbox_command(&args[1], "/bin/sh")?;
+        command.args(["-c", &args[2]]);
+        command
+    } else {
+        let mut command = with_profile(&args[1]);
+        command.args(["/bin/sh", "-c", &args[2]]);
+        command
+    };
+    command.current_dir(&args[0]);
     Ok(command)
 }
 
@@ -135,4 +142,11 @@ mod tests {
         let error = run_trusted(vec!["/nonexistent".into(), "exit 0".into()]).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::Unsupported);
     }
+}
+
+fn private_environment(command: &mut Command) -> io::Result<()> {
+    if std::env::var_os("PLAIT_COMMAND_ENV_FD").is_some() {
+        command.env_clear().envs(crate::mcp::environment()?);
+    }
+    Ok(())
 }

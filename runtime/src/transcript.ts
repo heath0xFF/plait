@@ -1,7 +1,7 @@
 import type { ConversationView } from '@earendil-works/pi-durable';
 import type { Snapshot, SnapshotMessage, SnapshotTool, InputRecord } from './protocol.ts';
 import { inputMessage, legacy, readsAsTyped } from './protocol.ts';
-import { clipTail } from './text.ts';
+import { clipTail, escapeDisplay } from './text.ts';
 
 export type Part = { type?: string; text?: string; thinking?: string; redacted?: boolean; id?: string; name?: string; arguments?: unknown };
 export type Message = {
@@ -120,12 +120,12 @@ export function update(snapshot: Snapshot, view: ConversationView, inputs: Input
       }
       if (Array.isArray(message.content)) for (const part of message.content) {
         if (part.type === 'toolCall' && part.id && part.name) tools.set(part.id, {
-          id: part.id, name: part.name, status: 'running', input: clip(JSON.stringify(part.arguments)), output: '', ...order(),
+          id: part.id, name: part.name, status: 'running', input: clip(escapeDisplay(JSON.stringify(part.arguments))), output: '', ...order(),
         });
       }
       if (message.role === 'toolResult' && message.toolCallId) {
         const tool = tools.get(message.toolCallId) ?? { id: message.toolCallId, name: 'tool', input: '', output: '', status: 'done' as const, ...order() };
-        tool.output = clip(messageText(message)); tool.status = message.isError ? 'error' : 'done'; tools.set(tool.id, tool);
+        tool.output = clip(escapeDisplay(messageText(message))); tool.status = message.isError ? 'error' : 'done'; tools.set(tool.id, tool);
       }
     }
   }
@@ -136,7 +136,7 @@ export function update(snapshot: Snapshot, view: ConversationView, inputs: Input
   } | undefined;
   for (const item of live?.tools ?? []) {
     const tool = tools.get(item.callId);
-    if (tool && item.output) tool.output = clip(item.output);
+    if (tool && item.output) tool.output = clip(escapeDisplay(item.output));
   }
   const retained = retain(messages);
   snapshot.messages = retained.messages;

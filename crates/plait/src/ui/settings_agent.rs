@@ -145,7 +145,7 @@ impl From<McpServer> for McpRow {
                 Some(McpTransport::Http) => "HTTP",
                 _ => "Unknown",
             },
-            hover: hover.join("\n").into(),
+            hover: plait_core::display_text::escape(&hover.join("\n")).into(),
             enabled: server.enabled,
             can_enable: server.can_enable,
             file: None,

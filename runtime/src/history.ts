@@ -4,7 +4,7 @@ import { fail } from './protocol.ts';
 import type { PendingInput } from './store.ts';
 import { messageText, reasoningText } from './transcript.ts';
 import type { Message } from './transcript.ts';
-import { clipHead, splitsCharacter } from './text.ts';
+import { clipHead, splitsCharacter, escapeDisplay } from './text.ts';
 
 /** UTF-16 units of one field carried inline, and of one `history_text` reply. */
 export const INLINE_UNITS = 65536;
@@ -71,10 +71,10 @@ function entryUnit(entry: EntryRecord, placed: Map<number, Placed>): Unit {
     if (Array.isArray(message.content)) for (const [part, content] of message.content.entries()) {
       if (content.type !== 'toolCall' || !content.id || !content.name) continue;
       const item: ToolItem = { type: 'tool', id: content.id, name: content.name, status: 'running', input: '', output: '' };
-      assign(item, 'input', JSON.stringify(content.arguments), `${ref}.input.${part}`);
+      assign(item, 'input', escapeDisplay(JSON.stringify(content.arguments)), `${ref}.input.${part}`);
       unit.items.push(item);
     }
-    if (message.role === 'toolResult' && message.toolCallId) unit.results.set(message.toolCallId, { text: messageText(message), error: !!message.isError, ref: `${ref}.output` });
+    if (message.role === 'toolResult' && message.toolCallId) unit.results.set(message.toolCallId, { text: escapeDisplay(messageText(message)), error: !!message.isError, ref: `${ref}.output` });
   }
   // A result is counted where it is stored; its tool item may sit in an older entry of the page.
   unit.bytes = bytes(unit.items) + [...unit.results.values()].reduce((sum, result) => sum + bytes(clipHead(result.text, INLINE_UNITS)), 0);
@@ -176,9 +176,9 @@ async function resolve(source: HistorySource, ref: string): Promise<string | und
   if (!message) return undefined;
   if (field === 'text') return message.role === 'user' || message.role === 'assistant' ? messageText(message) : undefined;
   if (field === 'reasoning') return message.role === 'assistant' ? reasoningText(message) : undefined;
-  if (field === 'output') return message.role === 'toolResult' ? messageText(message) : undefined;
+  if (field === 'output') return message.role === 'toolResult' ? escapeDisplay(messageText(message)) : undefined;
   const call = Array.isArray(message.content) ? message.content[Number(part)] : undefined;
-  return call?.type === 'toolCall' ? JSON.stringify(call.arguments) : undefined;
+  return call?.type === 'toolCall' ? escapeDisplay(JSON.stringify(call.arguments)) : undefined;
 }
 /** One bounded part of a field too large for its history item. */
 export async function historyText(source: HistorySource, ref: string, offset: number) {

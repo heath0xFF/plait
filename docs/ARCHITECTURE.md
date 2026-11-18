@@ -318,7 +318,7 @@ live and historical rows retain `mcp:server/tool` across restarts.
 `PipeTransport` connects to `plait-host mcp-server`; the Rust guardian owns the
 stdio process group, writer leases, and a separate lifetime pipe. The stdio
 server cannot inherit private descriptors. Sandboxed servers use the command
-filesystem profile with network permission added; trusted servers use the
+filesystem profile with IP networking and the exact system DNS socket added; trusted servers use the
 shared login environment. Streamable HTTP uses bounded fetches with no redirects
 or OAuth provider. Sampling and elicitation are declined by the pinned client.
 `mcp/secrets.ts` scrubs resolved configured credentials of at least eight
