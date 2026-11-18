@@ -4,7 +4,12 @@ use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 
 pub fn escape(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
-    for character in text.chars() {
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        // A carriage return that is part of a line ending is not content.
+        if character == '\r' && characters.peek() == Some(&'\n') {
+            continue;
+        }
         if matches!(
             character.general_category(),
             GeneralCategory::Format
@@ -36,5 +41,11 @@ mod tests {
             ),
             "safe\\u202edelete\\u200b\\u0085\\u2028\\u2066\\ufeff\\udb40\\udc01\n\t🙂"
         );
+    }
+
+    #[test]
+    fn a_line_ending_keeps_no_carriage_return_and_a_lone_one_stays_visible() {
+        assert_eq!(super::escape("one\r\ntwo\r\n"), "one\ntwo\n");
+        assert_eq!(super::escape("12%\r34%"), "12%\\u000d34%");
     }
 }

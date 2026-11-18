@@ -41,6 +41,7 @@ export const customTitle = (text: string) => plain(text, 200);
 
 /** Keep layout controls visible in approvals and tool data, preserving ordinary newlines/tabs. */
 export function escapeDisplay(value: string): string {
-  return value.replace(/[\p{Cf}\p{Zl}\p{Zp}\u0000-\u0008\u000b-\u001f\u007f-\u009f]/gu,
+  // A carriage return that is part of a line ending is not content.
+  return value.replace(/\r\n/g, '\n').replace(/[\p{Cf}\p{Zl}\p{Zp}\u0000-\u0008\u000b-\u001f\u007f-\u009f]/gu,
     character => character.split('').map(unit => '\\u' + unit.charCodeAt(0).toString(16).padStart(4, '0')).join(''));
 }

@@ -76,6 +76,9 @@ test('tool inputs and results escape layout controls in snapshots and full histo
   const dangerous = 'safe\u202edelete\u200b\u0085\u2028\u2066\ufeff';
   const result = escapeDisplay(dangerous);
   assert.equal(result, 'safe\\u202edelete\\u200b\\u0085\\u2028\\u2066\\ufeff');
+  // The carriage return of a line ending is not content; a lone one stays visible.
+  assert.equal(escapeDisplay('one\r\ntwo\r\n'), 'one\ntwo\n');
+  assert.equal(escapeDisplay('12%\r34%'), '12%\\u000d34%');
   const model = [{ role: 'assistant', content: [{ type: 'toolCall', id: 'danger', name: 'mcp:docs/echo', arguments: { text: dangerous } }] },
     { role: 'toolResult', toolCallId: 'danger', content: dangerous }];
   const state = snapshot(); update(state, { entries: [{ id: 1, model }], docs: {} } as unknown as ConversationView);
