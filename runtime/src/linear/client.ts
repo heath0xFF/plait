@@ -389,6 +389,8 @@ export class LinearClient {
   async listTeams(apiKey: string, signal?: AbortSignal): Promise<LinearQueryResult<LinearTeam[]>> {
     const sanitize = makeSanitizer(apiKey);
     const teams: LinearTeam[] = [];
+    const seenTeamIds = new Set<string>();
+    const seenCursors = new Set<string>();
     let after: string | null = null;
     let partial = false;
     for (let page = 0; page < MAX_TEAM_PAGES && teams.length < LINEAR_MAX_TEAMS; page++) {
@@ -407,7 +409,8 @@ export class LinearClient {
         const id = sanitize.text(obj.id, FIELD_LIMITS.id);
         const key = sanitize.text(obj.key, FIELD_LIMITS.key);
         const name = sanitize.text(obj.name, FIELD_LIMITS.name);
-        if (!id || !key) continue;
+        if (!id || !key || seenTeamIds.has(id)) continue;
+        seenTeamIds.add(id);
         const statesObj = asObject(obj.states);
         const states = asArray(statesObj?.nodes)
           .slice(0, LINEAR_MAX_STATES)
@@ -417,7 +420,8 @@ export class LinearClient {
         teams.push({ id, key, name, states });
       }
       const info = parsePageInfo(container.pageInfo, sanitize);
-      if (!info.hasMore || !info.nextCursor) break;
+      if (!info.hasMore || !info.nextCursor || seenCursors.has(info.nextCursor)) break;
+      seenCursors.add(info.nextCursor);
       after = info.nextCursor;
     }
     return { data: teams, partial, warning: partial ? PARTIAL_DATA_WARNING : null };

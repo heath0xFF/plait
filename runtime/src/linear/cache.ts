@@ -191,7 +191,11 @@ export class LinearCache {
   saveTeams(teams: LinearTeam[], cachedAt: number): void {
     this.transaction(() => {
       this.db.prepare('DELETE FROM linear_cache_teams').run();
-      const insert = this.db.prepare('INSERT INTO linear_cache_teams(team_id, payload, cached_at) VALUES (?, ?, ?)');
+      const insert = this.db.prepare(`
+        INSERT INTO linear_cache_teams(team_id, payload, cached_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(team_id) DO UPDATE SET payload=excluded.payload, cached_at=excluded.cached_at
+      `);
       for (const team of teams) insert.run(team.id, JSON.stringify(team), cachedAt);
       this.db.prepare('INSERT INTO linear_cache_meta(key, cached_at) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET cached_at=excluded.cached_at')
         .run(TEAMS_META_KEY, cachedAt);

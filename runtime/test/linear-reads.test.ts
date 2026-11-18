@@ -570,3 +570,33 @@ test('project binding from a prior workspace is never served after sign-out or w
   assert.equal(afterSwitch.ok, true);
   assert.equal(afterSwitch.result.binding, null, 'workspace 1 binding must not be served under workspace 2');
 });
+
+test('linear_list_teams stops on repeated cursor and deduplicates team IDs without crashing', async t => {
+  const h = await setupHarness(t);
+  assert.equal((await h.call({ op: 'linear_set_key', key: h.fake.validKey })).ok, true);
+
+  const reqBefore = h.fake.requests.length;
+  for (let i = 0; i < 15; i++) {
+    h.fake.enqueueFault((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        data: {
+          teams: {
+            nodes: [
+              { id: 'team-loop', key: 'LOOP', name: 'Loop Team', states: { nodes: [] } },
+              { id: 'team-loop', key: 'LOOP', name: 'Loop Team Duplicate', states: { nodes: [] } },
+            ],
+            pageInfo: { hasNextPage: true, endCursor: 'STUCK_CURSOR' },
+          },
+        },
+      }));
+      return true;
+    });
+  }
+
+  const reply = await h.call({ op: 'linear_list_teams' });
+  assert.equal(reply.ok, true, JSON.stringify(reply));
+  assert.equal(reply.result.teams.length, 1);
+  assert.equal(reply.result.teams[0].id, 'team-loop');
+  assert(h.fake.requests.length - reqBefore <= 2, `expected repeated cursor to stop early, got ${h.fake.requests.length - reqBefore} requests`);
+});
