@@ -602,10 +602,11 @@ export class LinearClient {
     const errors = asArray(envelope.errors).filter((item): item is GraphQlError => asObject(item) !== null);
     const data = asObject(envelope.data);
 
-    // Auth and rate-limit errors always take priority even on HTTP 200 or 400.
-    if (errors.length > 0 && !data) {
-      throw classifyGraphQlErrors(errors, mode, response.headers, this.now())
-        ?? new LinearError('invalid_request', 'Linear rejected the request.');
+    // Auth and rate-limit errors always take priority even on HTTP 200 with non-null data.
+    if (errors.length > 0) {
+      const classified = classifyGraphQlErrors(errors, mode, response.headers, this.now());
+      if (classified && classified.kind !== 'invalid_request') throw classified;
+      if (!data) throw classified ?? new LinearError('invalid_request', 'Linear rejected the request.');
     }
     if (response.status === 400) {
       throw classifyGraphQlErrors(errors, mode, response.headers, this.now())

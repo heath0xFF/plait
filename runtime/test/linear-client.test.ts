@@ -265,3 +265,41 @@ test('LinearAuthStore does not write the key into any sibling file or readable b
   await authStore.remove();
   await assert.rejects(() => readFile(join(dir, 'linear-auth.json')), { code: 'ENOENT' });
 });
+
+test('LinearClient throws auth and rate-limit GraphQL errors on HTTP 200 even beside non-null data', async t => {
+  const fake = new FakeLinearServer();
+  const endpoint = await fake.start();
+  t.after(() => fake.close());
+  const client = new LinearClient({ endpoint });
+
+  // HTTP 200 with AUTHENTICATION_ERROR beside non-null empty issues list must throw key_rejected.
+  fake.enqueueFault((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      data: { issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+      errors: [{ message: 'Authentication required', extensions: { code: 'AUTHENTICATION_ERROR' } }],
+    }));
+    return true;
+  });
+  await assert.rejects(() => client.listIssues(fake.validKey, { teamId: 'team-pla', filter: 'active' }), (error: unknown) => {
+    assert(error instanceof LinearError);
+    assert.equal(error.kind, 'key_rejected');
+    return true;
+  });
+
+  // HTTP 200 with RATELIMITED beside non-null data must throw rate_limited with Retry-After seconds.
+  fake.enqueueFault((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json', 'retry-after': '22' });
+    res.end(JSON.stringify({
+      data: { issues: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+      errors: [{ message: 'Rate limited', extensions: { code: 'RATELIMITED' } }],
+    }));
+    return true;
+  });
+  await assert.rejects(() => client.listIssues(fake.validKey, { teamId: 'team-pla', filter: 'active' }), (error: unknown) => {
+    assert(error instanceof LinearError);
+    assert.equal(error.kind, 'rate_limited');
+    assert.equal(error.retryAfterSeconds, 22);
+    return true;
+  });
+});
