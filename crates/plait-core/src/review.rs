@@ -132,3 +132,6 @@ mod tests {
         assert_eq!(text.matches("+x").count(), QUOTE_LIMIT);
     }
 }
+
+/// Immutable historical Changes selection.
+pub mod recorded;

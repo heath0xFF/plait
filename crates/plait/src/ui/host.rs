@@ -126,6 +126,7 @@ impl Plait {
             self.navigation.error =
                 Some("Thread change not confirmed. Refresh to check before trying again.".into());
         }
+        self.turn_review.generation += 1;
         self.host.reconnect();
         self.sync_composer(cx);
         self.host_request(
@@ -138,6 +139,7 @@ impl Plait {
                 Ok(status) => {
                     if this.host.apply_status(this.host.epoch, status) {
                         this.load_threads(window, cx);
+                        this.refresh_turn_review(cx);
                         if let Some(id) = this.host.selected.clone() {
                             this.watch_thread(id, window, cx);
                         }
@@ -206,6 +208,7 @@ impl Plait {
         window.focus(&self.focus, cx);
         self.host_watch = None;
         self.images = Default::default();
+        self.clear_turn_review();
         self.host.select(Some(id.clone()));
         self.history = Default::default();
         self.settings_open = false;
@@ -329,7 +332,16 @@ impl Plait {
                                     cx.notify();
                                     return false;
                                 }
+                                let review_changed = previous.as_ref().is_none_or(|old| {
+                                    this.host.snapshot.as_ref().is_some_and(|new| {
+                                        old.status != new.status
+                                            || old.records_revision != new.records_revision
+                                    })
+                                });
                                 this.turn_records_snapshot(window, cx);
+                                if review_changed {
+                                    this.refresh_turn_review(cx);
+                                }
                                 this.conversation_changed(window, cx);
                                 this.record_snapshot(cx);
                                 this.thread_files_snapshot(cx);
@@ -383,6 +395,7 @@ impl Plait {
         self.host_watch = None;
         self.host.connected = false;
         self.host.error = Some(error.to_string());
+        self.refresh_turn_review(cx);
         self.sync_composer(cx);
         cx.notify();
     }

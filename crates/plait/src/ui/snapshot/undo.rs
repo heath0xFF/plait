@@ -18,7 +18,7 @@ use std::{
     },
 };
 
-fn record(id: &str, requests: &[&str], state: &str) -> Value {
+pub(super) fn record(id: &str, requests: &[&str], state: &str) -> Value {
     json!({"id":id,"request_ids":requests,"request_ids_offset":0,"request_ids_total":requests.len(),"kind":"turn","undoes":null,"state":state,"head_moved":false,"after_restart":false,
         "paths":[{"path":"src/review.rs","change":"modified","added":3,"removed":1},{"path":"README.md","change":"modified","added":2,"removed":0},{"path":"src/generated.rs","change":"added","added":12,"removed":0},{"path":"notes/plan.toml","change":"added","added":2,"removed":0}],"paths_offset":0,"paths_total":4,
         "not_covered":[{"path":"build/","reason":"ignored_directory"},{"path":"vendor/","reason":"nested_repository"}],"not_covered_offset":0,"not_covered_total":2,"created_at":1})
@@ -26,7 +26,7 @@ fn record(id: &str, requests: &[&str], state: &str) -> Value {
 fn reply(state: &str, id: &str) -> Value {
     json!({"state":state,"changed_since":if state == "blocked" { vec!["src/review.rs"] } else {vec![]},"changed_since_total":if state == "blocked" {1} else {0},"not_covered":[{"path":"build/","reason":"ignored_directory"}],"not_covered_total":1,"record_id":id,"after_restart":false})
 }
-fn prepare(harness: &mut Harness, repository: &Path) {
+pub(super) fn prepare(harness: &mut Harness, repository: &Path) {
     harness.connect(repository, false);
     harness.change_snapshot(|s| {
         s.status = ThreadStatus::Idle;
@@ -84,7 +84,7 @@ fn prepare(harness: &mut Harness, repository: &Path) {
         inject(plait, data);
     });
 }
-fn inject(plait: &mut Plait, data: Vec<Value>) {
+pub(super) fn inject(plait: &mut Plait, data: Vec<Value>) {
     let snapshot = plait.host.snapshot.as_ref().unwrap();
     plait.turn_records.inject(
         data.into_iter()
@@ -95,7 +95,7 @@ fn inject(plait: &mut Plait, data: Vec<Value>) {
         plait.host.watch_epoch,
     );
 }
-fn wait(harness: &mut Harness, done: impl Fn(&Plait) -> bool) {
+pub(super) fn wait(harness: &mut Harness, done: impl Fn(&Plait) -> bool) {
     let end = Instant::now() + Duration::from_secs(10);
     loop {
         harness.settle();
@@ -110,7 +110,7 @@ fn wait(harness: &mut Harness, done: impl Fn(&Plait) -> bool) {
         std::thread::sleep(Duration::from_millis(5));
     }
 }
-fn setup(name: &str) -> (PathBuf, PathBuf, Harness) {
+pub(super) fn setup(name: &str) -> (PathBuf, PathBuf, Harness) {
     let scratch = PathBuf::from("/tmp").join(format!("plait-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&scratch);
     let repository = fixture_repository(&scratch);
@@ -120,14 +120,14 @@ fn setup(name: &str) -> (PathBuf, PathBuf, Harness) {
 }
 
 /// A private, owner-only socket using the real Rust client and async UI paths.
-struct Host {
+pub(super) struct Host {
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
-    requests: Arc<Mutex<Vec<Value>>>,
+    pub(super) requests: Arc<Mutex<Vec<Value>>>,
     socket: PathBuf,
 }
 impl Host {
-    fn start(mut answer: impl FnMut(&Value) -> Option<Value> + Send + 'static) -> Self {
+    pub(super) fn start(mut answer: impl FnMut(&Value) -> Option<Value> + Send + 'static) -> Self {
         let store = PathBuf::from(std::env::var_os("PLAIT_HOST_STORE").unwrap());
         std::fs::create_dir_all(&store).unwrap();
         std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o700)).unwrap();

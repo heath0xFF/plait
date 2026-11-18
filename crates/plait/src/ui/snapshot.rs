@@ -45,6 +45,7 @@ mod branches;
 mod find;
 mod mcp;
 mod showcase;
+mod turn_review;
 mod undo;
 mod ways_out;
 
@@ -2033,6 +2034,7 @@ fn walk(output: Option<&Path>) {
         reading_walk(&mut harness, &repository, suffix);
         find::find_walk(&mut harness, &repository, suffix);
         undo::undo_walk(&mut harness, &repository, suffix);
+        turn_review::walk(&mut harness, &repository, suffix);
         history_walk(&mut harness, &repository, suffix);
         tool_cards_walk(&mut harness, &repository, suffix);
         draft_walk(&mut harness, &repository, suffix);

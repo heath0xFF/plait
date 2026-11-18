@@ -111,11 +111,14 @@ pub struct File {
     pub path: PathBuf,
     pub name: String,
     pub counts: String,
+    pub review_detail: String,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Line {
     /// Original run identity; stable across undo and redo.
     pub run: String,
+    /// Exact record whose paths are displayed; independent of the undo target.
+    pub displayed: String,
     /// The usable leaf of the undo chain, never the provisional before ID.
     pub target: Option<String>,
     pub availability: Availability,
@@ -124,6 +127,9 @@ pub struct Line {
     pub files: Vec<File>,
     pub not_covered: Vec<Uncovered>,
     pub detail: String,
+    pub review_detail: String,
+    pub more_label: String,
+    pub more_detail: String,
     pub after_restart: bool,
     pub head_moved: bool,
 }
@@ -183,6 +189,17 @@ fn line(
                 .unwrap_or(file.path.as_os_str())
                 .to_string_lossy()
                 .replace(['\n', '\r', '\t'], " "),
+            review_detail: if current.kind == RecordKind::Undo {
+                format!("Review {} restored by this undo.", file.path.display())
+            } else {
+                match (file.added, file.removed) {
+                    (Some(a), Some(r)) => format!(
+                        "Review {} recorded during this turn (+{a} −{r}).",
+                        file.path.display()
+                    ),
+                    _ => format!("Review {} recorded during this turn.", file.path.display()),
+                }
+            },
             counts: match (file.added, file.removed) {
                 (Some(a), Some(r)) => format!("+{a} −{r}"),
                 _ => String::new(),
@@ -249,8 +266,23 @@ fn line(
             ));
         }
     }
+    let review_detail = match availability {
+        Availability::Ready => "Review this turn's recorded changes.",
+        Availability::Recording => "The host is still recording this turn.",
+        Availability::Failed => "This turn's after record could not be made.",
+        Availability::Unavailable => {
+            "This record is no longer retained. Turn records are kept for 30 days."
+        }
+    }
+    .into();
+    let more_label = format!("{} more", files.len().saturating_sub(3));
+    let more_detail = format!("Review all {} files in this record.", files.len());
     Line {
+        review_detail,
+        more_label,
+        more_detail,
         run: original.id.clone(),
+        displayed: current.id.clone(),
         target: (availability == Availability::Ready).then(|| current.id.clone()),
         availability,
         undone: depth % 2 == 1,

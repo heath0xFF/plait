@@ -375,6 +375,20 @@ impl Plait {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let run = &line.run;
+        let target =
+            self.host
+                .selected
+                .as_ref()
+                .map(|thread| plait_core::review::recorded::Target {
+                    thread: thread.clone(),
+                    checkout: self.host.checkout.clone(),
+                    record: line.displayed.clone(),
+                    original: line.run.clone(),
+                    path: None,
+                });
+        let available = line.availability == Availability::Ready;
+        let older = self.turn_review.older;
+
         let refusal = self.undo_refusal(line);
         let note = self
             .turn_records
@@ -461,9 +475,15 @@ impl Plait {
                     .child("Undone"),
             );
         } else if let Some(steps) = line.steps {
-            content = content.child(div().flex_shrink_0().text_color(rgb(colors().muted)).child(
-                format!("{steps} {}", if steps == 1 { "step" } else { "steps" }),
-            ));
+            let target = target.clone();
+            let review_detail = line.review_detail.clone();
+            content = content.child(button(SharedString::from(format!("review-steps-{run}")),
+                if older { "Older host".into() } else { format!("{steps} {}", if steps == 1 { "step" } else { "steps" }) })
+                .h(px(22.)).px_0().flex_shrink_0().text_color(rgb(colors().muted))
+                .aria_label(if older { "Turn review needs a newer host." } else { "Review this turn's recorded changes" })
+                .disabled(!available)
+                .tooltip(move |_, cx| cx.new(|_| TextTooltip(if older { "Turn review needs a newer host. Current Changes and supported undo remain available.".into() } else { review_detail.clone() })).into())
+                .on_activate(cx,move |this,window,cx| { if available && let Some(target)=&target { this.open_turn_review(target.clone(),window,cx); } }));
         }
         content = content
             .child(
@@ -473,6 +493,15 @@ impl Plait {
                     .gap(px(4.))
                     .children(line.files.iter().take(3).map(|file| {
                         let path = file.path.clone();
+                        let target = target.clone().map(|mut target| {
+                            target.path = Some(path.clone());
+                            target
+                        });
+                        let detail = if available {
+                            file.review_detail.clone()
+                        } else {
+                            line.review_detail.clone()
+                        };
                         button(
                             SharedString::from(format!("run-file-{run}-{}", path.display())),
                             "",
@@ -482,11 +511,9 @@ impl Plait {
                         .h(px(22.))
                         .px_0()
                         .gap(px(3.))
-                        .aria_label(format!(
-                            "Show {} in Changes, {}",
-                            path.display(),
-                            file.counts
-                        ))
+                        .aria_label(file.review_detail.clone())
+                        .disabled(!available)
+                        .tooltip(move |_, cx| cx.new(|_| TextTooltip(detail.clone())).into())
                         .child(
                             div()
                                 .min_w_0()
@@ -504,14 +531,63 @@ impl Plait {
                                 .child(file.counts.clone()),
                         )
                         .on_activate(cx, move |this, window, cx| {
-                            this.open_thread_file(path.clone(), window, cx)
+                            if !available {
+                                return;
+                            }
+                            if older {
+                                this.open_thread_file(path.clone(), window, cx);
+                            } else if let Some(target) = &target {
+                                this.open_turn_review(target.clone(), window, cx);
+                            }
                         })
                     }))
-                    .when(line.files.len() > 3, |el| {
+                    .when(line.files.is_empty(), |el| {
+                        let target = target.clone();
                         el.child(
-                            div()
-                                .flex_shrink_0()
-                                .child(format!("and {} more", line.files.len() - 3)),
+                            button(
+                                SharedString::from(format!("review-empty-{run}")),
+                                if older { "Older host" } else { "Changes" },
+                            )
+                            .h(px(22.))
+                            .px_0()
+                            .text_color(rgb(colors().blue))
+                            .underline()
+                            .aria_label("Review this turn's recorded changes")
+                            .disabled(!available)
+                            .on_activate(
+                                cx,
+                                move |this, window, cx| {
+                                    if available && let Some(target) = &target {
+                                        this.open_turn_review(target.clone(), window, cx);
+                                    }
+                                },
+                            ),
+                        )
+                    })
+                    .when(line.files.len() > 3, |el| {
+                        let target = target.clone();
+                        let detail = line.more_detail.clone();
+                        el.child(
+                            button(
+                                SharedString::from(format!("review-more-{run}")),
+                                line.more_label.clone(),
+                            )
+                            .h(px(22.))
+                            .px_0()
+                            .flex_shrink_0()
+                            .text_color(rgb(colors().blue))
+                            .underline()
+                            .aria_label(line.more_detail.clone())
+                            .tooltip(move |_, cx| cx.new(|_| TextTooltip(detail.clone())).into())
+                            .disabled(!available)
+                            .on_activate(
+                                cx,
+                                move |this, window, cx| {
+                                    if available && let Some(target) = &target {
+                                        this.open_turn_review(target.clone(), window, cx);
+                                    }
+                                },
+                            ),
                         )
                     }),
             )

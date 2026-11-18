@@ -241,6 +241,7 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.clear_turn_review();
         let found = self.state.repository.snapshot.ready().and_then(|snapshot| {
             let index = snapshot
                 .changes

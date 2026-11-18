@@ -16,6 +16,9 @@ impl Plait {
             // Another app may have changed the open file.
             if window.is_window_active() {
                 this.check_file(cx);
+                if this.tab == super::Workspace::Changes {
+                    this.refresh_turn_review(cx);
+                }
             }
             if window.is_window_active()
                 && !this.settings_open
@@ -125,6 +128,15 @@ impl Plait {
                         }
                         match result {
                             Ok(live) => {
+                                let review_changed = live.iter().any(|new| {
+                                    new.checkout == this.host.checkout
+                                        && this
+                                            .host
+                                            .threads
+                                            .iter()
+                                            .find(|old| old.id == new.id)
+                                            .is_none_or(|old| old.status != new.status)
+                                });
                                 if let Err(error) =
                                     navigation::merge_threads(&mut this.host.threads, live)
                                 {
@@ -134,6 +146,9 @@ impl Plait {
                                         cx,
                                     );
                                     return false;
+                                }
+                                if review_changed {
+                                    this.refresh_turn_review(cx);
                                 }
                                 this.apply_thread_activity(false, window, cx);
                                 this.rebuild_projects(cx);

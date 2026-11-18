@@ -1552,3 +1552,61 @@ patch after a commit and undo, and check same-checkout cross-thread reads.
 Pagination tests check complete assembly, repeat offsets, frame bounds, invalid
 offsets and five-minute expiry. The existing version 1–5 suites remain required.
 No installed-app or native-window acceptance is claimed for these operations.
+
+### Recorded Changes navigation
+
+The current source adds the desktop recorded view; preview.14 did not include
+it. Core tests keep original run identity separate from the displayed undo
+leaf, preserve deleted paths, and reject every changed read-stamp member.
+Socket-backed desktop tests cover original selection after a later run and
+undo, zero net paths, the all-files target used by step count and N more,
+partial-undo Original/Restored lists, clean/deleted files, picker Enter/Escape
+and focus restoration, old-host fallback, and incomplete-page refusal. The
+reply tests queue reads, invalidate thread, checkout, connection, watch,
+repository epoch, generation, comparison or path, and reject the completed
+metadata/diff/page sequence rather than install stale data. Preference-writing
+UI tests use the isolated home and host store. The final `scripts/check.sh`
+run exited 0: formatting, workspace Clippy with warnings denied, 642 Rust
+tests, 356 runtime tests (including the real macOS sandbox), and the release
+build passed.
+
+`bash scripts/snapshots.sh <output-directory>` renders the new `turn-recorded`,
+`turn-recorded-clean`, `turn-recorded-empty`, `turn-recorded-loading`,
+`turn-recorded-unavailable`, `turn-review-old-host`, `turn-recorded-undo`,
+`turn-recorded-long-path`, and `turn-recorded-light` scenes. All were inspected
+at 1380 and 900 points. The final scenes keep comparison controls visible when
+a path truncates, omit bulk staging in Recorded, and give the clean fixture
+consistent current-status counts. These are injected test scenes, not real
+agent runs.
+
+On Apple M5 Pro, macOS 26.6.2, Apple Git 2.54.0 and Node 26.12.0, a release
+`turn_diff` handler read a 5,000-changed-line file (2,500 removals and 2,500
+additions) in a 50,000-file checkout. After a 48.12 ms initial request, seven
+warm requests had a **41.60 ms median**, **38.02–44.62 ms** range. The measured
+boundary includes root validation, SQLite lookup, the real sandboxed helper,
+helper decoding and immutable page construction; it excludes socket framing,
+transport and desktop patch preparation. The patch was 275,105 bytes, and the
+JSON result was 368,277 bytes. The helper's counter measured **two Git
+processes** (one batch blob read and one blob comparison); its supervisor,
+worker and sandbox launcher add three, for **five child processes**. An
+absent side can require an additional private empty-blob process. This is a
+warm-cache fixture measurement, not a cold-disk or whole-application latency
+claim; other development work was running.
+
+`scripts/bench-frames.sh` now includes the recorded view with a prepared
+5,000-line patch. At 1380 × 860 points in a release build, 30 frames per
+scenario measured the following CPU costs in `Window::draw` (render, layout,
+prepaint and paint):
+
+| Recorded view | Median | p95 | Maximum |
+| --- | ---: | ---: | ---: |
+| Top | 0.79 ms | 1.27 ms | 1.40 ms |
+| Middle | 0.82 ms | 0.88 ms | 0.93 ms |
+| Wheel scrolling | 1.81 ms | 2.06 ms | 2.48 ms |
+
+The render method itself measured 0.02 ms. These measurements exclude GPU
+submission, native event delivery and host I/O. No installed app was checked
+or launched for this feature; native-window acceptance, VoiceOver and live
+model runs remain unverified. The broader attribution and staging benchmark
+matrix belongs to later stages; this measurement covers one changed path,
+not 50,000 changed paths or large retained histories.

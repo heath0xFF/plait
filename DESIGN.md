@@ -56,8 +56,10 @@ conversation keeps a readable minimum width.
   a filled node, including one with no answer. Its record is drawn there: the
   step count and the files the host recorded changing, including
   command writes. Three file names and a count of the rest stay on one line;
-  each name opens in Changes, blue and underlined, with added and removed
-  lines in hint color. A run includes its steering messages and closes only
+  each name opens that exact record's before/after diff in Changes, blue and
+  underlined, with added and removed lines in hint color. The step count and
+  underlined N more open all files in the record; an empty run has a Changes
+  link. Files remain reviewable after committing, later runs, or undo. A run includes its steering messages and closes only
   once, at its last message or tool; a queued follow-up is another run.
   Undo sits at the right end, always visible on the latest run and shown on
   hover or keyboard focus on earlier ones. One press applies it. Its line
@@ -231,6 +233,20 @@ conversation keeps a readable minimum width.
   (another Git write, or a thread running in this checkout) the name stays
   readable in hint color, hover says why, and the palette names the reason
   with every row unavailable.
+
+- **Recorded Changes.** A 28-point scope row below the branch names All changes,
+  Turn plus a short stable ID, or Restored. Its picker offers the current
+  thread's retained records and Original for an undo's source run; it does not
+  imply an all-thread catalogue. Hover gives the request, time and thread.
+  Recorded lists every saved path, including deleted and now-clean files, with
+  recorded counts and current layer availability in accessible hover text.
+  Recorded/Current says which comparison is visible. Recorded uses the immutable
+  before/after bytes and has no file or hunk write buttons. Current restores the
+  ordinary Git sides and controls, or says No current changes. Switching files,
+  later runs and undo never silently replace the chosen record. Loading,
+  Unavailable, Offline and Older host name the read's state; details and Retry
+  or Current explain the way forward. There are no origin labels, turn staging
+  or review-baseline controls yet. Opening a record never marks it reviewed.
 
 ## Tokens
 Colors are roles in one palette (`plait_core::theme::Palette`), so every theme

@@ -170,6 +170,7 @@ impl Plait {
             cx.notify();
             return;
         }
+        self.clear_turn_review();
         // A draft belongs to its checkout, including while another project is open.
         let drafting = self.draft_visible();
         self.capture_session(cx);

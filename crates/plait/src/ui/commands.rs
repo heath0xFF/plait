@@ -20,6 +20,8 @@ pub(super) enum Command {
     /// An application action, dispatched as its menu item or shortcut would be.
     Action(Box<dyn Action>),
     OpenThread(String),
+    ReviewAll,
+    ReviewRecord(plait_core::review::recorded::Target),
     SignIn(String),
     OpenProject(std::path::PathBuf),
     NewThread(ModelChoice),
@@ -65,6 +67,8 @@ impl Clone for Command {
         match self {
             Self::Action(action) => Self::Action(action.boxed_clone()),
             Self::OpenThread(id) => Self::OpenThread(id.clone()),
+            Self::ReviewAll => Self::ReviewAll,
+            Self::ReviewRecord(target) => Self::ReviewRecord(target.clone()),
             Self::OpenFile(path) => Self::OpenFile(path.clone()),
             Self::SwitchBranch(name) => Self::SwitchBranch(name.clone()),
             Self::CreateBranch(name) => Self::CreateBranch(name.clone()),
@@ -413,6 +417,12 @@ impl Plait {
             Command::SwitchBranch(name) => {
                 self.branch_write(plait_core::git::WriteOp::SwitchBranch(name), window, cx)
             }
+            Command::ReviewAll => {
+                self.clear_turn_review();
+                self.refresh_turn_review(cx);
+                cx.notify();
+            }
+            Command::ReviewRecord(target) => self.open_turn_review(target, window, cx),
             Command::CreateBranch(name) => {
                 self.branch_write(plait_core::git::WriteOp::CreateBranch(name), window, cx)
             }

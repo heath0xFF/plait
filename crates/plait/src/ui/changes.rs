@@ -285,6 +285,9 @@ impl Plait {
     }
 
     pub(super) fn file_panel(&self, compact: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        if !compact && self.turn_review.target.is_some() {
+            return self.recorded_file_panel(cx);
+        }
         let repo = &self.state.repository;
         let mut read = None;
         let body = match &repo.snapshot {
@@ -347,6 +350,7 @@ impl Plait {
                                     .child(home_relative(&snapshot.root)),
                             ),
                     )
+                    .when(!compact, |el| el.child(self.review_scope_button(cx)))
                     .child(if count == 0 {
                         empty(
                             "Working tree clean",
@@ -429,6 +433,7 @@ impl Plait {
         // The file and the side being shown come first, then what can be
         // done to that side.
         let lead = row()
+            .flex_wrap()
             .flex_1()
             .min_w(px(LEAD))
             .gap_2()
@@ -453,6 +458,9 @@ impl Plait {
                         )
                     }),
             )
+            .when(self.turn_review.target.is_some(), |el| {
+                el.child(self.recorded_switch(cx))
+            })
             .child(
                 segmented()
                     .flex_shrink_0()
@@ -898,14 +906,33 @@ impl Plait {
                     .bg(rgb(colors().rail))
                     .child(self.file_panel(false, cx)),
             )
-            .child(
-                column()
-                    .flex_1()
-                    .min_w_0()
-                    .min_h_0()
-                    .children(self.diff_header(cx))
-                    .child(self.diff_view(cx)),
-            )
+            .child(column().flex_1().min_w_0().min_h_0().child(
+                if self.turn_review.target.is_some() && !self.recorded_current_available() {
+                    column()
+                        .flex_1()
+                        .min_w_0()
+                        .min_h_0()
+                        .child(self.recorded_header(cx))
+                        .child(if self.turn_review.current {
+                            empty(
+                                "No current changes",
+                                "This file has no current staged or unstaged changes.",
+                            )
+                            .into_any_element()
+                        } else {
+                            self.recorded_diff(cx)
+                        })
+                        .into_any_element()
+                } else {
+                    column()
+                        .flex_1()
+                        .min_w_0()
+                        .min_h_0()
+                        .children(self.diff_header(cx))
+                        .child(self.diff_view(cx))
+                        .into_any_element()
+                },
+            ))
             .into_any_element()
     }
 }

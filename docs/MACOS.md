@@ -420,12 +420,46 @@ color until they meet a minimum contrast, so a few schemes look slightly crisper
 in Plait than elsewhere. A theme removed from the folder falls back to Plait's
 own.
 
+## Review a run
+
+The current source adds recorded review; it is not part of preview.14. Select a
+finished run's filename to read the before/after change saved by that run.
+Select its step count or **N more** for the complete file list. A run with no
+net file changes has a **Changes** link and says **No recorded changes**.
+Committed, clean and deleted files remain in this list while the record is
+retained. This view stays on the same record after later runs and undo.
+
+The scope below the branch is **Turn** plus the record's short ID. Open it to
+choose **All changes** or another retained record from this thread. An undo's
+closing line opens **Restored**, the files that undo actually restored; choose
+**Original** in the scope picker to see the run before undo. A partial undo's
+Restored list can be smaller than Original.
+
+**Recorded** compares saved bytes and offers no staging or discard controls.
+**Current** shows the same file's present Git changes, with the usual Staged
+and Unstaged sides; a clean file says **No current changes**. Neither comparison
+marks a file reviewed. The commit box still commits the current index. Origin
+labels, staging by turn, and review baselines are not built yet. Recorded changes describe an observed interval, not who
+wrote the bytes.
+
+**Loading** means the host read is pending. **Unavailable** explains a missing
+record or saved content; **Retry** requests it again. **Offline** can retain an
+already loaded diff, marked stale. With an older host, **Older host** says
+“Turn review needs a newer host”; **Current** returns to ordinary Git review.
+Existing current-file links and supported undo still work. Records remain
+subject to the host's 30-day retention.
+
+Refresh is event-driven: entering Changes, selecting a file or record, window
+activation, checkout run-state changes, a completed local Git write, or
+**Refresh** (**Cmd-R**). There is no periodic review probe.
+
 ## Undo a run
 
 With a version 5 host, each finished run ends with its tool-step count and the
 files the host recorded changing, including command writes. File links open
-Changes; the adjacent counts are lines added and removed. Three names fit on
-one line, with the remaining files counted. Hover previews up to 12 files and
+the exact recorded change in Changes when the host supports turn review; the
+adjacent counts are lines added and removed. Three names fit on one line, with
+an **N more** link to all recorded files. Hover previews up to 12 files and
 12 not-covered paths, with omitted counts.
 
 Press **Undo** at the line's right end, or **Cmd-Option-U** (Thread → Undo Last

@@ -400,11 +400,18 @@ selecting text and following a link, typing and streaming, the approval
 shortcuts, and the settings pages. It takes over the pointer, so a person runs
 it when away, before a release. It is a development tool, not part of the app.
 
-**M9 step 2, commit by turn.** Changes shows, for each changed hunk, whether the
-person made it or which turn did. A turn's changes can be staged on their own,
-leaving the person's work in progress unstaged. A hunk that no longer matches
-the turn's record is refused, as a hunk that moved is today. A finished turn's
-closing line opens what that turn changed.
+**M9 step 2, commit by turn — partly built in source, not released.** A
+finished run's closing line now opens that exact record's saved before/after
+change. Recorded Changes includes every retained path, even committed or clean
+files, and remains bound after later runs and undo. Recorded/Current and
+Original/Restored distinguish the comparisons. Additive host operations supply
+immutable diffs without changing protocol versions 1–5.
+
+Origins and staging by turn are not yet built. Their planned work is to show
+which current changes match a run and stage independently safe changes while
+preserving other work. Authorship wording and review semantics remain
+unsettled; the recorded view displays no origin or review control. A recorded
+interval by itself does not establish who wrote its bytes.
 
 **M9 step 3, since you last looked.** Plait remembers, for each file, the record
 the person last reviewed, and a file's diff can show only what changed since

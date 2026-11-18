@@ -1204,3 +1204,23 @@ uses the existing lifetime supervisor and a separate read sandbox. The runtime
 pins against pruning, then caches immutable bounded page documents. The desktop
 uses only the socket API; `host/review.rs` validates complete documents and
 prepares the existing virtualized patch model on the background executor.
+
+
+The desktop's `review/recorded.rs` holds plain record selection and reply
+identity, independent of GPUI. `ui/turn_review.rs` coordinates socket reads
+and installs only a complete file list and prepared patch. Original run ID,
+displayed record ID, and undo target are separate; watch updates never retarget
+an open recorded view. Current Git status does not determine its file list.
+File rows, scope descriptions and patches are prepared in background work;
+render builds only visible rows of the existing uniform lists.
+
+Reads are coalesced to one in flight. Completion checks thread, checkout,
+connection epoch, watch epoch, repository epoch, selection generation, record,
+path and comparison. Changing any member drops the whole reply. Entering
+Changes, selecting a file/run, regaining focus, a same-checkout run-state
+change, local Git write completion, and Refresh request fresh metadata; there
+is no review timer. An invalid-request probe identifies an older host, while
+other failures remain unavailable or offline. The desktop never opens the
+host store. The retained-record picker is limited to the current thread's v5
+list; current Git reads and writes continue through the existing repository
+queue. Recorded diffs expose no write controls.

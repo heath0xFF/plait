@@ -41,6 +41,7 @@ mod thread_controls;
 mod thread_files;
 mod tool_card;
 mod turn_records;
+mod turn_review;
 mod update;
 mod ways_out;
 mod window_bar;
@@ -167,6 +168,7 @@ pub struct Plait {
     /// Files the selected thread changed, above its composer.
     thread_files: thread_files::ThreadFiles,
     turn_records: turn_records::TurnRecords,
+    turn_review: turn_review::TurnReview,
     reveal: live_conversation::Reveals,
     approval_keys: live_conversation::ApprovalKeys,
     /// The command palette or model picker, above the workspace.
@@ -253,6 +255,7 @@ impl Plait {
             line_pick: None,
             thread_files: Default::default(),
             turn_records: Default::default(),
+            turn_review: Default::default(),
             reveal: Default::default(),
             approval_keys: Default::default(),
             overlay: None,
@@ -333,7 +336,12 @@ impl Plait {
             let (job, reply) = task.await;
             let _ = this.update(cx, |this, cx| {
                 let status = matches!(job, plait_core::state::Job::Status { .. });
+                let write = matches!(job, plait_core::state::Job::Write { .. });
                 this.state.repository.complete(job, reply);
+                if write {
+                    this.refresh_turn_review(cx);
+                }
+                this.sync_recorded_current(cx);
                 if status {
                     this.thread_files_status(cx);
                     this.check_file(cx);
@@ -381,6 +389,18 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let same_recorded_file = self.turn_review.current
+            && self.recorded_file().is_some_and(|recorded| {
+                self.state
+                    .repository
+                    .snapshot
+                    .ready()
+                    .and_then(|s| s.changes.get(file))
+                    .is_some_and(|current| current.path == recorded.path)
+            });
+        if !same_recorded_file {
+            self.clear_turn_review();
+        }
         self.show_file(file, mode, None, window, cx);
     }
 
@@ -402,11 +422,26 @@ impl Plait {
         }
         self.diff_scroll = UniformListScrollHandle::new();
         self.tab = Workspace::Changes;
+        self.refresh_turn_review(cx);
         self.pump(cx);
         cx.notify();
     }
 
     fn step_file(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(record) = &self.turn_review.record {
+            let count = record.files.len();
+            if count > 0 {
+                let selected = self.turn_review.selected.unwrap_or(0);
+                let next = if forward {
+                    (selected + 1) % count
+                } else {
+                    (selected + count - 1) % count
+                };
+                self.file_scroll.scroll_to_item(next, ScrollStrategy::Top);
+                self.select_recorded_file(next, window, cx);
+            }
+            return;
+        }
         let repo = &self.state.repository;
         let Some(snapshot) = repo.snapshot.ready() else {
             return;
@@ -433,6 +468,7 @@ impl Plait {
     fn refresh(&mut self, _: &Refresh, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
         self.fetch_turn_records(window, cx);
+        self.refresh_turn_review(cx);
         if !matches!(self.state.repository.snapshot, Load::Loading) {
             self.state.repository.refresh();
             self.pump(cx);
@@ -617,6 +653,9 @@ impl Plait {
             self.return_conversation_focus(window, cx);
         }
         self.tab = tab;
+        if tab == Workspace::Changes {
+            self.refresh_turn_review(cx);
+        }
         if tab == Workspace::History {
             self.state.repository.request_history();
             self.pump(cx);

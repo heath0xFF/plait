@@ -495,6 +495,17 @@ pub fn run() -> Vec<Row> {
         -60.,
     ));
 
+    turn_review::scene(&mut harness, &heavy, "ready", Some(big_diff(5_000)));
+    rows.push(harness.steady("recorded 5k-line diff, top"));
+    harness.update(|p, _, _| p.diff_scroll.scroll_to_item(2_500, ScrollStrategy::Top));
+    rows.push(harness.steady("recorded 5k-line diff, middle"));
+    rows.push(harness.scrolling(
+        "recorded 5k-line diff, scrolling",
+        point(px(900.), px(400.)),
+        -60.,
+    ));
+    harness.update(|p, _, _| p.clear_turn_review());
+
     // b. History: 5,000 commits, an injected 20k-line patch.
     harness.update(|plait, _, cx| {
         plait.tab = Workspace::History;

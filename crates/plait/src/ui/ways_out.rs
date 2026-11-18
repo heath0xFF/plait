@@ -117,6 +117,9 @@ impl Plait {
     /// The file selected in Changes, at the picked line when lines are
     /// picked, or else at the diff's first change.
     fn changes_target(&self) -> Option<Target> {
+        if self.turn_review.target.is_some() && !self.recorded_current_available() {
+            return None;
+        }
         let repo = &self.state.repository;
         let key = repo.selected.as_ref()?;
         let snapshot = repo.snapshot.ready()?;

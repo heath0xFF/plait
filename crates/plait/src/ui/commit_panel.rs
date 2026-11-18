@@ -340,19 +340,28 @@ impl Plait {
             .border_t_1()
             .border_color(rgb(colors().border))
             .children(self.sync_row(busy, cx))
-            .child(
-                row()
-                    .gap_1()
-                    .child(
-                        button("stage-all", "Stage all")
-                            .disabled(busy || changed == staged)
-                            .on_activate(cx, |this, _, cx| this.git_write(WriteOp::StageAll, cx)),
+            .when(
+                self.turn_review.target.is_none() || self.turn_review.current,
+                |el| {
+                    el.child(
+                        row()
+                            .gap_1()
+                            .child(
+                                button("stage-all", "Stage all")
+                                    .disabled(busy || changed == staged)
+                                    .on_activate(cx, |this, _, cx| {
+                                        this.git_write(WriteOp::StageAll, cx)
+                                    }),
+                            )
+                            .child(
+                                button("unstage-all", "Unstage all")
+                                    .disabled(busy || staged == 0)
+                                    .on_activate(cx, |this, _, cx| {
+                                        this.git_write(WriteOp::UnstageAll, cx)
+                                    }),
+                            ),
                     )
-                    .child(
-                        button("unstage-all", "Unstage all")
-                            .disabled(busy || staged == 0)
-                            .on_activate(cx, |this, _, cx| this.git_write(WriteOp::UnstageAll, cx)),
-                    ),
+                },
             )
             .child(
                 div()
