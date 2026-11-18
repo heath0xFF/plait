@@ -542,3 +542,31 @@ test('linear_sign_out or newer linear_set_key during in-flight linear_set_key pr
   assert.equal(olderReply.error.code, 'linear_not_signed_in');
   assert.equal((await h.call({ op: 'linear_auth_status' })).result.workspace_id, 'org-2');
 });
+
+test('project binding from a prior workspace is never served after sign-out or workspace switch', async t => {
+  const h = await setupHarness(t);
+  const repo = await makeRepo(h.dir, 'project-ws-isolation');
+
+  // Sign in to workspace 1, load teams, and bind repo to team-pla.
+  assert.equal((await h.call({ op: 'linear_set_key', key: h.fake.validKey })).ok, true);
+  assert.equal((await h.call({ op: 'linear_list_teams' })).ok, true);
+  const bound = await h.call({ op: 'linear_bind_project', checkout: repo, team_id: 'team-pla' });
+  assert.equal(bound.ok, true);
+  assert.equal(bound.result.binding.workspace_id, 'org-1');
+
+  // Sign out -> workspace 1 binding must not be served.
+  assert.equal((await h.call({ op: 'linear_sign_out' })).ok, true);
+  const afterSignOut = await h.call({ op: 'linear_get_project_binding', checkout: repo });
+  assert.equal(afterSignOut.ok, true);
+  assert.equal(afterSignOut.result.binding, null, 'project binding must not be served after sign-out');
+
+  // Re-sign-in to workspace 1, bind again, then switch directly to workspace 2 without signing out.
+  assert.equal((await h.call({ op: 'linear_set_key', key: h.fake.validKey })).ok, true);
+  assert.equal((await h.call({ op: 'linear_bind_project', checkout: repo, team_id: 'team-pla' })).ok, true);
+  h.fake.organization = { id: 'org-2', name: 'Other Workspace', urlKey: 'other' };
+  assert.equal((await h.call({ op: 'linear_set_key', key: h.fake.validKey })).ok, true);
+
+  const afterSwitch = await h.call({ op: 'linear_get_project_binding', checkout: repo });
+  assert.equal(afterSwitch.ok, true);
+  assert.equal(afterSwitch.result.binding, null, 'workspace 1 binding must not be served under workspace 2');
+});

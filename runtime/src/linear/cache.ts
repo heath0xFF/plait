@@ -354,9 +354,12 @@ export class LinearCache {
     });
   }
 
-  /** Clears all cached Linear API responses and write deduplication records (e.g. on sign-out). */
-  clearAll(): void {
+  /** Clears all cached Linear API responses and write deduplication records (and optionally project bindings). */
+  clearAll(options: { clearProjects?: boolean } = {}): void {
     this.transaction(() => {
+      if (options.clearProjects) {
+        this.db.prepare('DELETE FROM linear_projects').run();
+      }
       this.db.prepare('DELETE FROM linear_cache_meta').run();
       this.db.prepare('DELETE FROM linear_cache_teams').run();
       this.db.prepare('DELETE FROM linear_cache_issues').run();

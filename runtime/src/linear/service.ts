@@ -149,6 +149,7 @@ export class LinearService {
       if (this.authGeneration !== authGen || this.setKeySequence !== seq) {
         throw new LinearError('not_signed_in', 'Linear sign-in changed while the request was in flight.');
       }
+      const previous = await this.authStore.read().catch(() => null);
       const saved: StoredLinearAuth = {
         ...verified.data,
         api_key: apiKey,
@@ -159,7 +160,7 @@ export class LinearService {
       this.cacheGeneration++;
       this.keyRejected = false;
       this.inFlightWrites.clear();
-      this.store.linear.clearAll();
+      this.store.linear.clearAll({ clearProjects: previous !== null && previous.workspace_id !== saved.workspace_id });
       return formatAuthStatus(saved, false);
     });
   }
@@ -173,7 +174,7 @@ export class LinearService {
     this.inFlightWrites.clear();
     return this.serializeAuthMutation(async () => {
       await this.authStore.remove();
-      this.store.linear.clearAll();
+      this.store.linear.clearAll({ clearProjects: true });
       return formatAuthStatus(null, false);
     });
   }
@@ -267,7 +268,13 @@ export class LinearService {
   async getProjectBinding(rawCheckout: string): Promise<{ checkout: string; binding: LinearProjectBinding | null }> {
     const root = await checkout(rawCheckout);
     const identity = await rootIdentity(root);
-    return { checkout: root, binding: this.store.linear.getProjectBinding(root, identity) };
+    const auth = await this.authStore.read();
+    if (!auth) return { checkout: root, binding: null };
+    const binding = this.store.linear.getProjectBinding(root, identity);
+    if (binding && binding.workspace_id !== null && binding.workspace_id !== auth.workspace_id) {
+      return { checkout: root, binding: null };
+    }
+    return { checkout: root, binding };
   }
 
   async bindProject(

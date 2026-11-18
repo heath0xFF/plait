@@ -1959,7 +1959,9 @@ local client asks over the owner-only host socket.
   sibling temporary file and synced rename. Symlinks are refused, and loosened
   permissions are restored to `0600` on read. The key is never written to
   `host.sqlite`. `linear_sign_out` deletes `linear-auth.json` and clears all
-  Linear caches and recent write records.
+  Linear caches, project bindings, and recent write records. Switching to a key
+  for another workspace likewise clears caches, project bindings, and recent
+  write records so data from a previous workspace is never served.
 - **Host to desktop, never:** the API key, credential file paths, raw Linear
   HTTP bodies, or raw Linear response headers. Error messages are fixed host
   text; validation errors name the field and never repeat its value.
