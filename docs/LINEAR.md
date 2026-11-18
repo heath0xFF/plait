@@ -76,17 +76,39 @@ check its source before using its APIs.
 
 ## Decisions before implementation
 
-- Which workspace and team should supply issues? Is an existing Linear project
-  used, or should the person create one?
-- Is read-only issue selection sufficient for the first native version?
-- Should a thread support one source issue or several linked issues? One source
-  issue is the smaller first step.
-- Which sign-in and credential-storage design should the native integration use?
+Agreed:
+
+- **Native integration scope.** Native Linear support is agreed, beginning with
+  the host side in `runtime/`. The desktop view (a Linear tab) follows thread
+  tabs.
+- **Sign-in first step.** Start with a personal or restricted API key pasted in
+  Settings and stored by the host in its own private file (mode `0600`), never
+  in `host.sqlite` or any reply. Browser OAuth with PKCE comes later.
+- **Explicit writes.** Plait may perform two writes against Linear, each only
+  when the desktop asks on a person's action: posting a comment on an issue,
+  and moving an issue to another workflow state in its team. Nothing writes
+  automatically, and no agent, tool, or MCP server can reach these operations.
+- **Thread links.** One local source-issue link per thread, stored in the host
+  without writing to Linear.
+- **No issue-triggered automation.** Agents picking up issues on their own are
+  not agreed and stay outside this work.
+
+Still open:
+
+- Browser OAuth client registration, PKCE callback handling, and token refresh
+  for distributed builds.
+- Which default workspace, team, and optional Linear project selectors to
+  present once the desktop Linear tab is built.
+- Whether a thread will ever need more than one linked issue, and whether
+  thread summaries should carry a linked-issue field in a future protocol
+  version when the desktop stage lands.
+- Live verification against Linear's GraphQL and MCP endpoints.
 
 Using Linear MCP and building native issue navigation are separate steps. The
-former can validate the workflow without committing to the latter. Scheduled
-runs, issue-triggered execution, and Linear agent delegation remain outside this
-proposal; they require the automation permission design in the roadmap.
+former can validate the workflow without waiting for the desktop view.
+Scheduled runs, issue-triggered execution, and Linear agent delegation remain
+outside this agreement; they require the automation permission design in the
+roadmap.
 
 ## Sources
 
