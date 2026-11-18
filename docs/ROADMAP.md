@@ -508,6 +508,18 @@ names what has to be settled first.
 - **Linear.** Start a thread from an issue, and keep the two pointing at each
   other. To settle: whether Plait writes back to the issue, and which of the
   agent's own Linear tools already cover it.
+- **Automations.** A thread that starts by itself: first on a schedule, later
+  also when something happens in Git or when an issue arrives. An automation
+  is created with everything its runs need (the project, the harness and
+  model, the message, and its permissions), because nobody is there to approve
+  a step. The host would start it, since the host already outlives the window.
+  Today nothing starts by itself, and the
+  [host contract](HOST.md#internal-authorization-boundary) requires a
+  permission design before that changes. To settle: where a run's results wait
+  for the person and how they are told; what a run does when a step needs more
+  than the permissions it was created with; what happens to a run whose time
+  came while the Mac was asleep or the host was down; and how a run that
+  starts in a checkout the person is working in shares it with them.
 - **A browser.** See a page the work produced, or one the agent needs, without
   leaving the window. Previews (M5) are the planned first step. To settle:
   whether the agent can drive it, which changes what a thread can reach.
