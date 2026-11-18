@@ -11,7 +11,7 @@ pub(super) struct Attachments {
     pub generation: u64,
     pub loading: bool,
     pub error: Option<String>,
-    pub failed: Option<String>,
+    pub failed: HashMap<String, String>,
     pub uploading: bool,
     pub blocked: Option<(String, String)>,
 }
@@ -35,10 +35,8 @@ impl Composer {
             .retain(|reference| reference.id != id);
         self.images.pixels.remove(id);
         self.images.pins.remove(id);
+        self.images.failed.remove(id);
         self.images.error = None;
-        if self.images.references.is_empty() {
-            self.images.failed = None;
-        }
         self.draft.revision += 1;
         cx.notify();
     }
@@ -97,7 +95,7 @@ impl Composer {
         self.pin_images(&references);
         self.images.references = references.clone();
         self.images.pixels.clear();
-        self.images.failed = None;
+        self.images.failed.clear();
         self.images.error = None;
         self.images.loading = !references.is_empty();
         let generation = self.images.generation;
@@ -105,23 +103,14 @@ impl Composer {
         let task = cx.background_executor().spawn(async move {
             let pin = pending_pin?;
             images::validate_message(&references)?;
-            let pixels = references
+            let prepared = references
                 .into_iter()
                 .map(|reference| {
-                    let bytes = images::local(&reference).or_else(|error| {
-                        let Some(thread) = &thread else {
-                            return Err(error);
-                        };
-                        let bytes = plait_core::host::Client::from_environment()
-                            .and_then(|client| client.image(thread, &reference))
-                            .map_err(|error| error.to_string())?;
-                        images::persist(&bytes)?;
-                        Ok(bytes)
-                    })?;
-                    Ok((reference.id, decode(&bytes, 192)?))
+                    let result = restore_original(&reference, thread.as_deref());
+                    (reference.id, result)
                 })
-                .collect::<Result<HashMap<_, _>, String>>()?;
-            Ok::<_, String>((pixels, pin))
+                .collect::<HashMap<_, _>>();
+            Ok::<_, String>((prepared, pin))
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -131,12 +120,30 @@ impl Composer {
                 }
                 this.images.loading = false;
                 match result {
-                    Ok((mut pixels, _pin)) => {
-                        // Removed references may finish loading, but must not retain pixels.
-                        pixels.retain(|id, _| this.images.references.iter().any(|r| &r.id == id));
-                        this.images.pixels = pixels;
+                    Ok((prepared, _pin)) => {
+                        for (id, result) in prepared {
+                            // Removed attachments must retain neither pixels nor failures.
+                            if !this.images.references.iter().any(|r| r.id == id) {
+                                continue;
+                            }
+                            match result {
+                                Ok(pixels) => {
+                                    this.images.pixels.insert(id, pixels);
+                                }
+                                Err(error) => {
+                                    this.images.failed.insert(id, error);
+                                }
+                            }
+                        }
                     }
-                    Err(error) => this.images.failed = Some(error),
+                    Err(error) => {
+                        this.images.failed = this
+                            .images
+                            .references
+                            .iter()
+                            .map(|reference| (reference.id.clone(), error.clone()))
+                            .collect();
+                    }
                 }
                 cx.notify();
             });
@@ -274,7 +281,8 @@ impl Composer {
                                 let reason = self
                                     .images
                                     .failed
-                                    .clone()
+                                    .get(&id)
+                                    .cloned()
                                     .unwrap_or_else(|| "Preparing image thumbnail.".into());
                                 slot.tooltip(move |_, cx| {
                                     cx.new(|_| TextTooltip(reason.clone())).into()
@@ -290,11 +298,15 @@ impl Composer {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .child(if self.images.loading {
-                                        "Loading"
-                                    } else {
-                                        "Failed"
-                                    })
+                                    .child(
+                                        if self.images.loading
+                                            && !self.images.failed.contains_key(&id)
+                                        {
+                                            "Loading"
+                                        } else {
+                                            "Failed"
+                                        },
+                                    )
                                     .into_any_element(),
                             }),
                     )
@@ -313,7 +325,7 @@ impl Composer {
                 "Uploading".into(),
                 "Sending image originals to the host. The draft stays until acceptance.".into(),
             ))
-        } else if !self.images.references.is_empty() && self.images.failed.is_some() {
+        } else if !self.images.failed.is_empty() {
             // Each unavailable slot already names its failure and has the reason on hover.
             None
         } else if let Some(error) = &self.images.error {
@@ -340,6 +352,24 @@ impl Composer {
     }
 }
 
+/// One unavailable original must not discard the other attachments' prepared pixels.
+fn restore_original(
+    reference: &ImageRef,
+    thread: Option<&str>,
+) -> Result<Arc<RenderImage>, String> {
+    let bytes = images::local(reference).or_else(|error| {
+        let Some(thread) = thread else {
+            return Err(error);
+        };
+        let bytes = plait_core::host::Client::from_environment()
+            .and_then(|client| client.image(thread, reference))
+            .map_err(|error| error.to_string())?;
+        images::persist(&bytes)?;
+        Ok(bytes)
+    })?;
+    decode(&bytes, 192)
+}
+
 #[cfg(test)]
 impl Composer {
     pub(in crate::ui) fn scene_images(
@@ -351,6 +381,7 @@ impl Composer {
         self.pin_images(&references);
         self.images.references = references;
         self.images.pixels = pixels;
+        self.images.failed.clear();
         self.images.loading = false;
         self.draft.revision += 1;
         cx.notify();
@@ -371,9 +402,15 @@ impl Composer {
             self.images.loading,
             self.image_send_blocked(),
             self.images.error.as_deref(),
-            self.images.failed.as_deref(),
+            self.images.failed.values().next().map(String::as_str),
             self.images.pixels.len(),
             self.images.uploading,
+        )
+    }
+    pub(in crate::ui) fn scene_image_state(&self, id: &str) -> (bool, Option<&str>) {
+        (
+            self.images.pixels.contains_key(id),
+            self.images.failed.get(id).map(String::as_str),
         )
     }
     pub(in crate::ui) fn scene_history(&self) -> Arc<[String]> {

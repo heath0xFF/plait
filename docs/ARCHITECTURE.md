@@ -799,8 +799,11 @@ dimensions for the tooltip and larger view. Results
 must match connection epoch, watch generation, thread ID, and cache selection;
 a larger-view result also matches its own generation. Changing thread or
 connection drops the cache. Draft thumbnail replies match composer generation
-and discard pixels for references removed while loading. A missing original
-shows Failed with its reason on hover and prevents sending. Uploading marks a
+and discard pixels and errors for references removed while loading. Restoring
+a draft, including a queued message returned by Edit, prepares each attachment
+independently. A missing original alone shows Failed with its reason on hover;
+valid siblings keep their thumbnails. Removing failed attachments leaves those
+valid originals sendable. Uploading marks a
 pending image submission and blocks sending that draft twice; pending rows
 show the image count even without text. Disabled composers reject paste/drop,
 and a refused attachment's notice clears on the next text edit.

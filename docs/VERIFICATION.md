@@ -1444,6 +1444,9 @@ Regression tests exercise edits while queued cancellation is awaiting a reply,
 checkout-specific new-thread drafts and immediate Discard saves, cancelled-image
 collection with shared accepted ownership, header-only paste validation,
 LRU recency and 50-image scroll-back reuse, unavailable originals blocking Send,
+and valid siblings surviving a missing or unreadable original in both local
+draft restoration and queued Edit's host-fallback path. Removing the failed
+attachment enables sending the valid remainder. Tests also cover
 Uploading with image-only pending labels, disabled paste/drop, refusal clearing
 on edit, prompt history for illustrated messages, removed images finishing
 late, EXIF-rotated display dimensions, and Codex capability resolution before
@@ -1456,8 +1459,9 @@ unknown support is deliberately allowed, not inferred from model names.
 
 `scripts/snapshots.sh` renders one and several composer images, Text only,
 Update host, Uploading with an image-only pending message, an unavailable
-original, a request with several images, and the larger view at 1380 and 900
-points. All sixteen image scenes were inspected offscreen with Metal and Core Text.
+original, a mixed valid/failed draft and its recovery after removal, a request
+with several images, and the larger view at 1380 and 900 points. All twenty
+image scenes were inspected offscreen with Metal and Core Text.
 `scripts/bench-frames.sh`, release profile, measured 30 CPU frames of a
 50-image conversation: median 0.85 ms at rest (p95 0.96 ms) and 1.68 ms scrolling
 (p95 1.77 ms). Thumbnails were prepared in advance. The LRU cache retains up to

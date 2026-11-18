@@ -148,9 +148,22 @@ pub(super) fn walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.capture(&format!("images-older-host-{suffix}"));
     harness.composer(|composer, _, cx| {
         composer.set_image_support(6, Some("yes"), cx);
-        composer.restore_images(vec![fixture[0].0.clone()], cx);
+        composer.restore_images(vec![fixture[1].0.clone()], cx);
     });
     harness.capture(&format!("images-unavailable-{suffix}"));
+
+    let references = fixture.iter().map(|(r, _)| r.clone()).collect::<Vec<_>>();
+    let _pins = plait_core::images::pin(&references).unwrap();
+    for bytes in [
+        include_bytes!("../../../../../runtime/test/support/images/0.png").as_slice(),
+        include_bytes!("../../../../../runtime/test/support/images/2.png").as_slice(),
+    ] {
+        plait_core::images::persist(bytes).unwrap();
+    }
+    harness.composer(|composer, _, cx| composer.restore_images(references, cx));
+    harness.capture(&format!("images-partial-restore-{suffix}"));
+    harness.composer(|composer, _, cx| composer.scene_remove(&fixture[1].0.id, cx));
+    harness.capture(&format!("images-partial-recovered-{suffix}"));
 
     harness.composer(|composer, _, cx| {
         composer.scene_images(Vec::new(), HashMap::new(), cx);

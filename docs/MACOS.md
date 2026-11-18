@@ -363,8 +363,9 @@ Both desktop and host allow four different images, at most 5 MiB each and
 The bytes determine PNG or JPEG, not the file extension. **Refused** explains
 the reason on hover. Plait never shrinks or recompresses the original to make
 it fit. Choose a smaller file yourself if needed. The refusal clears on the
-next text edit. **Failed** means an original could not be restored; hover for
-the reason and remove the unavailable attachment before sending. **Uploading**
+next text edit. **Failed** means that attachment's original could not be
+restored; hover for the reason and remove it before sending. Other attachments
+keep their thumbnails and can be sent once the failed ones are removed. **Uploading**
 keeps Send disabled until the host replies, and pending rows show their image
 count. Paste and drop leave a disabled message box unchanged.
 

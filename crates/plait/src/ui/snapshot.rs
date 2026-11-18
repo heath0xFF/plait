@@ -5624,6 +5624,86 @@ fn image_restore_failure_blocks_sending() {
 }
 
 #[core::prelude::v1::test]
+fn image_restore_failure_is_per_attachment() {
+    if !isolated("image_restore_failure_is_per_attachment") {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("plait-image-partial-{}", std::process::id()));
+    let repository = fixture_repository(&root);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.fresh_composer(&repository);
+    images::install(&mut harness, 1);
+    let originals = [
+        include_bytes!("../../../../runtime/test/support/images/0.png").as_slice(),
+        include_bytes!("../../../../runtime/test/support/images/1.png").as_slice(),
+        include_bytes!("../../../../runtime/test/support/images/2.png").as_slice(),
+    ];
+    let references = originals
+        .iter()
+        .map(|bytes| plait_core::images::inspect(bytes).unwrap())
+        .collect::<Vec<_>>();
+    let _pin = plait_core::images::pin(&references).unwrap();
+    let directory = plait_core::session::locations().unwrap().0.join("images");
+    // A missing middle image used to discard both earlier and later valid results.
+    // Queued Edit uses the same loader with a host fallback; that can fail as well.
+    for (thread, unreadable, broken) in [
+        (false, false, 1),
+        (false, true, 0),
+        (true, false, 1),
+        (true, true, 2),
+    ] {
+        for bytes in originals {
+            plait_core::images::persist(bytes).unwrap();
+        }
+        let path = directory.join(&references[broken].id);
+        std::fs::remove_file(&path).unwrap();
+        if unreadable {
+            // A link is deterministically unreadable even for a privileged test runner.
+            std::os::unix::fs::symlink(directory.join(&references[(broken + 1) % 3].id), &path)
+                .unwrap();
+        }
+        harness.composer(|composer, _, cx| {
+            if thread {
+                composer.restore_thread_images(references.clone(), THREAD.into(), cx);
+            } else {
+                composer.restore_images(references.clone(), cx);
+            }
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while harness.composer(|composer, _, _| composer.scene_image_status().0) {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        harness.composer(|composer, _, cx| {
+            assert_eq!(composer.saved_images(), references);
+            for (index, reference) in references.iter().enumerate() {
+                let (pixels, error) = composer.scene_image_state(&reference.id);
+                assert_eq!(pixels, index != broken);
+                assert_eq!(error.is_some(), index == broken);
+            }
+            assert!(composer.scene_image_status().1);
+            composer.scene_submit(cx);
+            assert!(composer.saved_draft().2.is_none());
+            composer.scene_remove(&references[broken].id, cx);
+            assert_eq!(composer.saved_images().len(), 2);
+            let status = composer.scene_image_status();
+            assert!(!status.1, "removing the failed original must enable Send");
+            assert!(status.3.is_none());
+            assert_eq!(status.4, 2);
+        });
+        if unreadable {
+            std::fs::remove_file(path).unwrap();
+        }
+    }
+    harness.composer(|composer, _, cx| {
+        composer.scene_submit(cx);
+        assert!(composer.saved_draft().2.is_some());
+        assert_eq!(composer.saved_images().len(), 2);
+    });
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[core::prelude::v1::test]
 fn image_upload_state_blocks_duplicate_send() {
     if !isolated("image_upload_state_blocks_duplicate_send") {
         return;
