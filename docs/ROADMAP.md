@@ -495,6 +495,21 @@ the person has sandboxed: a trusted project, the default, already runs any
 tool as the person. It is built when a sandboxed project needs a tool with
 network access or the person's own credentials.
 
+## Agreed next: thread tabs
+
+Tabs initially hold threads only. Their state and presentation must be separate
+from thread content, so later content types can use the same open, select,
+order, and close behavior. This does not approve other tab content types yet.
+Closing a tab must not stop its run or archive its thread.
+
+Implementation needs a design review first. The desktop currently keeps most
+workspace state on the root view and resets it when selecting a thread. Separate
+thread workspace state before adding the tab strip; do not add a second set of
+selection rules around the existing resets. Tab identity and transitions belong
+in headless state, and the strip belongs in GPUI. Agree the desktop recovery
+format and the change to the one-bar chrome before implementation. No host
+execution or permission change is needed merely to keep threads open.
+
 ## Proposed, not yet agreed
 
 The later steps of M9, each agreed before it starts. All of them read the turn
@@ -526,10 +541,6 @@ to the agent unless the person sends it.
 **Ideas, not yet shaped.** Wanted, but none is designed or agreed, and each
 names what has to be settled first.
 
-- **Tabs.** Keep several things open at once and move between them without
-  going back to the sidebar. Wanted sooner than the rest of this list. To
-  settle: what a tab holds (a thread, a file, a view of a project), and how it
-  sits with the one-bar chrome, which today rules out a tab strip.
 - **Threads, files, and Git side by side.** One window that shows a
   conversation, a file, and the working tree's changes together, instead of
   the tabs that replace the conversation today. To settle: what it shows at
@@ -538,9 +549,10 @@ names what has to be settled first.
   other machine, for people who do not want to run their own. It could be how
   Plait pays for itself. It needs remote hosts first (M3), and a position on
   what a hosted checkout may hold and who can read it.
-- **Linear.** Start a thread from an issue, and keep the two pointing at each
-  other. To settle: whether Plait writes back to the issue, and which of the
-  agent's own Linear tools already cover it.
+- **Linear.** Investigation is agreed; native integration is not yet agreed.
+  Start by checking the official MCP server with existing tool support. A
+  proposed native first step starts a thread from an issue without writing back
+  to Linear. See [integration options and open decisions](LINEAR.md).
 - **Automations.** A thread that starts by itself: first on a schedule, later
   also when something happens in Git or when an issue arrives. An automation
   is created with everything its runs need (the project, the harness and
