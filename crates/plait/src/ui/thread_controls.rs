@@ -284,6 +284,8 @@ impl Plait {
             .and_then(|u| ContextUsage::new(u, model));
         let harness = self.thread_harness_line();
         let pi = harness_of(snapshot) == HarnessId::Pi;
+        // A harness thread runs under the harness's own mode; Plait's approvals are Pi's.
+        let mode = harness.and_then(|line| line.mode.as_ref());
         let mut controls = row()
             .flex_wrap()
             .gap_x_2()
@@ -294,30 +296,38 @@ impl Plait {
             .text_color(rgb(colors().muted))
             .when_some(
                 match harness {
-                    Some(line) => Some((line.label.clone(), line.tip.clone())),
+                    // With no Permissions chip to carry it, the logo's hover
+                    // text says what protects the checkout.
+                    Some(line) => Some((
+                        line.label.clone(),
+                        match line.protection.as_ref().filter(|_| mode.is_none()) {
+                            Some(protection) => format!("{} {protection}", line.tip).into(),
+                            None => line.tip.clone(),
+                        },
+                    )),
                     None if pi => Some(("Pi".into(), "Pi, built into the host".into())),
                     None => None,
                 },
                 |el, (label, tip)| el.child(harness_mark(harness_of(snapshot), label, tip)),
             )
-            .child(
+            .child(locked(
                 button("thread-model", "")
                     .max_w(px(240.))
                     .flex_shrink_1()
                     .aria_label(format!("Change thread model: {model_name}"))
                     .aria_description(reason.unwrap_or("Choose a model for the next run."))
-                    .disabled(reason.is_some())
                     .child(div().min_w_0().truncate().child(text!(model_name)))
                     .on_activate(cx, |this, window, cx| this.open_thread_models(window, cx)),
-            );
+                reason,
+            ));
         if !levels.is_empty() {
-            controls = controls.child(
+            controls = controls.child(locked(
                 button("thread-thinking", thinking_value(level))
                     .aria_label(format!("Thinking level: {}", level.label()))
                     .aria_description(reason.unwrap_or("Choose how much this model thinks."))
-                    .disabled(reason.is_some())
                     .on_activate(cx, |this, window, cx| this.open_thinking(window, cx)),
-            );
+                reason,
+            ));
         }
         if let Some(usage) = &usage {
             let detail = usage.detail.clone();
@@ -337,8 +347,6 @@ impl Plait {
                     }),
             );
         }
-        // A harness thread runs under the harness's own mode; Plait's approvals are Pi's.
-        let mode = harness.and_then(|line| line.mode.as_ref());
         if let Some(mode) = mode {
             let chip = self.thread_permissions(mode).and_then(|permissions| {
                 self.permissions_chip("thread-permissions", permissions, cx)
@@ -353,32 +361,15 @@ impl Plait {
             .mx_auto()
             .gap_1()
             .child(controls);
-        if let Some(mode) = mode {
-            let tint = if mode.overridden {
-                colors().amber
-            } else {
-                colors().subtle
-            };
-            content = content.child(tag(mode.note.clone(), tint).line_height(px(16.)));
-        } else if let Some(protection) = harness.and_then(|line| line.protection.clone()) {
-            content = content.child(tag(protection, colors().subtle).line_height(px(16.)));
-        }
-        if snapshot.status.busy() {
-            content = content.child(match mode {
-                Some(mode) => tag(mode.busy.clone(), colors().subtle),
-                None if !pi => tag("Model locked during run", colors().subtle),
-                None => {
-                    let approval = if snapshot.approval_mode == Some(host::ApprovalMode::Auto) {
-                        "automatic approval"
-                    } else {
-                        "ask before actions"
-                    };
-                    tag(
-                        format!("Current run: {approval} · Model locked during run"),
-                        colors().subtle,
-                    )
-                }
-            });
+        // The controls are the whole line. What a mode allows and why a
+        // control is locked are hover text. One thing is said in the open,
+        // in amber: the run is not under the mode the control names.
+        if let Some(differs) = mode
+            .filter(|mode| mode.overridden)
+            .map(|mode| mode.note.clone())
+            .or_else(|| self.run_differs(snapshot).filter(|_| pi))
+        {
+            content = content.child(tag(differs, colors().amber).line_height(px(16.)));
         }
         if self.thread_controls.usage_open
             && let Some(usage) = usage
@@ -617,7 +608,53 @@ pub(super) fn approval_label(mode: ApprovalMode) -> &'static str {
     }
 }
 
+/// A control that cannot be used now, such as the model during a run. It
+/// keeps its place and stays readable, in hint color, and hover says why.
+/// Pressing it still answers: its action reports the same reason.
+fn locked(control: Stateful<Div>, reason: Option<&'static str>) -> Stateful<Div> {
+    let Some(reason) = reason else {
+        return control;
+    };
+    control
+        .text_color(rgb(colors().subtle))
+        .cursor_default()
+        .a11y_synthetic_children(|builder| {
+            builder.parent_node().set_disabled();
+        })
+        .tooltip(move |_, cx| cx.new(|_| TextTooltip(reason.to_owned())).into())
+}
+
+/// What to say when a Pi run is under one approval mode and the control
+/// names another. `None` when they agree or the host does not report the
+/// run's mode.
+fn run_mode_note(running: Option<ApprovalMode>, chosen: ApprovalMode) -> Option<SharedString> {
+    let running = running.filter(|running| *running != chosen)?;
+    let now = match running {
+        ApprovalMode::Ask => "asks before actions",
+        ApprovalMode::Auto => "approves actions automatically",
+    };
+    Some(
+        format!(
+            "This run {now}. {} applies from your next message.",
+            approval_label(chosen)
+        )
+        .into(),
+    )
+}
+
 impl Plait {
+    /// The open thread's run is under another approval mode than its control
+    /// names: the mode was changed while the run was under way.
+    fn run_differs(&self, snapshot: &host::Snapshot) -> Option<SharedString> {
+        if !snapshot.status.busy() {
+            return None;
+        }
+        let chosen = self
+            .thread_approval(&snapshot.id)
+            .unwrap_or_else(|| self.default_approval());
+        run_mode_note(snapshot.approval_mode, chosen)
+    }
+
     /// Opens the run-settings menu. The label is this thread's approval mode,
     /// and names trusted commands, since those reach beyond the sandbox.
     fn run_settings_button(&self, id: String, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -955,4 +992,34 @@ fn harness_mark(id: HarnessId, label: SharedString, tip: SharedString) -> Statef
             Some(logo) => el.child(logo.text_color(rgb(colors().muted))),
             None => el.child(label),
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ApprovalMode, run_mode_note};
+
+    /// The controls under the composer are one line. The only sentence that
+    /// joins them is this warning, when a run and its control disagree.
+    #[test]
+    fn a_run_under_another_approval_mode_is_said_in_the_open() {
+        // A run the control describes, or one the host does not describe, says nothing.
+        assert_eq!(
+            run_mode_note(Some(ApprovalMode::Ask), ApprovalMode::Ask),
+            None
+        );
+        assert_eq!(run_mode_note(None, ApprovalMode::Auto), None);
+        // Asking was chosen while a run that approves on its own is under way.
+        assert_eq!(
+            run_mode_note(Some(ApprovalMode::Auto), ApprovalMode::Ask).as_deref(),
+            Some(
+                "This run approves actions automatically. Ask before actions applies from your next message."
+            )
+        );
+        assert_eq!(
+            run_mode_note(Some(ApprovalMode::Ask), ApprovalMode::Auto).as_deref(),
+            Some(
+                "This run asks before actions. Auto-approve actions applies from your next message."
+            )
+        );
+    }
 }

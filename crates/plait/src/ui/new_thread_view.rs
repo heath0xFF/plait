@@ -38,7 +38,6 @@ impl Plait {
                     .pt_2()
                     .pb_3()
                     .gap_2()
-                    .child(self.draft_header(cx))
                     .when_some(composer, |el, composer| {
                         el.child(
                             div()
@@ -52,6 +51,9 @@ impl Plait {
                                 .child(composer),
                         )
                     })
+                    // Under the box, where an open thread's controls are, so
+                    // the box stays where it is when the first message is sent.
+                    .child(self.draft_controls(cx))
                     .children(self.draft_status(cx)),
             );
         row()
@@ -66,7 +68,7 @@ impl Plait {
     }
 
     /// Project | model | thinking | harness | permissions, then Discard.
-    fn draft_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn draft_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let locked = self.draft_locked();
         let project = self.active_project();
         let harness = self.draft_harness();
@@ -189,10 +191,20 @@ impl Plait {
         let harness = self.draft_harness();
         let row = self.harness_row(harness)?;
         let current = self.draft_mode()?;
-        let protection = row.protection.trim();
+        // The chip names the mode; hover says what it allows and what
+        // protects the checkout.
+        let allows = row
+            .mode(&current)
+            .map(|mode| mode.detail.trim().to_owned())
+            .unwrap_or_default();
+        let lead = [allows.as_str(), row.protection.trim()]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
         let tip = format!(
-            "{protection}{}Choose what {} may do in the new thread.",
-            if protection.is_empty() { "" } else { " " },
+            "{lead}{}Choose what {} may do in the new thread.",
+            if lead.is_empty() { "" } else { " " },
             row.name
         );
         Some(Permissions {
@@ -314,17 +326,16 @@ impl Plait {
                     .into_any_element(),
             );
         }
+        // A harness that lists no modes has no Permissions chip to carry
+        // what protects the checkout, so it is said here.
         let harness = self.draft_harness();
         let row = self
             .harness_row(harness)
-            .filter(|_| harness != HarnessId::Pi)?;
-        let detail = self
-            .draft_mode()
-            .and_then(|mode| row.mode(&mode).map(|mode| mode.detail.clone()))
-            .unwrap_or_else(|| row.protection.clone());
-        (!detail.is_empty()).then(|| {
+            .filter(|row| harness != HarnessId::Pi && row.modes.is_empty())?;
+        let protection = row.protection.clone();
+        (!protection.is_empty()).then(|| {
             line()
-                .child(tag(detail, colors().subtle).line_height(px(16.)))
+                .child(tag(protection, colors().subtle).line_height(px(16.)))
                 .into_any_element()
         })
     }

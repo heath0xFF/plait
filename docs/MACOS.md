@@ -285,11 +285,12 @@ Codex's: ready, or what to fix (not installed, too old, or signed out).
 of Plait's Ask and Auto and the project's command policy. Claude Code offers
 Ask, Accept edits, Plan, Auto (the default), and Bypass. Codex offers Read only,
 Ask, Approve for me, and Full access (the default). Set each harness's default
-for new threads in Settings → Agent, or choose **Permissions** above a new
-thread's message box or under an open thread's. In Claude Code a change applies
-at once, even during a run; in Codex it applies from the next turn. If the
-harness's own settings run a different mode, the line under the message box
-says so. Each request the harness asks you about is an approval card, allowed or
+for new threads in Settings → Agent, or choose **Permissions** under the
+message box, in a new thread or an open one. The control names the mode; hold
+the pointer over it to read what the mode allows and what protects the
+checkout. In Claude Code a change applies at once, even during a run; in Codex
+it applies from the next turn. If the harness's own settings run a different
+mode, an amber line under the controls says so. Each request the harness asks you about is an approval card, allowed or
 denied once. Plait's guard on files you had already changed does not apply
 here: the card names those files, but nothing stops the harness writing them.
 
@@ -474,7 +475,12 @@ nothing. A held queue resumes from its oldest input on the next send.
 
 Choose the model beneath the composer, or Cmd-Shift-M, to change this thread's
 next run. The adjacent thinking control lists exactly the chosen model's
-supported levels. Both are locked during a run. New threads start at **Settings → Models → Default
+supported levels. Both are locked during a run: they stay readable, and hover
+says when they can be changed. In a Pi thread, changing the approval mode
+during a run applies from your next message; until then an amber line says
+which mode the run is under. An empty message box names its two triggers, `@`
+for files and `/` for commands; a line of key hints appears under the draft
+only during a run or when sending is off. New threads start at **Settings → Models → Default
 thinking for new threads** (Medium unless changed), or the closest level their
 model offers; a model without reasoning starts with thinking off.
 

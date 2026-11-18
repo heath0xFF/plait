@@ -947,7 +947,15 @@ impl Composer {
             .filter(|completion| completion.is_visible())
     }
 
-    /// One line under the draft: what the keys do right now, or why sending is off.
+    /// What the keys do while nothing is running. It is not drawn: the
+    /// placeholder names the triggers, and Enter needs no label. Assistive
+    /// technology still reads it with the draft.
+    const IDLE_KEYS: &str = "Enter sends. Shift-Enter starts a new line. \
+        @ names a file, and / runs a command.";
+
+    /// One line under the draft, when there is something to say: what the
+    /// keys do during a run, a choice among suggestions, or why sending is
+    /// off. Empty while idle.
     fn hint(&self) -> String {
         if let Some(error) = &self.paint_error {
             return error.clone();
@@ -970,7 +978,7 @@ impl Composer {
             );
         }
         if !self.busy {
-            return "Enter sends · Shift-Enter new line · @ files · / commands".into();
+            return String::new();
         }
         if self.stop.armed(Instant::now()) {
             "Press Esc again to stop the agent".into()
@@ -1207,6 +1215,7 @@ impl Render for Composer {
             Some(((position, total), item)) => {
                 format!("Suggestion {position} of {total}: {}. {hint}", item.name)
             }
+            None if hint.is_empty() => Self::IDLE_KEYS.into(),
             None => hint.clone(),
         };
         let input = cx.entity().downgrade();

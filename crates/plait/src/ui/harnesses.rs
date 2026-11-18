@@ -64,12 +64,11 @@ pub(super) struct ModeLine {
     pub(super) note: SharedString,
     /// Whether `note` says the harness is not using the chosen mode.
     pub(super) overridden: bool,
-    /// The Permissions chip's hover text: what protects the checkout, and when a change applies.
+    /// The Permissions chip's hover text: what the mode allows, what protects
+    /// the checkout, and when a change applies.
     pub(super) tip: SharedString,
     /// Under the Permissions menu: when a choice applies.
     pub(super) applies: SharedString,
-    /// What the composer says while a run is under way.
-    pub(super) busy: SharedString,
 }
 
 /// One of a harness's own permission modes, as the host names it.
@@ -350,9 +349,17 @@ pub(super) fn mode_line(row: &HarnessRow, key: &ThreadHarness) -> Option<ModeLin
             format!("Applies from {name}'s next turn"),
         )
     };
+    // The chip names the mode and nothing more; what the mode allows is said
+    // here, on hover. A mode the harness is not using is said in the open.
+    let allows = if overridden { "" } else { note.trim() };
+    let lead = [allows, protection]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
     let tip = format!(
-        "{protection}{}Choose what {name} may do in this thread. A change applies {when}, even during a run.",
-        if protection.is_empty() { "" } else { " " }
+        "{lead}{}Choose what {name} may do in this thread. A change applies {when}, even during a run.",
+        if lead.is_empty() { "" } else { " " }
     );
     Some(ModeLine {
         id,
@@ -361,7 +368,6 @@ pub(super) fn mode_line(row: &HarnessRow, key: &ThreadHarness) -> Option<ModeLin
         overridden,
         tip: tip.into(),
         applies: format!("{applies}, even during a run.").into(),
-        busy: format!("Model locked during run · a permissions change applies {when}").into(),
     })
 }
 
@@ -1209,17 +1215,17 @@ mod tests {
             (line.label.as_ref(), line.note.as_ref()),
             ("Auto", "Decides itself.")
         );
+        // Hover says what the mode allows; the chip itself only names it.
         assert_eq!(
             line.tip.as_ref(),
-            "Claude Code's mode. Choose what Claude Code may do in this thread. A change applies at once, even during a run."
+            "Decides itself. Claude Code's mode. Choose what Claude Code may do in this thread. A change applies at once, even during a run."
         );
         assert_eq!(line.applies.as_ref(), "Applies at once, even during a run.");
-        assert_eq!(
-            line.busy.as_ref(),
-            "Model locked during run · a permissions change applies at once"
-        );
         let line = mode_line(row, &key("auto", Some("plan"))).unwrap();
         assert!(line.overridden);
+        // A mode the harness is not using is drawn under the controls, so
+        // hover does not repeat it.
+        assert!(line.tip.starts_with("Claude Code's mode."), "{}", line.tip);
         assert_eq!(
             line.note.as_ref(),
             "Claude Code is using Plan instead of Auto, set by your Claude Code settings. Plans first."
@@ -1254,9 +1260,12 @@ mod tests {
             (line.note.as_ref(), line.overridden),
             ("Asks first.", false)
         );
+        // Hover leads with what the mode allows, then what protects the checkout.
         assert!(
             line.tip
-                .starts_with("Codex's sandbox. Choose what Codex may do")
+                .starts_with("Asks first. Codex's sandbox. Choose what Codex may do"),
+            "{}",
+            line.tip
         );
         // A thread without a mode yet shows the harness default.
         let line = mode_line(codex, &thread(None, None)).unwrap();

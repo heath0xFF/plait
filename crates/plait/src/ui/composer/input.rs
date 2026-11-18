@@ -6,7 +6,9 @@ use gpui::*;
 use std::{collections::HashMap, ops::Range, rc::Rc};
 
 pub(super) const LINE_HEIGHT: f32 = 21.;
-pub(super) const PLACEHOLDER: &str = "Write a message…";
+/// Shown in an empty draft. It names the two triggers, so no line of key
+/// hints has to sit under the draft while nothing is running.
+pub(super) const PLACEHOLDER: &str = "Write a message · @ files · / commands";
 /// The input never scrolls before it shows this many lines, however short the window.
 const MIN_ROW_LIMIT: usize = 4;
 

@@ -377,12 +377,30 @@ impl Plait {
                         1 => "Commit 1 file".to_owned(),
                         n => format!("Commit {n} files"),
                     },
-                    Tone::Primary,
+                    // The filled button is the one that can act. A faded fill
+                    // reads as a smudge, so one that cannot act is an outline
+                    // in hint text, and hover says what is missing.
+                    if blocker.is_some() {
+                        Tone::Filled
+                    } else {
+                        Tone::Primary
+                    },
                 )
                 .w_full()
                 .justify_center()
                 .aria_description(blocker.unwrap_or("Commit the staged changes. Hooks run."))
-                .disabled(blocker.is_some())
+                .when_some(blocker, |button, blocker| {
+                    button
+                        .text_color(rgb(colors().subtle))
+                        .cursor_default()
+                        .a11y_synthetic_children(|builder| {
+                            builder.parent_node().set_disabled();
+                        })
+                        .tooltip(move |_, cx| {
+                            cx.new(|_| super::thread_controls::TextTooltip(blocker.to_owned()))
+                                .into()
+                        })
+                })
                 .on_activate(cx, |this, _, cx| this.commit_staged(cx)),
             )
             .when(self.running_here(), |el| {

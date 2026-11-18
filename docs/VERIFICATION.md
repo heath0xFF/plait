@@ -232,6 +232,13 @@ read, and a failure message long enough to wrap in the state line.
   without commits), and by a desktop test that counts real files, hides the
   card, and opens a file in Changes. It has not been watched live in the
   installed app.
+- The line of controls under the composer is covered by unit tests of its
+  texts (the Permissions hover leads with what the mode allows; a harness
+  using another mode, and a Pi run under another approval mode than its
+  control names, are each one amber sentence) and by scenes of the idle,
+  running, reported-mode, and new-thread composers. Scenes do not draw hover
+  text, so the sentences moved into hover are checked as text only, and none
+  of this has been checked in the installed app.
 - The Deny once and Allow once shortcuts are covered by action-table tests
   (both defaults need Command and Option, take no composer or other default
   key, and match the table in [macOS](MACOS.md#application-shortcuts)) and by an

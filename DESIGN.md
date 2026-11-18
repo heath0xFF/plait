@@ -95,17 +95,28 @@ conversation keeps a readable minimum width.
   its output is outlined in rose; the word is said once. A long run of calls folds under one line that names their
   count and kinds and any failures; a turn in progress keeps its latest calls
   in view.
-- **Composer.** One raised, rounded box holds the draft, a short key hint, and
-  Send. Stop remains a separate neutral control during a run. Enter follows up;
-  Option-Enter steers. The draft grows from one line to about a third of the
-  window, then scrolls. Waiting and unconfirmed messages form a compact,
-  scrollable stack above it, with explicit mode and Cancel or Retry controls.
-  Below it, wrapping controls show model, the thinking level by name alone,
-  context use, and a run-settings menu labeled with the thread's approval mode
-  (and trusted commands, when on). Labels name the setting, not when it applies;
-  hover text says that. Model names truncate; actions remain legible.
-  Project and machine stay in navigation and the header. A running turn names
-  its own approval mode, distinct from the next-message choice.
+- **Composer.** One raised, rounded box holds the draft and Send. Its
+  placeholder names the two triggers, `@` for files and `/` for commands, so
+  an idle composer carries no line of key hints. A line appears under the
+  draft only when it has something to say: what the keys do during a run, a
+  choice among suggestions, or why sending is off. Stop remains a separate
+  neutral control during a run. Enter follows up; Option-Enter steers. The
+  draft grows from one line to about a third of the window, then scrolls.
+  Waiting and unconfirmed messages form a compact, scrollable stack above it,
+  with explicit mode and Cancel or Retry controls. Below it is one line of
+  wrapping controls: the harness's logo, model, the thinking level by name
+  alone, context use, and the permissions control, which names the mode and
+  nothing more ("Full access", "Ask before actions", and trusted commands when
+  on). A new thread's draft has the same line in the same place, with its
+  project and harness. Labels name the setting; hover text says what a mode
+  allows, what protects the checkout, when a change applies, the harness's
+  version, and why a control is locked. A locked control stays readable, in
+  hint color. Only one sentence joins the controls, in amber: the run is not
+  under the mode the control names, because the harness used another or the
+  mode was changed during the run. Model names truncate; actions remain
+  legible. Project and machine stay in navigation and the header. The one
+  filled button in a view is the one that can act; a button that cannot is an
+  outline in hint text, and hover says what is missing.
 - **Suggestions.** `@` lists files and `/` lists local commands in one compact
   list that floats just above the composer, at most eight 28-point rows and 560
   points wide. A file row shows the name first, then its directory. Matched
