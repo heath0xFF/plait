@@ -735,11 +735,15 @@ a delayed credential command, and reject another server's credential in metadata
 
 Additional regressions cover control characters in programs and shared command/MCP
 approval details; escaped tool rows in live and full history; 4,000-level JSON;
-listing size before serialization and a 32-page cap; 20,000-notification and large
-byte floods while another thread calls a healthy server; inherited-property tool
+listing size before serialization and a 32-page cap; a normal call with a burst of
+1,000 progress notifications; sustained, 20,000-notification and large byte floods
+while another thread calls a healthy server; inherited-property tool
 names under user-hidden/restricted exposure; and credential-bearing call arguments
-refused before approval or dispatch. The pipe's 32 MiB and 256-line token buckets
-replenish per second and fail a server on excess. Project config symlink tests
+refused before approval or dispatch. The pipe permits a burst of 2,048 stdout lines
+and replenishes 512 lines per second. Its byte bucket remains 32 MiB, replenished
+at 32 MiB per second across stdout and stderr. Exceeding either budget fails the
+server; the sustained fixture emits 100 notifications every 50 ms, below the burst
+limit per batch but above the sustained rate. Project config symlink tests
 prove a linked final file and, on macOS, a linked `.pi` directory are not followed.
 
 Process-group cleanup does not catch a descendant which deliberately calls

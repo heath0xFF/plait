@@ -1387,7 +1387,9 @@ Listing is bounded to 500 tools, 32 pages, and 1 MiB of metadata per server.
 JSON is checked iteratively before serialization or copying, with a depth limit
 of 64 levels; each tool stays within 64 KiB and call arguments within 16 KiB.
 Each wire message is bounded to 16 MiB. Each stdio pipe has token buckets of
-32 MiB and 256 stdout lines, replenished at those rates per second. Stdout and
+32 MiB replenished at 32 MiB per second, and 2,048 stdout lines replenished at
+512 lines per second. The larger line burst permits progress and log notifications
+during ordinary calls while bounding sustained parsing work. Stdout and
 stderr both spend the byte budget, and all stdout lines spend the message budget.
 Exceeding either closes the pipe and fails that server before parsing more output.
 Text and structured results use the existing `CommandOutputs` store (16 MiB per output,

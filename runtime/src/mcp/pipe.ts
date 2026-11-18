@@ -6,18 +6,19 @@ import { GUARDIAN_ENV, writeEnvironment } from '../command/environment.ts';
 
 // A token bucket bounds both parsing work and raw output, including stderr.
 export const MCP_PIPE_BYTES = 32 * 1024 * 1024;
-export const MCP_PIPE_MESSAGES = 256;
-export const MCP_PIPE_BUDGET_PROBLEM = 'MCP server exceeded its output budget (32 MiB or 256 messages per second).';
+export const MCP_PIPE_MESSAGE_BURST = 2048;
+export const MCP_PIPE_MESSAGES_PER_SECOND = 512;
+export const MCP_PIPE_BUDGET_PROBLEM = 'MCP server exceeded its output budget (32 MiB/s, 2,048-message burst, 512 messages/s).';
 export class PipeBudget {
   private bytes = MCP_PIPE_BYTES;
-  private messages = MCP_PIPE_MESSAGES;
+  private messages = MCP_PIPE_MESSAGE_BURST;
   private time = performance.now();
   accept(data: Uint8Array, stdout: boolean, now = performance.now()) {
     const seconds = Math.max(0, now - this.time) / 1000; this.time = now;
     this.bytes = Math.min(MCP_PIPE_BYTES, this.bytes + seconds * MCP_PIPE_BYTES) - data.byteLength;
     let messages = 0;
     if (stdout) for (const byte of data) if (byte === 10) messages++;
-    this.messages = Math.min(MCP_PIPE_MESSAGES, this.messages + seconds * MCP_PIPE_MESSAGES) - messages;
+    this.messages = Math.min(MCP_PIPE_MESSAGE_BURST, this.messages + seconds * MCP_PIPE_MESSAGES_PER_SECOND) - messages;
     return this.bytes >= 0 && this.messages >= 0;
   }
 }

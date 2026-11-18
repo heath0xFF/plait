@@ -40,11 +40,17 @@ test('untrusted JSON has a depth bound without recursion or whole-list serializa
 });
 
 test('pipe budget limits message bursts and bytes before parsing and replenishes at a fixed rate', async () => {
-  const { PipeBudget, MCP_PIPE_BYTES, MCP_PIPE_MESSAGES } = await import('../src/mcp/pipe.ts');
+  const { PipeBudget, MCP_PIPE_BYTES, MCP_PIPE_MESSAGE_BURST, MCP_PIPE_MESSAGES_PER_SECOND } = await import('../src/mcp/pipe.ts');
   const messages = new PipeBudget(); const now = performance.now();
-  assert.equal(messages.accept(Buffer.from('\n'.repeat(MCP_PIPE_MESSAGES)), true, now), true);
+  assert.equal(MCP_PIPE_MESSAGE_BURST, 2048); assert.equal(MCP_PIPE_MESSAGES_PER_SECOND, 512);
+  assert.equal(messages.accept(Buffer.from('\n'.repeat(MCP_PIPE_MESSAGE_BURST)), true, now), true);
   assert.equal(messages.accept(Buffer.from('\n'), true, now), false);
-  assert.equal(messages.accept(Buffer.from('\n'), true, now + 1000), true);
+  const sustained = new PipeBudget(); const start = Math.ceil(performance.now());
+  assert.equal(sustained.accept(Buffer.from('\n'.repeat(MCP_PIPE_MESSAGE_BURST)), true, start), true);
+  for (let second = 1; second <= 3; second++) {
+    assert.equal(sustained.accept(Buffer.from('\n'.repeat(MCP_PIPE_MESSAGES_PER_SECOND)), true, start + second * 1000), true);
+  }
+  assert.equal(sustained.accept(Buffer.from('\n'), true, start + 3000), false);
   const bytes = new PipeBudget(); assert.equal(bytes.accept(Buffer.alloc(MCP_PIPE_BYTES), false, now), true);
   assert.equal(bytes.accept(Buffer.alloc(1), false, now), false);
 });

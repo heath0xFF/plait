@@ -276,7 +276,15 @@ test('deep arguments, deep schemas, oversized listing and endless pages fail wit
   }
 });
 
-for (const behavior of ['flood', 'flood-bytes']) test(`${behavior} is disconnected while another thread searches and calls a healthy server`, async t => {
+test('a normal call succeeds through a burst of 1,000 progress notifications', async t => {
+  const f = await rig(t, 'trusted', 'auto', 'notification-burst'); await f.search();
+  const result = await f.call('echo', { text: 'indexed files' });
+  assert.equal(result.isError, false); assert.match(JSON.stringify(result), /indexed files/);
+  assert.match(await readFile(f.marker, 'utf8'), /call echo\nnotifications 1000\n/);
+  assert.doesNotMatch(JSON.stringify(f.observations), /failed|exceeded its output budget/);
+});
+
+for (const behavior of ['flood', 'flood-bytes', 'flood-sustained']) test(`${behavior} is disconnected while another thread searches and calls a healthy server`, async t => {
   const abusive = await rig(t, 'trusted', 'auto', behavior); const healthy = await rig(t);
   const start = Date.now(); await Promise.all([abusive.search(), healthy.search()]);
   assert.ok(Date.now() - start < 5000);

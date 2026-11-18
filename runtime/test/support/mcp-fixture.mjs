@@ -58,8 +58,9 @@ createInterface({ input: process.stdin }).on('line', async line => {
   if (message.method === 'initialize') {
     if (mode.startsWith('flood')) {
       const line = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/progress', params: { text: mode === 'flood-bytes' ? 'x'.repeat(1024 * 1024) : 'progress' } }) + '\n';
-      const flood = () => { for (let i = 0; i < (mode === 'flood-bytes' ? 40 : 20000); i++) process.stdout.write(line); };
-      flood(); setInterval(flood, 10); return;
+      const count = mode === 'flood-bytes' ? 40 : mode === 'flood-sustained' ? 100 : 20000;
+      const flood = () => { for (let i = 0; i < count; i++) process.stdout.write(line); };
+      flood(); setInterval(flood, mode === 'flood-sustained' ? 50 : 10); return;
     }
     if (mode !== 'silent') reply({ protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'fixture', version: '1' }, instructions: 'SERVER_INSTRUCTIONS_MUST_NOT_REACH_MODEL' });
   } else if (message.method === 'tools/list') {
@@ -72,6 +73,12 @@ createInterface({ input: process.stdin }).on('line', async line => {
     const name = message.params.name;
     if (marker) appendFileSync(marker, `call ${name}\n`);
     if (mode === 'hang-call') return;
+    if (mode === 'notification-burst') {
+      for (let progress = 1; progress <= 1000; progress++) {
+        send({ method: 'notifications/progress', params: { progressToken: 'fixture-index', progress, total: 1000 } });
+      }
+      if (marker) appendFileSync(marker, 'notifications 1000\n');
+    }
     if (name === 'crash') { process.stderr.write(`fixture crashed ${process.env.FIXTURE_SECRET}\n`); process.exit(1); }
     if (name === 'sample') {
       pending.set('call', message.id);
