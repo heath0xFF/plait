@@ -35,7 +35,7 @@ mode is opt-in per project; the current sandbox stays the default. The
 
 **Changed after M7 step 2:** Pi's commands are trusted by default, as Codex
 and Claude Code run out of the box with Full access. The sandbox is opt-in per
-project in Settings → Approvals. Existing stores keep their trusted projects;
+project in the project's settings. Existing stores keep their trusted projects;
 projects at the old default become trusted. No protocol or schema change.
 
 M2.5's self-hosting work is done in source and host tests: ranged file reads,
@@ -202,7 +202,7 @@ and Plait's project command policy does not apply; Pi threads keep both. Codex
 offers Read only, Ask (workspace sandbox), Approve for me, and Full access
 (Codex's `--yolo`: never asks, no sandbox), Full access by default. Claude Code
 offers Ask, Accept edits, Plan, Auto, and Bypass, Auto by default. Each
-harness's default is a host setting in Settings → Agent. A thread's mode can
+harness's default is a host setting in Settings → Agents. A thread's mode can
 change at any time: Claude Code switches during a run, Codex from its next
 turn. The composer shows the mode the harness reports, not the one requested,
 and says plainly when nothing asks or nothing is sandboxed. Whatever a harness
@@ -210,7 +210,7 @@ asks becomes a Plait approval. Claude Code runs as the person's installed
 `claude` through a pinned Agent SDK, loading their own settings, `CLAUDE.md`
 files, skills, slash commands, hooks, and MCP servers; Plait never offers or
 handles a Claude sign-in. Plait's releases do not include the SDK, whose license
-reserves all rights: setting up Claude Code threads in Settings → Agent has the
+reserves all rights: setting up Claude Code threads in Settings → Agents has the
 host download that exact version from the npm registry and check it against
 the pinned hash before use. Whatever sign-in the person's `claude` uses, a
 Claude subscription, an API key, or a cloud provider, is accepted. Features
@@ -282,8 +282,8 @@ expands a prompt template with Plait's own expander following Pi's documented
 argument rules; project templates need a trusted project, and the expanded
 text is what the conversation shows, as in Pi. Typing `/` in the composer
 lists skills and templates after Plait's own commands, which win a name
-clash; choosing one inserts its text and runs nothing. Settings → Agent lists
-them read-only, with Open folder and Refresh; turning one off stays in Pi's
+clash; choosing one inserts its text and runs nothing. The project's settings
+list them read-only, with Open folder and Refresh; turning one off stays in Pi's
 settings. Recorded in the [host contract](HOST.md#skills-and-user-instructions).
 
 Next, each agreed before it starts: step 3 adds named CLIs for sandboxed

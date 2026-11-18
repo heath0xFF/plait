@@ -149,7 +149,7 @@ pub(super) fn approvable(approval: &Approval, harness: HarnessId) -> bool {
 }
 
 impl Plait {
-    /// The desktop default from Settings → Approvals.
+    /// The desktop default from Settings → New threads.
     pub(super) fn default_approval(&self) -> ApprovalMode {
         if self.preferences.value.ask_before_actions {
             ApprovalMode::Ask

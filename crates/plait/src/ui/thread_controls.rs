@@ -655,31 +655,23 @@ impl Plait {
         run_mode_note(snapshot.approval_mode, chosen)
     }
 
-    /// Opens the run-settings menu. The label is this thread's approval mode,
-    /// and names trusted commands, since those reach beyond the sandbox.
+    /// Opens the run-settings menu. The label is this thread's approval mode
+    /// and nothing more: the command policy belongs to the project, and its
+    /// own settings page says what it is.
     fn run_settings_button(&self, id: String, cx: &mut Context<Self>) -> Stateful<Div> {
         let own = self.thread_approval(&id);
-        let mode = own.unwrap_or_else(|| self.default_approval());
-        let policy = self.command_policy();
-        let mut label = approval_label(mode).to_owned();
-        if policy == Some(host::policy::CommandPolicy::Trusted) {
-            label.push_str(" · Trusted commands");
-        }
-        let source = if own.is_some() {
-            "Chosen for this thread."
+        let label = approval_label(own.unwrap_or_else(|| self.default_approval()));
+        let tip = if own.is_some() {
+            "Chosen for this thread. A change applies from your next message. Whether commands are sandboxed is a project setting."
         } else {
-            "The default from Settings."
+            "The default from Settings → New threads. A change applies from your next message. Whether commands are sandboxed is a project setting."
         };
-        let tip = format!(
-            "{source} Commands: {}. Click to change how this thread runs; applies from your next message.",
-            plait_core::host::policy::context_label(policy).to_lowercase()
-        );
         button("thread-run-settings", "")
             .min_w_0()
             .flex_shrink_1()
             .aria_label(format!("Run settings: {label}"))
-            .aria_description(tip.clone())
-            .tooltip(move |_, cx| cx.new(|_| TextTooltip(tip.clone())).into())
+            .aria_description(tip)
+            .tooltip(move |_, cx| cx.new(|_| TextTooltip(tip.into())).into())
             .child(div().min_w_0().truncate().child(label))
             .child(icon("down").size(px(12.)))
             .on_activate(cx, |this, window, cx| this.open_run_settings(window, cx))
@@ -706,8 +698,8 @@ impl Plait {
         cx.notify();
     }
 
-    /// The menu under the message box for how this thread runs: its approval
-    /// mode, and the project's command policy, which is changed in Settings.
+    /// The menu under the message box for how this thread runs: only this
+    /// thread's approval mode. The project's command policy has its own page.
     pub(super) fn open_run_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(thread_id) = self.host.selected.clone() else {
             return;
@@ -739,12 +731,11 @@ impl Plait {
             Some(ApprovalMode::Ask) => "approval-ask",
             Some(ApprovalMode::Auto) => "approval-auto",
         };
-        let policy = self.command_policy();
-        let mut items = vec![
+        let items = vec![
             choice(
                 "approval-default",
                 format!("Use default ({})", approval_label(default)),
-                "Follow Settings → Approvals.",
+                "Follow Settings → New threads.",
                 None,
             ),
             choice(
@@ -760,20 +751,6 @@ impl Plait {
                 Some(ApprovalMode::Auto),
             ),
         ];
-        items.push(
-            Item::new(
-                "command-policy",
-                plait_core::host::policy::context_label(policy),
-                Command::PolicySettings,
-            )
-            .section("Commands in this project")
-            .detail(
-                policy.map_or("Shared by every thread in this checkout.", |policy| {
-                    policy.meaning()
-                }),
-            )
-            .hint("Change in Settings"),
-        );
         let palette = cx.new(|cx| {
             Palette::new(
                 Options {

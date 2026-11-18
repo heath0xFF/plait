@@ -75,22 +75,14 @@ pub fn context_label(policy: Option<CommandPolicy>) -> &'static str {
     policy.map_or("Command policy not loaded", CommandPolicy::label)
 }
 
-/// The Approvals setting's explanation. `ask`: each call waits for approval.
-pub fn approval_detail(ask: bool, policy: Option<CommandPolicy>) -> &'static str {
-    match (ask, policy) {
-        (true, Some(CommandPolicy::Trusted)) => {
-            "Each edit and command waits for Allow once. An allowed command in this project runs with full user access and network."
-        }
-        (true, _) => "Each edit and command waits for Allow once.",
-        (false, Some(CommandPolicy::Sandboxed)) => {
-            "The agent edits files and runs commands without asking. Files you had already changed stay protected; commands cannot write the checkout or reach the network. Applies from your next message."
-        }
-        (false, Some(CommandPolicy::Trusted)) => {
-            "The agent edits files and runs commands without asking. Commands in this project are trusted: they run with full user access and network, and can change files you had already modified. Applies from your next message."
-        }
-        (false, None) => {
-            "The agent edits files and runs commands without asking. What commands can reach depends on this project's command policy, which is not loaded. Applies from your next message."
-        }
+/// The explanation of the application's default for edits and commands.
+/// `ask`: each call waits for approval. It describes no one project: what a
+/// command can reach is each project's own setting, so it promises no sandbox.
+pub fn approval_detail(ask: bool) -> &'static str {
+    if ask {
+        "Each edit and command waits for Allow once."
+    } else {
+        "The agent edits files and runs commands without asking. What a command can reach is set in each project's settings. Applies from your next message."
     }
 }
 
@@ -183,41 +175,47 @@ mod tests {
     #[test]
     fn copy_promises_a_sandbox_only_when_the_policy_is_sandboxed() {
         for ask in [true, false] {
+            // The application's default describes no project, so it never does.
+            for promise in SANDBOX_PROMISES {
+                let text = approval_detail(ask);
+                assert!(!text.contains(promise), "{text}");
+            }
             for policy in [None, Some(CommandPolicy::Trusted)] {
-                for text in [approval_detail(ask, policy), idle_detail(ask, policy)] {
-                    for promise in SANDBOX_PROMISES {
-                        assert!(!text.contains(promise), "{policy:?}: {text}");
-                    }
+                let text = idle_detail(ask, policy);
+                for promise in SANDBOX_PROMISES {
+                    assert!(!text.contains(promise), "{policy:?}: {text}");
                 }
             }
         }
         let sandboxed = Some(CommandPolicy::Sandboxed);
-        assert!(
-            approval_detail(false, sandboxed)
-                .contains("cannot write the checkout or reach the network")
-        );
         assert!(idle_detail(false, sandboxed).contains("sandboxed commands"));
+        // The project's own setting is where the sandbox is described.
+        assert!(CommandPolicy::Sandboxed.meaning().contains("No network"));
     }
 
     #[test]
     fn trusted_copy_says_what_commands_can_do() {
         let trusted = Some(CommandPolicy::Trusted);
         for text in [
-            approval_detail(false, trusted),
-            approval_detail(true, trusted),
+            CommandPolicy::Trusted.meaning(),
             idle_detail(false, trusted),
             idle_detail(true, trusted),
         ] {
             assert!(text.contains("full user access"), "{text}");
             assert!(text.contains("network"), "{text}");
         }
-        assert!(approval_detail(false, trusted).contains("already modified"));
+        assert!(
+            CommandPolicy::Trusted
+                .meaning()
+                .contains("already modified")
+        );
         // Asking is the same promise in every policy: nothing runs without Allow once.
+        assert!(approval_detail(true).starts_with("Each edit and command waits"));
         for policy in [None, Some(CommandPolicy::Sandboxed), trusted] {
-            assert!(approval_detail(true, policy).starts_with("Each edit and command waits"));
             assert!(idle_detail(true, policy).contains("waits for your approval"));
         }
-        assert!(approval_detail(false, None).contains("not loaded"));
+        // Without asking, the default points at the project for what commands reach.
+        assert!(approval_detail(false).contains("each project's settings"));
     }
 
     #[test]

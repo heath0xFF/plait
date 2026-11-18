@@ -149,7 +149,7 @@ impl Plait {
         let source = if self.draft.thinking.is_some() {
             "Chosen for this thread"
         } else {
-            "The default from Settings → Models"
+            "The default from Settings → New threads"
         };
         Some(
             menu_chip(
@@ -241,7 +241,7 @@ impl Plait {
         let source = if self.draft.approval.is_some() {
             "Chosen for this thread."
         } else {
-            "The default from Settings → Approvals."
+            "The default from Settings → New threads."
         };
         let blocked = locked.or_else(|| {
             (self.host.connected && self.host.protocol() < 2)
@@ -425,7 +425,7 @@ impl Plait {
         let note = if self.host.connected && self.host.protocol() < 4 {
             "This host runs every thread in Pi. Update the host to choose another harness."
         } else {
-            "A thread stays in the harness it starts in. Settings → Agent lists each one."
+            "A thread stays in the harness it starts in. Settings → Agents lists each one."
         };
         let options = Options {
             name: "Harness for the new thread".into(),
@@ -461,7 +461,7 @@ impl Plait {
             item(
                 "draft-approval-default",
                 format!("Use default ({})", approval_label(default)),
-                "Follow Settings → Approvals.",
+                "Follow Settings → New threads.",
                 None,
             ),
             item(

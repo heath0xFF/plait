@@ -79,13 +79,13 @@ stop; this preview provides no security-policy bypass.
 3. Open **Plait** from Applications. Use **Open repository…** (Cmd-O), then
    **Settings** (Cmd-comma) to check the local host and choose an authenticated
    model. Reconnect if the client opened before the host was ready.
-4. Start a real thread. Settings → Approvals selects automatic approval or
-   asking for each action. Trusted commands require a separate explicit choice
-   for each project. A Codex or Claude Code thread uses that harness's own
-   permissions instead,
-   chosen with **Permissions** above a new thread's message box or under an
-   open thread's, with a default for new threads in Settings → Agent. The app
-   shows only real threads.
+4. Start a real thread. Settings → New threads selects automatic approval or
+   asking for each action. Whether a project's commands are sandboxed or
+   trusted is that project's own choice, in its settings (the project's **…**
+   menu in the sidebar → **Project settings…**). A Codex or Claude Code thread
+   uses that harness's own permissions instead, chosen with **Permissions**
+   under a new or open thread's message box, with a default for each harness
+   in Settings → Agents. The app shows only real threads.
 
 The host is a **per-user LaunchAgent**, not a root daemon. It starts for the
 current graphical user when possible and at later graphical logins. If no
@@ -146,8 +146,12 @@ not copied into desktop preferences, the recovery journal, accessibility values,
 or clipboard copy. A connection check consumes an entered key without saving it;
 paste it again before saving a new endpoint. Endpoint removal requires confirmation.
 
-**Settings → Approvals → Command policy** changes the current checkout between
-Sandboxed and Trusted. Trusted requires confirmation of full user access, network,
+**Commands** in a project's settings changes that checkout between Sandboxed
+and Trusted. Open the page from the project's **…** menu in the sidebar
+(**Project settings…**), or with **File → Project Settings…** for the active
+project; a project that is not active becomes the active one first. The page
+also lists the Pi skills, prompt templates, and instructions its threads are
+offered. Trusted requires confirmation of full user access, network,
 Git writes, and the ability to change already-modified files. It affects the next
 run; an active run retains its original policy. The approval default is independent.
 
@@ -264,7 +268,7 @@ remain manual acceptance checks.
 Source builds from `main` with a matching host can run a thread in Codex or
 Claude Code instead of Pi. Neither is in a release yet. Each runs your own
 install with its own sign-in, settings, instructions, and tools; Plait never
-sees their credentials. **Settings → Agent** lists each harness with its state,
+sees their credentials. **Settings → Agents** lists each harness with its state,
 version, path, and what protects your checkout. **Choose…** runs a particular
 executable, and **Use PATH** returns to the one your login shell finds.
 **Refresh** checks again after you install, update, or sign in.
@@ -285,7 +289,7 @@ Codex's: ready, or what to fix (not installed, too old, or signed out).
 of Plait's Ask and Auto and the project's command policy. Claude Code offers
 Ask, Accept edits, Plan, Auto (the default), and Bypass. Codex offers Read only,
 Ask, Approve for me, and Full access (the default). Set each harness's default
-for new threads in Settings → Agent, or choose **Permissions** under the
+for new threads in Settings → Agents, or choose **Permissions** under the
 message box, in a new thread or an open one. The control names the mode; hold
 the pointer over it to read what the mode allows and what protects the
 checkout. In Claude Code a change applies at once, even during a run; in Codex
@@ -294,7 +298,7 @@ mode, an amber line under the controls says so. Each request the harness asks yo
 denied once. Plait's guard on files you had already changed does not apply
 here: the card names those files, but nothing stops the harness writing them.
 
-**Default harness for new threads** in Settings → Agent chooses where Cmd-N
+**Default harness for new threads** in Settings → New threads chooses where Cmd-N
 starts. A harness that is not ready is shown dimmed and cannot be chosen; a
 draft whose default is not ready starts in Pi. What has been checked against
 real installs is in [Verification](VERIFICATION.md#claude-code).
@@ -399,8 +403,8 @@ choose the **project** (a filterable list of sidebar projects, most recently
 active first, and **Open repository…**), the **model** (only the chosen
 harness's models), the **harness** (Pi, and each harness the host lists; one
 that is not ready is listed with its state), and **Permissions** (Pi: Ask or
-Auto, defaulting to Settings → Approvals; another harness: its own modes,
-defaulting to its Settings → Agent default). Changing the harness returns the
+Auto, defaulting to Settings → New threads; another harness: its own modes,
+defaulting to its Settings → Agents default). Changing the harness returns the
 model and permissions to that harness's defaults: Pi's saved default model, or
 the harness's most recently used model, else its first. Switching project keeps
 the new thread open and shows that repository in the inspector. While it is
@@ -480,17 +484,17 @@ says when they can be changed. In a Pi thread, changing the approval mode
 during a run applies from your next message; until then an amber line says
 which mode the run is under. An empty message box names its two triggers, `@`
 for files and `/` for commands; a line of key hints appears under the draft
-only during a run or when sending is off. New threads start at **Settings → Models → Default
+only during a run or when sending is off. New threads start at **Settings → New threads → Default
 thinking for new threads** (Medium unless changed), or the closest level their
 model offers; a model without reasoning starts with thinking off.
 
 The run-settings menu beside them chooses this thread's approval mode: **Use
-default** follows Settings → Approvals, or pick **Ask before actions** or
+default** follows Settings → New threads, or pick **Ask before actions** or
 **Auto-approve actions** for this thread alone. The choice is saved with the
 thread's draft and applies from its next message; it does not change an active
-run or previously queued messages. The menu also shows this project's command
-policy, which every thread in the checkout shares and which changes in
-Settings. The button names trusted commands, since they run outside the sandbox.
+run or previously queued messages. The button and the menu name only this
+thread's approval mode. Whether commands are sandboxed is shared by every
+thread in the checkout and is set in the project's settings.
 
 Context usage shows the latest response, not cumulative cost. Hover or activate
 it for exact token counts. At 75% it says high; at 90% it says nearly full. It

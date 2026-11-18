@@ -94,6 +94,7 @@ pub(super) const ACTIONS: &[AppAction] = &[
     entry("thread.new_worktree", "New Thread in Worktree", "File", Some("cmd-alt-n"), Item, || Box::new(NewWorktreeThread)),
     entry("thread.switch_model", "Change Thread Model…", "File", Some("cmd-shift-m"), Item, || Box::new(SwitchThreadModel)),
     entry("repository.open", "Open Repository…", "File", Some("cmd-o"), Group, || Box::new(OpenRepository)),
+    entry("project.settings", "Project Settings…", "File", None, Item, || Box::new(ProjectSettings)),
     entry("file.open", "Open File…", "File", Some("cmd-p"), Item, || Box::new(QuickOpen)),
     entry("git.refresh", "Refresh Git Status", "File", Some("cmd-r"), Item, || Box::new(Refresh)),
     entry("window.close", "Close Window", "File", Some("cmd-w"), Group, || Box::new(Close)),

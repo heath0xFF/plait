@@ -159,10 +159,10 @@ The latest release is **v0.1.0-preview.10**.
   [planned](docs/ROADMAP.md).
 - **Agent harnesses.** A thread runs on Pi, built in, or in your own Codex or
   Claude Code, with its own sign-in and permissions; Claude Code needs a
-  one-time setup in Settings → Agent. Other harnesses are planned (M7).
+  one-time setup in Settings → Agents. Other harnesses are planned (M7).
 - **Your Pi setup, partly.** Threads get your Pi skills (including
   `/skill:name`), prompt templates, and user-level
-  `AGENTS.md`, listed in Settings → Agent and offered when you type `/`. MCP
+  `AGENTS.md`, listed in each project's settings and offered when you type `/`. MCP
   servers and named CLIs are planned (M8).
 - **Not an IDE.** There is no file editor, embedded terminal, merge, rebase, or
   branch switching. The Files tab is read-only.

@@ -27,6 +27,7 @@ mod settings;
 mod settings_agent;
 mod settings_keyboard;
 mod settings_policy;
+mod settings_project;
 mod settings_providers;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod snapshot;
@@ -62,6 +63,7 @@ actions!(
         OpenRepository,
         Settings,
         ProviderSettings,
+        ProjectSettings,
         CheckForUpdates,
         Refresh,
         ToggleSidebar,
@@ -128,8 +130,11 @@ pub struct Plait {
     live_layout: Vec<plait_core::transcript::Slot>,
     formatted: std::sync::Arc<plait_core::markdown::Transcript>,
     history: history::HistoryView,
+    /// A settings page covers the workspace; `settings_page` says which.
     settings_open: bool,
-    settings_section: usize,
+    settings_page: settings::SettingsPage,
+    settings_tab: settings::SettingsTab,
+    /// Shared by both pages: opening either starts it at the top.
     settings_scroll: ScrollHandle,
     keyboard: settings_keyboard::KeyboardState,
     policy: settings_policy::PolicyState,
@@ -212,7 +217,8 @@ impl Plait {
             formatted: Default::default(),
             history: Default::default(),
             settings_open: false,
-            settings_section: 0,
+            settings_page: Default::default(),
+            settings_tab: Default::default(),
             settings_scroll: ScrollHandle::new(),
             keyboard: Default::default(),
             policy: Default::default(),
@@ -446,20 +452,56 @@ impl Plait {
 }
 
 impl Plait {
+    /// Open the application's Settings, or close whichever settings page is open.
     fn show_settings(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_page(
+            open.then_some(settings::SettingsPage::Application),
+            window,
+            cx,
+        );
+    }
+
+    /// Open the active project's settings page.
+    pub(super) fn show_project_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_page(Some(settings::SettingsPage::Project), window, cx);
+    }
+
+    /// Cmd-comma: the application page closes when it is the one open;
+    /// from anywhere else, including the project page, it opens.
+    fn toggle_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let open = self.settings_open && self.settings_page == settings::SettingsPage::Application;
+        self.show_settings(!open, window, cx);
+    }
+
+    /// Show `page` over the workspace, or close settings with `None`.
+    fn open_page(
+        &mut self,
+        page: Option<settings::SettingsPage>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.close_overlay(false, window, cx);
         window.focus(&self.focus, cx);
-        self.settings_open = open;
+        self.settings_open = page.is_some();
+        self.settings_page = page.unwrap_or_default();
         self.settings_scroll.set_offset(point(px(0.), px(0.)));
         self.cancel_recording(cx);
-        if open {
-            self.prepare_keyboard(cx);
-            self.prepare_code_font(cx);
-            self.prepare_providers(cx);
-        } else {
-            self.close_provider_form(cx);
+        match page {
+            Some(settings::SettingsPage::Application) => {
+                self.prepare_keyboard(cx);
+                self.prepare_code_font(cx);
+                self.prepare_providers(cx);
+            }
+            Some(settings::SettingsPage::Project) => {
+                self.close_provider_form(cx);
+                // Opened fresh, the page asks before trusting again.
+                self.policy.confirm = false;
+                // Pi's files can change while the app is open.
+                self.refresh_agent(cx);
+            }
+            None => self.close_provider_form(cx),
         }
-        if !open
+        if page.is_none()
             && self.tab == Workspace::Conversation
             && let Some(id) = self.host.selected.clone()
         {
@@ -553,25 +595,21 @@ impl Plait {
         cx.notify();
     }
 
-    /// One compact chrome row: where you are, its state, and the two workspaces.
+    /// One compact chrome row: where you are, its state, and the workspaces.
     /// It is also the window's title bar, so its empty parts move the window.
+    /// A settings page is not a thread's workspace, so it draws neither the
+    /// workspace switch nor the inspector toggle.
     fn header(
         &self,
         title: String,
-        location: String,
+        location: Option<String>,
         status: (String, u32),
         wide: bool,
         fullscreen: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let changed = self
-            .state
-            .repository
-            .snapshot
-            .ready()
-            .map(|snapshot| snapshot.changes.len())
-            .filter(|count| *count > 0);
-        self.window_drag(row(), cx)
+        let header = self
+            .window_drag(row(), cx)
             .h(px(CHROME_HEIGHT))
             .flex_shrink_0()
             .pl(window_bar::header_inset(self.sidebar, fullscreen))
@@ -597,7 +635,7 @@ impl Plait {
                             .child(text!(title)),
                     )
                     // The composer repeats this context; the header keeps it for Changes.
-                    .when(wide, |el| {
+                    .when_some(location.filter(|_| wide), |el, location| {
                         el.child(
                             tag(location, colors().subtle)
                                 .flex_shrink_0()
@@ -605,72 +643,82 @@ impl Plait {
                         )
                     }),
             )
-            .child(
-                row()
-                    .flex_shrink_0()
-                    .gap(px(6.))
-                    .child(dot(status.1))
-                    .child(tag(status.0, colors().muted)),
-            )
-            .child(
-                segmented()
-                    .child(
-                        segment(
-                            "conversation-tab",
-                            "Conversation",
-                            self.tab == Workspace::Conversation,
-                        )
-                        .aria_keyshortcuts(self.shortcut_aria("view.conversation"))
-                        .on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.show_tab(Workspace::Conversation, cx)
-                            }),
-                        ),
-                    )
-                    .child(
-                        segment("changes-tab", "Changes", self.tab == Workspace::Changes)
-                            .aria_keyshortcuts(self.shortcut_aria("view.changes"))
-                            // The accessible name stays "Changes"; the count is visual.
-                            .when_some(changed, |el, count| {
-                                el.child(
-                                    div()
-                                        .text_size(px(11.))
-                                        .text_color(rgb(colors().subtle))
-                                        .child(count.to_string()),
-                                )
-                            })
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.show_tab(Workspace::Changes, cx)),
-                            ),
-                    )
-                    .child(
-                        segment("history-tab", "History", self.tab == Workspace::History)
-                            .aria_keyshortcuts(self.shortcut_aria("view.history"))
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.show_tab(Workspace::History, cx)),
-                            ),
-                    )
-                    .child(
-                        segment("files-tab", "Files", self.tab == Workspace::Files)
-                            .aria_keyshortcuts(self.shortcut_aria("view.files"))
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.show_tab(Workspace::Files, cx)),
-                            ),
-                    ),
-            )
-            .child(
-                // Mirrors the sidebar toggle at the other end of the header.
-                icon_button(
-                    "toggle-inspector",
-                    "panel-right",
-                    if wide {
-                        "Toggle Git inspector"
-                    } else {
-                        "Git inspector (needs a wider window)"
-                    },
+            // A settings page is not a thread's: it has no state to show here.
+            .when(!self.settings_open, |el| {
+                el.child(
+                    row()
+                        .flex_shrink_0()
+                        .gap(px(6.))
+                        .child(dot(status.1))
+                        .child(tag(status.0, colors().muted)),
                 )
-                .aria_keyshortcuts(self.shortcut_aria("view.toggle_inspector"))
-                .on_activate(cx, |this, window, cx| this.toggle_inspector(window, cx)),
+            });
+        if self.settings_open {
+            // The bar names the page and holds the way out, so the page
+            // itself repeats neither.
+            return header.child(
+                toned_button("close-settings", "Done", Tone::Filled)
+                    .on_activate(cx, |this, window, cx| this.show_settings(false, window, cx)),
+            );
+        }
+        header.child(self.workspace_switch(cx)).child(
+            // Mirrors the sidebar toggle at the other end of the header.
+            icon_button(
+                "toggle-inspector",
+                "panel-right",
+                if wide {
+                    "Toggle Git inspector"
+                } else {
+                    "Git inspector (needs a wider window)"
+                },
+            )
+            .aria_keyshortcuts(self.shortcut_aria("view.toggle_inspector"))
+            .on_activate(cx, |this, window, cx| this.toggle_inspector(window, cx)),
+        )
+    }
+
+    /// Conversation, Changes, History, and Files: the views of the open checkout.
+    fn workspace_switch(&self, cx: &mut Context<Self>) -> Div {
+        let changed = self
+            .state
+            .repository
+            .snapshot
+            .ready()
+            .map(|snapshot| snapshot.changes.len())
+            .filter(|count| *count > 0);
+        segmented()
+            .child(
+                segment(
+                    "conversation-tab",
+                    "Conversation",
+                    self.tab == Workspace::Conversation,
+                )
+                .aria_keyshortcuts(self.shortcut_aria("view.conversation"))
+                .on_click(cx.listener(|this, _, _, cx| this.show_tab(Workspace::Conversation, cx))),
+            )
+            .child(
+                segment("changes-tab", "Changes", self.tab == Workspace::Changes)
+                    .aria_keyshortcuts(self.shortcut_aria("view.changes"))
+                    // The accessible name stays "Changes"; the count is visual.
+                    .when_some(changed, |el, count| {
+                        el.child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(rgb(colors().subtle))
+                                .child(count.to_string()),
+                        )
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| this.show_tab(Workspace::Changes, cx))),
+            )
+            .child(
+                segment("history-tab", "History", self.tab == Workspace::History)
+                    .aria_keyshortcuts(self.shortcut_aria("view.history"))
+                    .on_click(cx.listener(|this, _, _, cx| this.show_tab(Workspace::History, cx))),
+            )
+            .child(
+                segment("files-tab", "Files", self.tab == Workspace::Files)
+                    .aria_keyshortcuts(self.shortcut_aria("view.files"))
+                    .on_click(cx.listener(|this, _, _, cx| this.show_tab(Workspace::Files, cx))),
             )
     }
 
@@ -769,8 +817,13 @@ impl Render for Plait {
             ("Host disconnected".to_owned(), colors().amber)
         };
         let drafting = !real && self.draft.open;
-        let title = if self.settings_open {
-            "Settings".to_owned()
+        let page = self.settings_open.then_some(self.settings_page);
+        let title = if let Some(page) = page {
+            match page {
+                settings::SettingsPage::Application => "Settings",
+                settings::SettingsPage::Project => "Project settings",
+            }
+            .to_owned()
         } else if real {
             self.thread_title(self.host.selected.as_deref().unwrap_or_default())
         } else if drafting {
@@ -792,10 +845,13 @@ impl Render for Plait {
             connection
         };
         // With no thread open the title is already the project; don't repeat it.
-        let location = if real || drafting || self.settings_open {
-            format!("{} / {}", project.name, machine.name)
-        } else {
-            machine.name.clone()
+        // Settings is the app's, so it names no project; a project's page names it.
+        let location = match page {
+            // A settings page names itself; the project's page shows its
+            // name and path as its heading, so the bar does not repeat them.
+            Some(_) => None,
+            None if real || drafting => Some(format!("{} / {}", project.name, machine.name)),
+            None => Some(machine.name.clone()),
         };
         let root = column()
             .id("plait")
@@ -805,8 +861,11 @@ impl Render for Plait {
             .track_focus(&self.focus)
             .on_action(cx.listener(Self::open_repository))
             .on_action(cx.listener(Self::refresh))
-            .on_action(cx.listener(|this, _: &Settings, window, cx| {
-                this.show_settings(!this.settings_open, window, cx)
+            .on_action(
+                cx.listener(|this, _: &Settings, window, cx| this.toggle_settings(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &ProjectSettings, window, cx| {
+                this.show_project_settings(window, cx)
             }))
             .on_action(cx.listener(|this, _: &CheckForUpdates, window, cx| {
                 this.show_settings(true, window, cx);
@@ -936,7 +995,7 @@ impl Render for Plait {
             )
             .on_action(cx.listener(|this, _: &ProviderSettings, window, cx| {
                 this.show_settings(true, window, cx);
-                this.settings_section = 1;
+                this.settings_tab = settings::SettingsTab::Providers;
             }))
             .on_action(cx.listener(|_, _: &Minimize, window, _| window.minimize_window()))
             .map(|root| self.on_jump_actions(root, cx))
@@ -984,11 +1043,18 @@ impl Render for Plait {
                                 )
                             })
                             .when_some(self.creation_bar(cx), |el, bar| el.child(bar))
-                            .when(self.inspector_note && !wide, |el| {
+                            .when(self.inspector_note && !wide && page.is_none(), |el| {
                                 el.child(self.inspector_note(cx))
                             })
-                            .child(if self.settings_open {
-                                self.settings(cx).into_any_element()
+                            .child(if let Some(page) = page {
+                                match page {
+                                    settings::SettingsPage::Application => {
+                                        self.settings(cx).into_any_element()
+                                    }
+                                    settings::SettingsPage::Project => {
+                                        self.project_settings(cx).into_any_element()
+                                    }
+                                }
                             } else if self.tab == Workspace::History {
                                 self.history_view(wide, cx).into_any_element()
                             } else if self.tab == Workspace::Files {

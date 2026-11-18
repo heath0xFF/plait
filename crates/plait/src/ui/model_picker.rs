@@ -224,7 +224,7 @@ impl Plait {
     }
 
     /// The model a new thread starts with unless another is chosen, in the
-    /// default harness from Settings → Agent.
+    /// default harness from Settings → New threads.
     pub(super) fn new_thread_model(&self) -> Option<&Model> {
         let harness = self.default_harness();
         if harness != HarnessId::Pi {

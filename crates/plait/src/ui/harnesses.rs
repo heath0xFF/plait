@@ -96,11 +96,11 @@ pub(super) struct HarnessRow {
     /// The harness's own permission modes; empty for Pi, which uses Plait's approvals.
     pub(super) modes: Vec<ModeRow>,
     pub(super) default_mode: Option<String>,
-    /// Settings → Agent: what the default mode lets the harness do.
+    /// Settings → Agents: what the default mode lets the harness do.
     pub(super) default_detail: SharedString,
-    /// Settings → Agent: why the harness cannot be the default now, as hover text.
+    /// Settings → Agents: why the harness cannot be the default now, as hover text.
     pub(super) unstartable: Option<SharedString>,
-    /// The harness needs a download the person starts from Settings → Agent.
+    /// The harness needs a download the person starts from Settings → Agents.
     pub(super) setup: bool,
 }
 
@@ -158,7 +158,7 @@ impl HarnessRow {
             .map(|mode| mode.detail.clone())
             .unwrap_or_default();
         let blocked = (!ready).then(|| {
-            let fix = note.as_deref().unwrap_or("See Settings → Agent.");
+            let fix = note.as_deref().unwrap_or("See Settings → Agents.");
             SharedString::from(format!("{}: {}. {fix}", harness.name, state.to_lowercase()))
         });
         let models = harness.models.unwrap_or_default();
@@ -506,7 +506,7 @@ impl Plait {
         match self.harness_row(id) {
             Some(row) => row.blocked.as_ref().map(ToString::to_string),
             None if self.harnesses.note.is_some() => {
-                Some("Agent harnesses could not be checked · see Settings → Agent.".into())
+                Some("Agent harnesses could not be checked · see Settings → Agents.".into())
             }
             None => Some(format!("Checking {}…", id.label())),
         }
@@ -565,7 +565,7 @@ impl Plait {
         self.send_harnesses(Request::set_up_harness(id), cx);
     }
 
-    /// Whether harness `id` is being set up now, for Settings → Agent.
+    /// Whether harness `id` is being set up now, for Settings → Agents.
     pub(super) fn harness_setting_up(&self, id: HarnessId) -> bool {
         self.harnesses.busy && self.harnesses.setting_up == Some(id)
     }
@@ -724,7 +724,7 @@ impl Plait {
         (snapshot.harness.as_ref() == Some(key)).then_some(line)
     }
 
-    /// Settings → Agent: each harness, its state and version, and what protects the checkout.
+    /// Settings → Agents: each harness, its state and version, and what protects the checkout.
     pub(super) fn harness_settings(&self, cx: &mut Context<Self>) -> Div {
         let usable = self.host.connected && self.host.protocol() >= 4;
         let busy = self.harnesses.busy;
@@ -739,17 +739,11 @@ impl Plait {
         .when(usable && !busy, |el| {
             el.on_activate(cx, |this, _, cx| this.refresh_harnesses(cx))
         });
-        let mut page = settings::section("Agent harnesses")
-            .child(settings::setting(
-                "What can run a thread",
-                "Pi is built in. Codex and Claude Code run through your own installs, with their own sign-in and settings. A new thread starts in the default below; choose another above its message box, and the thread stays in it.",
-                refresh,
-            ))
-            .child(self.default_harness_setting(cx))
-            .when_some(
-                self.preference_note(Some(super::jump::PreferenceGroup::Agent)),
-                |el, note| el.child(tag(note, colors().subtle)),
-            );
+        let mut page = settings::section("Agent harnesses").child(settings::setting(
+            "What can run a thread",
+            "Pi is built in. Codex and Claude Code run through your own installs, with their own sign-in and settings. A new thread starts in the default from New threads; choose another under its message box, and the thread stays in it.",
+            refresh,
+        ));
         if !self.host.connected {
             return page.child(tag(
                 "Connect the host to list agent harnesses.",
@@ -895,9 +889,10 @@ impl Plait {
         }
     }
 
-    /// The harness a new thread's draft starts in: Pi, then each harness the host
-    /// lists. One that cannot start a thread now is shown, not offered.
-    fn default_harness_setting(&self, cx: &mut Context<Self>) -> Div {
+    /// Settings → New threads: the harness a new thread's draft starts in: Pi,
+    /// then each harness the host lists. One that cannot start a thread now is
+    /// shown, not offered.
+    pub(super) fn default_harness_setting(&self, cx: &mut Context<Self>) -> Div {
         let saved = self.preferences.value.default_harness;
         let rows = self.harness_rows();
         let mut options: Vec<(HarnessId, SharedString, Option<SharedString>)> = Vec::new();

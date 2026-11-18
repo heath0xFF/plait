@@ -921,7 +921,7 @@ Each canonical checkout has a command policy: `trusted`, the default, or
 `sandboxed`. It decides how the `command` tool runs for runs in that checkout.
 Trusted matches how Codex and Claude Code run out of the box: commands run as
 the user, with Git writes and the network. The sandbox is opt-in per project
-under Settings → Approvals → Command policy; returning to Trusted asks for
+under the project's settings → Commands; returning to Trusted asks for
 explicit confirmation of its consequences. Hosts through v0.1.0-preview.10
 defaulted to `sandboxed`.
 

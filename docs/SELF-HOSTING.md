@@ -30,7 +30,7 @@ threads, and drafts. **Settings → About** shows the desktop revision and host
 protocol; a new host may be staged until existing runs finish.
 
 Open this checkout with **Open repository…**, choose an authenticated model in
-**Settings → Providers / Models**, and start a thread. Existing dirty files
+**Settings → Providers / New threads**, and start a thread. Existing dirty files
 remain protected by the file tools; commit or finish that work before asking a
 new thread to edit those files, or start it with **New Thread in Worktree**
 so it works on its own branch and files. Worktrees are optional.
@@ -43,7 +43,8 @@ full development loop: formatting, package installation, generation, commits,
 and the full runtime test suite. It also permits commands to alter
 pre-existing work; file-tool dirty-path checks do not constrain a trusted shell.
 
-To contain a project, select **Sandboxed** in **Settings → Approvals**. File
+To contain a project, select **Sandboxed** under **Commands** in the project's
+settings (the project's **…** menu in the sidebar → **Project settings…**). File
 tools can still make approved edits, and commands can run offline locked Cargo
 builds using a persistent per-thread build cache. Commands cannot format source
 files, install dependencies from the network, write the checkout, or run every

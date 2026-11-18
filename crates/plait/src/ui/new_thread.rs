@@ -4,7 +4,7 @@
 //!
 //! The draft lands in the active checkout. Its harness, model, thinking level,
 //! and permissions are chosen in the row above its composer; until then each
-//! follows its default, and the harness follows Settings → Agent. Leaving the
+//! follows its default, and the harness follows Settings → New threads. Leaving the
 //! draft keeps its text; Escape or Discard clears it.
 
 use super::{
@@ -145,7 +145,7 @@ impl Plait {
         self.draft.harness.unwrap_or_else(|| self.default_harness())
     }
 
-    /// The harness from Settings → Agent when it can start a thread now, else Pi.
+    /// The harness from Settings → New threads when it can start a thread now, else Pi.
     pub(super) fn default_harness(&self) -> HarnessId {
         let id = self.preferences.value.default_harness;
         let startable = self
@@ -557,7 +557,7 @@ impl Plait {
         cx.notify();
     }
 
-    /// Pi's approvals for the new thread; `None` follows Settings → Approvals.
+    /// Pi's approvals for the new thread; `None` follows Settings → New threads.
     pub(super) fn choose_draft_approval(
         &mut self,
         mode: Option<ApprovalMode>,

@@ -592,9 +592,14 @@ impl Plait {
         if let Some(path) = id.strip_prefix("project:") {
             let checkout = PathBuf::from(path);
             let select = checkout.clone();
+            let configure = checkout.clone();
             let hide = checkout.clone();
             panel = panel.child(tag("Project", colors().muted))
                 .child(button("project-open", "Open project").on_activate(cx, move |this, window, cx| { this.navigation.menu = None; this.change_checkout(select.clone(), window, cx); }))
+                .child(button("project-settings", "Project settings…").on_activate(cx, move |this, window, cx| {
+                    this.navigation.menu = None;
+                    this.show_settings_for_project(configure.clone(), window, cx);
+                }))
                 .child(button("project-hide", "Remove from sidebar").on_activate(cx, move |this, _, cx| {
                     if this.project_of(&this.host.checkout) == hide { this.navigation.error = Some("Open another project before removing this one. Host threads are kept.".into()); }
                     else { let mut value = this.preferences.value.clone(); value.navigation.hide(&hide); this.set_preferences(value, PreferenceGroup::View, cx); this.rebuild_projects(cx); }

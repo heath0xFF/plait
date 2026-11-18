@@ -1,5 +1,7 @@
-//! The Settings page: host status first, then Models, Providers, Approvals, Agent,
-//! Keyboard, View, and About and updates.
+//! The application's Settings page: host status first, then New threads,
+//! Providers, Agents, Keyboard, Appearance, and About. Only what applies to the
+//! whole app or host is here; a project's own settings have their own page
+//! (settings_project.rs), and a thread's are under its message box.
 
 use super::{
     Plait,
@@ -12,8 +14,52 @@ use super::{
 use gpui::{prelude::*, *};
 use std::collections::HashSet;
 
+/// Which settings page fills the workspace while one is open.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum SettingsPage {
+    /// Settings (Cmd-comma): the whole app and host.
+    #[default]
+    Application,
+    /// The active project's own settings, from its sidebar menu.
+    Project,
+}
+
+/// The application page's tabs, in the order they are drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum SettingsTab {
+    #[default]
+    NewThreads,
+    Providers,
+    Agents,
+    Keyboard,
+    Appearance,
+    About,
+}
+
+impl SettingsTab {
+    pub(super) const ALL: [Self; 6] = [
+        Self::NewThreads,
+        Self::Providers,
+        Self::Agents,
+        Self::Keyboard,
+        Self::Appearance,
+        Self::About,
+    ];
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::NewThreads => "New threads",
+            Self::Providers => "Providers",
+            Self::Agents => "Agents",
+            Self::Keyboard => "Keyboard",
+            Self::Appearance => "Appearance",
+            Self::About => "About",
+        }
+    }
+}
+
 /// Centered reading column for settings-style pages.
-fn page(id: &'static str) -> Stateful<Div> {
+pub(super) fn page(id: &'static str) -> Stateful<Div> {
     column()
         .id(id)
         .overflow_y_scroll()
@@ -25,11 +71,16 @@ fn page(id: &'static str) -> Stateful<Div> {
         .gap_4()
 }
 
-fn heading(text: &'static str) -> Div {
+pub(super) fn heading(text: impl Into<SharedString>) -> Div {
     div()
         .text_size(px(15.))
         .font_weight(FontWeight::MEDIUM)
-        .child(text)
+        .child(text.into())
+}
+
+/// The workspace area around a settings page's column.
+pub(super) fn framed(column: Div) -> Div {
+    div().flex().flex_1().min_h_0().px_6().py_5().child(column)
 }
 
 fn note(text: impl Into<SharedString>) -> Div {
@@ -189,9 +240,44 @@ impl Plait {
         ))
     }
 
-    /// The default model at the top of its section. Choosing in the picker
-    /// saves at once; the line beneath reports what the host answered.
-    fn model_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Settings → New threads: what a new thread starts with, then what the
+    /// host's catalog offers.
+    fn new_thread_settings(&self, cx: &mut Context<Self>) -> Div {
+        column()
+            .gap_4()
+            .child(
+                section("Defaults")
+                    .child(self.default_harness_setting(cx))
+                    .when_some(
+                        self.preference_note(Some(PreferenceGroup::Agent)),
+                        |el, note| el.child(tag(note, colors().subtle)),
+                    )
+                    .child(self.default_model_setting(cx))
+                    .child(self.default_thinking_setting(cx))
+                    .child(self.approval_setting(cx)),
+            )
+            .child(self.catalog_settings())
+    }
+
+    /// How many models the host can use, and where sign-in answers go.
+    fn catalog_settings(&self) -> Div {
+        section("Models")
+            .when_some(self.catalog_summary(), |el, summary| {
+                el.child(tag(summary, colors().subtle))
+            })
+            .child(tag(
+                "Authentication stays on the host. Keys and sign-in answers entered here are sent once and never saved in desktop preferences.",
+                colors().subtle,
+            ))
+            .when_some(
+                self.preference_note(Some(PreferenceGroup::Models)),
+                |el, note| el.child(tag(format!("Favorites and recent models: {note}"), colors().subtle)),
+            )
+    }
+
+    /// The default model. Choosing in the picker saves at once; the line
+    /// beneath reports what the host answered.
+    fn default_model_setting(&self, cx: &mut Context<Self>) -> Div {
         let saved = self
             .host
             .status
@@ -215,7 +301,8 @@ impl Plait {
                     this.open_model_picker(ModelPurpose::DefaultModel, window, cx)
                 })
             });
-        section("Models")
+        column()
+            .gap_3()
             .child(setting(
                 "Default model for new threads",
                 "New threads start with this model. Choosing another saves it on the host at once. Existing threads are unchanged; their own model control changes them between runs.",
@@ -233,18 +320,6 @@ impl Plait {
             .when_some(self.default_model_state(), |el, (state, tint)| {
                 el.child(state_line(state, tint))
             })
-            .child(self.default_thinking_setting(cx))
-            .when_some(self.catalog_summary(), |el, summary| {
-                el.child(tag(summary, colors().subtle))
-            })
-            .child(tag(
-                "Authentication stays on the host. Keys and sign-in answers entered here are sent once and never saved in desktop preferences.",
-                colors().subtle,
-            ))
-            .when_some(
-                self.preference_note(Some(PreferenceGroup::Models)),
-                |el, note| el.child(tag(format!("Favorites and recent models: {note}"), colors().subtle)),
-            )
     }
 
     /// Saved on this desktop and sent with each new thread. The host picks the
@@ -302,94 +377,74 @@ impl Plait {
         self.present(palette, None, window, cx);
     }
 
-    pub(super) fn settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div().flex().flex_1().min_h_0().px_6().py_5().child(
-            column()
-                .flex_1()
-                .min_h_0()
-                .w_full()
-                .max_w(px(CONTENT_WIDTH))
-                .mx_auto()
-                .gap_3()
-                .child(
-                    row()
-                        .flex_shrink_0()
-                        .justify_between()
-                        .child(heading("Settings"))
-                        .child(
-                            toned_button("close-settings", "Done", Tone::Filled)
-                                .on_activate(cx, |this, window, cx| {
-                                    this.show_settings(false, window, cx)
-                                }),
-                        ),
+    /// A settings page's column. Both pages share it, so they keep one
+    /// width. The window bar names the page and holds Done, so the column
+    /// starts with its content; `title` is for a page that has something
+    /// more to say there, as the project's page names its project.
+    pub(super) fn settings_column(&self, title: Option<AnyElement>) -> Div {
+        column()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .max_w(px(CONTENT_WIDTH))
+            .mx_auto()
+            .gap_3()
+            .children(title)
+            .when_some(self.preference_note(None), |el, note| {
+                el.child(state_line(
+                    format!("Desktop preferences: {note}"),
+                    colors().amber,
+                ))
+            })
+    }
+
+    fn settings_tabs(&self, cx: &mut Context<Self>) -> Div {
+        let mut tabs = row().gap_1().flex_wrap();
+        for tab in SettingsTab::ALL {
+            let selected = self.settings_tab == tab;
+            tabs = tabs.child(
+                toned_button(
+                    ("settings-section", tab as usize),
+                    tab.label(),
+                    if selected {
+                        Tone::Selected
+                    } else {
+                        Tone::Ghost
+                    },
                 )
-                .when_some(self.preference_note(None), |el, note| {
-                    el.child(state_line(
-                        format!("Desktop preferences: {note}"),
-                        colors().amber,
-                    ))
-                })
-                .child(self.host_status(cx))
-                .child({
-                    let mut tabs = row().gap_1().flex_wrap();
-                    for (index, label) in [
-                        "Models",
-                        "Providers",
-                        "Approvals",
-                        "Agent",
-                        "Keyboard",
-                        "Appearance",
-                        "About",
-                    ]
-                    .into_iter()
-                    .enumerate()
-                    {
-                        tabs = tabs.child(
-                            toned_button(
-                                ("settings-section", index),
-                                label,
-                                if self.settings_section == index {
-                                    Tone::Selected
-                                } else {
-                                    Tone::Ghost
-                                },
-                            )
-                            .role(Role::Tab)
-                            .aria_selected(self.settings_section == index)
-                            .on_activate(cx, move |this, _, cx| {
-                                this.cancel_recording(cx);
-                                if index != 1 {
-                                    this.close_provider_form(cx);
-                                }
-                                this.settings_section = index;
-                                if index == 3 {
-                                    this.refresh_agent(cx);
-                                }
-                                this.settings_scroll.set_offset(point(px(0.), px(0.)));
-                                cx.notify();
-                            }),
-                        );
+                .role(Role::Tab)
+                .aria_selected(selected)
+                .on_activate(cx, move |this, _, cx| {
+                    this.cancel_recording(cx);
+                    if tab != SettingsTab::Providers {
+                        this.close_provider_form(cx);
                     }
-                    tabs
-                })
+                    this.settings_tab = tab;
+                    this.settings_scroll.set_offset(point(px(0.), px(0.)));
+                    cx.notify();
+                }),
+            );
+        }
+        tabs
+    }
+
+    pub(super) fn settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let body = match self.settings_tab {
+            SettingsTab::NewThreads => self.new_thread_settings(cx).into_any_element(),
+            SettingsTab::Providers => self.provider_settings(cx).into_any_element(),
+            SettingsTab::Agents => self.harness_settings(cx).into_any_element(),
+            SettingsTab::Keyboard => self.keyboard_settings(cx).into_any_element(),
+            SettingsTab::Appearance => self.view_settings(cx).into_any_element(),
+            SettingsTab::About => self.build_details(cx).into_any_element(),
+        };
+        framed(
+            self.settings_column(None)
+                .child(self.host_status(cx))
+                .child(self.settings_tabs(cx))
                 .child(
                     page("settings-page")
                         .track_scroll(&self.settings_scroll)
-                        .child(match self.settings_section {
-                            1 => self.provider_settings(cx).into_any_element(),
-                            2 => column()
-                                .gap_4()
-                                .when(!self.policy.confirm, |el| {
-                                    el.child(self.approval_settings(cx))
-                                })
-                                .child(self.policy_settings(cx))
-                                .into_any_element(),
-                            3 => self.agent_settings(cx).into_any_element(),
-                            4 => self.keyboard_settings(cx).into_any_element(),
-                            5 => self.view_settings(cx).into_any_element(),
-                            6 => self.build_details(cx).into_any_element(),
-                            _ => self.model_settings(cx).into_any_element(),
-                        }),
+                        .child(body),
                 ),
         )
     }
@@ -460,7 +515,9 @@ impl Plait {
         }
     }
 
-    fn approval_settings(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Pi's default approvals. The detail names what commands reach in the
+    /// open project, since that is where the next thread will run.
+    fn approval_setting(&self, cx: &mut Context<Self>) -> Div {
         let ask = self.preferences.value.ask_before_actions;
         let mut choices = segmented();
         for (index, (label, value)) in [("Automatic", false), ("Ask each time", true)]
@@ -486,10 +543,12 @@ impl Plait {
         let detail = if self.host.connected && self.host.protocol() < 2 {
             "This host asks before every edit and command. Update the host to use Automatic."
         } else {
-            plait_core::host::policy::approval_detail(ask, self.command_policy())
+            // Settings describes no one project, the open one included.
+            plait_core::host::policy::approval_detail(ask)
         };
         let harness_modes = self.harness_rows().iter().any(|row| !row.modes.is_empty());
-        section("Approvals")
+        column()
+            .gap_3()
             .child(setting("Default for edits and commands", detail, choices))
             .child(tag(
                 "A thread can choose its own from the run settings under its message box.",
@@ -497,7 +556,7 @@ impl Plait {
             ))
             .when(harness_modes, |el| {
                 el.child(tag(
-                    "These apply to Pi threads. A thread in another harness uses that harness's own permissions, chosen under its message box and in Settings → Agent.",
+                    "These apply to Pi threads. A thread in another harness uses that harness's own permissions, chosen under its message box and in Settings → Agents.",
                     colors().subtle,
                 ).line_height(px(16.)))
             })
@@ -505,5 +564,25 @@ impl Plait {
                 self.preference_note(Some(PreferenceGroup::Approvals)),
                 |el, note| el.child(tag(note, colors().subtle)),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SettingsTab;
+
+    /// A tab's element ID is its position, so the order and the IDs agree.
+    #[test]
+    fn each_tab_is_drawn_once_at_its_own_position() {
+        for (index, tab) in SettingsTab::ALL.into_iter().enumerate() {
+            assert_eq!(tab as usize, index, "{tab:?}");
+        }
+        let labels = SettingsTab::ALL
+            .map(SettingsTab::label)
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(labels.len(), SettingsTab::ALL.len());
+        assert_eq!(SettingsTab::default(), SettingsTab::NewThreads);
+        assert_eq!(SettingsTab::NewThreads.label(), "New threads");
     }
 }

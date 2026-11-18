@@ -1,5 +1,6 @@
-//! Settings → Agent: what the person's Pi setup offers threads in the open
-//! checkout, read from the host with the same discovery a run makes.
+//! A project's settings → Your Pi agent: what the person's Pi setup offers
+//! threads in the open checkout, read from the host with the same discovery a
+//! run makes.
 //!
 //! Read-only. Turning a skill or template off stays in Pi's own settings,
 //! which Plait follows, so there is one place to manage them. Every string the
@@ -147,7 +148,8 @@ impl Plait {
         }
     }
 
-    /// Read the setup once per host connection and checkout. Settings refreshes it on demand.
+    /// Read the setup once per host connection and checkout. Opening the
+    /// project's settings, or Refresh there, reads it again.
     pub(super) fn sync_agent(&mut self, cx: &mut Context<Self>) {
         if !self.host.connected || self.state.repository.snapshot.ready().is_none() || cfg!(test) {
             return;
@@ -255,14 +257,11 @@ impl Plait {
                     colors().subtle,
                 ))
             });
-            return column()
-                .gap_4()
-                .child(self.harness_settings(cx))
-                .child(page);
+            return page;
         };
         if !view.trusted {
             page = page.child(tag(
-                "Skills and templates inside this project load only when its commands are trusted (Approvals).",
+                "Skills and templates inside this project load only when its commands are trusted, above.",
                 colors().subtle,
             ).line_height(px(16.)));
         }
@@ -275,7 +274,6 @@ impl Plait {
         };
         column()
             .gap_4()
-            .child(self.harness_settings(cx))
             .child(page)
             .child(settings::section("Instructions").child(instructions))
             .child(self.list(

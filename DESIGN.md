@@ -106,8 +106,8 @@ conversation keeps a readable minimum width.
   with explicit mode and Cancel or Retry controls. Below it is one line of
   wrapping controls: the harness's logo, model, the thinking level by name
   alone, context use, and the permissions control, which names the mode and
-  nothing more ("Full access", "Ask before actions", and trusted commands when
-  on). A new thread's draft has the same line in the same place, with its
+  nothing more ("Full access", "Ask before actions"); whether commands are
+  sandboxed is the project's, on its page. A new thread's draft has the same line in the same place, with its
   project and harness. Labels name the setting; hover text says what a mode
   allows, what protects the checkout, when a change applies, the harness's
   version, and why a control is locked. A locked control stays readable, in
@@ -131,14 +131,33 @@ conversation keeps a readable minimum width.
   headings before a search and disappear during one. The model picker adds a
   favorite star, outlined or filled, and Set default on every usable row; the
   current default carries a mint Default label instead.
-- **Settings.** Host status and Reconnect first, then Models, Providers,
-  Approvals, Keyboard, View, and About tabs. View lists light and dark themes
-  side by side, each with a swatch of its background, text, and accents. The heading and tabs stay visible while
+- **A home per scope.** A setting lives where its scope is. A thread's own
+  choices are under its message box, and its menus hold nothing wider. A
+  project's settings are on the project's page, opened from its sidebar menu
+  (Project settings…). What applies to the whole app or host is in Settings.
+  A control names its state in a word or two; what it means goes in hover
+  text, not a permanent line.
+- **Settings.** Host status and Reconnect first, then New threads, Providers,
+  Agents, Keyboard, Appearance, and About tabs. New threads holds the defaults
+  a new thread starts with: harness, model, thinking, and Pi's approvals.
+  Agents lists each harness, its setup, and its default permissions.
+  Appearance lists light and dark themes side by side, each with a swatch of
+  its background, text, and accents. The host status and tabs stay visible while
   the active section scrolls. Each setting is a label and one line
-  of meaning on the left and its control on the right. Provider forms occupy their section while open; keys are masked, with explicit reveal. Trusted command access needs a
-  consequence summary and a separate confirmation. Shortcut recording shows
+  of meaning on the left and its control on the right. Provider forms occupy their section while open; keys are masked, with explicit reveal. Shortcut recording shows
   conflicts in place and lets the person cancel or reassign. A choice applies when
-  made; its saved or failed state is a dot and a sentence beneath it.
+  made; its saved or failed state is a dot and a sentence beneath it. While a
+  settings page is open, the window bar names it ("Settings" or "Project
+  settings") and holds Done, the way out. It drops the thread's state, the
+  workspace switch, and the inspector toggle, which belong to a thread's
+  workspace. The page does not repeat its title or Done. Settings describes
+  no one project, the open one included: what a command can reach is said on
+  the project's page.
+- **Project settings.** The same column as Settings, headed by the project's
+  name with its checkout path beneath in hint color. Commands
+  (sandboxed or trusted, for this checkout), then the Pi setup its threads are
+  offered: skills, prompt templates, and instructions. Trusted command access
+  needs a consequence summary and a separate confirmation.
 - **Approval.** A bordered card above the composer shows the exact arguments,
   the risk, protected dirty paths, and Deny once / Allow once. The amber dot,
   title, and edge carry the caution; the risk is secondary text, read rather

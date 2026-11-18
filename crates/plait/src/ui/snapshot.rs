@@ -17,7 +17,13 @@
 //! then call `harness.capture("name-{suffix}")` from `walk` or a `*_walk`
 //! helper. Every scene runs at both window sizes.
 
-use super::{Plait, composer::Composer, model_picker::ModelPurpose, theme::Assets};
+use super::{
+    Plait,
+    composer::Composer,
+    model_picker::ModelPurpose,
+    settings::{SettingsPage, SettingsTab},
+    theme::Assets,
+};
 use gpui::{prelude::*, *};
 use plait_core::host::harness::HarnessId;
 use plait_core::{
@@ -671,6 +677,7 @@ impl Harness {
                 plait.host.snapshot.as_ref().unwrap(),
             ));
             plait.settings_open = false;
+            plait.settings_page = SettingsPage::default();
             plait.new_thread_open = false;
             plait.tab = super::Workspace::Conversation;
             let composer = cx.new(|cx| Composer::new(window, cx));
@@ -2631,7 +2638,7 @@ fn theme_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.capture(&format!("light-changes-{suffix}"));
     harness.update(|plait, _, _| {
         plait.settings_open = true;
-        plait.settings_section = 5;
+        plait.settings_tab = SettingsTab::Appearance;
     });
     harness.capture(&format!("light-settings-appearance-{suffix}"));
     force(harness, false);
@@ -2810,7 +2817,7 @@ fn draft_scenes_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         plait.close_overlay(true, window, cx);
         plait.inject_harnesses(Some(sample_harnesses(
             "not_installed",
-            Some("Install Codex, or choose its executable in Settings → Agent."),
+            Some("Install Codex, or choose its executable in Settings → Agents."),
         )));
         plait.open_draft_harnesses(window, cx);
     });
@@ -2867,7 +2874,7 @@ fn draft_scenes_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         modifiers: Modifiers::default(),
     }));
     harness.capture(&format!("sidebar-project-hover-{suffix}"));
-    // With Codex as the default in Settings → Agent, a new draft opens on it.
+    // With Codex as the default in Settings → New threads, a new draft opens on it.
     harness.update(|plait, window, cx| {
         // In memory only: the scene does not write a preferences file.
         plait.preferences.value.default_harness = HarnessId::Codex;
@@ -2944,7 +2951,7 @@ fn sample_harnesses(state: &str, note: Option<&str>) -> plait_core::host::harnes
 const NEWER: &str = "Newer than the 0.169.0 Plait was tested with. It should work; anything odd is worth reporting.";
 
 /// Version 4 harnesses: a Codex thread's composer line, model menu, and
-/// permissions, and Settings → Agent. The draft walk covers choosing one.
+/// permissions, and Settings → Agents. The draft walk covers choosing one.
 fn harnesses_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     use plait_core::host::{
         ThinkingLevel,
@@ -3016,7 +3023,7 @@ fn harnesses_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.update(|plait, _, cx| {
         plait.inject_harnesses(Some(sample_harnesses(
             "signed_out",
-            Some("Run codex login in a terminal, then Refresh in Settings → Agent."),
+            Some("Run codex login in a terminal, then Refresh in Settings → Agents."),
         )));
         plait.sync_composer(cx);
         assert!(!plait.can_submit(), "a signed-out Codex cannot send");
@@ -3027,10 +3034,14 @@ fn harnesses_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         // Codex is the default for new threads. In memory only.
         plait.preferences.value.default_harness = HarnessId::Codex;
         plait.settings_open = true;
-        plait.settings_section = 3;
+        plait.settings_tab = SettingsTab::Agents;
         plait.sync_composer(cx);
     });
     harness.capture(&format!("harness-settings-{suffix}"));
+    // The default harness is a default for new threads, so it is under New threads.
+    harness.update(|plait, _, _| plait.settings_tab = SettingsTab::NewThreads);
+    harness.capture(&format!("harness-default-{suffix}"));
+    harness.update(|plait, _, _| plait.settings_tab = SettingsTab::Agents);
     let forced = harness
         .window
         .update(&mut harness.cx, |plait, _, _| plait.themes.forced)
@@ -3057,7 +3068,7 @@ fn harnesses_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         plait.inject_harnesses(None);
         plait.preferences.value.default_harness = HarnessId::Pi;
         plait.show_settings(false, window, cx);
-        plait.settings_section = 0;
+        plait.settings_tab = SettingsTab::default();
     });
     harness.connect(repository, false);
 }
@@ -3128,7 +3139,7 @@ fn capture_both(harness: &mut Harness, name: &str) {
     });
 }
 
-/// Settings → Agent in both themes. In a narrow window the Claude Code entry
+/// Settings → Agents in both themes. In a narrow window the Claude Code entry
 /// sits below the window's height, so it is also captured scrolled to it.
 fn claude_settings(harness: &mut Harness, state: &str, suffix: &str) {
     capture_both(
@@ -3145,7 +3156,7 @@ fn claude_settings(harness: &mut Harness, state: &str, suffix: &str) {
     }
 }
 
-/// Claude Code: Settings → Agent before, during, and after setup, a Claude
+/// Claude Code: Settings → Agents before, during, and after setup, a Claude
 /// Code draft, and a Claude Code thread waiting for an approval.
 fn claude_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     use plait_core::host::{ThinkingLevel, harness::ThreadHarness};
@@ -3156,7 +3167,7 @@ fn claude_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         status.models.truncate(6);
         plait.inject_harnesses(Some(claude_harnesses("setup_required", Some(CLAUDE_SETUP))));
         plait.settings_open = true;
-        plait.settings_section = 3;
+        plait.settings_tab = SettingsTab::Agents;
         plait.sync_composer(cx);
     });
     claude_settings(harness, "setup", suffix);
@@ -3183,7 +3194,7 @@ fn claude_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     // A new thread opens on Claude Code, the default now, in its default mode.
     harness.update(|plait, window, cx| {
         plait.show_settings(false, window, cx);
-        plait.settings_section = 0;
+        plait.settings_tab = SettingsTab::default();
         plait.open_draft(window, cx);
         assert_eq!(plait.draft_harness(), HarnessId::Claude);
         assert_eq!(plait.draft_model(), Some(claude_choice()));
@@ -3398,7 +3409,7 @@ fn a_codex_draft_starts_a_codex_thread_in_its_mode() {
     std::fs::remove_dir_all(scratch).unwrap();
 }
 
-/// A draft starts in the default harness from Settings → Agent while it is
+/// A draft starts in the default harness from Settings → New threads while it is
 /// ready, else Pi; a harness chosen in one draft leaves the default alone.
 #[core::prelude::v1::test]
 fn a_draft_starts_in_the_default_harness_while_it_is_ready() {
@@ -3626,7 +3637,7 @@ fn settings_controls_walk(harness: &mut Harness, repository: &Path, suffix: &str
     harness.connect(repository, false);
     harness.update(|plait, window, cx| {
         plait.show_settings(true, window, cx);
-        plait.settings_section = 4;
+        plait.settings_tab = SettingsTab::Keyboard;
         plait
             .keyboard
             .search
@@ -3679,7 +3690,7 @@ fn settings_controls_walk(harness: &mut Harness, repository: &Path, suffix: &str
     });
     harness.capture(&format!("keyboard-default-{suffix}"));
     harness.update(|plait, _, _| {
-        plait.settings_section = 1;
+        plait.settings_tab = SettingsTab::Providers;
         plait.providers.loaded = true;
         plait.providers.rows = vec![
             Provider {
@@ -3900,10 +3911,11 @@ fn settings_controls_walk(harness: &mut Harness, repository: &Path, suffix: &str
         });
         harness.capture("provider-endpoint-scrolled-narrow");
     }
-    harness.update(|plait, _, cx| {
-        plait.close_provider_form(cx);
-        plait.settings_scroll.set_offset(point(px(0.), px(0.)));
-        plait.settings_section = 2;
+    // The command policy is the project's, on the project's own page.
+    harness.update(|plait, window, cx| {
+        plait.show_project_settings(window, cx);
+        assert!(plait.providers.form.is_none(), "the provider form closes");
+        assert_eq!(plait.settings_page, SettingsPage::Project);
         plait.policy.key = Some((plait.host.epoch, plait.host.checkout.clone()));
         plait.policy.value = Some(CommandPolicy::Sandboxed);
     });
@@ -3964,13 +3976,20 @@ fn settings_controls_walk(harness: &mut Harness, repository: &Path, suffix: &str
                 message: "description is required".into(),
             }],
         };
-        plait.settings_section = 3;
         plait.agent.view = Some(std::sync::Arc::new(super::settings_agent::AgentView::new(sample)));
     });
+    harness.capture(&format!("project-settings-{suffix}"));
+    // The Pi setup's lists, below the command policy.
+    harness.update(|plait, _, _| plait.settings_scroll.set_offset(point(px(0.), px(-260.))));
     harness.capture(&format!("agent-settings-{suffix}"));
     harness.update(|plait, window, cx| {
-        plait.show_settings(false, window, cx);
-        plait.settings_section = 0;
+        // Cmd-comma from the project's page opens the application's, not closes.
+        plait.toggle_settings(window, cx);
+        assert!(plait.settings_open);
+        assert_eq!(plait.settings_page, SettingsPage::Application);
+        plait.toggle_settings(window, cx);
+        assert!(!plait.settings_open);
+        plait.settings_tab = SettingsTab::default();
     });
 }
 
@@ -4637,6 +4656,9 @@ fn navigation_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         plait.navigation.menu = Some(THREAD.into());
     });
     harness.capture(&format!("navigation-actions-{suffix}"));
+    let project = format!("project:{}", repository.display());
+    harness.update(move |plait, _, _| plait.navigation.menu = Some(project));
+    harness.capture(&format!("navigation-project-actions-{suffix}"));
     // Threads in a Plait worktree list under the project it was made from.
     let main = repository.to_owned();
     harness.update(move |plait, _, cx| {
@@ -4737,6 +4759,104 @@ fn project_switching_keeps_each_draft_and_rejects_the_old_watch() {
         );
         assert_eq!(plait.host.threads.len(), 3);
     });
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+/// Project Settings… in another project's sidebar menu makes that project the
+/// active one, then opens its page. The action opens the active project's
+/// page, and Done and Cmd-comma leave it.
+#[core::prelude::v1::test]
+fn project_settings_open_for_the_chosen_project() {
+    if !isolated("project_settings_open_for_the_chosen_project") {
+        return;
+    }
+    let scratch =
+        std::env::temp_dir().join(format!("plait-project-settings-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    let other = repository.join("other");
+    let chosen = other.clone();
+    harness.update(move |plait, window, cx| {
+        plait.host.status.as_mut().unwrap().protocol_version = 3;
+        // Refused while a thread is being created: no page for the wrong project.
+        plait.host.creating = true;
+        plait.show_settings_for_project(chosen.clone(), window, cx);
+        assert!(!plait.settings_open);
+        assert_ne!(plait.host.checkout, chosen);
+        plait.host.creating = false;
+        plait.notice = None;
+        plait.show_settings_for_project(chosen.clone(), window, cx);
+        assert_eq!(plait.host.checkout, chosen, "the chosen project is active");
+        assert!(plait.settings_open);
+        assert_eq!(plait.settings_page, SettingsPage::Project);
+    });
+    harness.draw();
+    // The same project again opens its page without changing checkout.
+    let epoch = harness
+        .window
+        .update(&mut harness.cx, |plait, window, cx| {
+            plait.show_settings(false, window, cx);
+            assert!(!plait.settings_open);
+            plait.host.epoch
+        })
+        .expect("window update");
+    harness.update(move |plait, window, cx| {
+        plait.show_settings_for_project(other.clone(), window, cx);
+        assert_eq!(plait.host.epoch, epoch, "no checkout change");
+        assert_eq!(plait.settings_page, SettingsPage::Project);
+        plait.show_settings(false, window, cx);
+        // The menu bar's Project Settings… opens the active project's page.
+        window.dispatch_action(Box::new(super::ProjectSettings), cx);
+    });
+    harness.update(|plait, window, cx| {
+        assert!(plait.settings_open);
+        assert_eq!(plait.settings_page, SettingsPage::Project);
+        window.dispatch_action(Box::new(super::Settings), cx);
+    });
+    harness.update(|plait, _, _| {
+        assert!(
+            plait.settings_open,
+            "Cmd-comma opens Settings over the project page"
+        );
+        assert_eq!(plait.settings_page, SettingsPage::Application);
+    });
+    harness.draw();
+    let action = super::actions::ACTIONS
+        .iter()
+        .find(|action| action.id == "project.settings")
+        .expect("Project Settings… is in the action table");
+    assert_eq!(action.title, "Project Settings…");
+    assert_eq!(action.key, None, "no default shortcut");
+    assert_eq!(action.category, "File");
+    assert_ne!(action.place, super::actions::Place::Hidden);
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+/// A Pi thread's run-settings menu lists only that thread's approval choices.
+#[core::prelude::v1::test]
+fn the_thread_menu_lists_only_the_threads_approvals() {
+    if !isolated("the_thread_menu_lists_only_the_threads_approvals") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-run-menu-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.update(|plait, window, cx| {
+        use plait_core::host::policy::CommandPolicy;
+        // Trusted commands no longer add a project item to the thread's menu.
+        plait.policy.key = Some((plait.host.epoch, plait.host.checkout.clone()));
+        plait.policy.value = Some(CommandPolicy::Trusted);
+        plait.open_run_settings(window, cx);
+    });
+    harness.draw();
+    let titles = shown(&mut harness);
+    assert_eq!(titles.len(), 3, "{titles:?}");
+    assert!(titles[0].starts_with("Use default ("), "{titles:?}");
+    assert_eq!(titles[1..], ["Ask before actions", "Auto-approve actions"]);
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();
 }

@@ -172,6 +172,29 @@ No real sign-in, credential save, endpoint request, or model run was performed i
 that native pass. Exact minimum-size native scrolling, IME, token refresh,
 notification delivery, and full VoiceOver acceptance remain separate checks.
 
+### Settings by scope
+
+Source builds split settings by scope: a thread's under its message box, a
+project's on its own page, and the app's in Settings. Desktop tests check that
+Project settings… for a project that is not active makes it the active one and
+then opens its page, that it opens nothing while a thread is being created,
+that the same project opens without changing checkout, that the menu bar's
+**Project Settings…** opens the active project's page, and that Cmd-comma over
+that page opens Settings rather than closing it. A Pi thread's run-settings
+menu lists only its three approval choices, even when the project's commands
+are trusted. A unit test keeps the Settings tabs' order and their element IDs
+in step. A core test keeps the explanation of the default for edits and
+commands from promising a sandbox: Settings describes no one project, and the
+project's own page says what its commands can reach. Wide and narrow scenes render Settings → New threads (including the
+default harness), Settings → Agents, the project's page with the command
+policy and its Pi setup (`project-settings`, `agent-settings`), the Sandboxed,
+Trusted, and confirmation states there (`policy-*`), and the project's sidebar
+menu (`navigation-project-actions`). All of it uses injected host replies.
+
+None of this has been checked in the installed app: not the menu bar item, the
+sidebar menu with a real pointer, the header while a settings page is open, a
+real policy change saved from the new page, or VoiceOver on either page.
+
 ## Paged conversation history
 
 Source builds with a version 3 host have core tests for history/live seams,
@@ -391,7 +414,7 @@ discovery and links to non-Markdown or credential files, and keep the
 `agent_resources` reply free of file contents and under the 1 MiB frame with
 oversized lists. A host test sends `agent_resources` and sees trust follow the
 command policy. Desktop tests cover agent command ranking and clashes, and
-scenes render Settings → Agent and the `/` list from sample state; choosing a
+scenes render the project's settings page and the `/` list from sample state; choosing a
 command inserts it. A live model receiving an expanded template in the
 installed app has not been checked. Discovery on
 a real Pi setup with 66 skills (29 turned off in settings) took 7–20 ms per run.

@@ -9,6 +9,7 @@ use super::{
     actions::{ACTIONS, KEY_LABELS, Place},
     model_picker::{self, ModelPurpose, PickerStamp},
     palette::{Item, Options, Palette, PaletteEvent},
+    settings::SettingsTab,
     theme::*,
 };
 use gpui::{prelude::*, *};
@@ -26,7 +27,7 @@ pub(super) enum Command {
     Model(ModelChoice),
     /// A model of a harness other than Pi, chosen in the model picker.
     HarnessModel(HarnessId, ModelChoice),
-    /// Open Settings → Agent, where harnesses are listed.
+    /// Open Settings → Agents, where harnesses are listed.
     HarnessSettings,
     Thinking {
         thread_id: String,
@@ -43,8 +44,6 @@ pub(super) enum Command {
         mode: String,
         select: super::permissions::OnPermissions,
     },
-    /// Open the project's command policy in Settings.
-    PolicySettings,
     /// The new-thread draft's project, harness, and Pi approvals.
     DraftProject(std::path::PathBuf),
     DraftHarness(HarnessId),
@@ -86,7 +85,6 @@ impl Clone for Command {
                 mode: mode.clone(),
                 select: select.clone(),
             },
-            Self::PolicySettings => Self::PolicySettings,
             Self::DraftProject(path) => Self::DraftProject(path.clone()),
             Self::DraftHarness(id) => Self::DraftHarness(*id),
             Self::DraftApproval(mode) => Self::DraftApproval(*mode),
@@ -390,7 +388,7 @@ impl Plait {
             Command::Action(action) => window.dispatch_action(action, cx),
             Command::SignIn(provider) => {
                 self.show_settings(true, window, cx);
-                self.settings_section = 1;
+                self.settings_tab = SettingsTab::Providers;
                 self.close_provider_form(cx);
                 self.start_provider_sign_in(provider, cx);
             }
@@ -429,13 +427,9 @@ impl Plait {
                 }
             }
             Command::Permissions { mode, select } => select(self, mode, window, cx),
-            Command::PolicySettings => {
-                self.show_settings(true, window, cx);
-                self.settings_section = 2;
-            }
             Command::HarnessSettings => {
                 self.show_settings(true, window, cx);
-                self.settings_section = 3;
+                self.settings_tab = SettingsTab::Agents;
             }
             Command::DraftProject(path) => self.choose_draft_project(path, window, cx),
             Command::DraftHarness(id) => self.choose_draft_harness(id, cx),

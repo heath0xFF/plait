@@ -27,7 +27,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
   model_picker.rs       model catalog as a palette; default, favorites, new thread
   new_thread.rs         the new-thread draft: created on its first send, reply guards
   new_thread_view.rs    the draft's project, model, harness, permissions row, and menus
-  harnesses.rs          agent harnesses: the host's list, setup, Settings → Agent, mode lines
+  harnesses.rs          agent harnesses: the host's list, setup, Settings → Agents, mode lines
   permissions.rs        the Permissions chip and menu of a harness's own modes
   text_field.rs         single-line input: IME, selection, clipboard, undo
   navigation.rs         virtualized projects and threads, filtering and management
@@ -49,7 +49,8 @@ ui/                     GPUI layout, actions, focus, lists, theme
   window_bar.rs         the traffic lights' place, header inset, and window dragging
   jump.rs               Cmd-1 to Cmd-9 and the desktop preferences file
   session.rs            draft and submission recovery, and save scheduling
-  settings.rs           the Settings page and its sections
+  settings.rs           the Settings page (the app and host) and its tabs
+  settings_project.rs   a project's own settings page, from its sidebar menu
   settings_keyboard.rs  the shortcut editor
   settings_policy.rs    the checkout's command policy, read from the host
   settings_providers.rs provider sign-in, API keys, and custom endpoints
@@ -72,7 +73,8 @@ ui/                     GPUI layout, actions, focus, lists, theme
   history.rs            bounded history reads, projection dispatch, and reading controls
   session.rs            desktop restore/save coordination and submission guards
   markdown.rs           native conversation blocks: prose, code, tables, diffs
-  settings.rs           host status and the Models, Approvals, Keyboard, About sections
+  settings.rs           Settings: host status, its tabs, and New threads, Appearance, About
+  settings_project.rs   a project's settings page: its command policy and Pi setup
   changes.rs            real local status and diff views
   theme.rs              current palette, original controls, embedded glyphs
   snapshot.rs           windowless scene snapshots on macOS and Linux (tests only)
@@ -190,8 +192,9 @@ command needs a one-call approval with full arguments; in `auto` mode, the
 desktop default with a version 2 host, they run without a prompt. File helpers own checkout writes. By default a project uses the trusted
 [command policy](HOST.md#command-policy), in which commands run as the user and
 may write the checkout. A project can instead be sandboxed, in which commands
-read the checkout and use private scratch space for build output. Settings →
-Approvals offers the policy, with a deliberate confirmation of Trusted access. Stop revokes pending approvals and
+read the checkout and use private scratch space for build output. The
+project's settings page (its sidebar menu → Project settings…) offers the
+policy, with a deliberate confirmation of Trusted access. Stop revokes pending approvals and
 cancels work. Interrupted work must not replay automatically after host failure.
 These boundaries need the tests listed in HOST.md before valuable-repository use.
 

@@ -1,4 +1,5 @@
-//! The host owns command policy; an unread policy is never called sandboxed.
+//! The open project's command policy, on its Project settings page. The host
+//! owns the policy; an unread policy is never called sandboxed.
 use super::{Plait, settings, theme::*};
 use gpui::{prelude::*, *};
 use plait_core::host::{
@@ -138,10 +139,11 @@ impl Plait {
                     }),
             );
         }
-        settings::section("Command policy")
+        // The page's heading names the checkout this applies to.
+        settings::section("Commands")
             .when(!self.policy.confirm, |el| {
                 el.child(settings::setting(
-                    "This checkout",
+                    "Commands in this project",
                     current.map_or(
                         "Policy has not loaded from the host.",
                         CommandPolicy::meaning,
@@ -149,10 +151,6 @@ impl Plait {
                     choices,
                 ))
             })
-            .child(tag(
-                self.host.checkout.to_string_lossy().into_owned(),
-                colors().subtle,
-            ))
             .when(self.policy.busy, |el| {
                 el.child(tag("Loading command policy…", colors().muted))
             })
