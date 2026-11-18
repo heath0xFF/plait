@@ -681,3 +681,28 @@ test('superseded listIssues for another filter does not overwrite newer issue su
   assert.equal(cachedAll.result.cached, true);
   assert.equal(cachedAll.result.issues[0].title, 'FRESH_CROSS_FILTER_TITLE');
 });
+
+test('multibyte issue description and comments honor UTF-8 KiB bounds and fit inside 1 MiB host frame', async t => {
+  const h = await setupHarness(t);
+  assert.equal((await h.call({ op: 'linear_set_key', key: h.fake.validKey })).ok, true);
+
+  // Use 3-byte UTF-8 characters (65,536 chars = 192 KiB; 25 * 16,384 chars = 1.2 MiB if only UTF-16 bounded).
+  // Keep raw JSON under LinearClient's 2 MiB response body cap while exceeding 64 KiB / 16 KiB in UTF-8 bytes.
+  h.fake.issues[0].description = 'あ'.repeat(40_000);
+  h.fake.issues[0].comments = Array.from({ length: 25 }, (_, i) => ({
+    id: `mb-cmt-${i}`,
+    body: 'あ'.repeat(16_384),
+    createdAt: '2026-11-18T11:00:00.000Z',
+    updatedAt: '2026-11-18T11:00:00.000Z',
+    user: { name: 'Alex' },
+  }));
+
+  const reply = await h.call({ op: 'linear_get_issue', issue_id: 'issue-142' });
+  assert.equal(reply.ok, true, JSON.stringify(reply));
+  assert(Buffer.byteLength(reply.result.issue.description, 'utf8') <= 65_536, 'description must be <= 64 KiB UTF-8');
+  for (const comment of reply.result.issue.comments) {
+    assert(Buffer.byteLength(comment.body, 'utf8') <= 16_384, 'comment body must be <= 16 KiB UTF-8');
+  }
+  const frameBytes = Buffer.byteLength(JSON.stringify(reply) + '\n', 'utf8');
+  assert(frameBytes <= 1_048_576, `reply frame must stay <= 1 MiB, got ${frameBytes} bytes`);
+});

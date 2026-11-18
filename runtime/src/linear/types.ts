@@ -1,5 +1,5 @@
 import { HostError } from '../protocol.ts';
-import { clipHead, escapeDisplay } from '../text.ts';
+import { escapeDisplay } from '../text.ts';
 
 /** Fixed Linear GraphQL endpoint. Production code never overrides this from settings or env. */
 export const LINEAR_GRAPHQL_URL = 'https://api.linear.app/graphql';
@@ -167,24 +167,40 @@ export type LinearQueryResult<T> = {
   warning: string | null;
 };
 
-/** Escapes display controls and bounds any string returned by Linear before it leaves the host. */
+/** Clips a string to at most `maxBytes` UTF-8 bytes without splitting a Unicode code point. */
+function clipUtf8Bytes(text: string, maxBytes: number): string {
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
+  let bytes = 0;
+  let end = 0;
+  while (end < text.length) {
+    const code = text.codePointAt(end)!;
+    const charBytes = code <= 0x7f ? 1 : code <= 0x7ff ? 2 : code <= 0xffff ? 3 : 4;
+    const units = code > 0xffff ? 2 : 1;
+    if (bytes + charBytes > maxBytes) break;
+    bytes += charBytes;
+    end += units;
+  }
+  return text.slice(0, end);
+}
+
+/** Escapes display controls and bounds any string returned by Linear in UTF-8 bytes before it leaves the host. */
 export function boundLinearText(value: unknown, limit: number): string {
   if (typeof value !== 'string') return '';
-  return clipHead(escapeDisplay(value), limit);
+  return clipUtf8Bytes(escapeDisplay(value), limit);
 }
 
 export function boundNullableText(value: unknown, limit: number): string | null {
   if (typeof value !== 'string') return null;
-  return clipHead(escapeDisplay(value), limit);
+  return clipUtf8Bytes(escapeDisplay(value), limit);
 }
 
 /** Keeps only bounded http/https URLs without embedded credentials. */
 export function safeLinearUrl(value: unknown): string {
-  if (typeof value !== 'string' || value.length > FIELD_LIMITS.url) return '';
+  if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > FIELD_LIMITS.url) return '';
   if (/[\u0000-\u001f\u007f]/.test(value) || !URL.canParse(value)) return '';
   const url = new URL(value);
   if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username || url.password) return '';
-  return clipHead(escapeDisplay(url.href), FIELD_LIMITS.url);
+  return clipUtf8Bytes(escapeDisplay(url.href), FIELD_LIMITS.url);
 }
 
 export function safeNumber(value: unknown, fallback = 0): number {
