@@ -8,6 +8,20 @@ use crate::{
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+/// Visible previews stay small even when the retained record lists every path.
+pub const PREVIEW_LIMIT: usize = 12;
+pub fn preview_name(name: &str) -> String {
+    let mut text: String = name
+        .chars()
+        .take(240)
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    if name.chars().nth(240).is_some() {
+        text.push('…');
+    }
+    text
+}
+
 /// Read the entire retained list. A cursor can continue any of its three lists.
 pub fn read(client: &Client, thread: &str) -> Result<Vec<TurnRecord>, host::Error> {
     let mut records = Vec::new();
@@ -206,16 +220,32 @@ fn line(
     if steps.is_none() {
         detail.push_str("\nEarlier messages are not loaded; the step count is unavailable.");
     }
-    for file in &files {
-        detail.push_str(&format!("\n{} {}", file.path.display(), file.counts));
+    for file in files.iter().take(PREVIEW_LIMIT) {
+        detail.push_str(&format!(
+            "\n{} {}",
+            preview_name(&file.path.to_string_lossy()),
+            file.counts
+        ));
+    }
+    if files.len() > PREVIEW_LIMIT {
+        detail.push_str(&format!(
+            "\n{} more changed paths",
+            files.len() - PREVIEW_LIMIT
+        ));
     }
     if !not_covered.is_empty() {
         detail.push_str("\nNot covered:");
-        for item in &not_covered {
+        for item in not_covered.iter().take(PREVIEW_LIMIT) {
             detail.push_str(&format!(
                 "\n{} — {}",
-                item.path,
+                preview_name(&item.path),
                 coverage_reason(item.reason)
+            ));
+        }
+        if not_covered.len() > PREVIEW_LIMIT {
+            detail.push_str(&format!(
+                "\n{} more not-covered paths",
+                not_covered.len() - PREVIEW_LIMIT
             ));
         }
     }

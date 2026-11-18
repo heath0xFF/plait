@@ -225,3 +225,15 @@ fn a_failed_undo_without_file_effects_keeps_the_original_action() {
     assert_eq!(line.availability, Availability::Ready);
     assert!(!line.undone);
 }
+
+#[test]
+fn large_exclusion_lists_prepare_a_bounded_hover_preview() {
+    let mut v = record("run", &["next"], "ready");
+    v["not_covered"] = json!((0..10_000).map(|i| json!({"path":format!("excluded-{i:05}/{}", "x".repeat(1000)),"reason":"unreadable"})).collect::<Vec<_>>());
+    v["not_covered_total"] = json!(10_000);
+    let line = project(&snapshot(), &[decode(v)], true).latest.unwrap();
+    assert_eq!(line.not_covered.len(), 10_000);
+    assert!(line.detail.contains("9988 more not-covered paths"));
+    assert!(!line.detail.contains("excluded-00012"));
+    assert!(line.detail.len() < 5000);
+}

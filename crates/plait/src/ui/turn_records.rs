@@ -28,26 +28,52 @@ pub(super) struct Attempt {
 pub(super) struct Blocked {
     run: String,
     reply: UndoTurnReply,
-    coverage: Vec<Uncovered>,
+    coverage: Vec<SharedString>,
+    changed: Vec<SharedString>,
     omitted: usize,
+    changed_omitted: usize,
+    host_omitted: usize,
 }
 impl Blocked {
     pub(super) fn new(run: String, reply: UndoTurnReply, coverage: &[Uncovered]) -> Self {
-        let omitted = reply
+        let host_omitted = reply
             .not_covered_total
             .saturating_sub(reply.not_covered.len());
-        let coverage = coverage
+        let coverage: Vec<_> = coverage
             .iter()
             .chain(&reply.not_covered)
             .cloned()
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect();
+        let omitted = coverage.len().saturating_sub(records::PREVIEW_LIMIT);
+        let coverage = coverage
+            .iter()
+            .take(records::PREVIEW_LIMIT)
+            .map(|item| {
+                format!(
+                    "{} — {}",
+                    records::preview_name(&item.path),
+                    records::coverage_reason(item.reason)
+                )
+                .into()
+            })
+            .collect();
+        let changed: Vec<SharedString> = reply
+            .changed_since
+            .iter()
+            .take(records::PREVIEW_LIMIT)
+            .map(|path| records::preview_name(&path.to_string_lossy()).into())
+            .collect();
+        let changed_omitted = reply.changed_since_total.saturating_sub(changed.len());
         Self {
             run,
             reply,
             coverage,
+            changed,
             omitted,
+            changed_omitted,
+            host_omitted,
         }
     }
 }
@@ -514,7 +540,6 @@ impl Plait {
             .blocked
             .as_ref()
             .filter(|blocked| blocked.run == line.run)?;
-        let reply = &blocked.reply;
         let covered = &blocked.coverage;
         let run = line.run.clone();
         let list = column()
@@ -522,34 +547,26 @@ impl Plait {
             .max_h(px(132.))
             .overflow_y_scroll()
             .gap_1()
-            .children(reply.changed_since.iter().map(|path| {
-                div()
-                    .font_family(mono())
-                    .child(path.to_string_lossy().into_owned())
-            }))
-            .when(
-                reply.changed_since_total > reply.changed_since.len(),
-                |el| {
-                    el.child(format!(
-                        "{} more changed paths are not shown by the host.",
-                        reply.changed_since_total - reply.changed_since.len()
-                    ))
-                },
+            .children(
+                blocked
+                    .changed
+                    .iter()
+                    .map(|path| div().font_family(mono()).child(path.clone())),
             )
+            .when(blocked.changed_omitted > 0, |el| {
+                el.child(format!("{} more changed paths", blocked.changed_omitted))
+            })
             .when(!covered.is_empty(), |el| {
                 el.child(div().mt_2().child("Not covered"))
             })
-            .children(covered.iter().map(|item| {
-                div().child(format!(
-                    "{} — {}",
-                    item.path,
-                    records::coverage_reason(item.reason)
-                ))
-            }))
+            .children(covered.iter().map(|text| div().child(text.clone())))
             .when(blocked.omitted > 0, |el| {
+                el.child(format!("{} more not-covered paths", blocked.omitted))
+            })
+            .when(blocked.host_omitted > 0, |el| {
                 el.child(format!(
-                    "The host coverage preview omitted {} paths.",
-                    blocked.omitted
+                    "The host preview omitted {} further coverage entries.",
+                    blocked.host_omitted
                 ))
             });
         Some(column().mt_2().mb_1().p_3().gap_2().border_1().border_color(rgb(colors().edge)).rounded_md()
@@ -572,5 +589,33 @@ impl Plait {
         } else {
             "No retained host record is available for this turn.".into()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[core::prelude::v1::test]
+    fn blocked_previews_bound_both_lists_before_rendering() {
+        let coverage: Vec<_> = (0..10_000)
+            .map(|n| Uncovered {
+                path: format!("excluded-{n:05}/"),
+                reason: plait_core::git::record::Reason::Unreadable,
+            })
+            .collect();
+        let reply = UndoTurnReply {
+            state: UndoState::Blocked,
+            changed_since: (0..500).map(|n| format!("changed-{n}").into()).collect(),
+            changed_since_total: 1000,
+            not_covered: vec![],
+            not_covered_total: 0,
+            record_id: "target".into(),
+            after_restart: false,
+        };
+        let blocked = Blocked::new("run".into(), reply, &coverage);
+        assert_eq!(blocked.coverage.len(), records::PREVIEW_LIMIT);
+        assert_eq!(blocked.changed.len(), records::PREVIEW_LIMIT);
+        assert_eq!(blocked.omitted, 9988);
+        assert_eq!(blocked.changed_omitted, 988);
     }
 }

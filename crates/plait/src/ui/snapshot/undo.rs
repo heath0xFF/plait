@@ -505,6 +505,21 @@ pub(super) fn undo_walk(harness: &mut Harness, repository: &Path, suffix: &str) 
         )
     });
     harness.capture(&format!("undo-blocked-{suffix}"));
+    harness.update(|p, _, _| {
+        let mut record = record("last", &["last"], "ready");
+        record["not_covered"] = json!(
+            (0..10000)
+                .map(|n| json!({"path":format!("excluded-{n:05}/"),"reason":"unreadable"}))
+                .collect::<Vec<_>>()
+        );
+        record["not_covered_total"] = json!(10000);
+        inject(p, vec![record]);
+        p.turn_records.block(
+            "last",
+            serde_json::from_value(reply("blocked", "last")).unwrap(),
+        );
+    });
+    harness.capture(&format!("undo-many-exclusions-{suffix}"));
     prepare(harness, repository);
     harness.update(|p, _, _| inject(p, vec![record("last", &["last"], "failed")]));
     harness.capture(&format!("undo-failed-{suffix}"));
