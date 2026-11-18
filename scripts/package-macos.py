@@ -94,6 +94,12 @@ def main():
             "LSMinimumSystemVersion": "15.0",
             "NSHighResolutionCapable": True,
             "NSPrincipalClass": "NSApplication",
+            # Opening a file or folder in Rex sends it an Apple event. Without
+            # this sentence macOS refuses the event instead of asking.
+            "NSAppleEventsUsageDescription": (
+                "Plait opens files and folders in the editor and terminal "
+                "you chose in Settings."
+            ),
             "PlaitRevision": revision,
             "PlaitBuildChannel": "development",
         }

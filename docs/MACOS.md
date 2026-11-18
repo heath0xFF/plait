@@ -637,9 +637,11 @@ shell's `PATH`, so name a program outside `/usr/bin` and `/bin` by its full
 path. The choices are kept in `desktop.json`.
 
 The Rex choices talk to Rex through AppleScript, addressed by its bundle ID, so
-Rex and Rex Beta both answer. macOS may first need Plait allowed to control Rex
-in System Settings → Privacy & Security → Automation; until then using it says
-so. Plait does not need Rex: without it the choice stays, and using it says
+Rex and Rex Beta both answer. The first time, macOS asks whether Plait may
+control Rex; the answer can be changed in System Settings → Privacy & Security →
+Automation, and until it is allowed, using a Rex choice says so. Plait's builds
+are signed ad hoc, so macOS may ask again after an update. Plait does not need
+Rex: without it the choice stays, and using it says
 that Rex is not installed. Plait starts the command and does not wait for it or
 read its output. Only a command that cannot start, or that exits with an error
 within two seconds, is reported, in one sentence above the workspace.
