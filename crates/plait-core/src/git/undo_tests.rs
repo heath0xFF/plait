@@ -691,3 +691,21 @@ fn a_git_directory_appearing_after_capture_blocks_old_record_paths() {
     assert_eq!(outcome.changed_since, ["metadata/file"]);
     assert_eq!(outcome.applied, 0);
 }
+
+#[test]
+fn making_an_unreadable_directory_readable_does_not_authorize_deleting_its_files() {
+    let f = Fixture::new();
+    let directory = f.repo.0.join("secret");
+    fs::create_dir(&directory).unwrap();
+    f.repo.write("secret/keep", "valuable untouched\n");
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o000)).unwrap();
+    let before = f.take("before", None);
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
+    let after = f.take("after", Some(&before));
+    let outcome = f.undo(&before, &after, "undo", true);
+    assert_eq!(outcome.applied, 0);
+    assert_eq!(
+        fs::read(directory.join("keep")).unwrap(),
+        b"valuable untouched\n"
+    );
+}

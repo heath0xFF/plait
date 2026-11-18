@@ -888,6 +888,44 @@ fn an_unreadable_file_is_listed_and_the_rest_is_recorded() {
 }
 
 #[test]
+fn untracked_unreadable_directories_stay_excluded_on_either_side() {
+    for unreadable_first in [true, false] {
+        let repo = committed();
+        let store = Scratch::new();
+        let directory = repo.0.join("secret");
+        fs::create_dir(&directory).unwrap();
+        repo.write("secret/keep", "pre-existing valuable bytes\n");
+        let set_mode =
+            |mode| fs::set_permissions(&directory, fs::Permissions::from_mode(mode)).unwrap();
+        if unreadable_first {
+            set_mode(0o000);
+        }
+        let before = take(&repo, &store, "before", None);
+        set_mode(if unreadable_first { 0o755 } else { 0o000 });
+        let after = take(&repo, &store, "after", Some(&before));
+        set_mode(0o755);
+        assert!(after.paths.as_ref().unwrap().is_empty());
+        assert!(uncovered_list(&after).contains(&("secret/".into(), Reason::Unreadable)));
+    }
+}
+
+#[test]
+fn untracked_fifo_and_socket_are_reported_as_unsupported() {
+    let repo = committed();
+    let store = Scratch::new();
+    let name = std::ffi::CString::new(repo.0.join("pipe").as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+    let _socket = std::os::unix::net::UnixListener::bind(repo.0.join("socket")).unwrap();
+    let before = take(&repo, &store, "before", None);
+    assert!(uncovered_list(&before).contains(&("pipe".into(), Reason::Special)));
+    assert!(uncovered_list(&before).contains(&("socket".into(), Reason::Special)));
+    fs::remove_file(repo.0.join("pipe")).unwrap();
+    repo.write("pipe", "replaced unsupported entry");
+    let after = take(&repo, &store, "after", Some(&before));
+    assert!(after.paths.as_ref().unwrap().is_empty());
+}
+
+#[test]
 fn files_and_directories_can_swap_places() {
     let repo = committed();
     fs::create_dir(repo.0.join("dir")).unwrap();

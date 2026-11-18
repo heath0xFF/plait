@@ -15,8 +15,8 @@
 //! keeps the objects that index and `HEAD` name.
 
 use std::{
-    collections::{BTreeSet, HashSet},
-    ffi::OsStr,
+    collections::{BTreeSet, HashMap, HashSet},
+    ffi::{OsStr, OsString},
     fs,
     io::{self, Write},
     os::unix::{
@@ -336,17 +336,6 @@ fn record_with_paths(
     let (head, head_ref) = person_head(&located.root)?;
     let mut listing = private.status()?;
     let private_paths = private.index_paths()?;
-    // Git can stat an indexed spelling through its case alias and miss a
-    // case-only rename. Reconcile actual names before making a restorable tree.
-    for (old, new) in renamed_spellings(&located.root, &private_paths) {
-        listing.retain(|entry| !matches!(entry, Entry::Tracked { path, .. } if path == &old));
-        listing.push(Entry::Tracked {
-            path: old,
-            worktree: b'D',
-            submodule: false,
-        });
-        listing.push(Entry::Untracked(new));
-    }
     let tracked: HashSet<Vec<u8>> = tracked.into_iter().collect();
     let untracked: Vec<Vec<u8>> = private_paths
         .iter()
@@ -355,20 +344,27 @@ fn record_with_paths(
         .collect();
     let mut ignored: BTreeSet<Vec<u8>> = private.ignored(&untracked)?.into_iter().collect();
     let ignored_directories = private.ignored_directories(&listing, &ignored)?;
-    let mut inspected_paths = private_paths.clone();
-    inspected_paths.extend(listing.iter().map(|entry| match entry {
-        Entry::Tracked { path, .. }
-        | Entry::Unmerged(path)
-        | Entry::Untracked(path)
-        | Entry::Ignored(path) => path.clone(),
-    }));
-    let mut repositories: Vec<(Vec<u8>, Reason)> =
-        nested_directories(&private.root, &inspected_paths)
-            .into_iter()
-            .filter(|path| !submodules.contains(&path[..path.len() - 1]))
-            .map(|path| (path, Reason::NestedRepository))
-            .collect();
-    repositories.extend(submodules.iter().map(|path| {
+    let skipped: HashSet<_> = ignored_directories
+        .iter()
+        .cloned()
+        .chain(submodules.iter().map(|p| {
+            let mut p = p.clone();
+            p.push(b'/');
+            p
+        }))
+        .collect();
+    let mut inventory = inventory(&private.root, &skipped)?;
+    // Reuse the directory inventory to reconcile filesystem aliases with Git.
+    for (old, new) in renamed_spellings(&located.root, &private_paths, &mut inventory.names) {
+        listing.retain(|entry| !matches!(entry, Entry::Tracked { path, .. } if path == &old));
+        listing.push(Entry::Tracked {
+            path: old,
+            worktree: b'D',
+            submodule: false,
+        });
+        listing.push(Entry::Untracked(new));
+    }
+    inventory.excluded.extend(submodules.iter().map(|path| {
         let mut directory = path.clone();
         directory.push(b'/');
         (directory, Reason::Submodule)
@@ -377,11 +373,17 @@ fn record_with_paths(
     for (directory, reason) in ignored_directories
         .iter()
         .map(|p| (p, Reason::IgnoredDirectory))
-        .chain(repositories.iter().map(|(path, reason)| (path, *reason)))
+        .chain(
+            inventory
+                .excluded
+                .iter()
+                .map(|(path, reason)| (path, *reason)),
+        )
     {
         plan.not_covered.push(uncovered(directory, reason));
         let excluded = |path: &[u8]| {
-            path.starts_with(directory)
+            (path == directory.strip_suffix(b"/").unwrap_or(directory)
+                || (directory.ends_with(b"/") && path.starts_with(directory)))
                 && (reason != Reason::IgnoredDirectory || !tracked.contains(path))
         };
         plan.add.retain(|(path, _)| !excluded(path));
@@ -1164,10 +1166,11 @@ impl Private {
 }
 
 /// The checkout's attributes that would convert content, path by path.
-fn renamed_spellings(root: &Path, paths: &[Vec<u8>]) -> Vec<(Vec<u8>, Vec<u8>)> {
-    use std::collections::HashMap;
-    use std::ffi::OsString;
-    let mut directories: HashMap<PathBuf, BTreeSet<OsString>> = HashMap::new();
+fn renamed_spellings(
+    root: &Path,
+    paths: &[Vec<u8>],
+    directories: &mut HashMap<PathBuf, BTreeSet<OsString>>,
+) -> Vec<(Vec<u8>, Vec<u8>)> {
     let mut parents: HashMap<PathBuf, Option<PathBuf>> = HashMap::new();
     parents.insert(PathBuf::new(), Some(root.to_path_buf()));
     fn actual(
@@ -1220,10 +1223,10 @@ fn renamed_spellings(root: &Path, paths: &[Vec<u8>]) -> Vec<(Vec<u8>, Vec<u8>)> 
         if let Some(parent) = relative.parent()
             && !parents.contains_key(parent)
         {
-            let resolved = actual(root, parent, &mut directories, &mut parents);
+            let resolved = actual(root, parent, directories, &mut parents);
             parents.insert(parent.to_path_buf(), resolved);
         }
-        if let Some(resolved) = actual(root, relative, &mut directories, &mut parents)
+        if let Some(resolved) = actual(root, relative, directories, &mut parents)
             && let Ok(relative) = resolved.strip_prefix(root)
             && relative.as_os_str().as_bytes() != path
         {
@@ -1736,14 +1739,75 @@ fn ancestors(paths: &[Vec<u8>]) -> BTreeSet<Vec<u8>> {
     directories
 }
 
-fn nested_directories(root: &Path, paths: &[Vec<u8>]) -> Vec<Vec<u8>> {
-    ancestors(paths)
-        .into_iter()
-        .filter(|path| {
-            let directory = root.join(OsStr::from_bytes(path));
-            repository_entries(|name| fs::symlink_metadata(directory.join(name)).is_ok())
-        })
-        .collect()
+#[derive(Default)]
+struct Inventory {
+    names: HashMap<PathBuf, BTreeSet<OsString>>,
+    excluded: Vec<(Vec<u8>, Reason)>,
+}
+
+/// Git omits unreadable untracked folders and special files from successful
+/// status output. Enumerate directories ourselves; file types come from readdir.
+fn inventory(root: &Path, skipped: &HashSet<Vec<u8>>) -> Result<Inventory> {
+    let mut result = Inventory::default();
+    let mut pending = vec![PathBuf::new()];
+    while let Some(relative) = pending.pop() {
+        remaining()?;
+        let directory = root.join(&relative);
+        let mut prefix = relative.as_os_str().as_bytes().to_vec();
+        if !prefix.is_empty() {
+            prefix.push(b'/');
+        }
+        if skipped.contains(&prefix) {
+            continue;
+        }
+        // Do not descend through a parent that changed to a symlink.
+        if !fs::symlink_metadata(&directory).is_ok_and(|m| m.is_dir()) {
+            result.excluded.push((prefix, Reason::Changing));
+            continue;
+        }
+        let entries =
+            fs::read_dir(&directory).and_then(|entries| entries.collect::<io::Result<Vec<_>>>());
+        let Ok(entries) = entries else {
+            if relative.as_os_str().is_empty() {
+                return Err("Cannot read the checkout directory.".into());
+            }
+            result.names.insert(directory, BTreeSet::new());
+            result.excluded.push((prefix, Reason::Unreadable));
+            continue;
+        };
+        let names: BTreeSet<_> = entries.iter().map(|e| e.file_name()).collect();
+        let repository = !relative.as_os_str().is_empty()
+            && repository_entries(|name| {
+                names
+                    .iter()
+                    .any(|n| n.as_bytes().eq_ignore_ascii_case(name.as_bytes()))
+            });
+        result.names.insert(directory, names);
+        if repository {
+            result.excluded.push((prefix, Reason::NestedRepository));
+            continue;
+        }
+        for entry in entries {
+            let name = entry.file_name();
+            if name.as_bytes().eq_ignore_ascii_case(b".git") {
+                continue;
+            }
+            let path = relative.join(&name);
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => pending.push(path),
+                Ok(kind) if kind.is_file() || kind.is_symlink() => {}
+                kind => result.excluded.push((
+                    path.as_os_str().as_bytes().to_vec(),
+                    if kind.is_ok() {
+                        Reason::Special
+                    } else {
+                        Reason::Unreadable
+                    },
+                )),
+            }
+        }
+    }
+    Ok(result)
 }
 
 /// Recognize worktrees and Git directories without running Git in each folder.
