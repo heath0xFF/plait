@@ -240,9 +240,11 @@ conversation keeps a readable minimum width.
   imply an all-thread catalogue. Hover gives the request, time and thread.
   Recorded lists every saved path, including deleted and now-clean files, with
   recorded counts and current layer availability in accessible hover text.
-  Recorded/Current says which comparison is visible. Recorded uses the immutable
-  before/after bytes and has no file or hunk write buttons. Current restores the
-  ordinary Git sides and controls, or says No current changes. Switching files,
+  Recorded/Current appears for a selected recorded file and says which comparison
+  is visible. Recorded uses the immutable before/after bytes and has no file or
+  hunk write buttons. Current selects a Git side with changes, shows Reading diff…
+  while status loads, and says No current changes only for a known clean file.
+  Switching files,
   later runs and undo never silently replace the chosen record. Loading,
   Unavailable, Offline and Older host name the read's state; details and Retry
   or Current explain the way forward. There are no origin labels, turn staging

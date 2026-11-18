@@ -1925,6 +1925,10 @@ its only possible store write creates an empty blob for an absent side.
 On macOS its sandbox denies checkout and Git metadata writes.
 
 Read caches are bounded to 32 MiB per checkout and 128 MiB per host. A preview
-at 512 KiB or 10,000 lines is limited. Complete page validation and patch
-preparation run off the UI thread. These operations provide no staging,
+at 512 KiB or 10,000 lines is limited. A byte-clipped preview ends on a complete
+line and omits its unfinished trailing hunk. Empty file additions and deletions
+are Ready; Mode requires two present sides with equal content. Binary follows
+the record's Git line-count classification, so non-UTF-8 text stays text and its
+raw bytes remain in the patch. Complete page validation and patch preparation
+run off the UI thread. These operations provide no staging,
 attribution proof, or reviewed baseline, and make no change to undo semantics.

@@ -422,8 +422,8 @@ own.
 
 ## Review a run
 
-The current source adds recorded review; it is not part of preview.14. Select a
-finished run's filename to read the before/after change saved by that run.
+Recorded review is built in the current source. Select a finished run's
+filename to read the before/after change saved by that run.
 Select its step count or **N more** for the complete file list. A run with no
 net file changes has a **Changes** link and says **No recorded changes**.
 Committed, clean and deleted files remain in this list while the record is
@@ -437,16 +437,20 @@ Restored list can be smaller than Original.
 
 **Recorded** compares saved bytes and offers no staging or discard controls.
 **Current** shows the same file's present Git changes, with the usual Staged
-and Unstaged sides; a clean file says **No current changes**. Neither comparison
-marks a file reviewed. The commit box still commits the current index. Origin
-labels, staging by turn, and review baselines are not built yet. Recorded changes describe an observed interval, not who
-wrote the bytes.
+and Unstaged sides; it selects a side with changes. **Reading diff…** remains
+visible while current status loads; only a known clean file says **No current
+changes**. The comparison controls appear once a recorded file is selected.
+Neither comparison marks a file reviewed. The commit box still commits the
+current index. Origin labels, staging by turn, and review baselines are not built
+yet. Recorded changes describe an observed interval, not who wrote the bytes.
 
 **Loading** means the host read is pending. **Unavailable** explains a missing
 record or saved content; **Retry** requests it again. **Offline** can retain an
 already loaded diff, marked stale. With an older host, **Older host** says
 “Turn review needs a newer host”; **Current** returns to ordinary Git review.
-Existing current-file links and supported undo still work. Records remain
+Closing-line file links open current Changes, including the first click before
+host support is known. Their hover text explains this fallback once the older
+host is detected. Supported undo still works. Records remain
 subject to the host's 30-day retention.
 
 Refresh is event-driven: entering Changes, selecting a file or record, window

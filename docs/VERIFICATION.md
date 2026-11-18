@@ -1555,9 +1555,9 @@ No installed-app or native-window acceptance is claimed for these operations.
 
 ### Recorded Changes navigation
 
-The current source adds the desktop recorded view; preview.14 did not include
-it. Core tests keep original run identity separate from the displayed undo
-leaf, preserve deleted paths, and reject every changed read-stamp member.
+The current source adds the desktop recorded view. Core tests keep original
+run identity separate from the displayed undo leaf, preserve deleted paths,
+and reject every changed read-stamp member.
 Socket-backed desktop tests cover original selection after a later run and
 undo, zero net paths, the all-files target used by step count and N more,
 partial-undo Original/Restored lists, clean/deleted files, picker Enter/Escape
@@ -1566,8 +1566,8 @@ reply tests queue reads, invalidate thread, checkout, connection, watch,
 repository epoch, generation, comparison or path, and reject the completed
 metadata/diff/page sequence rather than install stale data. Preference-writing
 UI tests use the isolated home and host store. The final `scripts/check.sh`
-run exited 0: formatting, workspace Clippy with warnings denied, 642 Rust
-tests, 356 runtime tests (including the real macOS sandbox), and the release
+run, with Homebrew Git 2.56 first on PATH, exited 0: formatting, workspace
+Clippy with warnings denied, 649 Rust tests, 358 runtime tests (including the real macOS sandbox), and the release
 build passed.
 
 `bash scripts/snapshots.sh <output-directory>` renders the new `turn-recorded`,
@@ -1581,8 +1581,8 @@ agent runs.
 
 On Apple M5 Pro, macOS 26.6.2, Apple Git 2.54.0 and Node 26.12.0, a release
 `turn_diff` handler read a 5,000-changed-line file (2,500 removals and 2,500
-additions) in a 50,000-file checkout. After a 48.12 ms initial request, seven
-warm requests had a **41.60 ms median**, **38.02–44.62 ms** range. The measured
+additions) in a 50,000-file checkout. After a 452.66 ms initial request, seven
+warm requests had a **67.47 ms median**, **64.36–73.51 ms** range. The measured
 boundary includes root validation, SQLite lookup, the real sandboxed helper,
 helper decoding and immutable page construction; it excludes socket framing,
 transport and desktop patch preparation. The patch was 275,105 bytes, and the
@@ -1591,7 +1591,7 @@ processes** (one batch blob read and one blob comparison); its supervisor,
 worker and sandbox launcher add three, for **five child processes**. An
 absent side can require an additional private empty-blob process. This is a
 warm-cache fixture measurement, not a cold-disk or whole-application latency
-claim; other development work was running.
+claim; checks and snapshot rendering were running concurrently.
 
 `scripts/bench-frames.sh` now includes the recorded view with a prepared
 5,000-line patch. At 1380 × 860 points in a release build, 30 frames per
@@ -1600,13 +1600,43 @@ prepaint and paint):
 
 | Recorded view | Median | p95 | Maximum |
 | --- | ---: | ---: | ---: |
-| Top | 0.79 ms | 1.27 ms | 1.40 ms |
-| Middle | 0.82 ms | 0.88 ms | 0.93 ms |
-| Wheel scrolling | 1.81 ms | 2.06 ms | 2.48 ms |
+| Top | 1.03 ms | 1.43 ms | 1.48 ms |
+| Middle | 1.07 ms | 1.33 ms | 1.38 ms |
+| Wheel scrolling | 2.31 ms | 2.80 ms | 2.99 ms |
 
-The render method itself measured 0.02 ms. These measurements exclude GPU
+The render method itself measured 0.03 ms. These measurements exclude GPU
 submission, native event delivery and host I/O. No installed app was checked
 or launched for this feature; native-window acceptance, VoiceOver and live
 model runs remain unverified. The broader attribution and staging benchmark
 matrix belongs to later stages; this measurement covers one changed path,
 not 50,000 changed paths or large retained histories.
+
+### Recorded review edge cases
+
+Regression tests cover a long-path patch whose byte limit crosses a hunk header,
+an unfinished hunk body, or a long line. The preview stops at a complete line and
+omits its incomplete trailing hunk. Empty file creation and deletion remain
+Ready rather than Mode, and Latin-1 edits retain Git's text classification and
+raw bytes while the desktop decodes them for display.
+
+Desktop tests cover Current while status loads, records with no selected file,
+and a staged-only file previously selected on its empty unstaged side. An older
+version 5 host falls back to the clicked current file on the first unsupported
+probe; stale replies cannot redirect a different checkout. Known older-host
+links describe their actual destination. State wording tests cover the single
+limit notice, pending or unavailable record scopes, absent line counts, and
+distinct undo picker descriptions. Multi-line coverage explanations are
+flattened before entering the picker so fixed-height rows cannot overlap.
+
+Runtime tests reject inherited operation names with `invalid_request` and send
+a full-size patch alongside large hunk metadata through a shared reply budget.
+The combined initial reply fits the 1 MiB transport frame, and continuation
+pages preserve their boundaries on retries without losing items.
+
+The additional scenes cover Current loading and staged-only selection; a
+loading, unavailable or older-host record with no selected file; older-host
+closing lines with and without files; limited patches; empty additions and
+deletions; Latin-1 text; and multiple undo choices. All 21 recorded-review scenes
+were inspected at 1380 and 900 points. Inspection corrected a repeated Older
+host label, stale fixture ages, and overlapping multi-line picker details.
+These are headless, injected scenes; nothing was checked in the installed app.
