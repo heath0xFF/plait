@@ -10,6 +10,8 @@ use crate::{
     transcript::{self, Row},
 };
 
+pub mod records;
+
 pub const MAX_ITEMS: usize = 600;
 pub const MAX_BYTES: usize = 16 * 1024 * 1024;
 const PAGE_BYTES: usize = 2 * 1024 * 1024;

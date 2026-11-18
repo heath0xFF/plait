@@ -294,7 +294,7 @@ waits until a sandboxed project needs it.
 **Direction for M9, turn records:** the host records the checkout around every
 run, for Pi, Codex, and Claude Code in every permission mode. This protection
 does not depend on the harness reporting its edits. Recording and the host undo
-operations are implemented in source; their desktop presentation follows.
+operations and their desktop controls are implemented in source.
 None of M9 is released yet.
 
 - **A run is the unit.** One submitted message, steering messages that join it,
@@ -336,11 +336,13 @@ unknown. A created-then-deleted file leaves no difference.
   the run's after record. Paths changed since are never overwritten; the
   person chooses “Undo the rest” or “Cancel”. An undo is recorded and can
   itself be undone. Undo changes files, not Git history.
-- **Presentation, after the operations.** A finished run will show its file
-  list and size and offer Undo. The changed-files view will include command
-  writes recorded by the host. A run that moved HEAD will say so. Stage 1 added
-  no desktop view, operation, or snapshot field. Stage 2 adds
-  host operations; the control and confirmation sheet remain stage 3.
+- **Presentation, in source.** A finished run shows recorded file changes and
+  line counts, including command writes, with Undo on its last closing line.
+  Steering shares that control; a queued follow-up gets its own. Undone runs
+  offer Redo. Changed-since conflicts open an inline panel with Undo the rest
+  and Cancel; coverage and restart/HEAD warnings are explained on hover.
+  The changed-files card uses record paths. Stage 3 adds desktop controls and
+  headless scenes; installed-app acceptance remains outstanding.
 - **Order and release.** Undo precedes M7's ACP client. Codex and Claude Code
   in v0.1.0-preview.10 and v0.1.0-preview.11 have no per-run undo; this work is
   not a claim that those releases can undo turns.

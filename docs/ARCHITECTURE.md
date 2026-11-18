@@ -44,6 +44,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
   tool_card.rs          one line per tool call, its details, and grouped runs
   thread_controls.rs    model, thinking, context, run settings, and queued inputs
   thread_files.rs       files the thread changed, above its composer
+  turn_records.rs       guarded record pages, closing-line undo, conflict panel
   changes.rs            changed-file list and diff view
   commit_panel.rs       staging buttons, commit message, and write results
   commits.rs            the History tab: commit list and a commit's patch
@@ -92,6 +93,7 @@ host/watch.rs           cancellable reader and bounded async snapshot delivery
 host_state.rs           host selection, request identity, and stale-result guards
 transcript.rs           stable row identity and incremental list-change plans
 history.rs              stored/live merging, text parts, memory limits, run wording
+history/records.rs      complete record pages, run membership and closing-line projection
 local_socket.rs         owner-only paths and OS peer-identity checks
 state.rs                selection, collapse state, request queue, cache
 model.rs                plain Rust data, no GPUI
@@ -168,8 +170,25 @@ describes the layout, limits, exact-byte policy, recovery, and platform boundary
 Stage 2 adds protocol version 5 record listing and undo, still unreleased.
 `record-views.ts` pages complete paths, coverage and request membership within
 the client frame. Snapshot `records_revision` changes when records change;
-older snapshot shapes are unchanged. The native closing-line summaries still
-count observed tools. Desktop undo controls are stage 3.
+older snapshot shapes are unchanged. Stage 3 adds the native closing-line
+control. `history/records.rs` assembles page fragments at their offsets and maps
+run request IDs, including steering, to the last loaded message or tool. It
+follows undo links to the usable record and prepares file names, counts and
+hover text off the UI thread. Detached history does not claim its final run
+has ended; missing requests do not produce an invented step count.
+
+`ui/turn_records.rs` fetches on selection and `records_revision` changes. Thread,
+connection epoch, watch epoch, revision and fetch generation reject stale pages.
+The conversation projection prepares a map; render only looks up its visible
+rows. Changed records and conflict panels remeasure affected list rows, including
+rows whose message-based summary disappeared because steering joined a run.
+The changed-files card uses the complete record paths with current uncommitted
+Git counts. Undo requests use version 5 only; older hosts keep their existing
+summaries without controls. An explicit retry of an unconfirmed undo keeps its
+request ID and flags; an interrupted undo is refreshed, never replayed.
+Cmd-Option-U is the Thread action Undo Last Turn and uses the same gate as the
+visible control, with settings and palette visibility checks and key-repeat
+suppression. The desktop changes no host or protocol contract.
 
 `plait-host undo` holds the checkout lease and runs the headless restoration
 code under a sandbox that allows working files but denies Git-directory

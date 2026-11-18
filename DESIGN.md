@@ -52,11 +52,21 @@ conversation keeps a readable minimum width.
   composer's edges. A request heads its turn: left-aligned, semibold, and a
   size above the replies, with a ring on the line. Replies, reasoning, and
   tool calls are open text beside the line; headings inside a reply stay
-  smaller than or equal to the request. Every earlier turn that ended in an
-  answer closes at a filled node. One that called tools carries its record
-  there: the step count and the files its edits changed. Each file opens in
-  Changes and is drawn as a link, blue and underlined. The line ends at one
-  node, in the state's color, that names the latest turn's state and, once
+  smaller than or equal to the request. Each finished recorded run closes at
+  a filled node, including one with no answer. Its record is drawn there: the
+  step count and the files the host recorded changing, including
+  command writes. Three file names and a count of the rest stay on one line;
+  each name opens in Changes, blue and underlined, with added and removed
+  lines in hint color. A run includes its steering messages and closes only
+  once, at its last message or tool; a queued follow-up is another run.
+  Undo sits at the right end, always visible on the latest run and shown on
+  hover or keyboard focus on earlier ones. One press applies it. Its line
+  then says Undone, names the files put back, and offers Redo. A blocked undo
+  opens a small panel at that line: Changed since this turn, the paths,
+  Undo the rest, and Cancel. Excluded paths belong in hover text and that
+  panel, never in a permanent extra line. Recording, Unavailable, Wait, and
+  After restart name states briefly; hover text explains them. The line ends
+  at one node, in the state's color, that names the latest turn's state and, once
   that turn has finished, its record. The state is said there once, not
   repeated in the answer above. While the rows on screen stop short of the
   latest turn (scrolled back from the newest row, or reading older history),
@@ -86,7 +96,10 @@ conversation keeps a readable minimum width.
   finishes, with its chevron first, as on a tool call. Live reasoning opens in
   a bounded-height region. Both use the same
   text selection and copy behavior as answers. A turn's record holds only what
-  the host reported: tool steps and the files its edits changed. Do not invent
+  the host reported: observed tool steps and recorded file changes. An unloaded
+  request means the step count is unknown; a page ending before the live tail
+  cannot close its last run. Older hosts retain tool-based summaries and offer
+  no undo; hover text says a newer host is needed. Do not invent
   durations or identify who stopped a run when the host does not report that,
   and draw no control for an action that does not exist yet.
 - **Run state.** One text line above the composer, on the turn line's last

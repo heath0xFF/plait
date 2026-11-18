@@ -1064,3 +1064,65 @@ helper median (210–222 ms). The 200-file helper median was 69 ms (66–76 ms).
 These release-build measurements include the added directory-name checks;
 they measure recording, not undo or native rendering. They were taken during
 development without otherwise isolating the machine.
+
+## Turn undo stage 3 (unreleased)
+
+On 2026-11-18, `bash scripts/check.sh` exited 0: formatting, headless dependency
+separation, Clippy with warnings denied, 610 Rust tests, 344 runtime tests,
+TypeScript checks, and release builds passed. The Rust suite retains six
+separately invoked or timing tests as ignored. `bash scripts/snapshots.sh`
+also exited 0; all 18 new undo captures were inspected at both widths.
+
+The desktop uses protocol version 5 records at each run's closing line. Core
+projection tests cover steering in one run, queued follow-ups in separate runs,
+no-answer runs ending on a tool or request, reasoning with and without text,
+unloaded history, every recording and undo state, and undo-chain traversal.
+Page-assembly tests append all three lists at their supplied offsets and reject
+gaps or inconsistent metadata.
+No host, runtime, or wire contract changed in this stage.
+
+Desktop tests run in isolated homes and use scripted owner-only host sockets.
+They exercise the actual asynchronous client through Undo, Redo, a blocked
+reply, Cancel without a request, and Undo the rest with the explicit flag.
+The partial result names only restored files. The changed-files card includes
+recorded command paths. Tests reject replies across thread, watch, connection
+epoch, revision and fetch-generation changes, keep raw records from enabling
+an older row projection, check the shared button/shortcut gate, suppress held-key
+repeats, repeat an identical request ID after a lost reply, and refresh an
+interrupted operation without replaying it. Opening and closing an earlier
+run's conflict panel remeasures its row. The action-table tests check shortcut
+uniqueness and compare the default keyboard table with the Mac guide.
+
+The snapshot scenes use the real GPUI views over sample state at 1380 and 900
+points: finished Undo (dark and light), earlier-row hover, Undone with Redo,
+the changed-since panel, failed and recording states, after-restart warning,
+and an older host with no control. These are offscreen Metal/Core Text scenes,
+not installed-app acceptance. Nothing in this stage has been checked in the
+installed app; no app was launched, and no paid live harness was used. Native
+pointer/keyboard behavior, accessibility-client interaction, and a live desktop
+undo against an installed host remain unverified.
+
+The stage 2 safety limits still apply. The checkout lease excludes host writers,
+not arbitrary editors or shell commands. An external writer can modify or
+replace an existing file after the last recheck and before rename or deletion;
+that external change can be overwritten or deleted. No-follow traversal and
+exclusive creation narrow this exposure but do not make checks and existing-file
+mutations atomic. An ancestor moved after its last identity check is also
+outside the verified guarantee.
+
+An external writer can change an already restored path before the undo's final
+record captures it. That same-path edit can become the undo record's after
+image, so Redo can remove it while matching the recorded image. Excluding
+unrelated paths does not eliminate this same-path capture race. Ordinary later
+changes made after capture are protected by the fresh-record and immediate
+content checks.
+
+A detected late race or timeout can leave a subset restored; there is no rollback
+transaction. Process death after a mutation but before durable journal completion
+can omit that mutation from the recovered record. The write is never replayed,
+but the recovered record may not undo every effect. Power loss and arbitrary
+filesystem faults are not proven. Other permissions, extended attributes,
+hard-link relationships, empty-directory history, Git history, outside-checkout
+effects, and excluded coverage are not restored. Replacing a file can discard
+metadata outside the content/executable/symlink promise. These limits prevent an
+absolute guarantee against every concurrent writer.

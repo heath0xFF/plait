@@ -213,7 +213,16 @@ impl Plait {
             // The latest turn's record sits with its state, where the line ends.
             .when_some(
                 self.conversation_snapshot().and_then(|shown| {
-                    history::row_record(&self.formatted.turn_summaries, shown, &message.id)
+                    history::row_record(&self.formatted.turn_summaries, shown, &message.id).filter(
+                        |_| {
+                            self.host.protocol() < 5
+                                || !self
+                                    .turn_records
+                                    .lines
+                                    .covered
+                                    .contains(&Key::Message(message.id.clone()))
+                        },
+                    )
                 }),
                 |el, summary| el.child(self.turn_record(&message.id, summary, cx)),
             );
@@ -383,8 +392,15 @@ impl Plait {
             .role(Role::Group)
             .aria_label(format!("This turn: {}", summary.label()))
             .relative()
-            .flex_wrap()
+            .overflow_x_hidden()
             .gap_x(px(6.))
+            .tooltip({
+                let tip = self.legacy_record_tip();
+                move |_, cx| {
+                    cx.new(|_| super::thread_controls::TextTooltip(tip.clone()))
+                        .into()
+                }
+            })
             .pt(px(2.))
             .min_h(px(2. + line))
             .text_size(px(12.))
@@ -557,6 +573,9 @@ impl Plait {
         // closer to the tool calls that follow it than to what came before,
         // and a request stands clear of the turn above it.
         let request = matches!(row, Row::Message(message) if message.role == MessageRole::User);
+        let recorded = history::records::closing_key(row)
+            .and_then(|key| self.turn_records.lines.rows.get(&key))
+            .filter(|_| self.host.protocol() >= 5);
         let (content, top, bottom) = match row {
             Row::Message(message) if request => (self.live_message(message, index, cx), 22., 2.),
             Row::Message(message) => (self.live_message(message, index, cx), COPY_LIFT, 6.),
@@ -570,6 +589,7 @@ impl Plait {
             Row::Tool(tool) => match self.tool_row(tool, index, cx) {
                 Some(content) => (content, 1., 1.),
                 // Folded into a closed group: the row stays, with no height.
+                None if recorded.is_some() => (div().into_any_element(), 1., 1.),
                 None => return div().into_any_element(),
             },
         };
@@ -594,7 +614,21 @@ impl Plait {
                     .pt(px(top))
                     .pb(px(bottom))
                     .child(strand_line(from))
-                    .child(content),
+                    .child(content)
+                    .when_some(recorded, |el, line| {
+                        el.child(
+                            div()
+                                .relative()
+                                .pt_1()
+                                .child(strand_mark(
+                                    4. + RECORD_LINE / 2.,
+                                    NODE,
+                                    colors().subtle,
+                                    false,
+                                ))
+                                .child(self.record_line(line, false, row_group(index), cx)),
+                        )
+                    }),
             )
             .into_any_element()
     }
@@ -733,7 +767,9 @@ impl Plait {
         let keymap = &self.preferences.value.keymap;
         actions::ACTIONS
             .iter()
-            .filter(|action| action.id.starts_with("approval."))
+            .filter(|action| {
+                action.id.starts_with("approval.") || action.id == "thread.undo_last_turn"
+            })
             .flat_map(|action| actions::bound(action, keymap))
             .any(|key| key.modifiers == pressed.modifiers && key.key == pressed.key)
     }
@@ -1041,7 +1077,33 @@ Tone::Filled,
                     ),
                 );
             }
-            if let Some((state, failed)) = state {
+            if let Some(line) = self
+                .turn_records
+                .lines
+                .latest
+                .as_ref()
+                .filter(|_| self.host.protocol() >= 5 && !snapshot.status.busy())
+            {
+                main = main.child(
+                    div().px_6().child(
+                        div()
+                            .relative()
+                            .w_full()
+                            .max_w(px(CONTENT_WIDTH))
+                            .mx_auto()
+                            .pt_2()
+                            .pb(px(6.))
+                            .when(joined, |el| el.child(strand_end(8. + RECORD_LINE / 2.)))
+                            .child(strand_mark(
+                                8. + RECORD_LINE / 2.,
+                                NODE,
+                                colors().muted,
+                                false,
+                            ))
+                            .child(self.record_line(line, true, "latest-run".into(), cx)),
+                    ),
+                );
+            } else if let Some((state, failed)) = state {
                 /// Space above the state's line.
                 const LEAD: f32 = 8.;
                 // The node takes the thread's state color, as the rail does;
@@ -1066,6 +1128,13 @@ Tone::Filled,
                             .id("turn-state")
                             .role(Role::Group)
                             .aria_label(name)
+                            .tooltip({
+                                let tip = self.legacy_record_tip();
+                                move |_, cx| {
+                                    cx.new(|_| super::thread_controls::TextTooltip(tip.clone()))
+                                        .into()
+                                }
+                            })
                             .relative()
                             // The node stays beside the first line of a state
                             // that wraps, such as a long failure.

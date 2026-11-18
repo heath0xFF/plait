@@ -129,6 +129,7 @@ pub(super) const ACTIONS: &[AppAction] = &[
     entry("thread.notifications", "Mute or Unmute Thread Alerts", "Thread", None, Item, || Box::new(ToggleNotifications)),
     // Answers to the open thread's approval. Both need Command and Option, so
     // no typing slip sends one, and their keys sit far apart.
+    entry("thread.undo_last_turn", "Undo Last Turn", "Thread", Some("cmd-alt-u"), Group, || Box::new(UndoLastTurn)),
     entry("approval.deny_once", "Deny Once", "Thread", Some("cmd-alt-."), Group, || Box::new(DenyOnce)),
     entry("approval.allow_once", "Allow Once", "Thread", Some("cmd-alt-y"), Item, || Box::new(AllowOnce)),
     entry("git.stage_all", "Stage All Changes", "Git", None, Item, || Box::new(StageAll)),

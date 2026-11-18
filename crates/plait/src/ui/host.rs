@@ -295,6 +295,7 @@ impl Plait {
                                     cx.notify();
                                     return false;
                                 }
+                                this.turn_records_snapshot(window, cx);
                                 this.conversation_changed(window, cx);
                                 this.record_snapshot(cx);
                                 this.thread_files_snapshot(cx);

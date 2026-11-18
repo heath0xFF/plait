@@ -45,6 +45,7 @@ mod branches;
 mod find;
 mod mcp;
 mod showcase;
+mod undo;
 mod ways_out;
 
 const THREAD: &str = "thr_5791c2e4";
@@ -2021,6 +2022,7 @@ fn walk(output: Option<&Path>) {
         tool_states_walk(&mut harness, &repository, suffix);
         reading_walk(&mut harness, &repository, suffix);
         find::find_walk(&mut harness, &repository, suffix);
+        undo::undo_walk(&mut harness, &repository, suffix);
         history_walk(&mut harness, &repository, suffix);
         tool_cards_walk(&mut harness, &repository, suffix);
         draft_walk(&mut harness, &repository, suffix);

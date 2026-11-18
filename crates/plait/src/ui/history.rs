@@ -128,6 +128,8 @@ impl Plait {
         let cache = self.history.cache.clone();
         let enabled = self.history.enabled;
         let previous = self.formatted.clone();
+        let records = self.turn_records.data.clone();
+        let record_generation = self.turn_records.data_generation;
         let task = cx.background_executor().spawn(async move {
             let display = if enabled {
                 cache.project(&snapshot)
@@ -151,10 +153,11 @@ impl Plait {
                 })
                 .collect();
             let formatted = markdown::Transcript::update_stored(&previous, &display, &stored);
-            (Arc::new(display), Arc::new(formatted))
+            let lines = history::records::project(&display, &records, !cache.detached);
+            (Arc::new(display), Arc::new(formatted), Arc::new(lines))
         });
         cx.spawn_in(window, async move |this, cx| {
-            let (display, formatted) = task.await;
+            let (display, formatted, lines) = task.await;
             let _ = this.update_in(cx, |this, window, cx| {
                 if !this.host.accepts_watch(epoch, watch_epoch, &id) {
                     return;
@@ -169,6 +172,7 @@ impl Plait {
                 if this.reconcile_live_list(previous.as_deref()) {
                     this.remeasure_records(previous.as_deref(), &before);
                 }
+                this.install_record_lines(lines, record_generation);
                 this.conversation_rows_changed(cx);
                 if this.history.enabled
                     && this.history.loading.is_none()

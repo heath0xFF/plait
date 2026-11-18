@@ -345,6 +345,44 @@ color until they meet a minimum contrast, so a few schemes look slightly crisper
 in Plait than elsewhere. A theme removed from the folder falls back to Plait's
 own.
 
+## Undo a run (unreleased)
+
+With a version 5 host, each finished run ends with its tool-step count and the
+files the host recorded changing, including command writes. File links open
+Changes; the adjacent counts are lines added and removed. Three names fit on
+one line, with the remaining files counted and the complete list on hover.
+
+Press **Undo** at the line's right end, or **Cmd-Option-U** (Thread → Undo Last
+Turn). The latest run always shows its control; earlier controls appear on
+hover or keyboard focus. There is no confirmation: the line changes to
+**Undone**, lists the files restored, and offers **Redo**. Steering messages
+share a run's control; a queued follow-up is its own run. The shortcut acts
+only in the visible conversation, with no settings page or palette over it.
+It follows the latest line's Undo or Redo state; Cmd-Z remains text undo.
+
+If a path differs from the run's after record, the default operation changes
+nothing and opens **Changed since this turn** at that line. **Undo the rest**
+leaves those paths alone and restores only eligible files; **Cancel** closes
+the panel. A partial undo lists only the files actually restored. The panel
+labels any paths omitted from the host's bounded conflict preview. Hover text
+lists **Not covered** paths, with reasons; these also appear in the panel.
+
+**Recording** means the record is still being taken; **Unavailable** means it
+cannot be used; **Wait** means this checkout has an active run or write.
+**After restart** warns that capture may include changes made while the host
+was down. **HEAD moved** warns that Git history is outside undo's scope.
+Hover gives details. Older hosts show no control and explain that undo needs
+a newer host. Refresh (Cmd-R) rereads records. If an undo reply is lost, Retry
+checks the same request without applying it twice; Incomplete asks you to
+inspect Changes and never automatically replays the operation.
+
+Undo restores file content, executable bits, and symlinks. It does not restore
+other permissions, extended attributes, hard-link relationships, empty-directory
+history, Git history, or effects outside the checkout. The host checks for
+later changes, but an external editor racing the final checks can still lose
+a change, and failures after writes begin can be partial. Read the explicit
+[verification limits](VERIFICATION.md#turn-undo-stage-3-unreleased).
+
 ## Keyboard controls
 
 When focus is in the conversation, Home or Cmd-Up goes to the beginning of the
@@ -417,6 +455,7 @@ path alongside separate `PLAIT_HOST_STORE` and `PLAIT_DESKTOP_STATE_DIR` paths.
 | Cmd-Option-Up | Previous Thread | `thread.previous` |
 | Option-Down | Next Changed File | `git.next_file` |
 | Option-Up | Previous Changed File | `git.previous_file` |
+| Cmd-Option-U | Undo Last Turn | `thread.undo_last_turn` |
 | Cmd-Option-period | Deny Once | `approval.deny_once` |
 | Cmd-Option-Y | Allow Once | `approval.allow_once` |
 | Cmd-Shift-C | Commit Staged Changes… | `git.commit` |

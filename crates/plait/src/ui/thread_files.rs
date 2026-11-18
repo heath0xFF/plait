@@ -80,6 +80,9 @@ impl Plait {
         let Some(snapshot) = self.host.snapshot.as_ref() else {
             return;
         };
+        if self.host.protocol() >= 5 && !self.turn_records.data.is_empty() {
+            return;
+        }
         let done = snapshot
             .tools
             .iter()
@@ -93,6 +96,28 @@ impl Plait {
         let root = snapshot.checkout.clone();
         self.thread_files.tools_done = done;
         self.fetch_thread_files(id, root, cx);
+    }
+
+    /// Full paged records include command writes and are not capped by the
+    /// older changed_files preview. Git still supplies uncommitted counts.
+    pub(super) fn record_thread_files(
+        &mut self,
+        records: &[host::TurnRecord],
+        cx: &mut Context<Self>,
+    ) {
+        let Some(snapshot) = self.host.snapshot.as_ref() else {
+            return;
+        };
+        self.thread_files.generation += 1;
+        self.thread_files.thread = Some(snapshot.id.clone());
+        self.thread_files.root = snapshot.checkout.clone();
+        self.thread_files.paths = records
+            .iter()
+            .flat_map(|record| record.paths.iter().map(|path| path.path.clone()))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        self.count_thread_files(cx);
     }
 
     /// After a Git status read: recount, since commits and edits move the numbers.

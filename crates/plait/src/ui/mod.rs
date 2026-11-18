@@ -39,6 +39,7 @@ pub mod theme;
 mod thread_controls;
 mod thread_files;
 mod tool_card;
+mod turn_records;
 mod update;
 mod ways_out;
 mod window_bar;
@@ -90,6 +91,7 @@ actions!(
         NewBranch,
         NextThread,
         PreviousThread,
+        UndoLastTurn,
         Tab,
         BackTab,
         NextFile,
@@ -162,6 +164,7 @@ pub struct Plait {
     line_pick: Option<changes::LinePick>,
     /// Files the selected thread changed, above its composer.
     thread_files: thread_files::ThreadFiles,
+    turn_records: turn_records::TurnRecords,
     reveal: live_conversation::Reveals,
     approval_keys: live_conversation::ApprovalKeys,
     /// The command palette or model picker, above the workspace.
@@ -246,6 +249,7 @@ impl Plait {
             worktree_busy: false,
             line_pick: None,
             thread_files: Default::default(),
+            turn_records: Default::default(),
             reveal: Default::default(),
             approval_keys: Default::default(),
             overlay: None,
@@ -425,6 +429,7 @@ impl Plait {
 
     fn refresh(&mut self, _: &Refresh, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
+        self.fetch_turn_records(window, cx);
         if !matches!(self.state.repository.snapshot, Load::Loading) {
             self.state.repository.refresh();
             self.pump(cx);
@@ -1097,6 +1102,9 @@ impl Render for Plait {
             .on_action(cx.listener(|_, _: &Minimize, window, _| window.minimize_window()))
             .map(|root| self.on_jump_actions(root, cx))
             .map(|root| self.on_ways_out_actions(root, cx))
+            .on_action(
+                cx.listener(|this, _: &UndoLastTurn, window, cx| this.undo_last_turn(window, cx)),
+            )
             .map(|root| self.on_approval_actions(root, cx))
             .map(|root| self.on_selection_actions(root, cx))
             .map(|root| self.on_keyboard_controls(root, cx))
