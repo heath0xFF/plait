@@ -10,7 +10,7 @@ type Entry = { mode: '100644' | '100755' | '120000'; fingerprint: string; bytes:
 type Hunk = { first_line: number; last_line: number; old_start: number; old_count: number; new_start: number; new_count: number };
 type Read = { before: Entry; after: Entry; patch: number[]; hunks: Hunk[]; status: string; truncated: boolean; elapsed_ms: number; processes: number };
 export type Page = { token: string; offset: number; total: number; items: unknown[]; next_offset: number | null };
-type Document = { checkout: string; items: unknown[]; bytes: number; touched: number; offsets: Set<number> };
+type Document = { checkout: string; items: unknown[]; bytes: number; touched: number; offsets: Set<number>; pageLimit: number };
 const operations: Record<string, string[]> = { turn_review_info: ['thread_id'], turn_diff: ['thread_id', 'record_id', 'path'], turn_review_page: ['token', 'offset'] };
 const id = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 export function validateReview(input: unknown): Record<string, unknown> & { op: string } {
@@ -70,11 +70,11 @@ export class TurnReview {
       for (let offset = 0; offset < bytes.length; offset += 65_536) chunks.push({ byte_offset: offset, bytes_base64: bytes.subarray(offset, offset + 65_536).toString('base64') });
       const origin = { kind: 'turn', record_id: String(row.id), thread_id: String(row.thread), request_id: String(row.run_request), title: null, created_at: Number(row.created_at) };
       const hunks = (read?.hunks ?? []).map((hunk, index) => ({ ...hunk, id: `${row.id}-${index}`, origin, stageable: false, refusal: 'unsupported' }));
-      return { schema: 1, checkout, view_id: randomUUID(), path: String(request.path), side: null, basis: 'record', source_record_id: String(row.id),
+      return this.withDocuments(checkout.id, { schema: 1, checkout, view_id: randomUUID(), path: String(request.path), side: null, basis: 'record', source_record_id: String(row.id),
         before: read?.before ?? null, after: read?.after ?? null, status: read?.status ?? 'unavailable', reason: read ? null : (changed ? 'missing_object' : 'not_covered'),
-        patch_bytes: bytes.length, patch: this.document(checkout.id, chunks), hunks: this.document(checkout.id, hunks),
+        patch_bytes: bytes.length,
         review: { state: 'unreviewed', revision: 0, reviewed_at: null, expires_at: null, source_record_id: null, can_mark: false },
-        truncated: read?.truncated ?? false, elapsed_ms: read?.elapsed_ms ?? 0 };
+        truncated: read?.truncated ?? false, elapsed_ms: read?.elapsed_ms ?? 0 }, chunks, hunks);
     });
   }
   private checkout(root: string, identity: { dev: string; ino: string }): Checkout {
@@ -82,12 +82,19 @@ export class TurnReview {
     const row = this.store.db.prepare('SELECT id,catalog_revision FROM review_checkouts WHERE canonical_root=? AND root_dev=? AND root_ino=?').get(root, identity.dev, identity.ino)!;
     return { host_id: this.host, id: String(row.id), catalog_revision: Number(row.catalog_revision), review_revision: 0 };
   }
-  document(checkout: string, items: unknown[]): Page {
+  withDocuments<T extends object>(checkout: string, metadata: T, patch: unknown[], hunks: unknown[]): T & { patch: Page; hunks: Page } {
+    // Both initial pages travel in one 1 MiB transport frame, including its envelope.
+    const budget = 1_048_576 - 1024 - Buffer.byteLength(JSON.stringify(metadata));
+    const pageLimit = Math.min(750_000, Math.floor(budget / 2));
+    if (pageLimit < 1024) fail('review_limit', 'This preview exceeds the review limit.');
+    return { ...metadata, patch: this.document(checkout, patch, pageLimit), hunks: this.document(checkout, hunks, pageLimit) };
+  }
+  document(checkout: string, items: unknown[], pageLimit = 750_000): Page {
     this.evict();
     const bytes = Buffer.byteLength(JSON.stringify(items));
     if (bytes > 32 * 1024 * 1024) fail('review_limit', 'This preview exceeds the review limit.');
     const token = randomUUID();
-    this.documents.set(token, { checkout, items, bytes, touched: this.now(), offsets: new Set([0]) });
+    this.documents.set(token, { checkout, items, bytes, touched: this.now(), offsets: new Set([0]), pageLimit });
     this.evict();
     return this.page(token, 0);
   }
@@ -100,7 +107,10 @@ export class TurnReview {
     let size = 1024;
     for (const item of doc.items.slice(offset, offset + 500)) {
       const bytes = Buffer.byteLength(JSON.stringify(item)) + 1;
-      if (size + bytes > 750_000) break;
+      if (size + bytes > doc.pageLimit) {
+        if (items.length === 0) fail('review_limit', 'This preview exceeds the review limit.');
+        break;
+      }
       items.push(item); size += bytes;
     }
     const next_offset = offset + items.length < doc.items.length ? offset + items.length : null;

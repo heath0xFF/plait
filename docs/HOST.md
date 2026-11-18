@@ -1884,6 +1884,9 @@ Other failures retain their own unavailable or offline explanation.
   Tokens work across sockets for the same authenticated host owner, expire
   after five idle minutes, and are lost on host restart. `expired_view` means
   refresh the view. Pages contain at most 500 items and 750,000 JSON bytes.
+  The initial patch and hunk pages share the reply's 1 MiB transport budget
+  after metadata and framing overhead; their smaller page limits persist
+  for continuation requests and identical retries.
 
 A diff reply has these keys (nullable keys are always present):
 

@@ -69,3 +69,28 @@ test('turn review rejects inherited operation names with invalid_request', () =>
     assert.throws(() => validateReview({ op }), (error: unknown) => error instanceof HostError && error.code === 'invalid_request');
   }
 });
+
+test('recorded patch and hunk pages share one reply frame budget', async t => {
+  const h = await codex(t);
+  const review = new TurnReview(h.runtime.store, h.runtime.records, h.store);
+  const patch = Array.from({ length: 8 }, (_, i) => ({ byte_offset: i * 65_536, bytes_base64: Buffer.alloc(65_536, 'a').toString('base64') }));
+  // Leave room for richer hunk metadata without changing the transport contract.
+  const hunks = Array.from({ length: 500 }, (_, i) => ({ id: `hunk-${i}`, origin: { title: 't'.repeat(4096) } }));
+  const metadata = { schema: 1, path: 'p'.repeat(4096), source_record_id: 'r'.repeat(128), patch_bytes: 524_288 };
+  const reply = review.withDocuments('checkout', metadata, patch, hunks);
+  assert.ok(Buffer.byteLength(JSON.stringify({ ok: true, result: reply }) + '\n') < 1_048_576);
+  for (const [first, expected] of [[reply.patch, patch], [reply.hunks, hunks]] as const) {
+    assert.notEqual(first.next_offset, null, 'each document must continue in another frame');
+    let page = first; const all = [];
+    for (;;) {
+      assert.deepEqual(review.page(page.token, page.offset), page, 'page retries must retain the same boundary');
+      assert.ok(Buffer.byteLength(JSON.stringify({ ok: true, result: page }) + '\n') < 750_000);
+      all.push(...page.items);
+      if (page.next_offset === null) break;
+      page = review.page(page.token, page.next_offset);
+    }
+    assert.deepEqual(all, expected);
+  }
+  assert.throws(() => review.withDocuments('checkout', { title: 't'.repeat(1_048_576) }, [], []), /review limit/);
+  assert.throws(() => review.withDocuments('checkout', {}, ['x'.repeat(750_000)], []), /review limit/);
+});
