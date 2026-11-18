@@ -21,6 +21,7 @@ v0.1.0-preview.10. M8 steps 3 and 4 follow M7.**
 | M6 — Multiple machines | Unified project navigation across independent hosts, including disconnected/reconnecting states | Planned |
 | M7 — Any agent harness | Threads run by other agent harnesses (Claude Code, Codex, Pi, omp, Antigravity, and others) beside Pi, with the same conversation, approval, Git, and navigation views | Current work. Steps 1 and 2 (harness choice, Codex, each harness's own permissions, and Claude Code; protocol version 4) shipped in v0.1.0-preview.10; an ACP client follows, agreed first |
 | M8 — Skills, tools, and CLIs | Pi threads use the skills, prompt templates, global instructions, MCP servers, and command-line tools the person already set up for their agent, with each one visible in Settings and every call under Plait's approvals | Steps 1 (skills and user instructions) and 2 (prompt templates, Settings → Agent, and `/` completion) shipped in v0.1.0-preview.9; steps 3 (named CLIs) and 4 (MCP) follow M7 |
+| M9 — Turn records | The host keeps its own record of the checkout before and after every turn, in every harness: per-turn undo first, then committing by turn, review of what changed since the person last looked, and checks the host runs itself | Step 1, per-turn undo, is agreed and is the next work, ahead of M7's ACP client; the later steps are proposed |
 
 Do not build the whole roadmap at once. Each change must compile, run, and have
 its own checks. Protocol, storage, and shared-contract changes need agreement
@@ -64,6 +65,21 @@ writers must coordinate around existing dirty work. Each thread is one agent
 the person directs; Plait does not orchestrate agents or run swarms. There is
 no embedded terminal or built-in cloud compute service.
 Existing checkouts can be opened as projects.
+
+**Built around the person's checkout.** An agent works in the checkout the
+person already uses, beside their uncommitted work, their build output, and
+their tools. Worktrees stay optional: safety must not depend on working in a
+copy. What makes the checkout safe is the host, not the harness. The host keeps
+its own record of the checkout around every turn (M9), so it can show what a
+turn changed, and take it back, without relying on what the agent reports.
+
+Plait also leaves the person's agent as they set it up. In Codex and Claude
+Code threads it adds no instructions and no tools, and writes nothing into the
+harness's configuration. It calls no model on its own to write titles, branch
+names, or commit messages, and sends no telemetry. Running many agents at once
+on copies of one repository is a different product, and Plait does not aim at
+it: a feature that needs a fleet, a copy of the checkout, or a model call the
+person did not ask for is out of scope.
 
 **Agreed for M4 Git, ahead of M3:** Plait builds Plait, so committing reviewed
 work without leaving the app comes before remote execution. The desktop may
@@ -273,6 +289,72 @@ settings. Recorded in the [host contract](HOST.md#skills-and-user-instructions).
 Next, each agreed before it starts: step 3 adds named CLIs for sandboxed
 projects; step 4 adds MCP servers.
 
+**Direction for M9, turn records:** Plait's guard on files that had changes,
+its exact approvals, and its command sandbox protect a checkout only in Pi
+threads. Codex and Claude Code write wherever their own permissions allow, and
+most people run them without prompts. M9 gives every harness one protection
+that depends neither on prompts nor on the harness: the host records the
+checkout itself.
+
+- **A record before and after every turn.** Each record is the working tree as
+  Git would store it: every tracked and untracked file that Git does not
+  ignore. Records are commits in a chain. The difference between a turn's two
+  records is what that turn changed, whichever tool or command changed it. The
+  difference between one turn's end and the next turn's start is what the
+  person, or anything else, changed in between.
+- **Kept by the host, not in the repository.** A private copy of the index
+  takes the files, and the resulting objects are written to the host's store,
+  which reads the repository's own objects without adding to them. The person's
+  repository gains no objects and no refs; their index, `HEAD`, branches, and
+  files are only read.
+- **Undo first, then review.** The same records give per-turn undo (step 1),
+  then staging and committing by turn, review of what changed since the person
+  last looked, and checks the host runs itself. Each later step is agreed
+  before it starts.
+- **The same on every machine.** Records are made by whichever host runs the
+  turn, so a remote host (M3) gives the same undo and review as a local one.
+- **Cheap.** A record of an unchanged checkout costs about one pass over its
+  file metadata. It is measured against an agreed target on a large checkout
+  before shipping, and runs on the host's background work, never in a frame.
+
+**Agreed for M9 step 1, per-turn undo:** any turn, in any harness and any
+permission mode, can be undone, so the person's work is recoverable even when
+an agent ran with full access. This is the same promise for every harness,
+made by the host rather than the harness.
+
+- **Before each turn,** the host records the checkout as above. The turn
+  starts only after the record is made, and a turn whose record fails says so
+  before it starts rather than running unrecorded.
+- **After the turn,** the host records the tree again and keeps the list of
+  paths that differ.
+- **Undo this turn** puts those paths back as they were before the turn:
+  changed files restored, created files removed, deleted files returned. A
+  path the person or a later turn has changed since is not overwritten: the
+  undo lists it and stops until the person chooses. An undo is recorded first,
+  so it can itself be undone.
+- **Shown** on each finished turn with its file list and size, beside changed
+  files, for every harness. Changed files then includes what commands wrote,
+  which Codex and Claude Code threads do not list today.
+- **Not covered, and said so in the app:** files Git ignores (such as `.env`
+  files and build output), anything outside the checkout, commits, branch
+  changes, and pushes the agent made, and effects beyond the machine. A turn
+  that moved `HEAD` says so; undo restores files, not history.
+- **Writes.** Undo's restore of working-tree files is the only write to the
+  person's checkout, and there is no Git write to their repository. Records
+  are pruned with the thread and after an age to be agreed.
+- **Order.** Undo is built before M7 step 3, so each harness added later starts
+  with it.
+- **Release.** Codex and Claude Code threads shipped in v0.1.0-preview.10
+  without undo, and v0.1.0-preview.11 does not add it. Until undo ships, a
+  turn in those threads cannot be undone.
+
+Still to agree before implementation: the host protocol operation and its
+version; the cost target; how long records are kept; what is copied into the
+host's store so that pruning or rewriting history in the repository cannot
+break an undo; how files under Git filters (such as LFS) and line-ending
+conversion are recorded; and whether files ignored one at a time (such as
+`.env`), as opposed to ignored directories, are recorded.
+
 Use existing tools for interactive shells and debugging. A future Open in Rex
 integration and native mobile companion are possibilities, not current features.
 
@@ -281,44 +363,40 @@ not as source or layout templates. See [the originality policy](ORIGINALITY.md).
 
 ## Proposed, not yet agreed
 
-**Per-turn undo.** Any turn, in any harness and any permission mode, can be
-undone, so the person's work is recoverable even when an agent ran with full
-access. Plait's guard on files that had changes protects them only in Pi
-threads; Codex and Claude Code write wherever their own permissions allow. This
-is the same promise for every harness, made by the host rather than the
-harness.
+The later steps of M9, each agreed before it starts. All of them read the turn
+records described under "Direction for M9" above. None adds a write to the
+person's repository beyond the staging and committing Plait already does.
 
-- **Before each turn,** the host records the checkout's working tree as a Git
-  tree object, without touching the person's index, `HEAD`, branches, or files:
-  a private copy of the index takes every tracked and untracked file that Git
-  does not ignore, and a commit object for that tree, whose parent is `HEAD`,
-  is kept under a private ref (`refs/plait/turns/…`) so Git does not discard it.
-  The turn starts only after the record is made, and a turn whose record fails
-  says so before it starts rather than running unrecorded.
-- **After the turn,** the host records the tree again and keeps the list of
-  paths that differ: what that turn changed, whichever tool or command changed
-  it.
-- **Undo this turn** puts those paths back as they were before the turn: changed
-  files restored, created files removed, deleted files returned. A path the
-  person or a later turn has changed since is not overwritten: the undo lists
-  it and stops until the person chooses. An undo is recorded first, so it can
-  itself be undone.
-- **Shown** on each finished turn with its file list and size, beside changed
-  files, for every harness.
-- **Not covered, and said so in the app:** files Git ignores (such as `.env`
-  files and build output), anything outside the checkout, commits, branch
-  changes, and pushes the agent made, and effects beyond the machine. A turn
-  that moved `HEAD` says so; undo restores files, not history.
-- **Cost:** the record reuses Git's index stat cache, so an unchanged checkout
-  costs one pass over its file metadata. It is measured against a target (to be
-  agreed) on a large checkout before shipping, and runs on the host's
-  background work, never in a frame. Records are pruned with the thread and
-  after an age to be agreed; their objects live in the repository's own Git
-  store.
+**Step 2, commit by turn.** Changes shows, for each changed hunk, whether the
+person made it or which turn did. A turn's changes can be staged on their own,
+leaving the person's work in progress unstaged. A hunk that no longer matches
+the turn's record is refused, as a hunk that moved is today.
 
-Agreement needed: this adds a Git write that AGENTS.md does not yet list
-(private refs and objects, and the undo's restore of working-tree files), a
-host protocol operation for undo, and stored turn records.
+**Step 3, since you last looked.** Plait remembers, for each file, the record
+the person last reviewed, and a file's diff can show only what changed since
+then. A file that a later turn changes again is marked as changed, not hidden.
+
+**Step 4, checks the host runs.** After a turn, the host can run a check the
+person named for the project, such as a build or a test run, and show its
+result on the turn beside whatever the agent said. It runs in the command
+sandbox, so it can read the checkout and cannot write it or reach the network.
+It is off until the person turns it on for a project, runs at low priority and
+never in a frame, and is cancelled when a new turn starts. Nothing is sent back
+to the agent unless the person sends it.
+
+**Later, from the same records:**
+
+- **Line to turn.** From a line in the file viewer or a diff, to the turn that
+  wrote it and the message that asked for it.
+- **A fuller account of each turn.** The branches and `HEAD` it moved, with a
+  way to put them back; each command's exit status; processes it left running;
+  and files that changed outside the checkout while it ran.
+- **A shelf.** An undone turn can be put back later, and a message can be tried
+  again with another model before the person keeps one result.
+- **Turn bisect.** Which turn broke a check, found by running it on recorded
+  trees in the sandbox while the checkout stays as it is.
+- **Run the proof.** A command that shows, on the person's own Mac, the sandbox
+  refusing what it says it refuses and an undo restoring identical files.
 
 ## Performance goals
 
@@ -336,3 +414,13 @@ Keep filesystem, Git, and network work off the UI thread. Use cached state,
 background work, and virtualized views rather than unnecessary polling or full
 view rebuilds. The [ADEMark plan](ADEMARK.md) records the measurement boundary;
 Plait does not have an ADEMark score.
+
+Results are published only from the installed app, with the conditions they
+were measured under; goals and headless figures are not presented as results.
+ADEMark measures Mac agent apps with Claude Code at full access, which a
+release with Claude Code threads makes comparable, so entering it is planned.
+It also records what an app adds to the agent's request, the model calls it
+makes on its own, what it writes into the agent's configuration, and what
+keeps running after quit. Plait means to keep the first three at nothing. The
+host is meant to keep running, so its memory after quit is reported, not
+hidden.
