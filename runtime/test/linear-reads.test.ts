@@ -496,3 +496,49 @@ test('server echoing Authorization header in issue data never leaks key into rep
   assert.equal(listed.result.next_cursor, null);
   await assertKeyNotInStoreDb(h.storeDir, secret);
 });
+
+test('linear_sign_out or newer linear_set_key during in-flight linear_set_key prevents writing stale credential', async t => {
+  const h = await setupHarness(t);
+
+  // 1. Sign-out during in-flight set_key must prevent linear-auth.json from being written.
+  let releaseFirst!: () => void;
+  const firstStarted = new Promise<void>(resolve => {
+    h.fake.enqueueFault(async () => {
+      resolve();
+      await new Promise<void>(done => { releaseFirst = done; });
+      return false;
+    });
+  });
+
+  const setKeyReq = h.call({ op: 'linear_set_key', key: h.fake.validKey });
+  await firstStarted;
+  assert.equal((await h.call({ op: 'linear_sign_out' })).ok, true);
+  releaseFirst();
+  const setKeyReply = await setKeyReq;
+  assert.equal(setKeyReply.ok, false);
+  assert.equal(setKeyReply.error.code, 'linear_not_signed_in');
+  assert.equal((await h.call({ op: 'linear_auth_status' })).result.signed_in, false);
+  await assert.rejects(() => stat(join(h.storeDir, 'linear-auth.json')), { code: 'ENOENT' });
+
+  // 2. Newer set_key completing while an older set_key is still verifying must not be overwritten.
+  let releaseOlder!: () => void;
+  const olderStarted = new Promise<void>(resolve => {
+    h.fake.enqueueFault(async () => {
+      resolve();
+      await new Promise<void>(done => { releaseOlder = done; });
+      return false;
+    });
+  });
+  const olderReq = h.call({ op: 'linear_set_key', key: h.fake.validKey });
+  await olderStarted;
+  h.fake.organization = { id: 'org-2', name: 'Second Workspace', urlKey: 'second' };
+  const newerReply = await h.call({ op: 'linear_set_key', key: h.fake.readOnlyKey });
+  assert.equal(newerReply.ok, true);
+  assert.equal(newerReply.result.workspace_id, 'org-2');
+
+  releaseOlder();
+  const olderReply = await olderReq;
+  assert.equal(olderReply.ok, false);
+  assert.equal(olderReply.error.code, 'linear_not_signed_in');
+  assert.equal((await h.call({ op: 'linear_auth_status' })).result.workspace_id, 'org-2');
+});

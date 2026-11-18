@@ -61,6 +61,8 @@ export class LinearService {
   /** Increments on sign-in, sign-out, and cache invalidations to fence stale in-flight replies. */
   private authGeneration = 0;
   private cacheGeneration = 0;
+  private setKeySequence = 0;
+  private authMutation: Promise<void> = Promise.resolve();
   private readonly querySequence = new Map<string, number>();
   private readonly inFlightWrites = new Map<string, { op: string; hash: string; promise: Promise<unknown> }>();
 
@@ -133,29 +135,45 @@ export class LinearService {
     return formatAuthStatus(auth, this.keyRejected);
   }
 
+  private serializeAuthMutation<T>(work: () => Promise<T>): Promise<T> {
+    const next = this.authMutation.then(work, work);
+    this.authMutation = next.then(() => {}, () => {});
+    return next;
+  }
+
   async setKey(apiKey: string): Promise<LinearAuthStatus> {
+    const authGen = this.authGeneration;
+    const seq = ++this.setKeySequence;
     const verified = await this.client.viewer(apiKey);
-    const saved: StoredLinearAuth = {
-      ...verified.data,
-      api_key: apiKey,
-      saved_at: this.now(),
-    };
-    await this.authStore.write(saved);
-    this.authGeneration++;
-    this.cacheGeneration++;
-    this.keyRejected = false;
-    this.store.linear.clearAll();
-    return formatAuthStatus(saved, false);
+    return this.serializeAuthMutation(async () => {
+      if (this.authGeneration !== authGen || this.setKeySequence !== seq) {
+        throw new LinearError('not_signed_in', 'Linear sign-in changed while the request was in flight.');
+      }
+      const saved: StoredLinearAuth = {
+        ...verified.data,
+        api_key: apiKey,
+        saved_at: this.now(),
+      };
+      await this.authStore.write(saved);
+      this.authGeneration++;
+      this.cacheGeneration++;
+      this.keyRejected = false;
+      this.store.linear.clearAll();
+      return formatAuthStatus(saved, false);
+    });
   }
 
   async signOut(): Promise<LinearAuthStatus> {
-    // Advance generations first so any in-flight read cannot repopulate the cache after sign-out.
+    // Advance generations first so any in-flight read or setKey cannot repopulate state after sign-out.
     this.authGeneration++;
+    this.setKeySequence++;
     this.cacheGeneration++;
     this.keyRejected = false;
-    await this.authStore.remove();
-    this.store.linear.clearAll();
-    return formatAuthStatus(null, false);
+    return this.serializeAuthMutation(async () => {
+      await this.authStore.remove();
+      this.store.linear.clearAll();
+      return formatAuthStatus(null, false);
+    });
   }
 
   private async requireAuth(): Promise<{ auth: StoredLinearAuth; authGen: number; cacheGen: number }> {
