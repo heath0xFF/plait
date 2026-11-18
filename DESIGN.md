@@ -88,8 +88,8 @@ conversation keeps a readable minimum width.
   resized to fit a limit.
   A message allows up to 5 MiB of original image bytes, including a single
   full-size screenshot. PNG/JPEG, count/dimension limits, persistence, and clipboard exceptions
-  follow the [host contract](docs/HOST.md#protocol-version-6-images-unreleased)
-  and [Mac guide](docs/MACOS.md#images-in-messages-unreleased).
+  follow the [host contract](docs/HOST.md#protocol-version-6)
+  and [Mac guide](docs/MACOS.md#images-in-messages).
 - **Conversation text.** All message text is selectable; the selection is a
   neutral fill. Links are blue and underlined, and their address appears at the
   bottom edge of the conversation before a click. Lists hang their wrapped

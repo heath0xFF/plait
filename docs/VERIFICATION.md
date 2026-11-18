@@ -805,11 +805,13 @@ No installed app was launched or inspected for this stage. No real configured
 server, external-network MCP endpoint, browser sign-in, or saved OAuth token
 was exercised. Those remain separate acceptance work; sign-in is not implemented.
 
-### Release check for v0.1.0-preview.16
+### Release check for MCP tool calls
 
-On 2026-11-18, on the tree that was tagged, `bash scripts/check.sh` exited 0
-with the Git that CI's fixtures use first on the path: 632 Rust tests (171
-desktop, 439 core, 14 host, 8 helper integration), 423 runtime tests,
+MCP tool calls shipped in v0.1.0-preview.17; the release check for that tag is
+at the end of this document. On 2026-11-18, on the tree first tagged for them,
+`bash scripts/check.sh` exited 0 with the Git that CI's fixtures use first on
+the path: 632 Rust tests (171 desktop, 439 core, 14 host, 8 helper
+integration), 423 runtime tests,
 TypeScript checks, and release builds.
 
 Before the release, a reviewer who had not written the code read the MCP
@@ -1427,7 +1429,7 @@ against an installed host, and no paid harness was used.
 
 ## Images in messages
 
-Protocol 6 is unreleased. Rust and runtime tests cover version 5/6 request
+Protocol 6 shipped in v0.1.0-preview.17. Rust and runtime tests cover version 5/6 request
 encoding, reply decoding, negotiation down to an older host, and removal of
 image fields from older wire shapes. Scripted Pi, Codex, and Claude Code runs
 check the exact original base64 blocks each adapter sends, store reopen,
@@ -1687,3 +1689,53 @@ recorded paths, run and thread names, omitted paths and patch text. Display
 escapes share the MCP helper; record IDs, selected paths, patch bytes and line
 numbers retain their meaning. Recorded review stays unversioned alongside
 protocol 6 image operations, with its dispatch ahead of legacy validation.
+
+## Release check for v0.1.0-preview.17
+
+On 2026-11-18, on the tree that was tagged, `bash scripts/check.sh` exited 0
+with the Git that CI's fixtures use first on the path: 680 Rust tests (195
+desktop, 463 core, 14 host, 8 helper integration), 447 runtime tests,
+TypeScript checks, and release builds.
+
+Images in messages and the recorded turn view were each read before release by
+a reviewer who had not written them, and each finding was confirmed by
+experiment.
+
+- **Images in messages:** fifteen defects. Two lost images: Edit on a queued
+  message whose message box had changed kept only its text, and switching
+  checkout with a New thread draft open moved that draft to the other
+  checkout. One left a cancelled message's images marked as used for ever.
+  Two did avoidable work: hashing on the UI thread at paste, and a small
+  first-in-first-out thumbnail cache that fetched originals again. The rest
+  were wrong or missing states. All were fixed with regression tests and
+  checked again; that second pass found one more, a draft whose valid images
+  stayed failed after a missing one was removed, which was also fixed and
+  checked. Accepted images staying for the life of the host's store is a
+  documented limit, not a fix.
+- **Recorded turn view:** eight defects. Three showed a wrong diff: a large
+  diff cut inside a hunk header was reported as unavailable, a created or
+  deleted empty file showed as a mode change, and text that is not UTF-8
+  showed as binary. Two showed a wrong Current view, and one sent the first
+  click on an older host to a notice in place of the file. All were fixed
+  with regression tests and checked again, with nothing new found. A turn is
+  named by its request text; an earlier build named it by a record id.
+
+Text shown in approvals, tool rows and recorded diffs escapes control and
+format characters. A carriage return that is part of a CRLF line ending is
+dropped from what is shown; one that stands alone is escaped.
+
+This release also carries MCP tool calls, whose own release check is in the
+MCP section above. The tag first made for them, v0.1.0-preview.16, was never
+published, for two faults in tests and none found in the product. A core undo
+test compared a bare repository before and after an undo, and Git's detached
+maintenance, started by the push into that repository, could change it in
+between; the fixtures' environment settings do not reach the receiving side
+of a push, so that repository's own config now turns maintenance off. And in
+the installed-package suite the MCP byte-flood fixture wrote 1 MiB lines, a
+full pipe refused a write, and the fixture exited before the output budget was
+spent; it now writes lines the pipe can take, and the test accepts a server
+that dies of its own flood.
+
+Not exercised for either feature: a live model (an image-only message in
+particular), browser and Preview clipboards, a real pointer for paste and
+drop, and the installed app.

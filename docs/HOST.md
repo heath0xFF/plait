@@ -4,7 +4,7 @@ This is the version 1 contract plus the opt-in additions described in
 [Protocol version 2](#protocol-version-2) and
 [Protocol version 3](#protocol-version-3), [Protocol version 4](#protocol-version-4),
 [Protocol version 5](#protocol-version-5), and
-[Protocol version 6](#protocol-version-6-images-unreleased). Changes require compatibility review.
+[Protocol version 6](#protocol-version-6). Changes require compatibility review.
 All values below are JSON. The desktop has no dependency on the host crate and
 does not own its process.
 
@@ -1753,7 +1753,7 @@ power loss. Undo records exclude unrelated paths and failed restores, so their
 redo does not claim those concurrent edits.
 
 
-## Protocol version 6 (images, unreleased)
+## Protocol version 6
 
 Version 6 adds image attachments. Like version 5, it is negotiated per request:
 ask for status at 6, then step down on `invalid_request`. Versions 1–5 keep

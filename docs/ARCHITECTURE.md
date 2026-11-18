@@ -734,7 +734,7 @@ native window. The editing rules behind them are unit-tested.
 Protocol 6 carries image references in snapshots and history, with separate
 32 KiB upload and 512 KiB read operations. Originals belong to the thread in the host's
 private `host.sqlite`, outside the checkout and its Undo records. See the
-[host contract](HOST.md#protocol-version-6-images-unreleased) for limits,
+[host contract](HOST.md#protocol-version-6) for limits,
 capabilities, transport, and retention. Pi and Codex capability information
 comes from their catalogs; Claude Code's pinned model catalog cannot tell.
 Unknown support permits sending, with any harness refusal shown as a run error.

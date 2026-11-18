@@ -37,10 +37,10 @@ thread and draft.
 - **Work that outlives the window.** The host owns each run and its history.
   Quit, update, or reboot the app; threads, drafts, and pending approvals are
   there when you come back.
-- **Images in messages (unreleased).** Paste or drop PNG/JPEG images, remove
+- **Images in messages.** Paste or drop PNG/JPEG images, remove
   attachments before sending, and open conversation thumbnails larger. Drafts
   and sent originals persist privately. Requires host protocol 6; see the
-  [limits and clipboard behavior](docs/MACOS.md#images-in-messages-unreleased),
+  [limits and clipboard behavior](docs/MACOS.md#images-in-messages),
   including a 5 MiB combined image limit per message.
 - **Approvals you can read.** Let the agent work, or ask before each edit and
   command. Commands run as you, as they would in your terminal, or opt a
@@ -162,7 +162,7 @@ Dashed boxes are planned, not shipped.
 ## Status
 
 Plait is an early preview, built in the open and used daily to build itself.
-The latest release is **v0.1.0-preview.16**.
+The latest release is **v0.1.0-preview.17**.
 
 - **Mac only, local only.** Remote hosts and Linux execution are
   [planned](docs/ROADMAP.md).

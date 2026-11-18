@@ -343,7 +343,7 @@ starts. A harness that is not ready is shown dimmed and cannot be chosen; a
 draft whose default is not ready starts in Pi. What has been checked against
 real installs is in [Verification](VERIFICATION.md#claude-code).
 
-## Images in messages (unreleased)
+## Images in messages
 
 Paste an image with Cmd-V, or drop PNG or JPEG files onto the message box.
 Each attachment has a thumbnail and **Remove**. Several images can accompany

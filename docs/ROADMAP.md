@@ -8,9 +8,10 @@ v0.1.0-preview.9. M7 steps 1 (choosing a harness, and Codex) and 2 (each
 harness's own permissions, and Claude Code threads) shipped in
 v0.1.0-preview.10. Ways out, branches, and search in a conversation shipped in
 v0.1.0-preview.13. M9 step 1 (per-turn undo) shipped in v0.1.0-preview.15. M8
-step 4's tool calls (MCP servers that need no browser sign-in) shipped in
-v0.1.0-preview.16. M9 steps 2 and 3, MCP browser sign-in, M8 step 3, and the
-rest of "Agreed next, for daily use" below are the current work.**
+step 4's tool calls (MCP servers that need no browser sign-in), images in
+messages, and the first part of M9 step 2 (a run's closing line opens exactly
+what that run changed) shipped in v0.1.0-preview.17. The rest of M9 steps 2
+and 3, MCP browser sign-in, and M8 step 3 are the current work.**
 
 ## Milestones
 
@@ -24,7 +25,7 @@ rest of "Agreed next, for daily use" below are the current work.**
 | M5 — Previews | Live HTML, Markdown and MDX, automatic refresh, and selected-content feedback to the agent | Planned |
 | M6 — Multiple machines | Unified project navigation across independent hosts, including disconnected/reconnecting states | Planned |
 | M7 — Any agent harness | Threads run by other agent harnesses (Claude Code, Codex, Pi, omp, Antigravity, and others) beside Pi, with the same conversation, approval, Git, and navigation views | Current work. Steps 1 and 2 (harness choice, Codex, each harness's own permissions, and Claude Code; protocol version 4) shipped in v0.1.0-preview.10; an ACP client follows, agreed first |
-| M8 — Skills, tools, and CLIs | Pi threads use the skills, prompt templates, global instructions, MCP servers, and command-line tools the person already set up for their agent, with each one visible in Settings and every call under Plait's approvals | Steps 1 (skills and user instructions) and 2 (prompt templates, Settings → Agent, and `/` completion) shipped in v0.1.0-preview.9; step 4's MCP tool calls shipped in v0.1.0-preview.16, with browser sign-in still planned; step 3 (named CLIs) waits until a sandboxed project needs it |
+| M8 — Skills, tools, and CLIs | Pi threads use the skills, prompt templates, global instructions, MCP servers, and command-line tools the person already set up for their agent, with each one visible in Settings and every call under Plait's approvals | Steps 1 (skills and user instructions) and 2 (prompt templates, Settings → Agent, and `/` completion) shipped in v0.1.0-preview.9; step 4's MCP tool calls shipped in v0.1.0-preview.17, with browser sign-in still planned; step 3 (named CLIs) waits until a sandboxed project needs it |
 | M9 — Turn records | The host keeps its own record of the checkout before and after every turn, in every harness: per-turn undo first, then committing by turn, review of what changed since the person last looked, and checks the host runs itself | Step 1 shipped in v0.1.0-preview.15; steps 2 and 3 are agreed and are the current work, ahead of M7's ACP client; the later steps are proposed |
 
 Do not build the whole roadmap at once. Each change must compile, run, and have
@@ -400,7 +401,7 @@ selecting text and following a link, typing and streaming, the approval
 shortcuts, and the settings pages. It takes over the pointer, so a person runs
 it when away, before a release. It is a development tool, not part of the app.
 
-**M9 step 2, commit by turn — partly built in source, not released.** A
+**M9 step 2, commit by turn — the first part shipped in v0.1.0-preview.17.** A
 finished run's closing line now opens that exact record's saved before/after
 change. Recorded Changes includes every retained path, even committed or clean
 files, and remains bound after later runs and undo. Recorded/Current and
@@ -435,13 +436,13 @@ deletion. These two are added to the Git writes Plait may make.
 **Images in messages.** A PNG or JPEG pasted or dropped into the message box is
 sent with the message when the thread's model accepts images, and shown in the
 conversation. The host stores it with the thread. A model or harness that
-cannot take images says so before sending. Implemented, unreleased, in
-[protocol 6](HOST.md#protocol-version-6-images-unreleased): removable draft
+cannot take images says so before sending. Shipped in v0.1.0-preview.17, in
+[protocol 6](HOST.md#protocol-version-6): removable draft
 thumbnails, a larger conversation view, private persisted originals, and
 bounded transfers outside snapshots. PNG/JPEG only; four images, 5 MiB each,
 5 MiB per message, 8,192 pixels per side and 16,777,216 pixels per image.
 The pinned clipboard reader pastes text when text and an image coexist and
-refuses TIFF-only images; the [Mac guide](MACOS.md#images-in-messages-unreleased)
+refuses TIFF-only images; the [Mac guide](MACOS.md#images-in-messages)
 gives alternatives. Claude Code capability is unknown, so harness refusals
 remain run errors. [Scripted and offscreen checks](VERIFICATION.md#images-in-messages)
 cover the implementation; installed-app and live-model acceptance remain open.
