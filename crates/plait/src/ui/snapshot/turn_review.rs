@@ -56,6 +56,19 @@ pub(super) fn walk(h: &mut Harness, repository: &Path, suffix: &str) {
         h.capture(&format!("{name}-{suffix}"));
     }
     scene(h, repository, "ready", None);
+    h.update(|p, _, cx| {
+        if let Load::Ready(snapshot) = &mut p.state.repository.snapshot {
+            Arc::make_mut(snapshot)
+                .changes
+                .iter_mut()
+                .filter(|c| c.path == Path::new("src/review.rs"))
+                .for_each(|c| c.worktree = b' ');
+        }
+        p.turn_review.current = true;
+        p.sync_recorded_current(cx);
+    });
+    h.capture(&format!("turn-current-staged-{suffix}"));
+    scene(h, repository, "ready", None);
     let snapshot = h
         .window
         .update(&mut h.cx, |p, _, _| {
@@ -416,6 +429,47 @@ fn current_waits_for_status_and_requires_a_file() {
         });
         h.draw();
     }
+    drop(h);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn current_selects_a_present_layer() {
+    if !isolated("turn_review::current_selects_a_present_layer") {
+        return;
+    }
+    let (scratch, repository, mut h) = setup("review-layer");
+    scene(&mut h, &repository, "ready", None);
+    h.update(|p, _, cx| {
+        use plait_core::{model::DiffMode, state::DiffKey};
+        p.host.connected = false;
+        let mut snapshot = (**p.state.repository.snapshot.ready().unwrap()).clone();
+        snapshot.changes = vec![plait_core::model::Change {
+            path: "src/review.rs".into(),
+            original: None,
+            index: b'M',
+            worktree: b' ',
+        }];
+        p.state.repository.snapshot = Load::Ready(Arc::new(snapshot));
+        p.state.repository.selected = Some(DiffKey {
+            file: 0,
+            mode: DiffMode::Unstaged,
+        });
+        p.review_comparison(true, cx);
+        assert_eq!(
+            p.state.repository.selected.as_ref().unwrap().mode,
+            DiffMode::Staged
+        );
+        // A present staged selection stays selected when both layers exist.
+        if let Load::Ready(snapshot) = &mut p.state.repository.snapshot {
+            Arc::make_mut(snapshot).changes[0].worktree = b'M';
+        }
+        p.sync_recorded_current(cx);
+        assert_eq!(
+            p.state.repository.selected.as_ref().unwrap().mode,
+            DiffMode::Staged
+        );
+    });
     drop(h);
     std::fs::remove_dir_all(scratch).unwrap();
 }

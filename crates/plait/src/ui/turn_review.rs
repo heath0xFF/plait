@@ -319,11 +319,27 @@ impl Plait {
                 .map(|(i, c)| {
                     (
                         i,
-                        if c.unstaged() {
-                            DiffMode::Unstaged
-                        } else {
-                            DiffMode::Staged
-                        },
+                        self.state
+                            .repository
+                            .selected
+                            .as_ref()
+                            .filter(|key| {
+                                key.file == i
+                                    && match key.mode {
+                                        DiffMode::Staged => c.staged(),
+                                        DiffMode::Unstaged => c.unstaged(),
+                                    }
+                            })
+                            .map_or_else(
+                                || {
+                                    if c.unstaged() {
+                                        DiffMode::Unstaged
+                                    } else {
+                                        DiffMode::Staged
+                                    }
+                                },
+                                |key| key.mode,
+                            ),
                     )
                 })
         }) && !self
@@ -331,7 +347,7 @@ impl Plait {
             .repository
             .selected
             .as_ref()
-            .is_some_and(|s| s.file == index)
+            .is_some_and(|s| s.file == index && s.mode == mode)
         {
             self.state.repository.select(index, mode);
             self.pump(cx);
