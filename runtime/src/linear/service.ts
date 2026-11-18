@@ -5,7 +5,13 @@ import { LinearAuthStore, formatAuthStatus, validateLinearKey } from './auth.ts'
 import type { StoredLinearAuth } from './auth.ts';
 import { LinearClient } from './client.ts';
 import type { LinearClientOptions } from './client.ts';
-import { asFilterPreset, handlesLinearOp, validateLinearRequest } from './protocol.ts';
+import {
+  LINEAR_LINKS_DEFAULT_LIMIT,
+  asFilterPreset,
+  handlesLinearOp,
+  parseLinkCursor,
+  validateLinearRequest,
+} from './protocol.ts';
 import {
   FIELD_LIMITS,
   LINEAR_CACHE_DETAIL_TTL_MS,
@@ -13,6 +19,7 @@ import {
   LINEAR_CACHE_TEAMS_TTL_MS,
   LinearError,
   boundLinearText,
+  safeLinearUrl,
 } from './types.ts';
 import type {
   LinearAuthStatus,
@@ -21,6 +28,7 @@ import type {
   LinearIssueSummary,
   LinearProjectBinding,
   LinearTeam,
+  LinearThreadLink,
 } from './types.ts';
 
 export type LinearServiceOptions = LinearClientOptions & {
@@ -91,6 +99,19 @@ export class LinearService {
         commentsCursor: typeof request.comments_cursor === 'string' ? request.comments_cursor : undefined,
         refresh: request.refresh === true,
       });
+      case 'linear_link_thread': return this.linkThread({
+        threadId: String(request.thread_id),
+        issueId: String(request.issue_id),
+        identifier: String(request.identifier),
+        url: String(request.url),
+        title: String(request.title),
+      });
+      case 'linear_unlink_thread': return this.unlinkThread(String(request.thread_id));
+      case 'linear_get_thread_link': return this.getThreadLink(String(request.thread_id));
+      case 'linear_list_thread_links': return this.listThreadLinks(
+        typeof request.limit === 'number' ? request.limit : LINEAR_LINKS_DEFAULT_LIMIT,
+        typeof request.cursor === 'string' ? request.cursor : undefined,
+      );
       default: fail('invalid_request', 'Unknown operation or field.');
     }
   }
@@ -398,5 +419,41 @@ export class LinearService {
       }
       this.noteError(error, authGen);
     }
+  }
+
+  /** Persists a local link between a thread and a Linear issue. Never writes to Linear. */
+  linkThread(params: {
+    threadId: string;
+    issueId: string;
+    identifier: string;
+    url: string;
+    title: string;
+  }): { link: LinearThreadLink } {
+    if (!this.store.linear.hasThread(params.threadId)) fail('not_found', 'Thread not found.');
+    const safeUrl = safeLinearUrl(params.url);
+    if (!safeUrl) fail('invalid_request', 'url must be a valid https URL.');
+    const link = this.store.linear.setThreadLink({
+      thread_id: params.threadId,
+      issue_id: params.issueId,
+      identifier: params.identifier,
+      url: safeUrl,
+      title: boundLinearText(params.title.trim(), FIELD_LIMITS.title),
+      linked_at: this.now(),
+    });
+    return { link };
+  }
+
+  unlinkThread(threadId: string): { thread_id: string; removed: boolean } {
+    if (!this.store.linear.hasThread(threadId)) fail('not_found', 'Thread not found.');
+    return { thread_id: threadId, removed: this.store.linear.removeThreadLink(threadId) };
+  }
+
+  getThreadLink(threadId: string): { thread_id: string; link: LinearThreadLink | null } {
+    if (!this.store.linear.hasThread(threadId)) fail('not_found', 'Thread not found.');
+    return { thread_id: threadId, link: this.store.linear.getThreadLink(threadId) };
+  }
+
+  listThreadLinks(limit: number, cursor?: string) {
+    return this.store.linear.listThreadLinks(limit, cursor ? parseLinkCursor(cursor) : undefined);
   }
 }

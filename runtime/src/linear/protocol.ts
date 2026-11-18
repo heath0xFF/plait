@@ -14,11 +14,19 @@ const OPERATIONS: Record<string, OperationSpec> = {
   linear_get_project_binding: { required: ['checkout'], optional: [] },
   linear_list_issues: { required: ['team_id', 'filter'], optional: ['search', 'cursor', 'refresh'] },
   linear_get_issue: { required: ['issue_id'], optional: ['comments_cursor', 'refresh'] },
+  linear_link_thread: { required: ['thread_id', 'issue_id', 'identifier', 'url', 'title'], optional: [] },
+  linear_unlink_thread: { required: ['thread_id'], optional: [] },
+  linear_get_thread_link: { required: ['thread_id'], optional: [] },
+  linear_list_thread_links: { required: [], optional: ['limit', 'cursor'] },
 };
 
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const IDENTIFIER_PATTERN = /^[A-Z][A-Z0-9]{0,15}-\d{1,9}$/;
+const LINK_CURSOR_PATTERN = /^(\d{1,16}):([A-Za-z0-9_-]{1,128})$/;
 const TEAM_KEY_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
+export const LINEAR_LINKS_MAX_LIMIT = 500;
+export const LINEAR_LINKS_DEFAULT_LIMIT = 200;
 
 export type LinearRequest = Record<string, unknown> & { op: string };
 
@@ -53,6 +61,23 @@ function checkCheckout(value: unknown): string {
     fail('invalid_request', 'checkout must be an absolute path.');
   }
   return value;
+}
+
+function checkHttpsUrl(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !value.length || Buffer.byteLength(value) > FIELD_LIMITS.url || CONTROL_PATTERN.test(value) || !URL.canParse(value)) {
+    fail('invalid_request', `${field} must be a valid https URL.`);
+  }
+  const url = new URL(value);
+  if (url.protocol !== 'https:' || url.username || url.password) {
+    fail('invalid_request', `${field} must be an https URL without embedded credentials.`);
+  }
+  return url.href;
+}
+
+export function parseLinkCursor(value: string): { linkedAt: number; threadId: string } {
+  const match = LINK_CURSOR_PATTERN.exec(value);
+  if (!match || !Number.isSafeInteger(Number(match[1]))) fail('invalid_request', 'Invalid cursor.');
+  return { linkedAt: Number(match[1]), threadId: match[2] };
 }
 
 /** Validates additive Linear requests strictly: refuses unknown fields (including protocol_version) and bounds every value. */
@@ -108,6 +133,28 @@ export function validateLinearRequest(input: unknown): LinearRequest {
       checkId(request.issue_id, 'issue_id');
       if (request.comments_cursor !== undefined) checkCursor(request.comments_cursor, 'comments_cursor');
       if (request.refresh !== undefined && typeof request.refresh !== 'boolean') fail('invalid_request', 'refresh must be boolean.');
+      return request;
+    case 'linear_link_thread':
+      checkId(request.thread_id, 'thread_id');
+      checkId(request.issue_id, 'issue_id');
+      if (typeof request.identifier !== 'string' || !IDENTIFIER_PATTERN.test(request.identifier)) {
+        fail('invalid_request', 'Invalid identifier.');
+      }
+      checkHttpsUrl(request.url, 'url');
+      checkBoundedText(request.title, 'title', FIELD_LIMITS.title);
+      return request;
+    case 'linear_unlink_thread':
+    case 'linear_get_thread_link':
+      checkId(request.thread_id, 'thread_id');
+      return request;
+    case 'linear_list_thread_links':
+      if (request.limit !== undefined && (!Number.isSafeInteger(request.limit) || (request.limit as number) < 1 || (request.limit as number) > LINEAR_LINKS_MAX_LIMIT)) {
+        fail('invalid_request', `limit must be an integer from 1 to ${LINEAR_LINKS_MAX_LIMIT}.`);
+      }
+      if (request.cursor !== undefined) {
+        if (typeof request.cursor !== 'string') fail('invalid_request', 'Invalid cursor.');
+        parseLinkCursor(request.cursor);
+      }
       return request;
     default:
       fail('invalid_request', 'Unknown operation or field.');

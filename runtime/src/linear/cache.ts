@@ -10,6 +10,7 @@ import type {
   LinearIssueSummary,
   LinearProjectBinding,
   LinearTeam,
+  LinearThreadLink,
 } from './types.ts';
 
 export type CachedTeams = { teams: LinearTeam[]; cached_at: number };
@@ -20,8 +21,10 @@ export type CachedIssuesPage = {
   cached_at: number;
 };
 export type CachedIssueDetail = { issue: LinearIssueDetail; cached_at: number };
+export type ThreadLinksPage = { links: LinearThreadLink[]; next_cursor: string | null };
 
 const TEAMS_META_KEY = 'teams';
+const LINKS_PAGE_BYTE_BUDGET = 750_000;
 
 /**
  * Additive SQLite persistence for Linear project bindings and bounded API caches.
@@ -82,6 +85,21 @@ export class LinearCache {
         cached_at INTEGER NOT NULL,
         accessed_at INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS linear_thread_links(
+        thread_id TEXT PRIMARY KEY,
+        issue_id TEXT NOT NULL,
+        identifier TEXT NOT NULL,
+        url TEXT NOT NULL,
+        title TEXT NOT NULL,
+        linked_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS linear_thread_links_order
+        ON linear_thread_links(linked_at DESC, thread_id ASC);
+      CREATE TRIGGER IF NOT EXISTS linear_thread_links_delete_thread
+        AFTER DELETE ON threads
+      BEGIN
+        DELETE FROM linear_thread_links WHERE thread_id = OLD.id;
+      END;
     `);
   }
 
@@ -317,4 +335,83 @@ export class LinearCache {
       this.db.prepare('DELETE FROM linear_cache_details').run();
     });
   }
+
+  hasThread(threadId: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM threads WHERE id=?').get(threadId);
+  }
+
+  getThreadLink(threadId: string): LinearThreadLink | null {
+    const row = this.db.prepare(
+      'SELECT thread_id, issue_id, identifier, url, title, linked_at FROM linear_thread_links WHERE thread_id=?',
+    ).get(threadId);
+    return row ? rowToThreadLink(row) : null;
+  }
+
+  setThreadLink(link: LinearThreadLink): LinearThreadLink {
+    this.db.prepare(`
+      INSERT INTO linear_thread_links(thread_id, issue_id, identifier, url, title, linked_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(thread_id) DO UPDATE SET
+        issue_id=excluded.issue_id,
+        identifier=excluded.identifier,
+        url=excluded.url,
+        title=excluded.title,
+        linked_at=excluded.linked_at
+    `).run(link.thread_id, link.issue_id, link.identifier, link.url, link.title, link.linked_at);
+    return link;
+  }
+
+  removeThreadLink(threadId: string): boolean {
+    const result = this.db.prepare('DELETE FROM linear_thread_links WHERE thread_id=?').run(threadId);
+    return Number(result.changes) > 0;
+  }
+
+  /** Bulk-lists persisted thread links in stable order (linked_at DESC, thread_id ASC), bounded by count and frame bytes. */
+  listThreadLinks(limit: number, cursor?: { linkedAt: number; threadId: string }): ThreadLinksPage {
+    const rows = cursor
+      ? this.db.prepare(`
+          SELECT thread_id, issue_id, identifier, url, title, linked_at
+          FROM linear_thread_links
+          WHERE linked_at < ? OR (linked_at = ? AND thread_id > ?)
+          ORDER BY linked_at DESC, thread_id ASC
+          LIMIT ?
+        `).all(cursor.linkedAt, cursor.linkedAt, cursor.threadId, limit + 1)
+      : this.db.prepare(`
+          SELECT thread_id, issue_id, identifier, url, title, linked_at
+          FROM linear_thread_links
+          ORDER BY linked_at DESC, thread_id ASC
+          LIMIT ?
+        `).all(limit + 1);
+
+    const links: LinearThreadLink[] = [];
+    let bytes = 1024;
+    let truncatedByBytes = false;
+    for (const row of rows.slice(0, limit)) {
+      const link = rowToThreadLink(row);
+      const itemBytes = Buffer.byteLength(JSON.stringify(link)) + 1;
+      if (links.length > 0 && bytes + itemBytes > LINKS_PAGE_BYTE_BUDGET) {
+        truncatedByBytes = true;
+        break;
+      }
+      links.push(link);
+      bytes += itemBytes;
+    }
+    const hasMore = truncatedByBytes || rows.length > limit;
+    const last = links.at(-1);
+    return {
+      links,
+      next_cursor: hasMore && last ? `${last.linked_at}:${last.thread_id}` : null,
+    };
+  }
+}
+
+function rowToThreadLink(row: Record<string, unknown>): LinearThreadLink {
+  return {
+    thread_id: String(row.thread_id),
+    issue_id: String(row.issue_id),
+    identifier: String(row.identifier),
+    url: String(row.url),
+    title: String(row.title),
+    linked_at: Number(row.linked_at),
+  };
 }

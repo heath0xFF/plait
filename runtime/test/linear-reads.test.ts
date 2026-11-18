@@ -409,7 +409,7 @@ test('migration: store written by current main gains Linear tables idempotently 
   // Open with Store -> adds Linear tables without disturbing existing rows.
   const store1 = new Store(dir);
   const tables = store1.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'linear_%'").all().map(r => String(r.name)).sort();
-  assert.deepEqual(tables, ['linear_cache_details', 'linear_cache_issues', 'linear_cache_meta', 'linear_cache_pages', 'linear_cache_teams', 'linear_projects']);
+  assert.deepEqual(tables, ['linear_cache_details', 'linear_cache_issues', 'linear_cache_meta', 'linear_cache_pages', 'linear_cache_teams', 'linear_projects', 'linear_thread_links']);
   assert.equal(store1.get('thread-legacy').id, 'thread-legacy');
   store1.close();
 
