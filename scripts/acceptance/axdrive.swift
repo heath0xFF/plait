@@ -45,7 +45,7 @@ struct Selector: Equatable {
     var contains: String?
     var regex: String?
     var nth = 1
-    var timeout: Double = 5
+    var timeout: Double = 3
 
     var describe: String {
         var parts: [String] = []
@@ -266,6 +266,46 @@ func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     return value
 }
 
+func flagValue(_ value: CFTypeRef?) -> Bool? {
+    guard let value, CFGetTypeID(value) == CFBooleanGetTypeID() || CFGetTypeID(value) == CFNumberGetTypeID(),
+          let number = value as? NSNumber, [0.0, 1.0].contains(number.doubleValue) else { return nil }
+    return number.boolValue
+}
+
+func rawAttribute(_ element: AXUIElement, _ name: String) -> String {
+    var value: CFTypeRef?
+    let status = AXUIElementCopyAttributeValue(element, name as CFString, &value)
+    guard status == .success, let value else { return "unavailable(AXError=\(status.rawValue))" }
+    if let flag = flagValue(value) { return flag ? "true(1)" : "false(0)" }
+    return "\(value) [type=\(CFGetTypeID(value))]"
+}
+
+func selectionFlag(role: String, selected: Bool?, value: Bool?) -> Bool? {
+    // AccessKit 0.26.3 maps Tab -> AXRadioButton/AXValue; rows use AXSelected.
+    role == "AXRadioButton" ? value : selected
+}
+
+func selection(_ node: Node) -> Bool? {
+    selectionFlag(role: node.role, selected: flagValue(attribute(node.element, kAXSelectedAttribute)),
+                  value: flagValue(attribute(node.element, kAXValueAttribute)))
+}
+
+func selectionDescription(_ node: Node) -> String {
+    "\(node.role)/\(node.subrole) \(node.name); AXSelected=\(rawAttribute(node.element, kAXSelectedAttribute)); AXValue=\(rawAttribute(node.element, kAXValueAttribute))"
+}
+
+struct StableFlag {
+    let wanted: Bool
+    let seconds: Double
+    var since: Double?
+
+    mutating func observe(_ value: Bool?, at time: Double) -> Bool {
+        guard value == wanted else { since = nil; return false }
+        if since == nil { since = time }
+        return time - since! >= seconds
+    }
+}
+
 func point(of value: CFTypeRef?) -> CGPoint? {
     guard let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
     var point = CGPoint.zero
@@ -362,7 +402,7 @@ func poll<T>(_ timeout: Double, interval: Double = 0.1, _ body: () -> T?) -> T? 
     repeat {
         if let value = body() { return value }
         if Date() >= deadline { break }
-        Thread.sleep(forTimeInterval: interval)
+        RunLoop.current.run(until: Date().addingTimeInterval(interval))
     } while true
     return nil
 }
@@ -373,14 +413,31 @@ func matches(_ pid: pid_t, _ selector: Selector) -> [Node] {
 }
 
 func waitFor(_ pid: pid_t, _ selector: Selector) -> Node {
+    var last = "no matching control"
     if let node = poll(selector.timeout, { () -> Node? in
         let found = matches(pid, selector)
+        last = "\(found.count) matching controls (need \(selector.nth))"
         return found.count >= selector.nth ? found[selector.nth - 1] : nil
     }) {
         return node
     }
     if !processAlive(pid) { die("the development copy (process \(pid)) exited") }
-    die("not found within \(selector.timeout) s: \(selector.describe)")
+    die("timed out after \(selector.timeout)s waiting for \(selector.describe); last observed: \(last)")
+}
+
+func waitSelected(_ pid: pid_t, _ selector: Selector, transition: String = "observing selection") {
+    var last = "control absent"
+    let found = poll(selector.timeout) { () -> Bool? in
+        let nodes = matches(pid, selector)
+        guard nodes.count >= selector.nth else { last = "control absent"; return nil }
+        let node = nodes[selector.nth - 1]
+        last = selectionDescription(node)
+        return selection(node) == true ? true : nil
+    }
+    guard found != nil else {
+        die("timed out after \(selector.timeout)s waiting for selected \(selector.describe); \(transition); last observed: \(last)")
+    }
+    say("selected \(selector.describe); \(transition); \(last)")
 }
 
 // MARK: - Window state
@@ -390,7 +447,7 @@ func setBool(_ element: AXUIElement, _ name: String, _ on: Bool) -> AXError {
 }
 
 func bool(_ element: AXUIElement, _ name: String) -> Bool {
-    (attribute(element, name) as? Bool) ?? false
+    flagValue(attribute(element, name)) ?? false
 }
 
 /// Brings the development copy forward through accessibility, which works
@@ -404,7 +461,7 @@ func front(_ pid: pid_t) {
     }
     let forward = poll(3) { NSWorkspace.shared.frontmostApplication?.processIdentifier == pid ? true : nil }
     if forward == nil {
-        die("could not bring process \(pid) forward; refusing to send input", 3)
+        die("timed out after 3s waiting for process \(pid) to be frontmost; last observed: \(frontDescription()); refusing to send input", 3)
     }
 }
 
@@ -415,8 +472,8 @@ func visibleFrame() -> CGRect {
     return topLeftFrame(visible, primaryTop: primary.frame.maxY)
 }
 
-func windowList(_ options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]) -> [WindowInfo] {
-    let list = (CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]]) ?? []
+func windowList(_ options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements], relativeTo: CGWindowID = kCGNullWindowID) -> [WindowInfo] {
+    let list = (CGWindowListCopyWindowInfo(options, relativeTo) as? [[String: Any]]) ?? []
     return list.compactMap { info in
         guard let bounds = info[kCGWindowBounds as String] as! CFDictionary?,
               let rect = CGRect(dictionaryRepresentation: bounds),
@@ -441,10 +498,19 @@ func windowNumber(_ pid: pid_t) -> Int? {
 /// AppKit asks WindowServer which window would receive mouseDown, including
 /// another app or the menu bar. Rectangle order also includes click-through
 /// overlays and is not a hit test (AX hit succeeded on the first CI run).
+func mouseWindowNumber(_ point: CGPoint) -> Int {
+    // A command-line helper has no NSApplication unless it creates one. Set up
+    // AppKit's connection without activating the helper or making any window.
+    NSApplication.shared.setActivationPolicy(.prohibited)
+    guard let primary = NSScreen.screens.first else { return 0 }
+    return NSWindow.windowNumber(at: flipScreenPoint(point, primaryTop: primary.frame.maxY), belowWindowWithWindowNumber: 0)
+}
+
 func windowAt(_ point: CGPoint) -> WindowInfo? {
-    guard let primary = NSScreen.screens.first else { return nil }
-    let number = NSWindow.windowNumber(at: flipScreenPoint(point, primaryTop: primary.frame.maxY), belowWindowWithWindowNumber: 0)
-    return windowList().first { $0.number == number }
+    let number = mouseWindowNumber(point)
+    guard number > 0, number <= Int(UInt32.max) else { return nil }
+    // Do not discard the system's answer through desktop/layer filtering.
+    return windowList([.optionIncludingWindow], relativeTo: CGWindowID(number)).first { $0.number == number }
 }
 
 func frontDescription() -> String {
@@ -455,7 +521,7 @@ func frontDescription() -> String {
 
 func pointDescription(_ point: CGPoint) -> String {
     let rectangle = windowList().first { $0.alpha > 0 && $0.frame.contains(point) }
-    return "point=[\(fmt(point.x)) \(fmt(point.y))]; mouse target: \(windowAt(point)?.description ?? "unknown"); first covering rectangle: \(rectangle?.description ?? "unknown"); \(frontDescription())"
+    return "point=[\(fmt(point.x)) \(fmt(point.y))]; mouse target number=\(mouseWindowNumber(point)): \(windowAt(point)?.description ?? "unknown"); first covering rectangle: \(rectangle?.description ?? "unknown"); \(frontDescription())"
 }
 
 func requireOwnPoint(_ pid: pid_t, _ point: CGPoint) {
@@ -589,6 +655,18 @@ func selfTest() {
     check(done.matches(role: "AXButton", names: ["Done"]), "Done settings button matches")
     check(!done.matches(role: "AXStaticText", names: ["Done"]), "Done thread status is not a button")
     check(!done.matches(role: "AXRow", names: ["Thread 123 · Done · fixture"]), "Done must be the whole name")
+    check(Selector().timeout == 3, "ordinary AX waits are bounded to three seconds")
+    check(flagValue(kCFBooleanTrue) == true && flagValue(kCFBooleanFalse) == false, "CFBoolean flags")
+    check(flagValue(NSNumber(value: 1)) == true && flagValue(NSNumber(value: 0)) == false, "numeric flags")
+    check(flagValue(nil) == nil && flagValue("1" as CFString) == nil && flagValue(NSNumber(value: 2)) == nil, "missing, text and mixed values stay unknown")
+    check(selectionFlag(role: "AXRadioButton", selected: false, value: true) == true, "tabs use AXValue")
+    check(selectionFlag(role: "AXRadioButton", selected: true, value: false) == false, "tab AXSelected cannot override AXValue")
+    check(selectionFlag(role: "AXRow", selected: false, value: true) == false, "rows use AXSelected")
+    check(selectionFlag(role: "AXRow", selected: nil, value: true) == nil, "missing row selection is unknown, not false")
+    var stable = StableFlag(wanted: true, seconds: 1.5)
+    check(!stable.observe(true, at: 0) && !stable.observe(false, at: 1), "transient full screen flag is not completion")
+    check(!stable.observe(true, at: 2) && !stable.observe(nil, at: 3), "missing window clears stability")
+    check(!stable.observe(true, at: 4) && !stable.observe(true, at: 5) && stable.observe(true, at: 5.5), "full screen must remain true for the complete interval")
     let point = CGPoint(x: 177.5, y: 73)
     check(flipScreenPoint(point, primaryTop: 768) == CGPoint(x: 177.5, y: 695), "AX point to AppKit, no pixel scaling")
     check(flipScreenPoint(flipScreenPoint(point, primaryTop: 768), primaryTop: 768) == point, "screen conversion is its own inverse")
@@ -599,8 +677,10 @@ func selfTest() {
     let own = WindowInfo(number: 8, pid: 42, owner: "fixture", frame: rect, layer: 0, alpha: 1)
     let other = WindowInfo(number: 9, pid: 43, owner: "other", frame: rect, layer: 0, alpha: 1)
     let sameApp = WindowInfo(number: 10, pid: 42, owner: "fixture", frame: rect, layer: 0, alpha: 1)
+    let dock = WindowInfo(number: 6, pid: 331, owner: "Dock", frame: CGRect(x: 0, y: 0, width: 1024, height: 768), layer: 20, alpha: 1)
     check(permitsPointer(target: own, pid: 42, window: 8, frame: rect, point: point), "own mouse target, even under a click-through covering rectangle")
     check(!permitsPointer(target: other, pid: 42, window: 8, frame: rect, point: point), "another app in front refused")
+    check(!permitsPointer(target: dock, pid: 42, window: 8, frame: rect, point: point), "Dock is refused if it actually receives the mouse event")
     check(!permitsPointer(target: sameApp, pid: 42, window: 8, frame: rect, point: point), "another window of same PID refused")
     check(!permitsPointer(target: own, pid: 42, window: 8, frame: rect, point: CGPoint(x: 177.5, y: 15)), "menu bar point refused")
     check(!permitsPointer(target: nil, pid: 42, window: 8, frame: rect, point: point), "unknown mouse target refused")
@@ -616,7 +696,7 @@ usage: axdrive self-test | preflight
        axdrive COMMAND PID [selector] [arguments]
 commands with a PID:
   wait-window, window, window-id, windows, place W H, lights, front, dump,
-  find, frame, absent, count, press, focus, focused, selected, value, set-value --text T,
+  find, frame, absent, count, press, select, wait-selected, focus, focused, selected, value, set-value --text T,
   growth, key COMBO, type --text T [--delay S], fullscreen on|off,
   minimized on|off|get, hit X Y, bar-gap FROM TO,
   drag X1 Y1 X2 Y2, double-click X Y, select-text --text T
@@ -648,13 +728,17 @@ func run(_ arguments: [String]) throws {
     switch command {
     case "wait-window":
         guard let window = poll(selector.timeout, { mainWindow(pid) }), let rect = frame(of: window) else {
-            die(processAlive(pid) ? "no window within \(selector.timeout) s" : "process \(pid) exited")
+            die("timed out after \(selector.timeout)s waiting for a development window with a frame; last observed: \(processAlive(pid) ? "process alive, no usable window" : "process exited")")
         }
         say(fmt(rect))
     case "window":
         let window = requireWindow(pid)
         guard let rect = frame(of: window) else { die("window has no frame") }
-        say("\(fmt(rect)) \(bool(window, "AXFullScreen") ? 1 : 0) \(bool(window, kAXMinimizedAttribute) ? 1 : 0)")
+        guard let full = flagValue(attribute(window, "AXFullScreen")),
+              let minimized = flagValue(attribute(window, kAXMinimizedAttribute)) else {
+            die("window state unavailable: AXFullScreen=\(rawAttribute(window, "AXFullScreen")); AXMinimized=\(rawAttribute(window, kAXMinimizedAttribute))")
+        }
+        say("\(fmt(rect)) \(full ? 1 : 0) \(minimized ? 1 : 0)")
     case "window-id":
         guard let number = windowNumber(pid) else { die("no on-screen window for process \(pid)") }
         say(String(number))
@@ -691,6 +775,8 @@ func run(_ arguments: [String]) throws {
             let indent = String(repeating: "  ", count: min(node.depth, 40))
             let value = (node.value ?? "").prefix(120).replacingOccurrences(of: "\n", with: "\\n")
             say("\(indent)\(node.role)\(node.subrole.isEmpty ? "" : "/" + node.subrole) title=\"\(node.title)\" label=\"\(node.label.prefix(120))\" value=\"\(value)\" frame=\(node.frame.map(fmt) ?? "-")")
+            if ["AXRadioButton", "AXRow"].contains(node.role) { say("\(indent)  state: \(selectionDescription(node))") }
+            if node.role == "AXWindow" { say("\(indent)  AXFullScreen=\(rawAttribute(node.element, "AXFullScreen")); AXMinimized=\(rawAttribute(node.element, kAXMinimizedAttribute))") }
         }
     case "find":
         let node = waitFor(pid, selector)
@@ -702,13 +788,30 @@ func run(_ arguments: [String]) throws {
     case "count":
         say(String(matches(pid, selector).count))
     case "absent":
-        let gone = poll(selector.timeout) { matches(pid, selector).isEmpty ? true : nil }
-        if gone == nil { die("still present after \(selector.timeout) s: \(selector.describe)") }
+        var last = "control still present"
+        let gone = poll(selector.timeout) { () -> Bool? in
+            let found = matches(pid, selector)
+            last = "\(found.count) matching controls remain"
+            return found.isEmpty ? true : nil
+        }
+        if gone == nil { die("timed out after \(selector.timeout)s waiting for absence of \(selector.describe); last observed: \(last)") }
     case "press":
         let node = waitFor(pid, selector)
         let result = AXUIElementPerformAction(node.element, kAXPressAction as CFString)
         guard result == .success else { die("press failed (\(result.rawValue)) on \(selector.describe)") }
         say("pressed \(node.role) \(node.name.prefix(120))")
+    case "select":
+        let node = waitFor(pid, selector)
+        let before = selectionDescription(node)
+        var action = "already selected; no press"
+        if selection(node) != true {
+            let result = AXUIElementPerformAction(node.element, kAXPressAction as CFString)
+            guard result == .success else { die("press failed (\(result.rawValue)) on \(selector.describe); \(selectionDescription(node))") }
+            action = "AXPress succeeded"
+        }
+        waitSelected(pid, selector, transition: "before: \(before); \(action)")
+    case "wait-selected":
+        waitSelected(pid, selector)
     case "focus":
         let node = waitFor(pid, selector)
         let result = setBool(node.element, kAXFocusedAttribute, true)
@@ -716,9 +819,8 @@ func run(_ arguments: [String]) throws {
     case "focused":
         say(bool(waitFor(pid, selector).element, kAXFocusedAttribute) ? "1" : "0")
     case "selected":
-        let element = waitFor(pid, selector).element
-        // accesskit_macos 0.26.3 exposes tabs' selection as AXValue.
-        let selected = bool(element, kAXSelectedAttribute) || bool(element, kAXValueAttribute)
+        let node = waitFor(pid, selector)
+        guard let selected = selection(node) else { die("selection unavailable: \(selectionDescription(node))") }
         say(selected ? "1" : "0")
     case "value":
         let node = waitFor(pid, selector)
@@ -740,11 +842,12 @@ func run(_ arguments: [String]) throws {
             } else if seen {
                 break
             }
-            Thread.sleep(forTimeInterval: 0.05)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         }
-        guard seen else { die("never saw \(selector.describe)") }
+        guard seen && lengths.count >= 2 else {
+            die("timed out after \(selector.timeout)s waiting for growth of \(selector.describe); last observed: \(seen ? "one length, \(lengths.max() ?? 0) characters" : "control absent")")
+        }
         say("\(lengths.count) different lengths, longest \(lengths.max() ?? 0) characters")
-        if lengths.count < 2 { exit(1) }
     case "key":
         guard let text = rest.first else { die(usage, 2) }
         let combo = try parseCombo(text)
@@ -756,15 +859,28 @@ func run(_ arguments: [String]) throws {
         postText(pid, text, delay: Double(extra["--delay"] ?? "0.008") ?? 0.008)
     case "fullscreen":
         guard let state = rest.first, state == "on" || state == "off" else { die(usage, 2) }
+        front(pid)
         let window = requireWindow(pid)
         let wanted = state == "on"
-        let result = setBool(window, "AXFullScreen", wanted)
-        guard result == .success else { die("AXFullScreen could not be set (\(result.rawValue))") }
-        guard poll(selector.timeout, interval: 0.2, { bool(window, "AXFullScreen") == wanted ? true : nil }) != nil else {
-            die("full screen still \(wanted ? "off" : "on") after \(selector.timeout) s")
+        let before = rawAttribute(window, "AXFullScreen")
+        if flagValue(attribute(window, "AXFullScreen")) != wanted {
+            let result = setBool(window, "AXFullScreen", wanted)
+            guard result == .success else { die("AXFullScreen could not be set (\(result.rawValue)); before=\(before)") }
         }
-        // The space animation runs after the attribute changes.
-        Thread.sleep(forTimeInterval: 1.5)
+        var stable = StableFlag(wanted: wanted, seconds: 1.5)
+        var last = before
+        guard poll(selector.timeout, interval: 0.1, { () -> Bool? in
+            // The setter's original AX object may report the requested value
+            // before the Space transition settles. Read a fresh window each time.
+            guard let current = mainWindow(pid) else {
+                last = "window absent"
+                _ = stable.observe(nil, at: ProcessInfo.processInfo.systemUptime)
+                return nil
+            }
+            last = "AXFullScreen=\(rawAttribute(current, "AXFullScreen")); frame=\(frame(of: current).map(fmt) ?? "unknown")"
+            return stable.observe(flagValue(attribute(current, "AXFullScreen")), at: ProcessInfo.processInfo.systemUptime) ? true : nil
+        }) != nil else { die("timed out waiting for stable full screen \(state) for 1.5s; before=\(before); last observed: \(last)") }
+        say("stable full screen \(state); before=\(before); \(last)")
     case "minimized":
         guard let state = rest.first else { die(usage, 2) }
         let window = (attribute(application(pid), kAXWindowsAttribute) as? [AXUIElement])?.first ?? requireWindow(pid)

@@ -25,7 +25,7 @@ def require(condition, detail):
         raise AssertionError(detail)
 
 
-def until(read, accept, timeout=15):
+def until(read, accept, timeout=3, *, description):
     deadline = time.monotonic() + timeout
     last = None
     while time.monotonic() < deadline:
@@ -36,7 +36,7 @@ def until(read, accept, timeout=15):
         except (OSError, ValueError) as error:
             last = str(error)
         time.sleep(.1)
-    raise AssertionError(f'timed out; last observed: {str(last)[:1500]}')
+    raise AssertionError(f'timed out after {timeout:g}s waiting for {description}; last observed: {str(last)[:1500]}')
 
 
 def request(store, protocol_version=4, **body):
@@ -141,8 +141,10 @@ class Replay:
 
 
 def write_json(path, data):
-    path.write_text(json.dumps(data, indent=2) + '\n')
-    path.chmod(0o600)
+    temporary = path.with_name(path.name + '.tmp')
+    temporary.write_text(json.dumps(data, indent=2) + '\n')
+    temporary.chmod(0o600)
+    temporary.replace(path)
 
 
 class Fixture:
@@ -201,7 +203,7 @@ class Fixture:
         }}})
         with (self.base / 'host.log').open('w') as log:
             self.host = subprocess.Popen([str(self.host_binary), 'run', '--store', str(self.store)], env=self.env, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
-        until(lambda: request(self.store, op='status'), lambda status: any(m['provider'] == PROVIDER and m['authenticated'] for m in status.get('models', [])), 30)
+        until(lambda: request(self.store, op='status'), lambda status: any(m['provider'] == PROVIDER and m['authenticated'] for m in status.get('models', [])), 30, description='host catalog to offer the authenticated fixture model')
         self.thread = request(self.store, op='create_thread', checkout=str(self.repo), provider=PROVIDER, model_id=MODEL, request_id='acceptance-create')['thread']
         self.seed_thread = self.thread
         self.replay.add({'text': ANSWER})
@@ -227,7 +229,7 @@ class Fixture:
         return request(self.store, op='watch', thread_id=self.thread['id'])['thread']
 
     def idle(self):
-        state = until(self.watch, lambda state: state['status'] in ('idle', 'error'), 25)
+        state = until(self.watch, lambda state: state['status'] in ('idle', 'error'), 25, description=f'fixture thread {self.thread["id"]} to finish')
         require(state['status'] == 'idle', f'thread error: {state.get("error")}')
         return state
 
@@ -236,7 +238,7 @@ class Fixture:
         after = 'allowed\n' if allow else 'denied\n'
         self.replay.add({'tool': {'id': f'acceptance_edit_{self.sequence}', 'name': 'edit', 'input': {'path': 'approval.txt', 'old_text': before, 'new_text': after}}}, {'text': 'The scripted approval turn is complete.'})
         self.submit('Propose the scripted fixture edit.')
-        return until(self.watch, lambda state: state.get('pending_approval'))
+        return until(self.watch, lambda state: state.get('pending_approval'), 15, description=f'edit approval in fixture thread {self.thread["id"]}')
 
     def reset(self):
         # A failed approval/stream item must not hold the checkout lease or leave
@@ -250,7 +252,7 @@ class Fixture:
         try:
             # Stop replies before the final capture. The host locks this inode;
             # wait for its lease, not the early 'stopped' snapshot, before writes.
-            until(lambda: fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB), lambda _: True, 25)
+            until(lambda: fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB), lambda _: True, 25, description='stopped fixture run to release its checkout lease')
             self.replay.clear()
             self.thread = self.seed_thread
             self.git('reset', '--hard', self.baseline)
@@ -286,7 +288,7 @@ class Fixture:
         request(self.store, op='approve', thread_id=self.thread['id'], approval_id=pending['pending_approval']['id'], allow=True)
         self.idle()
         require((self.repo / 'approval.txt').read_text() == 'allowed\n', 'scripted edit did not finish')
-        records = until(self.records, lambda rows: len(rows) == 1 and rows[0]['state'] == 'ready')
+        records = until(self.records, lambda rows: len(rows) == 1 and rows[0]['state'] == 'ready', 15, description='one ready record for the scripted edit')
         require([p['path'] for p in records[0]['paths']] == ['approval.txt'], 'run record does not cover exactly the scripted edit')
         return records[0]
 

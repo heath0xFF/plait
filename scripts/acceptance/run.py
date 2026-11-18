@@ -17,14 +17,28 @@ import time
 from fixture import ANSWER, Fixture, request, require, until, write_json
 
 ROOT = Path(__file__).resolve().parents[2]
+RUN_SECONDS = 390  # Leave 90 seconds for extraction, evidence and cleanup in CI.
 
 
 class Skipped(Exception):
     pass
 
 
+class RunInterrupted(BaseException):
+    """Leave the run loop, but still persist results and close owned processes."""
+
+
+def stop_run(signum, _frame):
+    signal.setitimer(signal.ITIMER_REAL, 0)
+    reason = f'{RUN_SECONDS}-second run deadline' if signum == signal.SIGALRM else signal.Signals(signum).name
+    raise RunInterrupted(reason)
+
+
 def command(args, timeout=30, env=None):
-    result = subprocess.run([str(arg) for arg in args], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, env=env)
+    try:
+        result = subprocess.run([str(arg) for arg in args], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, env=env)
+    except subprocess.TimeoutExpired as error:
+        raise AssertionError(f'timed out after {timeout:g}s waiting for {Path(str(args[0])).name} {list(args[1:])!r}; last observed: process did not finish; output={error.stdout!r}') from error
     require(result.returncode == 0, f'{Path(str(args[0])).name} {args[1:3]} exited {result.returncode}: {result.stderr.strip() or result.stdout.strip()}')
     return result.stdout.strip()
 
@@ -66,10 +80,26 @@ class Acceptance:
         self.results = []
         self.ready = False
         self.double_action = 'Maximize'
+        self.output = getattr(args, 'artifacts', None) or base
+        self.current = None
+        self.last_step = 'not started'
+        self.phase = 'setup'
+        self.started = time.monotonic()
+        self.interruption = None
+        self.finished = False
+
+    def trace(self, detail):
+        self.last_step = detail
+        if self.current:
+            with (self.output / f'{self.current}-steps.log').open('a') as log:
+                log.write(f'{time.monotonic() - self.started:.3f}s {self.phase}: {detail}\n')
 
     def ax(self, action, *args, timeout=15):
         require(self.app is not None and self.app.poll() is None, 'development app is not running')
-        return command([self.driver, action, self.app.pid, *args], timeout=timeout)
+        self.trace(f'waiting for axdrive {action} {str(args)[:300]}')
+        result = command([self.driver, action, self.app.pid, *args], timeout=timeout)
+        self.trace(f'observed {result[:1500]!r}')
+        return result
 
     def find(self, name, role=None):
         return self.ax('find', '--name', name, *(['--role', role] if role else []))
@@ -91,7 +121,7 @@ class Acceptance:
             self.ax('type', '--text', text, '--delay', '0.002', timeout=30)
         else:
             self.ax('set-value', '--name', name, '--role', 'field', '--text', text)
-        until(lambda: self.ax('value', '--name', name, '--role', 'field'), lambda value: value == text)
+        until(lambda: self.ax('value', '--name', name, '--role', 'field', '--timeout', '0'), lambda value: value == text, description=f'field {name!r} to contain {text[:80]!r}')
 
     def frame(self, name):
         return [float(v) for v in self.ax('frame', '--name', name).split()]
@@ -100,15 +130,14 @@ class Acceptance:
         return [float(v) for v in self.ax('window').split()]
 
     def selected(self, name):
-        until(lambda: self.ax('selected', '--name', name, '--role', 'control'), lambda value: value == '1')
+        self.ax('wait-selected', '--name', name, '--role', 'control')
 
     def tab(self, name):
         # A finished sidebar thread also has static text named Done.
         if self.exists('Done', 'AXButton'):
             self.press('Done')
             self.ax('absent', '--name', 'Done', '--role', 'AXButton')
-        self.press(name)
-        self.selected(name)
+        self.ax('select', '--name', name, '--role', 'control')
 
     def sidebar(self, wanted):
         if self.exists('Resize sidebar') != wanted:
@@ -134,8 +163,7 @@ class Acceptance:
         self.tab('Conversation')
         self.sidebar(True)
         self.field('Filter projects and threads', '')
-        self.ax('press', '--prefix', f'Thread {self.fixture.thread["id"]} ·', '--role', 'AXRow')
-        until(lambda: self.ax('selected', '--prefix', f'Thread {self.fixture.thread["id"]} ·', '--role', 'AXRow'), lambda value: value == '1')
+        self.ax('select', '--prefix', f'Thread {self.fixture.thread["id"]} ·', '--role', 'AXRow')
         self.find('Message to agent', 'field')
 
     def reset(self):
@@ -162,45 +190,71 @@ class Acceptance:
         self.ax('find', '--prefix', f'Assistant message: {ANSWER}', '--role', 'AXGroup')
 
     def record(self, name, fn, native=True):
+        self.current = name
+        self.phase = 'reset' if native else 'setup'
+        self.last_step = f'starting {self.phase} for {name}'
+        started = time.monotonic()
+        print(f'START {name}', flush=True)
         try:
             if native and not self.ready:
                 raise Skipped('native setup unavailable; see setup/permissions result')
             if native:
                 self.reset()
+            self.phase = 'check'
             detail = fn() or 'expected state observed'
             status = 'PASS'
         except Skipped as error:
             status, detail = 'SKIPPED', str(error)
+        except RunInterrupted as error:
+            self.interruption = str(error)
+            status, detail = 'FAIL', f'{self.phase}: {error}; last step: {self.last_step}'
         except Exception as error:
-            status, detail = 'FAIL', str(error)
-            if self.app:
-                self.capture(name)
-        self.results.append({'item': name, 'status': status, 'observed': detail})
+            status, detail = 'FAIL', f'{self.phase}: {error}'
+        self.results.append({'item': name, 'status': status, 'observed': detail, 'seconds': round(time.monotonic() - started, 3)})
         # Exactly one result line per item; verbose evidence goes into files.
         print(f'{status} {name}: {" ".join(detail.split())}', flush=True)
-        write_json(self.base / 'results.json', self.results)
+        self.persist_results()
+        if status == 'FAIL':
+            (self.output / f'{name}-failure.txt').write_text(detail + '\n')
+            self.phase = 'capture'
+            if self.app:
+                self.capture(name)
+        self.publish_logs()
+        if self.interruption:
+            raise RunInterrupted(self.interruption)
+
+    def persist_results(self):
+        write_json(self.output / 'results.json', self.results)
+        (self.output / 'failed-items.txt').write_text('\n'.join(failure_lines(self.results)) + '\n')
+
+    def publish_logs(self):
+        if self.output != self.base:
+            for name in ('permissions.txt', 'app.log', 'host.log', 'preferences.json', 'replay.json'):
+                path = self.base / name
+                if path.is_file():
+                    shutil.copy2(path, self.output / name)
 
     def capture(self, name):
         if not self.app or self.app.poll() is not None:
-            (self.base / f'{name}-capture.txt').write_text('Development process has exited; no window to capture.\n')
+            (self.output / f'{name}-capture.txt').write_text('Development process has exited; no window to capture.\n')
             return
         errors = []
         try:
-            (self.base / f'{name}-ax.txt').write_text(self.ax('dump', timeout=30))
+            (self.output / f'{name}-ax.txt').write_text(self.ax('dump', timeout=4))
         except Exception as error:
             errors.append(f'AX dump: {error}')
         try:
-            (self.base / f'{name}-windows.txt').write_text(self.ax('windows'))
+            (self.output / f'{name}-windows.txt').write_text(self.ax('windows', timeout=2))
         except Exception as error:
             errors.append(f'Window diagnostics: {error}')
         try:
-            window_id = self.ax('window-id')
+            window_id = self.ax('window-id', timeout=2)
             require(window_id.isdecimal(), f'invalid window ID: {window_id}')
-            command(['/usr/sbin/screencapture', '-x', '-l', window_id, self.base / f'{name}.png'])
+            command(['/usr/sbin/screencapture', '-x', '-l', window_id, self.output / f'{name}.png'], timeout=4)
         except Exception as error:
             errors.append(f'Window capture: {error}; grant Screen Recording to the invoking terminal')
         if errors:
-            (self.base / f'{name}-capture.txt').write_text('\n'.join(errors) + '\n')
+            (self.output / f'{name}-capture.txt').write_text('\n'.join(errors) + '\n')
 
     def setup(self):
         require(self.args.host.is_file() and os.access(self.args.host, os.X_OK), f'build host first: {self.args.host}')
@@ -253,7 +307,7 @@ class Acceptance:
         x, y = self.gap(sidebar=shown)
         self.ax('hit', x, y)
         self.ax('drag', x, y, x + 45, y + 30)
-        after = until(self.window, lambda rect: abs(rect[0] - before[0]) > 10 or abs(rect[1] - before[1]) > 10)
+        after = until(self.window, lambda rect: abs(rect[0] - before[0]) > 10 or abs(rect[1] - before[1]) > 10, description=f'window origin to move from {before[:2]}')
         # Header controls must still activate after the native move.
         self.press('Toggle sidebar')
         require(self.exists('Resize sidebar') != shown, 'sidebar button stopped responding after dragging')
@@ -277,12 +331,13 @@ class Acceptance:
             after = self.window()
             require(all(abs(a - b) < 3 for a, b in zip(before, after)), f'setting None; before={before}, after={after}')
         else:
-            until(self.window, lambda rect: abs(rect[2] - before[2]) > 10 or abs(rect[3] - before[3]) > 10)
+            until(self.window, lambda rect: abs(rect[2] - before[2]) > 10 or abs(rect[3] - before[3]) > 10, description=f'double-click {action} to resize window from {before[2:4]}')
         return f'system setting {action}; matching minimize/no-op/resize observed (other settings not changed or tested)'
 
     def fullscreen(self):
         self.ax('fullscreen', 'on', '--timeout', '10', timeout=15)
-        require(self.window()[4] == 1, 'full screen attribute is false')
+        entered = self.window()
+        require(entered[4] == 1, f'full screen reverted after stable entry; fresh window [x y w h fullscreen minimized]={entered}')
         self.ax('fullscreen', 'off', '--timeout', '10', timeout=15)
         require(self.window()[4] == 0, 'full screen attribute stayed true')
         self.press('Toggle sidebar')
@@ -314,8 +369,8 @@ class Acceptance:
         x, y = before[0] + before[2] / 2, before[1] + before[3] / 2
         delta = 50 if panel == 'sidebar' else -50
         self.ax('drag', x, y, x + delta, y)
-        after = until(lambda: self.frame(name), lambda rect: abs(rect[0] - before[0]) >= 20)
-        saved = until(lambda: json.loads(self.fixture.preferences.read_text()), lambda prefs: prefs.get(f'{panel}_width') is not None and prefs[f'{panel}_width'] != old_width)
+        after = until(lambda: self.frame(name), lambda rect: abs(rect[0] - before[0]) >= 20, description=f'{name} edge to move at least 20 points from {before}')
+        saved = until(lambda: json.loads(self.fixture.preferences.read_text()), lambda prefs: prefs.get(f'{panel}_width') is not None and prefs[f'{panel}_width'] != old_width, description=f'{panel} width preference to change from {old_width}')
         return f'edge moved {after[0] - before[0]:.1f} pt; saved width {saved[f"{panel}_width"]}'
 
     def workspace(self, name):
@@ -335,8 +390,7 @@ class Acceptance:
             self.key('cmd+comma')
         self.find('Done', 'control')
         if tab:
-            self.press(tab)
-            self.selected(tab)
+            self.ax('select', '--name', tab, '--role', 'control')
             markers = {'New threads': 'Models', 'Providers': 'Find provider', 'Agents': 'Agent harnesses', 'Keyboard': 'Find shortcut', 'Editor': 'Open files with', 'Appearance': 'Code font', 'About': 'About and updates'}
             self.find(markers[tab])
         return f'{tab or "Settings"} is open; expected controls present'
@@ -429,7 +483,7 @@ class Acceptance:
         self.field('Switch branch', name, typed=True)
         self.ax('find', '--prefix', f'Create branch {name}' if create else name, '--role', 'AXStaticText')
         self.key('return')
-        until(lambda: self.fixture.git('branch', '--show-current'), lambda branch: branch == name)
+        until(lambda: self.fixture.git('branch', '--show-current'), lambda branch: branch == name, description=f'Git branch to become {name}')
         self.find(f'Branch {name}', 'control')
         return f'UI and Git HEAD both name {name}'
 
@@ -437,7 +491,7 @@ class Acceptance:
         self.tab('Changes')
         self.ax('press', '--prefix', 'review.txt, Modified,', '--role', 'control')
         self.press('Stage hunk')
-        staged = until(lambda: self.fixture.git('diff', '--cached', '--no-ext-diff', '--no-textconv'), lambda diff: '+first new' in diff)
+        staged = until(lambda: self.fixture.git('diff', '--cached', '--no-ext-diff', '--no-textconv'), lambda diff: '+first new' in diff, description='Git index to contain the first review.txt hunk')
         unstaged = self.fixture.git('diff', '--no-ext-diff', '--no-textconv')
         require('+last new' not in staged and '+last new' in unstaged, f'hunk staging changed the wrong content: staged={staged}; unstaged={unstaged}')
         return 'first hunk staged in Git; second hunk remains unstaged'
@@ -450,7 +504,7 @@ class Acceptance:
         before = self.fixture.git('rev-parse', 'HEAD')
         self.field('Commit message', 'Native acceptance commit', typed=True)
         self.press('Commit 1 file')
-        until(lambda: self.fixture.git('rev-parse', 'HEAD'), lambda head: head != before)
+        until(lambda: self.fixture.git('rev-parse', 'HEAD'), lambda head: head != before, description=f'commit to advance Git HEAD from {before}')
         require(self.fixture.git('log', '-1', '--format=%s') == 'Native acceptance commit', 'unexpected commit subject')
         require('+last new' in self.fixture.git('diff', '--no-ext-diff', '--no-textconv'), 'unstaged hunk was lost')
         require(not self.fixture.git('diff', '--cached', '--name-only'), 'index still contains staged changes')
@@ -462,7 +516,7 @@ class Acceptance:
         self.field('Open terminals with', self.fixture.terminal_command, typed=True)
         expected = {'open_files_with': self.fixture.editor_command, 'open_terminals_with': self.fixture.terminal_command}
         until(lambda: json.loads(self.fixture.preferences.read_text()),
-              lambda prefs: all(prefs.get(k) == {'with': 'custom', 'command': v} for k, v in expected.items()))
+              lambda prefs: all(prefs.get(k) == {'with': 'custom', 'command': v} for k, v in expected.items()), description='both inert handoff commands to be saved in private preferences')
         self.press('Done')
         return 'both custom fields contain saved, inert argument recorders'
 
@@ -484,7 +538,7 @@ class Acceptance:
             self.find('2 of 3')
             self.press('Open find me.txt in your editor')
             expected = [str(self.fixture.repo / 'find me.txt'), '3', str(self.fixture.repo)]
-        actual = until(lambda: path.read_text().splitlines(), lambda args: args == expected)
+        actual = until(lambda: path.read_text().splitlines(), lambda args: args == expected, description=f'handoff recorder arguments {expected}')
         if not terminal:
             self.key('escape')
         return f'recorder received {actual}; no external application opened'
@@ -502,7 +556,7 @@ class Acceptance:
         self.field('Message to agent', text, typed=True)
         after = self.frame('Message to agent')
         require(after[3] > before[3], f'composer did not grow: {before} -> {after}')
-        until(lambda: json.loads((self.fixture.desktop / 'desktop.json').read_text()), lambda state: state['threads'][self.fixture.thread['id']]['draft']['text'] == text)
+        until(lambda: json.loads((self.fixture.desktop / 'desktop.json').read_text()), lambda state: state['threads'][self.fixture.thread['id']]['draft']['text'] == text, description='long composer draft to be saved in the private desktop journal')
         self.field('Message to agent', '')
         return f'{len(text)} characters typed as native Unicode events; draft exact, grew and persisted; not submitted'
 
@@ -553,16 +607,16 @@ class Acceptance:
             self.key('cmd+r')
             self.find('Redo', 'control')
             self.press('Redo')
-            until(path.read_text, lambda text: text == 'allowed\n')
+            until(path.read_text, lambda text: text == 'allowed\n', timeout=15, description='Redo to restore approval.txt to allowed')
             self.find('Undo', 'control')
         else:
             self.find('Undo', 'control')
             self.key('cmd+opt+u') if action == 'shortcut' else self.press('Undo')
-            until(path.read_text, lambda text: text == 'before\n')
+            until(path.read_text, lambda text: text == 'before\n', timeout=15, description='Undo to restore approval.txt to before')
             self.find('Redo', 'control')
             if action == 'shortcut':
                 self.key('cmd+opt+u')
-                until(path.read_text, lambda text: text == 'allowed\n')
+                until(path.read_text, lambda text: text == 'allowed\n', timeout=15, description='Redo to restore approval.txt to allowed')
                 self.find('Undo', 'control')
         require(self.fixture.git('rev-parse', 'HEAD') == head and self.fixture.git('ls-files', '--stage') == index, 'turn undo changed Git HEAD or index')
         require((self.fixture.repo / 'review.txt').read_bytes() == unrelated, 'turn undo changed unrelated fixture bytes')
@@ -609,12 +663,29 @@ class Acceptance:
         return checks
 
     def run(self):
-        self.record('fixture-isolation', self.setup, native=False)
-        self.record('native-setup-permissions', self.launch, native=False)
-        for name, fn in self.checks():
-            self.record(name, fn)
-        print(summary(self.results), flush=True)
-        return 1 if any(r['status'] == 'FAIL' for r in self.results) else 0
+        try:
+            self.record('fixture-isolation', self.setup, native=False)
+            self.record('native-setup-permissions', self.launch, native=False)
+            for name, fn in self.checks():
+                self.record(name, fn)
+        except RunInterrupted as error:
+            self.interruption = str(error)
+        finally:
+            self.finish()
+        return 1 if self.interruption or any(r['status'] == 'FAIL' for r in self.results) else 0
+
+    def finish(self):
+        if self.finished:
+            return
+        seen = {row['item'] for row in self.results}
+        for name in ['fixture-isolation', 'native-setup-permissions', *[name for name, _ in self.checks()]]:
+            if name not in seen:
+                detail = f'not attempted: {self.interruption or "run ended early"}'
+                self.results.append({'item': name, 'status': 'SKIPPED', 'observed': detail})
+                print(f'SKIPPED {name}: {detail}', flush=True)
+        self.persist_results()
+        print(summary(self.results) + (' incomplete=true' if self.interruption else ''), flush=True)
+        self.finished = True
 
     def close(self):
         if self.app and self.app.poll() is None:
@@ -648,6 +719,7 @@ def main():
     base = Path(tempfile.mkdtemp(prefix='plait-acceptance-', dir='/tmp')).resolve()
     driver = base / 'axdrive'
     runner = None
+    handlers = {}
     result = 1
     keep = False
     try:
@@ -659,6 +731,11 @@ def main():
             print('This check will take the pointer for a few minutes. Run it when away.' if not args.no_pointer else 'Pointer checks are disabled; this check still activates its own window and types into it.', flush=True)
             print('Permissions: grant Accessibility to the invoking terminal/runner and axdrive if macOS lists it; Screen Recording is needed for failure screenshots. No Automation permission is used or changed.', flush=True)
             print(f'Disposable folder: {base}', flush=True)
+            runner = Acceptance(args, base, driver)
+            for sig in (signal.SIGALRM, signal.SIGTERM, signal.SIGINT):
+                handlers[sig] = signal.signal(sig, stop_run)
+            signal.setitimer(signal.ITIMER_REAL, RUN_SECONDS)
+            print(f'Run deadline: {RUN_SECONDS}s including helper compilation and setup; ordinary waits: 3s.', flush=True)
         command(['/usr/bin/xcrun', 'swiftc', '-O', ROOT / 'scripts/acceptance/axdrive.swift', '-o', driver], timeout=120)
         if args.self_test:
             pure_tests(driver)
@@ -700,7 +777,7 @@ def main():
                     if state.get('live_text'):
                         lengths.add(len(state['live_text']))
                     return state
-                done = until(observed, lambda state: state['status'] in ('idle', 'error'), 15)
+                done = until(observed, lambda state: state['status'] in ('idle', 'error'), 15, description='fixture streaming run to finish')
                 require(done['status'] == 'idle' and len(lengths) >= 2, f'stream did not grow: {lengths}; {done.get("error")}')
                 require(any(m['text'] == stream_text for m in done['messages']), 'final streaming reply missing')
                 output = base / 'recorder-test.txt'
@@ -712,22 +789,26 @@ def main():
             finally:
                 fixture.close()
         else:
-            runner = Acceptance(args, base, driver)
             result = runner.run()
             keep = any(r['status'] == 'SKIPPED' for r in runner.results)
-    except (Exception, KeyboardInterrupt) as error:
+    except (Exception, KeyboardInterrupt, RunInterrupted) as error:
         print(f'FAIL harness: {error}', flush=True)
         if runner:
-            runner.capture('harness')
-        print('SUMMARY harness failed before completion', flush=True)
+            runner.interruption = str(error) or 'keyboard interrupt'
+            runner.finish()
+        else:
+            print('SUMMARY harness failed before completion', flush=True)
     finally:
+        if handlers:
+            signal.setitimer(signal.ITIMER_REAL, 0)
         if runner:
             try:
                 runner.close()
             except Exception as error:
                 result = 1
                 print(f'FAIL cleanup: {error}', flush=True)
-        if args.artifacts and args.artifacts.exists():
+            runner.publish_logs()
+        elif args.artifacts and args.artifacts.exists():
             # Keep only test-generated diagnostics, not the host database or binary.
             for path in base.iterdir():
                 if path.is_file() and path.suffix in ('.txt', '.log', '.json', '.png'):
@@ -739,9 +820,10 @@ def main():
         if runner:
             for line in failure_lines(runner.results):
                 print(line, flush=True)
+        for sig, handler in handlers.items():
+            signal.signal(sig, handler)
     return result
 
 
 if __name__ == '__main__':
-    signal.signal(signal.SIGTERM, lambda _signum, _frame: sys.exit(130))
     sys.exit(main())

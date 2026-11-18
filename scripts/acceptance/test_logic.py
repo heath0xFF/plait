@@ -1,15 +1,18 @@
 """Windowless harness tests; mocks deliberately forbid native helper calls."""
 import contextlib
+import ast
 import io
 import json
 from pathlib import Path
 import tempfile
+import signal
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from fixture import ANSWER, Fixture, events, require
-from run import Acceptance, Skipped, check_lights, failure_lines, inspector_skip, summary
+from fixture import ANSWER, Fixture, events, require, until
+from run import Acceptance, RUN_SECONDS, RunInterrupted, Skipped, check_lights, failure_lines, inspector_skip, main, stop_run, summary
 
 
 class HarnessTests(unittest.TestCase):
@@ -38,7 +41,7 @@ class HarnessTests(unittest.TestCase):
                     runner.record('skip', runner.pointer, native=False)
                     runner.record('dependent', lambda: self.fail('must not run'))
                 self.assertEqual([r['status'] for r in runner.results], ['PASS', 'FAIL', 'SKIPPED', 'SKIPPED'])
-                self.assertEqual(len(output.getvalue().splitlines()), 4)
+                self.assertEqual(len([line for line in output.getvalue().splitlines() if not line.startswith('START ')]), 4)
                 self.assertEqual(json.loads((Path(directory) / 'results.json').read_text()), runner.results)
                 self.assertEqual(summary(runner.results), 'SUMMARY pass=1 fail=1 skipped=2')
 
@@ -133,7 +136,108 @@ class HarnessTests(unittest.TestCase):
             ax.assert_any_call('minimized', 'off')
             ax.assert_any_call('fullscreen', 'off', '--timeout', '10')
             ax.assert_any_call('press', '--name', 'Close find', '--role', 'control')
-            ax.assert_any_call('press', '--prefix', 'Thread seed ·', '--role', 'AXRow')
+            ax.assert_any_call('select', '--prefix', 'Thread seed ·', '--role', 'AXRow')
+
+    def test_tab_and_thread_selection_use_idempotent_driver_operation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner = self.runner(directory)
+            runner.fixture.thread = {'id': 'seed'}
+            with patch.object(runner, 'ax', return_value='0') as ax, patch.object(runner, 'field'), patch.object(runner, 'sidebar'):
+                runner.tab('Conversation')
+                runner.select_thread()
+            ax.assert_any_call('select', '--name', 'Conversation', '--role', 'control')
+            ax.assert_any_call('select', '--prefix', 'Thread seed ·', '--role', 'AXRow')
+            self.assertFalse(any(call.args[0] == 'press' for call in ax.call_args_list))
+
+    def test_wait_names_expected_state_last_observation_and_short_budget(self):
+        clock = iter([0, 0, 1, 2, 3])
+        with patch('fixture.time.monotonic', side_effect=lambda: next(clock)), patch('fixture.time.sleep'):
+            with self.assertRaisesRegex(AssertionError, "after 3s waiting for file contents to become allowed; last observed: before"):
+                until(lambda: 'before', lambda value: value == 'allowed', description='file contents to become allowed')
+        # Prevent future ambiguous waits, including the windowless fixture mode.
+        for name in ('fixture.py', 'run.py'):
+            tree = ast.parse((Path(__file__).parent / name).read_text())
+            waits = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'until']
+            self.assertTrue(waits)
+            for node in waits:
+                self.assertIn('description', [keyword.arg for keyword in node.keywords], (name, node.lineno))
+
+    def test_failed_item_is_uploaded_before_capture_or_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory) / 'scratch'
+            base.mkdir()
+            output = Path(directory) / 'upload'
+            output.mkdir()
+            runner = Acceptance(SimpleNamespace(host=Path('/unused'), artifacts=output), base, Path('/never-call-driver'))
+            runner.app = Mock()
+
+            def cut_off_capture(name):
+                self.assertEqual(json.loads((output / 'results.json').read_text())[0]['status'], 'FAIL')
+                self.assertIn('named Conversation', (output / f'{name}-failure.txt').read_text())
+                self.assertIn('FAILED ITEM fixture-isolation', (output / 'failed-items.txt').read_text())
+                self.assertFalse((base / 'results.json').exists())
+                (output / f'{name}-ax.txt').write_text('captured tree')
+                raise RunInterrupted('cut off during screenshot')
+
+            with patch.object(runner, 'setup', side_effect=AssertionError('named Conversation missing')), \
+                 patch.object(runner, 'launch') as launch, patch.object(runner, 'capture', side_effect=cut_off_capture), \
+                 contextlib.redirect_stdout(io.StringIO()) as log:
+                self.assertEqual(runner.run(), 1)
+            launch.assert_not_called()
+            self.assertEqual(len(runner.results), 45)
+            self.assertIn('SUMMARY pass=0 fail=1 skipped=44 incomplete=true', log.getvalue())
+            self.assertTrue((output / 'fixture-isolation-ax.txt').exists())
+            self.assertEqual(len(json.loads((output / 'results.json').read_text())), 45)
+
+    def test_deadline_and_sigterm_finish_all_items_without_running_later_ones(self):
+        for sig in (signal.SIGALRM, signal.SIGTERM):
+            with self.subTest(signal=sig), tempfile.TemporaryDirectory() as directory:
+                runner = self.runner(directory)
+                with patch.object(runner, 'setup', side_effect=lambda: stop_run(sig, None)), \
+                     patch.object(runner, 'launch') as launch, patch('run.signal.setitimer'), \
+                     contextlib.redirect_stdout(io.StringIO()) as log:
+                    self.assertEqual(runner.run(), 1)
+                    runner.finish()
+                launch.assert_not_called()
+                self.assertEqual(len(runner.results), 45)
+                self.assertEqual(log.getvalue().count('SUMMARY'), 1)
+                self.assertIn('incomplete=true', log.getvalue())
+                self.assertTrue(all(row['status'] == 'SKIPPED' for row in runner.results[1:]))
+
+    @unittest.skipUnless(hasattr(signal, 'setitimer'), 'requires Unix signal timer')
+    def test_real_deadline_interrupts_blocking_setup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner = self.runner(directory)
+            previous = signal.signal(signal.SIGALRM, stop_run)
+            try:
+                with patch.object(runner, 'setup', side_effect=lambda: time.sleep(10)), \
+                     patch.object(runner, 'launch') as launch, contextlib.redirect_stdout(io.StringIO()) as log:
+                    signal.setitimer(signal.ITIMER_REAL, .02)
+                    self.assertEqual(runner.run(), 1)
+                launch.assert_not_called()
+                self.assertIn('run deadline', log.getvalue())
+                self.assertIn('SUMMARY pass=0 fail=1 skipped=44', log.getvalue())
+            finally:
+                signal.setitimer(signal.ITIMER_REAL, 0)
+                signal.signal(signal.SIGALRM, previous)
+
+    def test_compile_deadline_also_keeps_summary_and_live_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base, output = Path(directory) / 'scratch', Path(directory) / 'upload'
+            base.mkdir()
+            with patch('run.sys.argv', ['run.py', '--artifacts', str(output)]), \
+                 patch('run.sys.platform', 'darwin'), patch('run.os.umask'), \
+                 patch('run.tempfile.mkdtemp', return_value=str(base)), \
+                 patch('run.signal.signal'), patch('run.signal.setitimer') as timer, \
+                 patch('run.command', side_effect=RunInterrupted('deadline during compilation')) as command, \
+                 patch.object(Acceptance, 'close'), contextlib.redirect_stdout(io.StringIO()) as log:
+                self.assertEqual(main(), 1)
+            self.assertEqual(command.call_count, 1)
+            self.assertEqual(command.call_args.args[0][:2], ['/usr/bin/xcrun', 'swiftc'])
+            timer.assert_any_call(signal.ITIMER_REAL, RUN_SECONDS)
+            self.assertIn('SUMMARY pass=0 fail=0 skipped=45 incomplete=true', log.getvalue())
+            self.assertEqual(len(json.loads((output / 'results.json').read_text())), 45)
+            self.assertLessEqual(RUN_SECONDS, 8 * 60 - 60)
 
     def test_inspector_skips_only_after_sizing_its_own_narrow_window(self):
         self.assertIn('984 pt', inspector_skip(984))
@@ -194,6 +298,7 @@ class HarnessTests(unittest.TestCase):
             fixture = Fixture(Path(directory), Path('/unused'))
             fixture.prepare_checkout()
             fixture.replay = Mock()
+            fixture.thread = {'id': 'fixture'}
             with patch.object(fixture, 'submit'), patch.object(fixture, 'watch', return_value={'pending_approval': {'id': 'p'}}):
                 fixture.pending(False)
             edit = fixture.replay.add.call_args.args[0]['tool']['input']

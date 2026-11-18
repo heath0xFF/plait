@@ -359,38 +359,65 @@ recorded here:
 
 `scripts/acceptance-macos.sh` drives a separate development copy of Plait.
 **The first native run passed 4 of 42 items, failed 34, and skipped 4.** The
-fixture, permissions, full-screen round trip, and sidebar toggle passed. The
-host supplied the scripted conversation and the window exposed its controls
-and message rows. Accessibility and Screen Recording were both granted.
+fixture, permissions, full-screen round trip and sidebar toggle passed. Thirty
+failures came from the check mistaking a sidebar's static “Done” status for
+the Settings Done button. Four pointer items were refused by a rectangle-based
+ownership check. The window was present, permissions were granted, and its
+984 × 639-point frame was too narrow for the Git inspector.
 
-Thirty failures came from the check mistaking a sidebar's static “Done” status
-for the Settings Done button: it either tried to press a nonexistent button or
-never opened Settings. Four pointer items were refused by a rectangle-based
-WindowServer ownership check even though their points were inside Plait's
-window; the preceding accessibility hit test succeeded for both bar drags.
-The saved artifacts did not identify the covering window, so they cannot name
-which overlay or window caused that disagreement. The 984 × 639-point window
-also explicitly said the Git inspector needed a wider window.
+The first repair matched Done by button role and established window, view,
+thread, draft and disposable checkout state before each item. It made commit,
+handoff and approval prerequisites independent, stopped unfinished fixture
+runs before resetting their checkout, and added three recorded-run Undo/Redo
+items. Inspector checks now size their own window and skip if it remains
+below 1150 points.
 
-The repaired check matches Done by button role, establishes window, view,
-thread, draft and disposable checkout state before every item, and gives
-commit, handoff and approval checks independent prerequisites. Reset stops
-unfinished fixture runs and waits for their checkout lease before writing.
-Pointer safety now uses AppKit's actual mouse-down window hit test, converts
-AX top-left points to AppKit bottom-left points without pixel scaling, and
-requires both the development window's ID and accessibility owner to match.
-Another app, another window, a menu-bar point or an unknown target is still
-refused. Inspector checks size their own window first and skip with its
-observed width if it remains below 1150 points. Find accepts the conversation's
-newest-first initial match and verifies relative next/previous movement.
+**The second run passed 20 items, failed 19, skipped 1, and was cut off before
+the last 5 items.** Passes covered fixture isolation and native permissions;
+the sidebar toggle; Changes and History tabs; opening Settings and its Providers,
+Keyboard and Appearance pages; project settings; the command palette;
+conversation find; switching and creating branches; committing a staged hunk;
+editor and terminal handoffs to inert recorders; long-message typing; and both
+approval shortcuts. These are real-window observations, not inferred coverage.
 
-**The repaired check has not yet run against a window.** These changes and
-the three new recorded-run Undo/Redo items are intended coverage, not native
-acceptance evidence. The first artifacts show no proven missing accessible
-name, wrong control role or failed press action in the app; most controls were
-never reached. Field focus, press actions, title-bar gestures, text selection,
-and the new closing-line controls still need the next native run. Failures
-remain failures, with no pointer-click substitute for a broken AXPress.
+Fourteen failures said only “timed out; last observed: 0”. That message came
+from tab or thread selection waits, including the shared reset. The log cannot
+identify the particular selector for each item. Passing sibling tabs and
+settings pages use the same app role and activation handler; they do not prove
+which transition failed. Four pointer failures reported an unknown mouse
+target and a screen-sized Dock-owned rectangle at layer 20 above the development
+window. That looks like a system overlay, but a rectangle cannot establish
+whether it receives clicks. The remaining failure observed full screen false
+after entry had appeared successful. The entry setter was unchanged; the first
+repair added window normalization before every item. Without a state trace,
+the reason for the transient result cannot be established.
+
+The workflow's eight-minute limit stopped the run after approval-deny. Streaming,
+the three Undo/Redo items and the link skip were never reached. Only the log
+was uploaded: captures were written to the disposable folder and copied into
+the upload folder only on exit, which the external termination bypassed.
+There are no second-run trees or screenshots to compare with passing states.
+The first-run trees show real control names and roles; neither run establishes
+an app accessibility defect that warrants an app change.
+
+The second repair makes ordinary waits three seconds instead of fifteen,
+reports the selector and named last observation, and selects tabs and threads
+idempotently in one helper process. It reads tabs' AXValue and rows' AXSelected,
+distinguishes unavailable attributes from false, and services the helper's run
+loop while waiting. Full-screen completion requires a fresh window's attribute
+to remain at the requested value for 1.5 seconds. Pointer checks initialize the
+helper's AppKit connection without activation and resolve the actual mouse-down
+window ID directly, without filtering that answer through a rectangle list.
+AX top-left points are converted to AppKit bottom-left points without pixel
+scaling. The development window ID and accessibility owner must both match;
+Dock, another window, the menu bar and unknown targets are still refused.
+
+**The third native run has not happened.** Selection timing, mouse targeting,
+full-screen settling, text selection, streaming and closing-line Undo/Redo still
+need that run's evidence. On the same narrow display the two inspector items
+should skip, along with Finder activation and following a link, which would open
+external applications. The other 41 items are intended checks, not a pass claim.
+Failures remain failures, with no pointer substitute for a broken AXPress.
 
 Build the normal development executables and runtime dependencies with
 `bash scripts/check.sh`, then run the check when the computer is free:
@@ -517,33 +544,45 @@ verify navigation and named contents, not provider sign-in or every control.
 Live models, authentication, recovery, Stop, updates, signed commits, hooks,
 Git LFS and older systems remain separate checks.
 
-Output has one `PASS`, `FAIL` or `SKIPPED` line for each of 45 items and a
-summary. The log ends with a `FAILED ITEM` line for every failure, preserving
-its first missing selector or refused point. Pointer refusals name the actual
-mouse target, the first covering WindowServer rectangle, and the frontmost
-application's owner and frame. Each failure also saves a window inventory
-(owners, IDs and frames, without other applications' window titles). Any
-failure exits nonzero; an all-skipped native run exits zero with explicit skips.
-Each failure attempts an AX dump and **only that PID's window screenshot**,
-using its window ID with `screencapture -l`; a capture failure gets its own
-reason file. Failures and skips retain the disposable folder and print its
-path. A completely passing run removes it. `--artifacts` copies generated
-results, logs, argument recordings and screenshots to the requested new
-folder. It does not copy host databases or executables. CI uploads these plus
-the console output. Advisory steps at the end of the existing package job run
-only on pushes to `main` and reuse its finished package without installing it.
-The check and diagnostics upload both have `continue-on-error` and time limits;
-they add no macOS job or Rust build. Tagged releases skip both steps.
+Output has a `START` line and one `PASS`, `FAIL` or `SKIPPED` result for each
+attempted item, plus a summary covering all 45 items. The check has its own
+390-second deadline, including compilation and setup, within the unchanged
+eight-minute workflow limit. A deadline or termination signal records the
+interrupted item, marks unattempted items as skipped with the reason, prints
+`SUMMARY ... incomplete=true`, and exits nonzero. Reducing fourteen exhausted
+selection waits from fifteen to three seconds saves at least 168 seconds;
+the remaining margin allows evidence capture and cleanup. A hard kill cannot
+print a summary, but evidence already written survives it.
 
-Verified without a window: Swift compilation and its pure selector/key/Unicode/
-gap, screen-coordinate and ownership-guard tests; Python tests of role-aware
-Done matching, item ordering, reset after failure, narrow-window skip reasons,
-disposable Git reset/staging, environment isolation, failure digests,
-traffic-light bounds and replay frames; the production host/replay transcript
-and independent allow/deny edit effects, stopped-run reset, version 5 recorded
-undo/redo, growing stream, and argument recorder; shell syntax; workflow YAML and its non-gating,
-main-only condition; and `bash scripts/check.sh` (format, Clippy, workspace and
-runtime tests, release builds). The existing smoke AppleScript was compiled
+Results, the failure digest, per-item step traces, AX trees, screenshots and
+window inventories are written directly into `--artifacts` as items finish;
+there is no end-of-run copy dependency. Results are saved before capture begins.
+Each failed item attempts an AX dump and **only that PID's window screenshot**
+with `screencapture -l`; bounded capture failures get their own reason file.
+Trees include raw tab/thread selection flags and window state. Traces distinguish
+reset from the item action and record successful transitions for comparison.
+The log ends with a `FAILED ITEM` line per failure, naming its first missing
+selector, expected state and last observation, or refused point. Pointer
+refusals include the raw mouse target ID, its owner/frame, the first covering
+rectangle and the frontmost application's owner/frame, without other apps'
+window titles. Generated logs and preferences are also retained; host databases
+and executables are not copied. Failures and skips retain the disposable folder.
+A completely passing run removes it. An all-skipped native run exits zero with
+explicit skips unless interrupted.
+
+CI uploads these files and the console log. The final package-job steps remain
+advisory (`continue-on-error`), run only on pushes to `main`, and reuse the
+finished package without installing it. Tagged releases skip both steps; there
+is no additional macOS job or Rust build.
+
+Verified without a window: Swift compilation and pure selector, flag decoding,
+full-screen stability, coordinate and ownership tests; Python tests of named
+waits, deadlines and termination, immediate artifact persistence, item ordering,
+reset after failure, skip reasons, disposable Git reset, isolation and replay;
+and `bash scripts/check.sh` (format, Clippy, workspace and runtime tests, release
+builds). The fixture's production-host checks separately cover independent
+allow/deny effects, stopped-run reset, recorded undo/redo, growing stream and
+argument recording without a desktop process. The existing smoke AppleScript was compiled
 with `osacompile`, not executed; this check adds no AppleScript or JXA.
 ShellCheck was not installed during this verification. The check's own
 windowless entry points are:
