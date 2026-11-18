@@ -367,3 +367,27 @@ test('LinearClient rejects cursors with bidi/C1 controls or >512 bytes and bound
   const res2 = await client.listIssues(fake.validKey, { teamId: 'team-pla', filter: 'active' });
   assert.equal(res2.data.next_cursor, null, 'cursor over 512 UTF-8 bytes must be rejected');
 });
+
+test('LinearAuthStore.write masks filesystem errors without disclosing the credential path', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'plait-linear-unwritable-'));
+  t.after(async () => {
+    await chmod(dir, 0o700).catch(() => {});
+    await rm(dir, { recursive: true, force: true });
+  });
+  await chmod(dir, 0o500);
+  const authStore = new LinearAuthStore(dir);
+  await assert.rejects(() => authStore.write({
+    api_key: 'lin_api_SECRET_NEVER_LEAK_PATH',
+    workspace_id: 'org-1',
+    workspace_name: 'Acme',
+    workspace_url_key: 'acme',
+    viewer_id: 'viewer-1',
+    viewer_name: 'Alex',
+    saved_at: 1000,
+  }), (error: Error & { code?: string }) => {
+    assert.equal(error.code, 'internal', `expected HostError internal, got ${error.code}`);
+    assert(!error.message.includes(dir), `error must not disclose store path: ${error.message}`);
+    assert(!error.message.includes('SECRET_NEVER_LEAK_PATH'), 'error must not disclose key');
+    return true;
+  });
+});

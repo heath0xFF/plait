@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { chmod, lstat, mkdir, open, readFile, rename, unlink } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { chmod, lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fail } from '../protocol.ts';
 import { FIELD_LIMITS, LINEAR_KEY_MAX_BYTES, boundLinearText } from './types.ts';
@@ -57,23 +58,34 @@ export class LinearAuthStore {
   }
 
   async read(): Promise<StoredLinearAuth | null> {
-    let info;
+    let handle;
     try {
-      info = await lstat(this.path);
+      // Open with O_NOFOLLOW so symlinks are refused atomically without a lstat-to-read race.
+      handle = await open(this.path, constants.O_RDONLY | constants.O_NOFOLLOW);
     } catch (error) {
       if (missing(error)) return null;
+      const code = (error as { code?: string }).code;
+      if (code === 'ELOOP' || code === 'EISDIR') {
+        fail('internal', 'Linear credential storage has an unexpected file type.');
+      }
       fail('internal', 'Linear credential could not be read.');
-    }
-    if (!info.isFile()) fail('internal', 'Linear credential storage has an unexpected file type.');
-    // Tighten permissions if another process loosened them, matching Pi's auth.json handling.
-    if ((info.mode & 0o077) !== 0) {
-      await chmod(this.path, 0o600).catch(() => fail('internal', 'Linear credential permissions could not be secured.'));
     }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(await readFile(this.path, 'utf8'));
-    } catch {
-      fail('internal', 'Linear credential storage could not be read.');
+      const info = await handle.stat();
+      if (!info.isFile()) fail('internal', 'Linear credential storage has an unexpected file type.');
+      if (info.size > 65_536) fail('internal', 'Linear credential storage has an unexpected format.');
+      // Tighten permissions if another process loosened them, matching Pi's auth.json handling.
+      if ((info.mode & 0o077) !== 0) {
+        await handle.chmod(0o600).catch(() => fail('internal', 'Linear credential permissions could not be secured.'));
+      }
+      try {
+        parsed = JSON.parse(await handle.readFile('utf8'));
+      } catch {
+        fail('internal', 'Linear credential storage could not be read.');
+      }
+    } finally {
+      await handle.close();
     }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
       fail('internal', 'Linear credential storage has an unexpected format.');
@@ -96,10 +108,11 @@ export class LinearAuthStore {
   async write(auth: StoredLinearAuth): Promise<void> {
     const existing = await lstat(this.path).catch(error => missing(error) ? undefined : fail('internal', 'Linear credential storage could not be inspected.'));
     if (existing && !existing.isFile()) fail('internal', 'Linear credential storage has an unexpected file type.');
-    await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
     const temporary = join(dirname(this.path), `.${FILE_NAME}.${randomBytes(6).toString('hex')}.tmp`);
-    const handle = await open(temporary, 'wx', 0o600);
+    let handle;
     try {
+      await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
+      handle = await open(temporary, 'wx', 0o600);
       await handle.writeFile(JSON.stringify(auth) + '\n', 'utf8');
       await handle.chmod(0o600);
       await handle.sync();
@@ -109,7 +122,7 @@ export class LinearAuthStore {
       await unlink(temporary).catch(() => {});
       fail('internal', 'Linear credential could not be stored.');
     } finally {
-      await handle.close();
+      await handle?.close();
     }
   }
 
