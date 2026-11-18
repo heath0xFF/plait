@@ -1457,7 +1457,7 @@ It is negotiated per request. Versions 1–4 retain their reply shapes; an older
 host rejects version 5 with `invalid_request`. Clients negotiate status from 5
 downward, and must tell the person that undo needs a newer host when 5 is not
 available. Undo requests are never retried at an older version. These
-operations and their desktop controls shipped in v0.1.0-preview.14.
+operations and their desktop controls shipped in v0.1.0-preview.15.
 
 ### Listing a thread's records
 

@@ -7,7 +7,7 @@ M8 steps 1 and 2 (skills, prompt templates, and user instructions) shipped in
 v0.1.0-preview.9. M7 steps 1 (choosing a harness, and Codex) and 2 (each
 harness's own permissions, and Claude Code threads) shipped in
 v0.1.0-preview.10. Ways out, branches, and search in a conversation shipped in
-v0.1.0-preview.13. M9 step 1 (per-turn undo) shipped in v0.1.0-preview.14. M9
+v0.1.0-preview.13. M9 step 1 (per-turn undo) shipped in v0.1.0-preview.15. M9
 steps 2 and 3, M8 steps 3 and 4, and the rest of "Agreed next, for daily use"
 below are the current work.**
 
@@ -24,7 +24,7 @@ below are the current work.**
 | M6 — Multiple machines | Unified project navigation across independent hosts, including disconnected/reconnecting states | Planned |
 | M7 — Any agent harness | Threads run by other agent harnesses (Claude Code, Codex, Pi, omp, Antigravity, and others) beside Pi, with the same conversation, approval, Git, and navigation views | Current work. Steps 1 and 2 (harness choice, Codex, each harness's own permissions, and Claude Code; protocol version 4) shipped in v0.1.0-preview.10; an ACP client follows, agreed first |
 | M8 — Skills, tools, and CLIs | Pi threads use the skills, prompt templates, global instructions, MCP servers, and command-line tools the person already set up for their agent, with each one visible in Settings and every call under Plait's approvals | Steps 1 (skills and user instructions) and 2 (prompt templates, Settings → Agent, and `/` completion) shipped in v0.1.0-preview.9; steps 3 (named CLIs) and 4 (MCP) follow M7 |
-| M9 — Turn records | The host keeps its own record of the checkout before and after every turn, in every harness: per-turn undo first, then committing by turn, review of what changed since the person last looked, and checks the host runs itself | Step 1 shipped in v0.1.0-preview.14; steps 2 and 3 are agreed and are the current work, ahead of M7's ACP client; the later steps are proposed |
+| M9 — Turn records | The host keeps its own record of the checkout before and after every turn, in every harness: per-turn undo first, then committing by turn, review of what changed since the person last looked, and checks the host runs itself | Step 1 shipped in v0.1.0-preview.15; steps 2 and 3 are agreed and are the current work, ahead of M7's ACP client; the later steps are proposed |
 
 Do not build the whole roadmap at once. Each change must compile, run, and have
 its own checks. Protocol, storage, and shared-contract changes need agreement
@@ -296,7 +296,7 @@ waits until a sandboxed project needs it.
 **Direction for M9, turn records:** the host records the checkout around every
 run, for Pi, Codex, and Claude Code in every permission mode. This protection
 does not depend on the harness reporting its edits. Step 1, per-turn undo,
-shipped in v0.1.0-preview.14: recording, the host's undo operations, and their
+shipped in v0.1.0-preview.15: recording, the host's undo operations, and their
 desktop controls. None of it has been checked in the installed app yet; the
 [verification record](VERIFICATION.md#turn-undo-desktop-controls) says what
 was. Steps 2 and 3 are not built.
@@ -347,7 +347,7 @@ unknown. A created-then-deleted file leaves no difference.
   and Cancel; coverage and restart/HEAD warnings are explained on hover.
   The changed-files card uses record paths. Headless scenes cover these
   states; installed-app acceptance remains outstanding.
-- **Order and release.** Shipped in v0.1.0-preview.14, ahead of M7's ACP
+- **Order and release.** Shipped in v0.1.0-preview.15, ahead of M7's ACP
   client. Earlier releases record nothing, so a run made with an older host
   cannot be undone.
 

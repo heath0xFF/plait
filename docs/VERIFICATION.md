@@ -941,7 +941,7 @@ app.
 
 ## Checkout recording
 
-Per-turn undo shipped in v0.1.0-preview.14. It was built in three stages, each
+Per-turn undo shipped in v0.1.0-preview.15. It was built in three stages, each
 checked on its own: recording, the host's undo operations, and the desktop
 controls. Stage 1 introduced internal run records without undo, record-listing
 operations, protocol version 5, or desktop controls. The later
@@ -1222,7 +1222,7 @@ local wall-clock samples, not isolated-system guarantees. The helper now starts
 one additional supervisor worker; the inventory reuses directory-name reads
 and does not run a Git process for each directory.
 
-### Release check for v0.1.0-preview.14
+### Release check for v0.1.0-preview.15
 
 On 2026-11-18, on the tree that was tagged, `bash scripts/check.sh` exited 0:
 630 Rust tests (171 desktop, 437 core, 14 host, 8 helper integration), 353
@@ -1254,6 +1254,18 @@ worktrees: two records each into an empty store, with the listing of Git
 metadata (names, sizes, modes, times) and `git status` identical before and
 after. The linked worktree took 118 ms for the first record and 62 ms for the
 second.
+
+An earlier tag for this release, v0.1.0-preview.14, was never published: its
+CI check failed in two recording tests. Git 2.56, which that machine's test
+fixtures use, starts detached maintenance after every commit and holds a lock
+file under `.git/objects` for a few milliseconds. A test that compares a
+repository before and after a record could see the lock disappear and blame
+the recorder. Watching `.git/objects` for 40 ms after each of 100 commits
+showed the lock in 99 with Git 2.56 and in none once the fixtures turn
+maintenance off, as the recorder's own commands already do. With the unfixed
+fixtures and Git 2.56 the core Git tests failed in one run of three; with the
+fix they passed eight runs of eight, and the host's record tests four of four.
+v0.1.0-preview.15 is the same application code with that fixture change.
 
 None of this is installed-app acceptance. Undo and Redo have not been tried
 against an installed host, and no paid harness was used.
