@@ -349,10 +349,13 @@ Paste an image with Cmd-V, or drop PNG or JPEG files onto the message box.
 Each attachment has a thumbnail and **Remove**. Several images can accompany
 text, or be sent on their own. Activate a conversation thumbnail for a larger
 view; **Close** or Escape returns to the conversation. Draft images survive
-closing the window, and sent images survive a host restart.
+closing the window, and sent images survive a host restart. Removing an image
+or having its message accepted releases the desktop original once no draft or
+pending submission needs it. The host keeps sent images for the life of its
+store; archiving a thread does not reclaim them.
 
-Both desktop and host allow four different images, at most 2 MiB each and
-4 MiB combined, up to 8,192 pixels on either side and 16,777,216 pixels total.
+Both desktop and host allow four different images, at most 5 MiB each and
+5 MiB combined, up to 8,192 pixels on either side and 16,777,216 pixels total.
 The bytes determine PNG or JPEG, not the file extension. **Refused** explains
 the reason on hover. Plait never shrinks or recompresses the original to make
 it fit. Choose a smaller file yourself if needed.

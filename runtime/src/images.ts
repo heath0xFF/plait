@@ -3,10 +3,11 @@ import { createHash } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { fail } from './protocol.ts';
 
-export const IMAGE_BYTES = 2 * 1024 * 1024;
-export const MESSAGE_IMAGE_BYTES = 4 * 1024 * 1024;
+export const IMAGE_BYTES = 5 * 1024 * 1024;
+export const MESSAGE_IMAGE_BYTES = 5 * 1024 * 1024;
 export const IMAGE_COUNT = 4;
 export const IMAGE_CHUNK = 32768;
+export const IMAGE_READ_CHUNK = 512 * 1024;
 export const IMAGE_PIXELS = 16 * 1024 * 1024;
 export type ImageRef = { id: string; media_type: 'image/png' | 'image/jpeg'; size: number; width: number; height: number };
 export type ImageData = { ref: ImageRef; data: string };
@@ -14,7 +15,7 @@ const invalid = (message: string): never => fail('invalid_request', message);
 
 /** Reads dimensions without decompressing untrusted pixels. Full decoding is the desktop's job. */
 export function describe(bytes: Buffer): Omit<ImageRef, 'id'> {
-  if (!bytes.length || bytes.length > IMAGE_BYTES) invalid('Each image must be at most 2 MiB.');
+  if (!bytes.length || bytes.length > IMAGE_BYTES) invalid('Each image must be at most 5 MiB.');
   let media_type: ImageRef['media_type'] = 'image/png'; let width = 0; let height = 0;
   if (bytes.length >= 33 && bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) && bytes.toString('ascii', 12, 16) === 'IHDR' && bytes.readUInt32BE(8) === 13) {
     media_type = 'image/png'; width = bytes.readUInt32BE(16); height = bytes.readUInt32BE(20);
@@ -49,7 +50,7 @@ export class Images {
   }
   private prune() { this.db.prepare('DELETE FROM images WHERE used=0 AND created<?').run(Date.now() - 86400000); }
   put(thread: string, id: string, offset: number, total: number, data: string) {
-    if (!/^[a-f0-9]{64}$/.test(id) || !Number.isSafeInteger(total) || total < 1 || total > IMAGE_BYTES || !Number.isSafeInteger(offset) || offset < 0) invalid('Invalid image upload or image exceeds 2 MiB.');
+    if (!/^[a-f0-9]{64}$/.test(id) || !Number.isSafeInteger(total) || total < 1 || total > IMAGE_BYTES || !Number.isSafeInteger(offset) || offset < 0) invalid('Invalid image upload or image exceeds 5 MiB.');
     if (typeof data !== 'string' || data.length > Math.ceil(IMAGE_CHUNK / 3) * 4 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data)) invalid('Invalid image chunk.');
     const chunk = Buffer.from(data, 'base64');
     if (!chunk.length || chunk.length > IMAGE_CHUNK || offset + chunk.length > total || chunk.toString('base64') !== data) invalid('Invalid image chunk size.');
@@ -83,7 +84,7 @@ export class Images {
       if (!row?.metadata) fail('not_found', 'An image has not finished uploading to this thread.');
       return JSON.parse(String(row.metadata)) as ImageRef;
     });
-    if (refs.reduce((sum, ref) => sum + ref.size, 0) > MESSAGE_IMAGE_BYTES) invalid('Images in a message must total at most 4 MiB.');
+    if (refs.reduce((sum, ref) => sum + ref.size, 0) > MESSAGE_IMAGE_BYTES) invalid('Images in a message must total at most 5 MiB.');
     return refs;
   }
   attach(thread: string, request: string, ids: string[]) {
@@ -102,7 +103,7 @@ export class Images {
   read(thread: string, id: string, offset: number) {
     const image = this.refs(thread, [id])[0];
     if (!Number.isSafeInteger(offset) || offset < 0 || offset >= image.size) invalid('Invalid image offset.');
-    const row = this.db.prepare('SELECT substr(bytes,?,?) AS chunk FROM images WHERE thread=? AND id=?').get(offset + 1, IMAGE_CHUNK, thread, id)!;
+    const row = this.db.prepare('SELECT substr(bytes,?,?) AS chunk FROM images WHERE thread=? AND id=?').get(offset + 1, IMAGE_READ_CHUNK, thread, id)!;
     return { image, offset, data: Buffer.from(row.chunk as Uint8Array).toString('base64') };
   }
 }

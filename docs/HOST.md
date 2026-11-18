@@ -1812,24 +1812,34 @@ thumbnail or larger view:
 ```
 
 The result is `{"image":REFERENCE,"offset":0,"data":"BASE64_CHUNK"}` with
-at most 32,768 decoded bytes. Continue at the returned offset plus decoded
+at most 524,288 decoded bytes (512 KiB). Continue at the returned offset plus decoded
 length, stopping at `size`. Offsets outside the image are refused. The desktop
 checks every returned reference, offset, chunk length, and the completed hash.
 
 ### Limits and retention
 
-Both sides enforce at most four different images, 2 MiB (2,097,152 bytes) per
-image, 4 MiB (4,194,304 bytes) total per message, 8,192 pixels per axis, and
+Both sides enforce at most four different images, 5 MiB (5,242,880 bytes) per
+image and total per message, 8,192 pixels per axis, and
 16,777,216 pixels per image. Oversized images are refused with a reason; Plait
 never recompresses or resizes the sent original. Thumbnails are separate.
 
 These are conservative Plait limits, not a promise about every provider. All
-three pinned harness interfaces accept PNG/JPEG content blocks. Four MiB of
-raw bytes becomes about 5.34 MiB of base64, leaving room for text and framing
-under Plait's 8 MiB Codex adapter frame bound. A 32 KiB chunk becomes under
-44 KiB of base64, leaving room below the unchanged 64 KiB host request limit
-and 1 MiB reply limit. The image count, dimensions, and per-image bound limit
-decode memory and concurrent work. The SDK schemas specify no shared provider
+three pinned harness interfaces accept PNG/JPEG content blocks. Five MiB of
+raw bytes becomes 6,990,508 base64 bytes (at most 6,990,516 split across four
+blocks). Adding 65,536 bytes for serialized message text, 4,096 bytes for
+framing, and a newline gives 7,060,149 bytes, leaving 1,328,459 bytes under
+Plait's 8 MiB Codex adapter line bound. Six MiB would fill that entire line
+with base64 alone, so 5 MiB is the largest whole-MiB allowance with headroom.
+The runtime's complete submitted JSON
+request is actually limited to 65,000 bytes; these reserves are conservative.
+Tests send a maximum image with maximum text through all three scripted
+harnesses and check the resulting content and frame sizes.
+
+A 32 KiB upload chunk becomes 43,692 base64 bytes, leaving room below the
+unchanged 64 KiB host request limit. A 512 KiB download chunk becomes 699,052
+base64 bytes, leaving about 341 KiB for metadata and framing below the 1 MiB
+reply limit. A maximum-size original takes ten read requests. The image count,
+dimensions, and per-image bound limit decode memory and concurrent work. The SDK schemas specify no shared provider
 byte limit; a provider can still refuse an otherwise valid message.
 
 Originals are BLOBs in `STORE/host.sqlite`, keyed by thread and hash, with

@@ -7,12 +7,33 @@ use std::{collections::HashMap, path::PathBuf};
 pub(super) struct Attachments {
     pub references: Vec<ImageRef>,
     pub pixels: HashMap<String, Arc<RenderImage>>,
+    pub pins: HashMap<String, images::Pins>,
     pub generation: u64,
     pub loading: bool,
     pub error: Option<String>,
     pub blocked: Option<(String, String)>,
 }
 impl Composer {
+    fn pin_images(&mut self, references: &[ImageRef]) {
+        self.images.pins = references
+            .iter()
+            .filter_map(|reference| {
+                images::pin(std::slice::from_ref(reference))
+                    .ok()
+                    .map(|pin| (reference.id.clone(), pin))
+            })
+            .collect();
+    }
+    pub(super) fn remove_image(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.images
+            .references
+            .retain(|reference| reference.id != id);
+        self.images.pixels.remove(id);
+        self.images.pins.remove(id);
+        self.images.error = None;
+        self.draft.revision += 1;
+        cx.notify();
+    }
     pub fn saved_images(&self) -> &[ImageRef] {
         &self.images.references
     }
@@ -42,20 +63,49 @@ impl Composer {
         }
     }
     pub fn restore_images(&mut self, references: Vec<ImageRef>, cx: &mut Context<Self>) {
+        self.restore_originals(references, None, cx);
+    }
+    pub fn restore_thread_images(
+        &mut self,
+        references: Vec<ImageRef>,
+        thread: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.restore_originals(references, Some(thread), cx);
+    }
+    fn restore_originals(
+        &mut self,
+        references: Vec<ImageRef>,
+        thread: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         self.images.generation += 1;
+        self.pin_images(&references);
         self.images.references = references.clone();
         self.images.pixels.clear();
         self.images.loading = !references.is_empty();
         let generation = self.images.generation;
+        let pending_pin = images::pin(&references);
         let task = cx.background_executor().spawn(async move {
+            let pin = pending_pin?;
             images::validate_message(&references)?;
-            references
+            let pixels = references
                 .into_iter()
                 .map(|reference| {
-                    let bytes = images::local(&reference)?;
+                    let bytes = images::local(&reference).or_else(|error| {
+                        let Some(thread) = &thread else {
+                            return Err(error);
+                        };
+                        let bytes = plait_core::host::Client::from_environment()
+                            .and_then(|client| client.image(thread, &reference))
+                            .map_err(|error| error.to_string())?;
+                        images::persist(&bytes)?;
+                        Ok(bytes)
+                    })?;
                     Ok((reference.id, decode(&bytes, 192)?))
                 })
-                .collect::<Result<HashMap<_, _>, String>>()
+                .collect::<Result<HashMap<_, _>, String>>()?;
+            Ok::<_, String>((pixels, pin))
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -65,11 +115,18 @@ impl Composer {
                 }
                 this.images.loading = false;
                 match result {
-                    Ok(pixels) => this.images.pixels = pixels,
+                    Ok((pixels, _pin)) => this.images.pixels = pixels,
                     Err(error) => this.images.error = Some(error),
                 }
                 cx.notify();
             });
+            cx.background_executor()
+                .spawn(async {
+                    if let Err(error) = images::collect() {
+                        eprintln!("Plait draft images: {error}");
+                    }
+                })
+                .detach();
         })
         .detach();
     }
@@ -125,8 +182,10 @@ impl Composer {
                 .into_iter()
                 .map(|bytes| {
                     let pixels = decode(&bytes, 192)?;
-                    let reference = images::persist(&bytes)?;
-                    Ok((reference, pixels))
+                    let reference = images::inspect(&bytes)?;
+                    let pin = images::pin(std::slice::from_ref(&reference))?;
+                    images::persist(&bytes)?;
+                    Ok((reference, pixels, pin))
                 })
                 .collect::<Result<Vec<_>, String>>()
         });
@@ -139,7 +198,8 @@ impl Composer {
                 this.images.loading = false;
                 match result {
                     Ok(added) => {
-                        for (reference, pixels) in added {
+                        for (reference, pixels, pin) in added {
+                            this.images.pins.insert(reference.id.clone(), pin);
                             this.images.pixels.insert(reference.id.clone(), pixels);
                             this.images.references.push(reference);
                         }
@@ -149,6 +209,13 @@ impl Composer {
                 }
                 cx.notify();
             });
+            cx.background_executor()
+                .spawn(async {
+                    if let Err(error) = images::collect() {
+                        eprintln!("Plait draft images: {error}");
+                    }
+                })
+                .detach();
         })
         .detach();
         cx.notify();
@@ -177,13 +244,7 @@ impl Composer {
                             .h(px(22.))
                             .aria_label("Remove attached image")
                             .on_activate(cx, move |this, _, cx| {
-                                this.images
-                                    .references
-                                    .retain(|reference| reference.id != id);
-                                this.images.pixels.remove(&id);
-                                this.images.error = None;
-                                this.draft.revision += 1;
-                                cx.notify();
+                                this.remove_image(&id, cx);
                             }),
                     ),
             );
@@ -216,6 +277,7 @@ impl Composer {
         pixels: HashMap<String, Arc<RenderImage>>,
         cx: &mut Context<Self>,
     ) {
+        self.pin_images(&references);
         self.images.references = references;
         self.images.pixels = pixels;
         self.images.loading = false;
@@ -227,6 +289,9 @@ impl Composer {
     }
     pub(in crate::ui) fn scene_drop(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         self.drop_images(paths, cx);
+    }
+    pub(in crate::ui) fn scene_remove(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.remove_image(id, cx);
     }
     pub(in crate::ui) fn scene_submit(&mut self, cx: &mut Context<Self>) {
         self.submit(false, cx);

@@ -366,6 +366,7 @@ impl Composer {
         };
         if cleared {
             self.images.references.clear();
+            self.images.pins.clear();
             self.images.pixels.clear();
             self.images.generation += 1;
             self.images.loading = false;

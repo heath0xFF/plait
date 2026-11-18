@@ -92,6 +92,22 @@ impl Session {
         }
     }
 
+    pub fn image_ids(&self) -> impl Iterator<Item = &str> {
+        self.new_draft
+            .iter()
+            .flat_map(|(_, draft)| &draft.images)
+            .chain(self.threads.values().flat_map(|thread| {
+                thread.draft.images.iter().chain(
+                    thread
+                        .pending
+                        .iter()
+                        .chain(&thread.pending_submissions)
+                        .flat_map(|pending| &pending.images),
+                )
+            }))
+            .map(|image| image.id.as_str())
+    }
+
     fn validate(&self) -> Result<(), String> {
         if self.schema_version != 1 {
             return Err("Saved workspace uses an unsupported version. Update Plait; the file was not changed.".into());
@@ -209,10 +225,23 @@ fn file_lock(file: &File, operation: libc::c_int) -> io::Result<()> {
     }
 }
 
+struct Saved {
+    session: Session,
+    _images: crate::images::Pins,
+}
+impl Saved {
+    fn new(directory: &Path, session: Session) -> Arc<Self> {
+        let pins = crate::images::Pins::new(directory, session.image_ids().map(str::to_owned));
+        Arc::new(Self {
+            session,
+            _images: pins,
+        })
+    }
+}
 pub struct Journal {
     directory: PathBuf,
     _lease: Lease,
-    queued: Mutex<(u64, Arc<Session>)>,
+    queued: Mutex<(u64, Arc<Saved>)>,
     written: Mutex<u64>,
 }
 
@@ -291,32 +320,37 @@ impl Journal {
         if session.host_store != host_store {
             return Err("Saved workspace belongs to another host store. Use a separate PLAIT_DESKTOP_STATE_DIR; nothing was sent or overwritten.".into());
         }
+        crate::images::saved(directory, session.image_ids().map(str::to_owned));
+        let saved = Saved::new(directory, session.clone());
         let journal = Self {
             directory: directory.to_owned(),
             _lease: lease,
-            queued: Mutex::new((0, Arc::new(session.clone()))),
+            queued: Mutex::new((0, saved)),
             written: Mutex::new(0),
         };
+        crate::images::sweep(directory)?;
         Ok((Arc::new(journal), session))
     }
 
     /// No file access. Call after a state transition, never from render.
     pub fn queue(&self, session: Session) {
+        let saved = Saved::new(&self.directory, session);
         let mut queued = self.queued.lock().unwrap();
         queued.0 += 1;
-        queued.1 = Arc::new(session);
+        queued.1 = saved;
     }
 
     /// Flush the newest queued state. Submission callers must await success first.
     pub fn flush(&self) -> Result<(), String> {
         let mut written = self.written.lock().unwrap();
-        let (revision, session) = self.queued.lock().unwrap().clone();
+        let (revision, saved) = self.queued.lock().unwrap().clone();
         if revision <= *written {
-            return Ok(());
+            return crate::images::sweep(&self.directory);
         }
+        let session = &saved.session;
         session.validate()?;
         let bytes =
-            serde_json::to_vec(&*session).map_err(|e| format!("Cannot encode workspace: {e}"))?;
+            serde_json::to_vec(session).map_err(|e| format!("Cannot encode workspace: {e}"))?;
         if bytes.len() > FILE_LIMIT {
             return Err("Saved workspace exceeds 4 MiB. Shorten drafts before sending; nothing was discarded.".into());
         }
@@ -343,8 +377,9 @@ impl Journal {
                 "Workspace save failed: {error}. Submission was not sent."
             ));
         }
+        crate::images::saved(&self.directory, session.image_ids().map(str::to_owned));
         *written = revision;
-        Ok(())
+        crate::images::sweep(&self.directory)
     }
 }
 
@@ -394,6 +429,119 @@ mod tests {
             queued_submissions: Vec::new(),
             approval: None,
         }
+    }
+
+    fn image_file(directory: &Path, variant: u8) -> crate::images::ImageRef {
+        let mut bytes = crate::images::TEST_PNG_HEADER.to_vec();
+        bytes.push(variant);
+        let image = crate::images::inspect(&bytes).unwrap();
+        fs::create_dir_all(directory.join("images")).unwrap();
+        fs::write(directory.join("images").join(&image.id), bytes).unwrap();
+        image
+    }
+
+    #[test]
+    fn startup_sweeps_unreferenced_originals_and_preserves_saved_work() {
+        let directory = root("image-sweep");
+        let (journal, mut saved) = Journal::open(&directory, "/host".into()).unwrap();
+        let kept = image_file(&directory, 0);
+        let pending = image_file(&directory, 1);
+        let mut thread = thread();
+        thread.draft.images.push(kept.clone());
+        thread
+            .pending
+            .as_mut()
+            .unwrap()
+            .images
+            .push(pending.clone());
+        saved.threads.insert("thread".into(), thread);
+        journal.queue(saved);
+        journal.flush().unwrap();
+        drop(journal);
+        let orphan = image_file(&directory, 2);
+        let (journal, _) = Journal::open(&directory, "/host".into()).unwrap();
+        assert!(directory.join("images").join(kept.id).exists());
+        assert!(directory.join("images").join(pending.id).exists());
+        assert!(!directory.join("images").join(orphan.id).exists());
+        drop(journal);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn an_upload_keeps_originals_after_an_earlier_attempt_is_acknowledged() {
+        let directory = root("image-upload-pin");
+        let (journal, mut saved) = Journal::open(&directory, "/host".into()).unwrap();
+        let image = image_file(&directory, 0);
+        let mut thread = thread();
+        thread.pending.as_mut().unwrap().images.push(image.clone());
+        saved.threads.insert("thread".into(), thread);
+        journal.queue(saved.clone());
+        journal.flush().unwrap();
+        let upload = crate::images::Pins::new(&directory, [image.id.clone()]);
+        saved.threads.get_mut("thread").unwrap().pending = None;
+        journal.queue(saved);
+        journal.flush().unwrap();
+        assert!(directory.join("images").join(&image.id).exists());
+        drop(upload);
+        crate::images::sweep(&directory).unwrap();
+        assert!(!directory.join("images").join(image.id).exists());
+        drop(journal);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn collection_waits_for_recovery_and_preserves_a_closed_journal() {
+        let directory = root("image-recovery-guard");
+        let image = image_file(&directory, 0);
+        crate::images::sweep(&directory).unwrap();
+        assert!(directory.join("images").join(&image.id).exists());
+        let pin = crate::images::Pins::new(&directory, [image.id.clone()]);
+        let (journal, mut saved) = Journal::open(&directory, "/host".into()).unwrap();
+        saved.new_draft = Some((
+            "/repo".into(),
+            Draft {
+                images: vec![image.clone()],
+                ..Default::default()
+            },
+        ));
+        journal.queue(saved);
+        journal.flush().unwrap();
+        drop(pin);
+        drop(journal);
+        crate::images::sweep(&directory).unwrap();
+        assert!(directory.join("images").join(image.id).exists());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn cleanup_preserves_preparation_and_newer_queued_references() {
+        let directory = root("image-pins");
+        let (journal, mut saved) = Journal::open(&directory, "/host".into()).unwrap();
+        let image = image_file(&directory, 0);
+        let pin = crate::images::Pins::new(&directory, [image.id.clone()]);
+        journal.flush().unwrap();
+        assert!(directory.join("images").join(&image.id).exists());
+        saved.new_draft = Some((
+            "/repo".into(),
+            Draft {
+                images: vec![image.clone()],
+                ..Default::default()
+            },
+        ));
+        journal.queue(saved.clone());
+        drop(pin);
+        crate::images::sweep(&directory).unwrap();
+        assert!(directory.join("images").join(&image.id).exists());
+        journal.flush().unwrap();
+        saved.new_draft = None;
+        journal.queue(saved);
+        // The durable draft keeps its bytes until the replacement is saved.
+        crate::images::sweep(&directory).unwrap();
+        assert!(directory.join("images").join(&image.id).exists());
+        journal.flush().unwrap();
+        assert!(!directory.join("images").join(image.id).exists());
+        drop(journal);
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

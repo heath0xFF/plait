@@ -1178,7 +1178,7 @@ mod tests {
     /// Answers each connection with the next scripted line and reports what was asked.
     fn scripted(
         name: &str,
-        replies: Vec<&'static str>,
+        replies: Vec<impl Into<String>>,
     ) -> (
         Client,
         std::thread::JoinHandle<Vec<serde_json::Value>>,
@@ -1192,6 +1192,7 @@ mod tests {
         let path = directory.join("host.sock");
         let listener = UnixListener::bind(&path).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let replies = replies.into_iter().map(Into::into).collect::<Vec<String>>();
         let server = std::thread::spawn(move || {
             replies
                 .into_iter()
@@ -1208,6 +1209,39 @@ mod tests {
                 .collect()
         });
         (Client { path }, server, directory)
+    }
+
+    #[test]
+    fn image_downloads_accept_large_parts_and_refuse_oversized_parts() {
+        use crate::images::{IMAGE_BYTES, READ_CHUNK};
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let mut bytes = crate::images::TEST_PNG_HEADER.to_vec();
+        bytes.resize(IMAGE_BYTES, 0);
+        let reference = crate::images::inspect(&bytes).unwrap();
+        assert_eq!(reference.size, 5 * 1024 * 1024);
+        let parts = bytes.chunks(READ_CHUNK).enumerate().map(|(index, chunk)| {
+            let part = serde_json::json!({"ok":true,"result":{"image":reference,"offset":index*READ_CHUNK,"data":STANDARD.encode(chunk)}}).to_string();
+            assert!(part.len() + 1 < REPLY_LIMIT);
+            part
+        }).collect::<Vec<_>>();
+        assert_eq!(parts.len(), 10);
+        let (client, server, directory) = scripted("image-parts", parts);
+        assert_eq!(client.image("t", &reference).unwrap(), bytes);
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 10);
+        assert_eq!(requests[9]["offset"], 9 * READ_CHUNK);
+        std::fs::remove_dir_all(directory).unwrap();
+        let too_big = serde_json::json!({"ok":true,"result":{"image":reference,"offset":0,"data":STANDARD.encode(vec![0;READ_CHUNK+1])}}).to_string();
+        let (client, server, directory) = scripted("image-part-refused", vec![too_big]);
+        assert!(client.image("t", &reference).is_err());
+        server.join().unwrap();
+        std::fs::remove_dir_all(directory).unwrap();
+        // The combined boundary is also enforced before any socket or disk work.
+        let mut another = reference.clone();
+        another.id = "1".repeat(64);
+        another.size = 1;
+        assert!(crate::images::validate_message(std::slice::from_ref(&reference)).is_ok());
+        assert!(crate::images::validate_message(&[reference, another]).is_err());
     }
 
     #[test]

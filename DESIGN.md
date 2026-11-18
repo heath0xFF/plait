@@ -81,7 +81,8 @@ conversation keeps a readable minimum width.
   sending. Text only, Update host, Loading, and Refused name states in a word
   or two; the reason is hover text. A refusal leaves the draft intact. No
   attachment disappears silently, and no original is resized to fit a limit.
-  PNG/JPEG, byte/count/dimension limits, persistence, and clipboard exceptions
+  A message allows up to 5 MiB of original image bytes, including a single
+  full-size screenshot. PNG/JPEG, count/dimension limits, persistence, and clipboard exceptions
   follow the [host contract](docs/HOST.md#protocol-version-6-images-unreleased)
   and [Mac guide](docs/MACOS.md#images-in-messages-unreleased).
 - **Conversation text.** All message text is selectable; the selection is a

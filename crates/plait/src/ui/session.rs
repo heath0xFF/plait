@@ -258,7 +258,7 @@ impl Plait {
             let draft = saved.draft.clone();
             composer.update(cx, |composer, cx| {
                 composer.restore_draft(draft.text, draft.revision, draft.submitted, cx);
-                composer.restore_images(draft.images, cx)
+                composer.restore_thread_images(draft.images, id.to_owned(), cx)
             });
         }
     }
@@ -345,18 +345,25 @@ impl Plait {
         if *data == next {
             return;
         }
+        let removed_image = data
+            .image_ids()
+            .any(|id| !next.image_ids().any(|next| next == id));
         if let Some(journal) = &self.session.journal {
             journal.queue(next.clone());
         }
         self.session.data = Some(next);
-        self.schedule_session_save(cx);
+        self.schedule_session_save(removed_image, cx);
     }
 
-    fn schedule_session_save(&mut self, cx: &mut Context<Self>) {
+    fn schedule_session_save(&mut self, immediately: bool, cx: &mut Context<Self>) {
         let Some(journal) = self.session.journal.clone() else {
             return;
         };
-        let timer = cx.background_executor().timer(Duration::from_millis(250));
+        let timer = cx.background_executor().timer(if immediately {
+            Duration::ZERO
+        } else {
+            Duration::from_millis(250)
+        });
         self.session.save = Some(cx.spawn(async move |this, cx| {
             timer.await;
             let result = cx

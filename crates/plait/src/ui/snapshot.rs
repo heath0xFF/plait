@@ -5325,3 +5325,189 @@ fn image_paste_and_drop_prepare_originals_and_keep_text_paste() {
     assert_eq!(plait_core::images::local(&dropped).unwrap(), second);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[core::prelude::v1::test]
+fn removing_an_attachment_collects_only_unreferenced_originals() {
+    if !isolated("removing_an_attachment_collects_only_unreferenced_originals") {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("plait-image-remove-{}", std::process::id()));
+    let repository = fixture_repository(&root);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.fresh_composer(&repository);
+    let (directory, host) = plait_core::session::locations().unwrap();
+    let (journal, _) = plait_core::session::Journal::open(&directory, host.clone()).unwrap();
+    harness.update(|plait, _, _| {
+        plait.session.journal = Some(journal.clone());
+        plait.session.data.as_mut().unwrap().host_store = host;
+    });
+    let reference = plait_core::images::persist(include_bytes!(
+        "../../../../runtime/test/support/images/0.png"
+    ))
+    .unwrap();
+    harness.composer(|composer, _, cx| {
+        composer.scene_images(vec![reference.clone()], Default::default(), cx)
+    });
+    harness.update(|plait, _, cx| plait.capture_session(cx));
+    journal.flush().unwrap();
+    // An uncertain submission owns the original even after removing it from the draft.
+    let mut pending = None;
+    harness.update(|plait, _, cx| {
+        let submission = plait
+            .host
+            .submissions
+            .begin_images(
+                THREAD,
+                "look".into(),
+                None,
+                None,
+                None,
+                vec![reference.clone()],
+            )
+            .unwrap();
+        plait.capture_session(cx);
+        pending = Some(submission);
+    });
+    let pending = pending.unwrap();
+    harness.composer(|composer, _, cx| composer.scene_remove(&reference.id, cx));
+    harness.update(|plait, _, cx| plait.capture_session(cx));
+    journal.flush().unwrap();
+    assert!(plait_core::images::local(&reference).is_ok());
+    harness.update(|plait, _, cx| {
+        plait.host.submissions.finish(THREAD, &pending.request_id);
+        plait.capture_session(cx);
+    });
+    journal.flush().unwrap();
+    assert!(!directory.join("images").join(&reference.id).exists());
+    // Removing an ordinary unsent attachment needs no host acknowledgement.
+    plait_core::images::persist(include_bytes!(
+        "../../../../runtime/test/support/images/0.png"
+    ))
+    .unwrap();
+    harness.composer(|composer, _, cx| {
+        composer.scene_images(vec![reference.clone()], Default::default(), cx)
+    });
+    harness.update(|plait, _, cx| plait.capture_session(cx));
+    journal.flush().unwrap();
+    harness.composer(|composer, _, cx| composer.scene_remove(&reference.id, cx));
+    harness.update(|plait, _, cx| plait.capture_session(cx));
+    journal.flush().unwrap();
+    assert!(!directory.join("images").join(&reference.id).exists());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn host_acceptance_collects_the_original_after_clearing_the_draft() {
+    if !isolated("host_acceptance_collects_the_original_after_clearing_the_draft") {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("plait-image-accepted-{}", std::process::id()));
+    let repository = fixture_repository(&root);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.fresh_composer(&repository);
+    let (directory, host) = plait_core::session::locations().unwrap();
+    let (journal, _) = plait_core::session::Journal::open(&directory, host.clone()).unwrap();
+    harness.update(|plait, _, _| {
+        plait.session.journal = Some(journal.clone());
+        plait.session.data.as_mut().unwrap().host_store = host;
+    });
+    let reference = plait_core::images::persist(include_bytes!(
+        "../../../../runtime/test/support/images/0.png"
+    ))
+    .unwrap();
+    harness.composer(|composer, window, cx| {
+        composer.type_text("look", window, cx);
+        composer.scene_images(vec![reference.clone()], Default::default(), cx);
+    });
+    let revision = harness.composer(|composer, _, _| composer.saved_draft().1);
+    let mut pending = None;
+    harness.update(|plait, _, cx| {
+        let submission = plait
+            .host
+            .submissions
+            .begin_images(
+                THREAD,
+                "look".into(),
+                None,
+                None,
+                Some(revision),
+                vec![reference.clone()],
+            )
+            .unwrap();
+        plait.capture_session(cx);
+        pending = Some(submission);
+    });
+    let pending = pending.unwrap();
+    journal.flush().unwrap();
+    assert!(plait_core::images::local(&reference).is_ok());
+    harness.update(|plait, _, cx| {
+        plait.host.submissions.confirm(THREAD, &pending.request_id);
+        plait
+            .composers
+            .get(THREAD)
+            .unwrap()
+            .update(cx, |composer, cx| {
+                composer.acknowledge(&pending.text, pending.draft_revision, cx);
+            });
+        plait.capture_session(cx);
+    });
+    journal.flush().unwrap();
+    harness.composer(|composer, _, _| {
+        assert!(composer.saved_images().is_empty());
+        assert!(composer.saved_draft().0.is_empty());
+    });
+    assert!(!directory.join("images").join(&reference.id).exists());
+    // Editing an accepted queued message restores its now host-owned original.
+    use std::{
+        io::{BufRead, BufReader, Write},
+        os::unix::{fs::PermissionsExt, net::UnixListener},
+    };
+    let store = PathBuf::from(std::env::var_os("PLAIT_HOST_STORE").unwrap());
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let socket = store.join("host.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let bytes = include_bytes!("../../../../runtime/test/support/images/0.png");
+    let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut data = String::new();
+    for chunk in bytes.chunks(3) {
+        let word = (u32::from(chunk[0]) << 16)
+            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        for index in 0..4 {
+            data.push(if index > chunk.len() {
+                '='
+            } else {
+                alphabet[((word >> (18 - index * 6)) & 63) as usize] as char
+            });
+        }
+    }
+    let reply = serde_json::json!({"ok":true,"result":{"image":reference,"offset":0,"data":data}})
+        .to_string()
+        + "\n";
+    let server = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let mut line = String::new();
+        BufReader::new(socket.try_clone().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(request["op"], "image_read");
+        assert_eq!(request["thread_id"], THREAD);
+        socket.write_all(reply.as_bytes()).unwrap();
+    });
+    harness.composer(|composer, _, cx| {
+        composer.restore_thread_images(vec![reference.clone()], THREAD.into(), cx)
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while plait_core::images::local(&reference).is_err() {
+        assert!(Instant::now() < deadline, "accepted image was not restored");
+        harness.settle();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    server.join().unwrap();
+    assert_eq!(plait_core::images::local(&reference).unwrap(), bytes);
+    std::fs::remove_file(socket).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}

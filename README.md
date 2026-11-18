@@ -40,7 +40,8 @@ thread and draft.
 - **Images in messages (unreleased).** Paste or drop PNG/JPEG images, remove
   attachments before sending, and open conversation thumbnails larger. Drafts
   and sent originals persist privately. Requires host protocol 6; see the
-  [limits and clipboard behavior](docs/MACOS.md#images-in-messages-unreleased).
+  [limits and clipboard behavior](docs/MACOS.md#images-in-messages-unreleased),
+  including a 5 MiB combined image limit per message.
 - **Approvals you can read.** Let the agent work, or ask before each edit and
   command. Commands run as you, as they would in your terminal, or opt a
   project into a macOS sandbox that cannot write your checkout or reach the

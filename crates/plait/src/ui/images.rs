@@ -308,3 +308,33 @@ impl ImageCache {
         }
     }
 }
+
+#[cfg(test)]
+#[core::prelude::v1::test]
+#[ignore = "Run scripts/bench-images.sh with its private offline host"]
+fn thumbnail_transfer_bench() {
+    use std::time::Instant;
+    #[derive(serde::Deserialize)]
+    struct Input {
+        thread: String,
+        image: ImageRef,
+    }
+    let input: Input = serde_json::from_str(&std::env::var("PLAIT_IMAGE_BENCH").unwrap()).unwrap();
+    let client = Client::from_environment().unwrap();
+    let mut samples = Vec::new();
+    for index in 0..12 {
+        let started = Instant::now();
+        let bytes = client.image(&input.thread, &input.image).unwrap();
+        let pixels = decode(&bytes, 192).unwrap();
+        std::hint::black_box(pixels);
+        if index >= 2 {
+            samples.push(started.elapsed().as_secs_f64() * 1000.);
+        }
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "THUMBNAIL_BENCH 10 samples after 2 warmups: median {:.3} ms, p95/max {:.3} ms",
+        (samples[4] + samples[5]) / 2.,
+        samples[9]
+    );
+}

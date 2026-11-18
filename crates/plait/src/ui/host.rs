@@ -62,26 +62,41 @@ impl Plait {
         } else {
             None
         };
+        // A watch can acknowledge an earlier attempt while this retry is still uploading.
+        let image_pins = uploads
+            .as_ref()
+            .filter(|(_, images)| !images.is_empty())
+            .map(|(_, images)| plait_core::images::pin(images))
+            .transpose();
         let journal = self.session.journal.clone();
         let task = cx.background_executor().spawn(async move {
-            if persist {
-                let journal = journal.ok_or_else(|| {
-                    std::io::Error::other(
-                        "Desktop recovery is unavailable. Submission was not sent.",
-                    )
-                })?;
-                journal.flush().map_err(std::io::Error::other)?;
+            let image_pins = image_pins.map_err(host::Error::Protocol)?;
+            let result = (|| {
+                if persist {
+                    let journal = journal.ok_or_else(|| {
+                        std::io::Error::other(
+                            "Desktop recovery is unavailable. Submission was not sent.",
+                        )
+                    })?;
+                    journal.flush().map_err(std::io::Error::other)?;
+                }
+                if let Request::ListThreads { checkout } | Request::CreateThread { checkout, .. } =
+                    &mut request
+                {
+                    *checkout = std::fs::canonicalize(&*checkout)?;
+                }
+                let client = Client::from_environment()?;
+                if let Some((thread, images)) = uploads {
+                    client.upload_images(&thread, &images)?;
+                }
+                client.request(&request)
+            })();
+            let collect = image_pins.is_some();
+            drop(image_pins);
+            if collect && let Err(error) = plait_core::images::collect() {
+                eprintln!("Plait draft images: {error}");
             }
-            if let Request::ListThreads { checkout } | Request::CreateThread { checkout, .. } =
-                &mut request
-            {
-                *checkout = std::fs::canonicalize(&*checkout)?;
-            }
-            let client = Client::from_environment()?;
-            if let Some((thread, images)) = uploads {
-                client.upload_images(&thread, &images)?;
-            }
-            client.request(&request)
+            result
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;

@@ -1396,7 +1396,14 @@ runtime restart, history, and persisted references. Pi also crosses a complete
 Rust-host process restart and checks the next model context. No live or paid
 model was used.
 
-Both sides test type-by-bytes, size, count, total message size, and dimensions.
+Both sides test type-by-bytes, the inclusive 5 MiB image and message bounds,
+count, total message size, and dimensions. Maximum images with complete
+65,000-byte submitted JSON requests pass through scripted Pi, Codex, and
+Claude Code; resulting harness frames leave more than 1 MiB below the 8 MiB
+line bound. Four-block base64 padding is included in the arithmetic. Runtime
+and socket-client tests check 512 KiB read pieces, ten reads for a maximum
+image, the 1 MiB reply bound, and oversized-part refusal; uploads remain
+32 KiB and oversized upload pieces are refused.
 Desktop file tests reject links and special files. Host tests cover hash,
 chunk offsets, incomplete uploads, and thread ownership. An isolated desktop
 test keeps the text, images, and revision on refusal, saves and reopens existing-thread and new-thread image
@@ -1406,6 +1413,28 @@ the 32-entry bound. The host refuses a known text-only Pi model before accepting
 the message. A headless input test dispatches Cmd-V through the composer,
 checks text precedence with mixed clipboard entries, and runs the file-drop
 preparation path with a misleading extension, checking persisted originals.
+Isolated desktop tests remove an original after host acceptance and after
+attachment removal, keeping it while an uncertain submission still needs it. The acceptance test
+also restores the removed original from a scripted host when returning it to
+a draft for editing.
+Core recovery tests sweep orphan files on startup, retain saved drafts and
+pending submissions, and protect preparation and newer queued state during
+collection. An upload guard test retains originals when a watch acknowledges
+an earlier attempt while a retry is still reading files. Cleanup follows a successful journal save; a failed save retains
+the durable draft's bytes.
+
+Host retention remains a storage limit: accepted originals stay in
+`host.sqlite` for the life of the store, even after archive or cancellation.
+There is no age-based collection of accepted images. For example, 100 distinct
+5 MiB screenshots each day for 30 days means 3,000 × 5 MiB = 15,000 MiB,
+or about 14.65 GiB of image payload, plus SQLite page/index overhead and its
+write-ahead log. Identical bytes deduplicate within a thread, not across
+threads. Bytes occupy the separate `images` table's BLOB column;
+`message_images` holds associations. Ordinary thread/snapshot/history queries
+read references and metadata only, never those BLOBs. Bytes are selected for
+explicit image reads and harness input. Removing the host store removes them;
+unused uploads expire after 24 hours.
+
 Claude Code's pinned SDK has no model image-capability field;
 unknown support is deliberately allowed, not inferred from model names.
 
@@ -1417,6 +1446,19 @@ points. These scenes were inspected offscreen with Metal and Core Text.
 (p95 1.89 ms). Thumbnails were prepared in advance and the cache was bounded
 to 32 entries. This is render/layout/prepaint/paint cost, not GPU, network,
 decode, or input-to-display latency.
+
+`bash scripts/bench-images.sh` measures production Rust fetch, hash validation,
+PNG decode, and 192-pixel thumbnail preparation through a real local Rust host
+and SQLite-backed runtime. It uses generated 3840 × 2160 PNGs with valid
+ancillary padding, release builds, two warmups, and ten measured thumbnails.
+The former 2 MiB maximum with 32 KiB reads took 64 requests and median
+58.040 ms (p95/max 59.572 ms). At the new 5 MiB maximum, the old read scheme
+required 160 requests and median 225.856 ms (p95/max 232.030 ms); 512 KiB reads
+require ten requests and median 57.954 ms (p95/max 59.976 ms). The old scheme
+is reproduced in the offline fixture, with the larger size limit enabled for
+that comparison. Measurements include socket connections, host/runtime
+framing, SQLite reads, base64 decoding, and thumbnail preparation; they exclude
+upload, process startup, GPU drawing, and UI scheduling. No model runs.
 
 ### Native clipboard exception and probe
 
@@ -1437,9 +1479,10 @@ probe. It is opt-in so the ordinary test suite does not replace the clipboard.
 
 For valid, ancillary-data-padded PNG fixtures of 5,000,000 and 20,000,000 bytes,
 30 release samples after five warmups measured synchronous read + validation
-refusal + drop: respectively median 0.273 ms / p95 0.283 ms / max 0.284 ms and
-median 1.100 ms / p95 1.130 ms / max 1.176 ms. Both are over the 2 MiB limit;
-no pixels were decoded. These timings cover a local pasteboard owner, not the
++ drop: respectively median 8.365 ms / p95 8.668 ms / max 8.696 ms and
+median 1.063 ms / p95 1.127 ms / max 1.130 ms. The 5,000,000-byte image is
+now accepted, including hashing; the 20,000,000-byte image is refused before
+hashing. No pixels were decoded. These timings cover a local pasteboard owner, not the
 potential delay of another application's promised data provider.
 
 A native screenshot clipboard probe offered PNG and TIFF and GPUI selected

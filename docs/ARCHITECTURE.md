@@ -732,7 +732,7 @@ native window. The editing rules behind them are unit-tested.
 ### Images in messages
 
 Protocol 6 carries image references in snapshots and history, with separate
-32 KiB upload/read operations. Originals belong to the thread in the host's
+32 KiB upload and 512 KiB read operations. Originals belong to the thread in the host's
 private `host.sqlite`, outside the checkout and its Undo records. See the
 [host contract](HOST.md#protocol-version-6-images-unreleased) for limits,
 capabilities, transport, and retention. Pi and Codex capability information
@@ -747,8 +747,21 @@ in existing-thread drafts, the new-thread draft, and pending submissions.
 Original files are synced before references enter a draft. Sending flushes the
 journal, uploads originals, then submits their IDs. A refusal preserves the
 draft; only an acknowledgement for its unchanged revision clears it. Removing
-an attachment removes the reference; retained local originals are removed by
-resetting the desktop state directory, not by a cache eviction.
+an attachment, or accepting its submission, schedules an immediate background
+journal save and collection. Once the saved draft and pending submissions no
+longer refer to an original, the desktop deletes it. Accepted queued messages
+keep host references only; editing one fetches its original back from the host.
+An existing-thread draft can also recover a missing local original from its host.
+
+Opening the journal sweeps unreferenced originals on the background executor,
+after validating recovery state and acquiring its exclusive lease. In-memory
+pins protect active preparation, uploads, visible drafts, and the latest queued journal
+while saves overlap. A separate set retains the last durable journal references,
+even after its window closes; collection waits until recovery has loaded it. Collection and persistence
+share a background storage lock; UI pin updates use only a short in-memory
+lock. A failed save keeps the previous journal's originals. Abandoned image
+preparation is collected after its result is discarded. No deletion, directory
+scan, read, or decode runs during rendering.
 
 File drops use bounded regular-file reads with no-follow and nonblocking open.
 Type, byte, count, and dimension checks precede decoding and storage. The

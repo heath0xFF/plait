@@ -85,7 +85,10 @@ fn main() {
             for entry in item.entries {
                 if let ClipboardEntry::Image(image) = entry {
                     assert_eq!(image.bytes.len(), bytes);
-                    assert!(plait_core::images::inspect(&image.bytes).is_err());
+                    assert_eq!(
+                        plait_core::images::inspect(&image.bytes).is_ok(),
+                        bytes <= plait_core::images::IMAGE_BYTES
+                    );
                 }
             }
             if index >= 5 {
@@ -94,7 +97,7 @@ fn main() {
         }
         samples.sort_by(f64::total_cmp);
         println!(
-            "{bytes} bytes PNG: read + reject + drop, 30 samples; min {:.3} ms, median {:.3} ms, p95 {:.3} ms, max {:.3} ms",
+            "{bytes} bytes PNG: read + validate + drop, 30 samples; min {:.3} ms, median {:.3} ms, p95 {:.3} ms, max {:.3} ms",
             samples[0], samples[14], samples[28], samples[29]
         );
     }

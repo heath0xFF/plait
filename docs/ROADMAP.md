@@ -431,8 +431,8 @@ conversation. The host stores it with the thread. A model or harness that
 cannot take images says so before sending. Implemented, unreleased, in
 [protocol 6](HOST.md#protocol-version-6-images-unreleased): removable draft
 thumbnails, a larger conversation view, private persisted originals, and
-bounded transfers outside snapshots. PNG/JPEG only; four images, 2 MiB each,
-4 MiB per message, 8,192 pixels per side and 16,777,216 pixels per image.
+bounded transfers outside snapshots. PNG/JPEG only; four images, 5 MiB each,
+5 MiB per message, 8,192 pixels per side and 16,777,216 pixels per image.
 The pinned clipboard reader pastes text when text and an image coexist and
 refuses TIFF-only images; the [Mac guide](MACOS.md#images-in-messages-unreleased)
 gives alternatives. Claude Code capability is unknown, so harness refusals
