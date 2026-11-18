@@ -236,7 +236,7 @@ export class LinearService {
       }
       this.keyRejected = false;
       const fetchedAt = this.now();
-      if (this.canPopulateCache(scope, seq, authGen, cacheGen)) {
+      if (!fresh.partial && this.canPopulateCache(scope, seq, authGen, cacheGen)) {
         this.store.linear.saveTeams(fresh.data, fetchedAt);
       }
       return {
@@ -350,7 +350,7 @@ export class LinearService {
       }
       this.keyRejected = false;
       const fetchedAt = this.now();
-      if (this.canPopulateCache(scope, seq, authGen, cacheGen)) {
+      if (!fresh.partial && this.canPopulateCache(scope, seq, authGen, cacheGen)) {
         this.store.linear.saveIssuesPage(
           key,
           params.teamId,
@@ -431,7 +431,7 @@ export class LinearService {
       this.keyRejected = false;
       if (!fresh.data) fail('not_found', 'Linear issue not found.');
       const fetchedAt = this.now();
-      if (isFirstPage && this.canPopulateCache(scope, seq, authGen, cacheGen)) {
+      if (isFirstPage && !fresh.partial && this.canPopulateCache(scope, seq, authGen, cacheGen)) {
         this.store.linear.saveIssueDetail(fresh.data, fetchedAt);
       }
       return {

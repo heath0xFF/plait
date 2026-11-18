@@ -600,3 +600,34 @@ test('linear_list_teams stops on repeated cursor and deduplicates team IDs witho
   assert.equal(reply.result.teams[0].id, 'team-loop');
   assert(h.fake.requests.length - reqBefore <= 2, `expected repeated cursor to stop early, got ${h.fake.requests.length - reqBefore} requests`);
 });
+
+test('partial GraphQL responses are not cached as complete data', async t => {
+  const h = await setupHarness(t);
+  assert.equal((await h.call({ op: 'linear_set_key', key: h.fake.validKey })).ok, true);
+
+  h.fake.enqueueFault((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      data: {
+        teams: {
+          nodes: [{ id: 'team-pla', key: 'PLA', name: 'Plait', states: { nodes: [] } }],
+          pageInfo: { hasNextPage: false, endCursor: null },
+        },
+      },
+      errors: [{ message: 'States resolver failed' }],
+    }));
+    return true;
+  });
+
+  const first = await h.call({ op: 'linear_list_teams' });
+  assert.equal(first.ok, true);
+  assert.equal(first.result.partial, true);
+  assert.equal(first.result.teams[0].states.length, 0);
+
+  // Next read must fetch fresh complete data rather than serving the incomplete partial response as complete.
+  const second = await h.call({ op: 'linear_list_teams' });
+  assert.equal(second.ok, true);
+  assert.equal(second.result.cached, false);
+  assert.equal(second.result.partial, false);
+  assert.equal(second.result.teams[0].states.length, 5);
+});

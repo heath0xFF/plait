@@ -2085,7 +2085,8 @@ local client asks over the owner-only host socket.
   `Retry-After`, `X-RateLimit-Complexity-Reset`, and
   `X-RateLimit-Requests-Reset`), `linear_offline`, `invalid_request`,
   `not_found`, and `conflict`. HTTP 200 responses carrying GraphQL `errors`
-  beside usable `data` succeed with `"partial":true` and a fixed `warning`.
+  beside usable `data` succeed with `"partial":true` and a fixed `warning`, and
+  are not cached as complete responses.
 
 ### Not built in this stage
 
