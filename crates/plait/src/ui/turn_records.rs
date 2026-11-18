@@ -492,7 +492,7 @@ impl Plait {
             let target = target.clone();
             let review_detail = line.review_detail.clone();
             content = content.child(button(SharedString::from(format!("review-steps-{run}")),
-                if older { "Older host".into() } else { format!("{steps} {}", if steps == 1 { "step" } else { "steps" }) })
+                format!("{steps} {}", if steps == 1 { "step" } else { "steps" }))
                 .h(px(22.)).px_0().flex_shrink_0().text_color(rgb(colors().muted))
                 .aria_label(if older { "Turn review needs a newer host." } else { "Review this turn's recorded changes" })
                 .disabled(!available)

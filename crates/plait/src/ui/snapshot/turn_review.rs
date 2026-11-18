@@ -88,11 +88,15 @@ pub(super) fn walk(h: &mut Harness, repository: &Path, suffix: &str) {
         restored["undoes"] = json!("last");
         let mut another = restored.clone();
         another["id"] = json!("another-undo");
-        another["created_at"] = json!(60_001);
-        inject(
-            p,
-            vec![another, restored, record("last", &["last"], "undone")],
-        );
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        another["created_at"] = json!(now - 60_000);
+        restored["created_at"] = json!(now - 120_000);
+        let mut original = record("last", &["last"], "undone");
+        original["created_at"] = json!(now - 300_000);
+        inject(p, vec![another, restored, original]);
         p.open_review_scopes(w, cx);
     });
     h.capture(&format!("turn-recorded-undo-picker-{suffix}"));
