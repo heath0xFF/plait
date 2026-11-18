@@ -1,3 +1,4 @@
+import { escapeDisplay } from '../text.ts';
 import {
   FIELD_LIMITS,
   LINEAR_COMMENTS_PAGE_SIZE,
@@ -12,7 +13,6 @@ import {
   LinearError,
   PARTIAL_DATA_WARNING,
   boundLinearText,
-  boundNullableText,
   safeLinearUrl,
   safeNumber,
 } from './types.ts';
@@ -206,34 +206,77 @@ export function buildIssueFilter(teamId: string, preset: LinearFilterPreset, sea
   return filter;
 }
 
-function parseState(raw: unknown): LinearWorkflowState | null {
+type ResponseSanitizer = {
+  text(value: unknown, limit: number): string;
+  nullableText(value: unknown, limit: number): string | null;
+  url(value: unknown): string;
+  containsSecret(value: string): boolean;
+};
+
+/**
+ * Scrubs an echoed API key (raw, URL-encoded, or display-escaped) before any string
+ * from Linear is clipped, cached in SQLite, or returned to the desktop.
+ */
+function makeSanitizer(apiKey: string): ResponseSanitizer {
+  const variants = apiKey.length >= 8
+    ? [...new Set([apiKey, encodeURIComponent(apiKey), escapeDisplay(apiKey)])]
+        .filter(secret => secret.length >= 8)
+        .sort((a, b) => b.length - a.length)
+    : [];
+  const scrub = (value: string): string => {
+    let out = value;
+    for (const secret of variants) {
+      if (out.includes(secret)) out = out.split(secret).join('[redacted]');
+    }
+    return out;
+  };
+  const containsSecret = (value: string): boolean => variants.some(secret => value.includes(secret));
+  return {
+    text(value, limit) {
+      if (typeof value !== 'string') return '';
+      return scrub(boundLinearText(scrub(value), limit));
+    },
+    nullableText(value, limit) {
+      if (typeof value !== 'string') return null;
+      return scrub(boundLinearText(scrub(value), limit));
+    },
+    url(value) {
+      if (typeof value !== 'string' || containsSecret(value)) return '';
+      const safe = safeLinearUrl(value);
+      return !safe || containsSecret(safe) ? '' : safe;
+    },
+    containsSecret,
+  };
+}
+
+function parseState(raw: unknown, sanitize: ResponseSanitizer): LinearWorkflowState | null {
   const obj = asObject(raw);
   if (!obj) return null;
-  const id = boundLinearText(obj.id, FIELD_LIMITS.id);
-  const name = boundLinearText(obj.name, FIELD_LIMITS.name);
+  const id = sanitize.text(obj.id, FIELD_LIMITS.id);
+  const name = sanitize.text(obj.name, FIELD_LIMITS.name);
   if (!id || !name) return null;
   return {
     id,
     name,
-    type: boundLinearText(obj.type, FIELD_LIMITS.type),
+    type: sanitize.text(obj.type, FIELD_LIMITS.type),
     position: safeNumber(obj.position, 0),
   };
 }
 
-function parseLabel(raw: unknown): LinearLabel | null {
+function parseLabel(raw: unknown, sanitize: ResponseSanitizer): LinearLabel | null {
   const obj = asObject(raw);
   if (!obj) return null;
-  const id = boundLinearText(obj.id, FIELD_LIMITS.id);
-  const name = boundLinearText(obj.name, FIELD_LIMITS.name);
+  const id = sanitize.text(obj.id, FIELD_LIMITS.id);
+  const name = sanitize.text(obj.name, FIELD_LIMITS.name);
   if (!id || !name) return null;
   return { id, name };
 }
 
-function parseIssueSummary(raw: unknown): LinearIssueSummary | null {
+function parseIssueSummary(raw: unknown, sanitize: ResponseSanitizer): LinearIssueSummary | null {
   const obj = asObject(raw);
   if (!obj) return null;
-  const id = boundLinearText(obj.id, FIELD_LIMITS.id);
-  const identifier = boundLinearText(obj.identifier, FIELD_LIMITS.identifier);
+  const id = sanitize.text(obj.id, FIELD_LIMITS.id);
+  const identifier = sanitize.text(obj.identifier, FIELD_LIMITS.identifier);
   if (!id || !identifier) return null;
   const stateObj = asObject(obj.state);
   const teamObj = asObject(obj.team);
@@ -241,57 +284,58 @@ function parseIssueSummary(raw: unknown): LinearIssueSummary | null {
   const labelsObj = asObject(obj.labels);
   const labels = asArray(labelsObj?.nodes)
     .slice(0, LINEAR_MAX_LABELS)
-    .map(parseLabel)
+    .map(item => parseLabel(item, sanitize))
     .filter((label): label is LinearLabel => label !== null);
-  const assigneeName = assigneeObj ? boundLinearText(assigneeObj.name, FIELD_LIMITS.name) : '';
+  const assigneeName = assigneeObj ? sanitize.text(assigneeObj.name, FIELD_LIMITS.name) : '';
   return {
     id,
     identifier,
-    title: boundLinearText(obj.title, FIELD_LIMITS.title),
-    url: safeLinearUrl(obj.url),
+    title: sanitize.text(obj.title, FIELD_LIMITS.title),
+    url: sanitize.url(obj.url),
     priority: safeNumber(obj.priority, 0),
-    updated_at: boundLinearText(obj.updatedAt, FIELD_LIMITS.timestamp),
-    team_id: boundLinearText(teamObj?.id, FIELD_LIMITS.id),
+    updated_at: sanitize.text(obj.updatedAt, FIELD_LIMITS.timestamp),
+    team_id: sanitize.text(teamObj?.id, FIELD_LIMITS.id),
     state: {
-      id: boundLinearText(stateObj?.id, FIELD_LIMITS.id),
-      name: boundLinearText(stateObj?.name, FIELD_LIMITS.name),
-      type: boundLinearText(stateObj?.type, FIELD_LIMITS.type),
+      id: sanitize.text(stateObj?.id, FIELD_LIMITS.id),
+      name: sanitize.text(stateObj?.name, FIELD_LIMITS.name),
+      type: sanitize.text(stateObj?.type, FIELD_LIMITS.type),
     },
     assignee: assigneeName ? { name: assigneeName } : null,
     labels,
   };
 }
 
-function parseAttachment(raw: unknown): LinearAttachment | null {
+function parseAttachment(raw: unknown, sanitize: ResponseSanitizer): LinearAttachment | null {
   const obj = asObject(raw);
   if (!obj) return null;
-  const id = boundLinearText(obj.id, FIELD_LIMITS.id);
-  const url = safeLinearUrl(obj.url);
+  const id = sanitize.text(obj.id, FIELD_LIMITS.id);
+  const url = sanitize.url(obj.url);
   if (!id || !url) return null;
-  return { id, title: boundLinearText(obj.title, FIELD_LIMITS.title), url };
+  return { id, title: sanitize.text(obj.title, FIELD_LIMITS.title), url };
 }
 
-function parseComment(raw: unknown): LinearComment | null {
+function parseComment(raw: unknown, sanitize: ResponseSanitizer): LinearComment | null {
   const obj = asObject(raw);
   if (!obj) return null;
-  const id = boundLinearText(obj.id, FIELD_LIMITS.id);
+  const id = sanitize.text(obj.id, FIELD_LIMITS.id);
   if (!id) return null;
   const userObj = asObject(obj.user);
-  const author = userObj ? boundLinearText(userObj.name, FIELD_LIMITS.name) : '';
+  const author = userObj ? sanitize.text(userObj.name, FIELD_LIMITS.name) : '';
   return {
     id,
-    body: boundLinearText(obj.body, FIELD_LIMITS.commentBody),
-    created_at: boundLinearText(obj.createdAt, FIELD_LIMITS.timestamp),
-    updated_at: boundLinearText(obj.updatedAt, FIELD_LIMITS.timestamp),
+    body: sanitize.text(obj.body, FIELD_LIMITS.commentBody),
+    created_at: sanitize.text(obj.createdAt, FIELD_LIMITS.timestamp),
+    updated_at: sanitize.text(obj.updatedAt, FIELD_LIMITS.timestamp),
     author: author || null,
   };
 }
 
-function parsePageInfo(raw: unknown): { hasMore: boolean; nextCursor: string | null } {
+function parsePageInfo(raw: unknown, sanitize: ResponseSanitizer): { hasMore: boolean; nextCursor: string | null } {
   const info = asObject(raw);
   const hasMore = info?.hasNextPage === true;
   const rawCursor = info?.endCursor;
-  const cursor = typeof rawCursor === 'string' && rawCursor.length > 0 && rawCursor.length <= FIELD_LIMITS.cursor && !/[\u0000-\u001f\u007f]/.test(rawCursor)
+  const cursor = typeof rawCursor === 'string' && rawCursor.length > 0 && rawCursor.length <= FIELD_LIMITS.cursor
+    && !/[\u0000-\u001f\u007f]/.test(rawCursor) && !sanitize.containsSecret(rawCursor)
     ? rawCursor
     : null;
   return { hasMore: hasMore && cursor !== null, nextCursor: hasMore ? cursor : null };
@@ -318,11 +362,12 @@ export class LinearClient {
 
   /** Verifies a key with one small query: who am I, which workspace. */
   async viewer(apiKey: string, signal?: AbortSignal): Promise<LinearQueryResult<LinearIdentity>> {
+    const sanitize = makeSanitizer(apiKey);
     const response = await this.graphql(apiKey, VIEWER_QUERY, {}, 'read', signal);
     const viewer = asObject(response.data?.viewer);
     const organization = asObject(response.data?.organization);
-    const viewerId = boundLinearText(viewer?.id, FIELD_LIMITS.id);
-    const workspaceId = boundLinearText(organization?.id, FIELD_LIMITS.id);
+    const viewerId = sanitize.text(viewer?.id, FIELD_LIMITS.id);
+    const workspaceId = sanitize.text(organization?.id, FIELD_LIMITS.id);
     if (!viewerId || !workspaceId) {
       throw this.fallbackError(response.errors, 'read', response.headers)
         ?? new LinearError('offline', 'Linear returned an unexpected identity response.');
@@ -330,10 +375,10 @@ export class LinearClient {
     return {
       data: {
         workspace_id: workspaceId,
-        workspace_name: boundLinearText(organization?.name, FIELD_LIMITS.name),
-        workspace_url_key: boundLinearText(organization?.urlKey, FIELD_LIMITS.name),
+        workspace_name: sanitize.text(organization?.name, FIELD_LIMITS.name),
+        workspace_url_key: sanitize.text(organization?.urlKey, FIELD_LIMITS.name),
         viewer_id: viewerId,
-        viewer_name: boundLinearText(viewer?.name, FIELD_LIMITS.name),
+        viewer_name: sanitize.text(viewer?.name, FIELD_LIMITS.name),
       },
       partial: response.errors.length > 0,
       warning: response.errors.length > 0 ? PARTIAL_DATA_WARNING : null,
@@ -342,6 +387,7 @@ export class LinearClient {
 
   /** Lists teams with their workflow states, bounded to LINEAR_MAX_TEAMS. */
   async listTeams(apiKey: string, signal?: AbortSignal): Promise<LinearQueryResult<LinearTeam[]>> {
+    const sanitize = makeSanitizer(apiKey);
     const teams: LinearTeam[] = [];
     let after: string | null = null;
     let partial = false;
@@ -358,19 +404,19 @@ export class LinearClient {
         if (teams.length >= LINEAR_MAX_TEAMS) break;
         const obj = asObject(rawTeam);
         if (!obj) continue;
-        const id = boundLinearText(obj.id, FIELD_LIMITS.id);
-        const key = boundLinearText(obj.key, FIELD_LIMITS.key);
-        const name = boundLinearText(obj.name, FIELD_LIMITS.name);
+        const id = sanitize.text(obj.id, FIELD_LIMITS.id);
+        const key = sanitize.text(obj.key, FIELD_LIMITS.key);
+        const name = sanitize.text(obj.name, FIELD_LIMITS.name);
         if (!id || !key) continue;
         const statesObj = asObject(obj.states);
         const states = asArray(statesObj?.nodes)
           .slice(0, LINEAR_MAX_STATES)
-          .map(parseState)
+          .map(item => parseState(item, sanitize))
           .filter((state): state is LinearWorkflowState => state !== null)
           .sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
         teams.push({ id, key, name, states });
       }
-      const info = parsePageInfo(container.pageInfo);
+      const info = parsePageInfo(container.pageInfo, sanitize);
       if (!info.hasMore || !info.nextCursor) break;
       after = info.nextCursor;
     }
@@ -383,6 +429,7 @@ export class LinearClient {
     params: { teamId: string; filter: LinearFilterPreset; search?: string; cursor?: string },
     signal?: AbortSignal,
   ): Promise<LinearQueryResult<{ issues: LinearIssueSummary[]; has_more: boolean; next_cursor: string | null }>> {
+    const sanitize = makeSanitizer(apiKey);
     const filter = buildIssueFilter(params.teamId, params.filter, params.search);
     const response = await this.graphql(apiKey, ISSUES_QUERY, { after: params.cursor ?? null, filter }, 'read', signal);
     const container = asObject(response.data?.issues);
@@ -392,9 +439,9 @@ export class LinearClient {
     }
     const issues = container.nodes
       .slice(0, LINEAR_PAGE_SIZE)
-      .map(parseIssueSummary)
+      .map(item => parseIssueSummary(item, sanitize))
       .filter((issue): issue is LinearIssueSummary => issue !== null);
-    const info = parsePageInfo(container.pageInfo);
+    const info = parsePageInfo(container.pageInfo, sanitize);
     const partial = response.errors.length > 0;
     return {
       data: { issues, has_more: info.hasMore, next_cursor: info.nextCursor },
@@ -409,6 +456,7 @@ export class LinearClient {
     params: { issueId: string; commentsCursor?: string },
     signal?: AbortSignal,
   ): Promise<LinearQueryResult<LinearIssueDetail | null>> {
+    const sanitize = makeSanitizer(apiKey);
     const response = await this.graphql(
       apiKey,
       ISSUE_DETAIL_QUERY,
@@ -425,7 +473,7 @@ export class LinearClient {
       if (classified) throw classified;
       return { data: null, partial: response.errors.length > 0, warning: response.errors.length > 0 ? PARTIAL_DATA_WARNING : null };
     }
-    const summary = parseIssueSummary(response.data.issue);
+    const summary = parseIssueSummary(response.data.issue, sanitize);
     if (!summary) {
       throw this.fallbackError(response.errors, 'read', response.headers)
         ?? new LinearError('offline', 'Linear returned an unreadable issue.');
@@ -435,18 +483,18 @@ export class LinearClient {
     const commentsObj = asObject(raw.comments);
     const attachments = asArray(attachmentsObj?.nodes)
       .slice(0, LINEAR_MAX_ATTACHMENTS)
-      .map(parseAttachment)
+      .map(item => parseAttachment(item, sanitize))
       .filter((item): item is LinearAttachment => item !== null);
     const comments = asArray(commentsObj?.nodes)
       .slice(0, LINEAR_COMMENTS_PAGE_SIZE)
-      .map(parseComment)
+      .map(item => parseComment(item, sanitize))
       .filter((item): item is LinearComment => item !== null);
-    const commentsPage = parsePageInfo(commentsObj?.pageInfo);
+    const commentsPage = parsePageInfo(commentsObj?.pageInfo, sanitize);
     const partial = response.errors.length > 0;
     return {
       data: {
         ...summary,
-        description: boundNullableText(raw.description, FIELD_LIMITS.description),
+        description: sanitize.nullableText(raw.description, FIELD_LIMITS.description),
         attachments,
         comments,
         comments_has_more: commentsPage.hasMore,
@@ -459,10 +507,11 @@ export class LinearClient {
 
   /** Posts one comment on an issue. Only called on an explicit person action. */
   async createComment(apiKey: string, issueId: string, body: string, signal?: AbortSignal): Promise<{ comment_id: string }> {
+    const sanitize = makeSanitizer(apiKey);
     const response = await this.graphql(apiKey, COMMENT_CREATE_MUTATION, { issueId, body }, 'write', signal);
     const payload = asObject(response.data?.commentCreate);
     const comment = asObject(payload?.comment);
-    const commentId = boundLinearText(comment?.id, FIELD_LIMITS.id);
+    const commentId = sanitize.text(comment?.id, FIELD_LIMITS.id);
     if (payload?.success !== true || !commentId) {
       throw this.fallbackError(response.errors, 'write', response.headers)
         ?? new LinearError('invalid_request', 'Linear did not accept the comment.');
@@ -472,10 +521,11 @@ export class LinearClient {
 
   /** Moves an issue to another workflow state. Only called on an explicit person action. */
   async updateIssueState(apiKey: string, issueId: string, stateId: string, signal?: AbortSignal): Promise<{ issue_id: string }> {
+    const sanitize = makeSanitizer(apiKey);
     const response = await this.graphql(apiKey, ISSUE_UPDATE_STATE_MUTATION, { id: issueId, stateId }, 'write', signal);
     const payload = asObject(response.data?.issueUpdate);
     const issue = asObject(payload?.issue);
-    const updatedId = boundLinearText(issue?.id, FIELD_LIMITS.id);
+    const updatedId = sanitize.text(issue?.id, FIELD_LIMITS.id);
     if (payload?.success !== true || !updatedId) {
       throw this.fallbackError(response.errors, 'write', response.headers)
         ?? new LinearError('invalid_request', 'Linear did not accept the state change.');

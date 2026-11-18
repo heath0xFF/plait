@@ -456,3 +456,43 @@ test('all Linear read operations strictly refuse malformed inputs, unknown field
     assert.equal(h.runtime.linear.handles({ op: inherited }), false);
   }
 });
+
+test('server echoing Authorization header in issue data never leaks key into replies or host.sqlite', async t => {
+  const h = await setupHarness(t);
+  const secret = h.fake.validKey;
+  assert.equal((await h.call({ op: 'linear_set_key', key: secret })).ok, true);
+
+  // Hostile server echoes the Authorization key in title, URL, cursor, description, and comments.
+  h.fake.enqueueFault((req, res) => {
+    const echoed = String(req.headers.authorization ?? '');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      data: {
+        issues: {
+          nodes: [{
+            id: 'issue-echo',
+            identifier: 'PLA-77',
+            title: `Echoed ${echoed}`,
+            url: `https://linear.app/acme/issue/PLA-77?k=${encodeURIComponent(echoed)}`,
+            priority: 1,
+            updatedAt: '2026-11-18T12:00:00.000Z',
+            team: { id: 'team-pla' },
+            state: { id: 'state-todo', name: `State ${echoed}`, type: 'unstarted' },
+            assignee: { name: `User ${echoed}` },
+            labels: { nodes: [{ id: 'lbl-1', name: `Tag ${echoed}` }] },
+          }],
+          pageInfo: { hasNextPage: true, endCursor: `cur-${echoed}` },
+        },
+      },
+    }));
+    return true;
+  });
+
+  const listed = await h.call({ op: 'linear_list_issues', team_id: 'team-pla', filter: 'active' });
+  assert.equal(listed.ok, true);
+  assert(!JSON.stringify(listed).includes(secret), 'issue list reply must not contain echoed key');
+  assert(!JSON.stringify(listed).includes(encodeURIComponent(secret)), 'issue list reply must not contain encoded key');
+  assert.equal(listed.result.issues[0].url, '');
+  assert.equal(listed.result.next_cursor, null);
+  await assertKeyNotInStoreDb(h.storeDir, secret);
+});
