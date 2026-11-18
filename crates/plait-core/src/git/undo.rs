@@ -434,10 +434,10 @@ fn current_at(directory: &File, name: &str) -> Result<Option<Fingerprint>> {
     } else if kind == libc::S_IFREG {
         let mut file = open_at(directory, name, libc::O_RDONLY, 0)?;
         let held = file.metadata().map_err(err)?;
-        if held.ino() != meta.st_ino
-            || held.dev() != meta.st_dev as u64
-            || held.len() > record::FILE_LIMIT
-        {
+        // `dev_t` is 32 bits on macOS and already 64 on Linux.
+        #[allow(clippy::unnecessary_cast)]
+        let device = meta.st_dev as u64;
+        if held.ino() != meta.st_ino || held.dev() != device || held.len() > record::FILE_LIMIT {
             return Err("File changed during undo.".into());
         }
         let mut bytes = Vec::new();

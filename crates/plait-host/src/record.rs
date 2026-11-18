@@ -364,7 +364,10 @@ fn undo_request(value: Value) -> io::Result<()> {
     let mut inherited = std::mem::MaybeUninit::<libc::stat>::uninit();
     let held = unsafe { libc::fstat(4, inherited.as_mut_ptr()) } == 0 && {
         let inherited = unsafe { inherited.assume_init() };
-        inherited.st_ino == meta.ino() && inherited.st_dev as u64 == meta.dev()
+        // `dev_t` is 32 bits on macOS and already 64 on Linux.
+        #[allow(clippy::unnecessary_cast)]
+        let device = inherited.st_dev as u64;
+        inherited.st_ino == meta.ino() && device == meta.dev()
     };
     let fd = if held { 4 } else { lease.as_raw_fd() };
     if unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } != 0 {
