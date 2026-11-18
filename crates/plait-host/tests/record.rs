@@ -580,3 +580,33 @@ fn undo_refuses_hard_links_including_links_to_git_metadata() {
         assert_eq!(snapshot(&root), old);
     }
 }
+
+#[test]
+fn distinct_hard_link_names_are_recorded_as_distinct_entries() {
+    // The command sandbox deliberately denies hard-link creation. Construct
+    // this fixture outside it, then exercise the real recorder's own sandbox.
+    let base = Scratch::new();
+    let root = repository(&base.0);
+    let store = base.0.join("store");
+    let name = "cafe\u{301}";
+    fs::write(root.join(name), b"before\n").unwrap();
+    fs::hard_link(root.join(name), root.join("other")).unwrap();
+    let (ok, before, error) = helper(
+        "record",
+        &json!({"checkout":root,"store":store,"id":"before"}),
+    );
+    assert!(ok, "{error}");
+    fs::write(root.join(name), b"after\n").unwrap();
+    let (ok, after, error) = helper(
+        "record",
+        &json!({"checkout":root,"store":store,"id":"after","before":before["commit"]}),
+    );
+    assert!(ok, "{error}");
+    let paths: Vec<_> = after["paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths, [name, "other"]);
+}
