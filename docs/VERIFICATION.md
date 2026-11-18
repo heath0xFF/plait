@@ -497,11 +497,10 @@ reason file. Failures and skips retain the disposable folder and print its
 path. A completely passing run removes it. `--artifacts` copies generated
 results, logs, argument recordings and screenshots to the requested new
 folder. It does not copy host databases or executables. CI uploads these plus
-the console output. The advisory `native-acceptance` job runs only on pushes
-to `main`, reuses the package job's artifact without installing it, and has
-`continue-on-error`. There was no existing non-gating macOS job to append it
-to; the additional job does no Rust build. Tagged releases do not run or wait
-for it.
+the console output. Advisory steps at the end of the existing package job run
+only on pushes to `main` and reuse its finished package without installing it.
+The check and diagnostics upload both have `continue-on-error` and time limits;
+they add no macOS job or Rust build. Tagged releases skip both steps.
 
 Verified without a window: Swift compilation and its pure selector/key/Unicode/
 gap tests; Python tests of environment isolation, failure/skip reporting,

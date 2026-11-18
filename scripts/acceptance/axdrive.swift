@@ -411,11 +411,11 @@ func ownerOfWindow(at point: CGPoint) -> pid_t? {
 
 // MARK: - Input
 
-func postKey(_ pid: pid_t, _ combo: Combo) {
+func postKey(_ pid: pid_t, _ combo: Combo) throws {
     let source = CGEventSource(stateID: .hidSystemState)
     for down in [true, false] {
         guard let event = CGEvent(keyboardEventSource: source, virtualKey: combo.key, keyDown: down) else {
-            die("could not make a key event")
+            throw UsageError("could not make a key event")
         }
         event.flags = combo.flags
         event.postToPid(pid)
@@ -665,7 +665,7 @@ func run(_ arguments: [String]) throws {
         guard let text = rest.first else { die(usage, 2) }
         let combo = try parseCombo(text)
         front(pid)
-        postKey(pid, combo)
+        try postKey(pid, combo)
     case "type":
         guard let text = extra["--text"] else { die(usage, 2) }
         front(pid)
@@ -697,9 +697,11 @@ func run(_ arguments: [String]) throws {
         guard result == .success, let element else { die("nothing at that point") }
         var owner: pid_t = 0
         AXUIElementGetPid(element, &owner)
+        // Check ownership before reading a name that could belong to another app.
+        guard owner == pid else { die("the point is not in the development copy", 3) }
         let (node, _) = read(element, depth: 0)
         say("owner \(owner) \(node.role) \(node.name.prefix(80))")
-        if owner != pid || expandRoles("control,field").contains(node.role) { exit(1) }
+        if expandRoles("control,field").contains(node.role) { exit(1) }
     case "bar-gap":
         // A point on the 44-point bar that no element covers.
         guard rest.count == 2 else { die(usage, 2) }
@@ -748,10 +750,11 @@ func run(_ arguments: [String]) throws {
         let to = CGPoint(x: min(box.maxX - 3, box.minX + 160), y: from.y)
         pointer(pid, at: [from, to]) { drag(from, to) }
         board.clearContents()
-        postKey(pid, try parseCombo("cmd+c"))
+        try postKey(pid, parseCombo("cmd+c"))
         guard let copied = poll(2, { board.string(forType: .string) }),
               copied.count >= 3, expected.contains(copied), copied != expected else {
-            die("drag and Cmd-C did not copy a proper substring of the fixture message")
+            // Unwind through the clipboard restore even when the check fails.
+            throw UsageError("drag and Cmd-C did not copy a proper substring of the fixture message")
         }
         say("selected and copied \(copied.count) fixture characters; clipboard restored")
     case "double-click":

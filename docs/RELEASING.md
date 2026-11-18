@@ -14,7 +14,7 @@ manifest, and publishes.
    computer is free **before tagging**, and inspect failures, screenshots and
    skips alongside the remaining manual acceptance list. The script has not
    yet been run against a window; its current evidence is windowless only.
-   Its advisory job on pushes to `main` may skip for missing macOS permissions
+   Its advisory steps on pushes to `main` may skip for missing macOS permissions
    and cannot gate a release. An all-skipped run is not native acceptance.
 3. Tag the merged commit and push the tag. There is no need to wait for
    `main`'s macOS build first: the tag's build runs the same checks on the same

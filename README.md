@@ -162,8 +162,9 @@ The latest release is **v0.1.0-preview.13**.
   one-time setup in Settings → Agents. Other harnesses are planned (M7).
 - **Your Pi setup, partly.** Threads get your Pi skills (including
   `/skill:name`), prompt templates, and user-level
-  `AGENTS.md`, listed in each project's settings and offered when you type `/`. MCP
-  servers and named CLIs are planned (M8).
+  `AGENTS.md`, listed in each project's settings and offered when you type `/`.
+  Project settings also lists Pi MCP servers and saves switches for that project;
+  threads do not use those servers yet. Named CLIs are planned (M8).
 - **Not an IDE.** There is no file editor, embedded terminal, merge, or rebase.
   The Files tab is read-only. Instead Plait hands off: Open in Editor opens the
   file on screen at its line in your editor, Show in Finder reveals it, and
