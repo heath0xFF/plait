@@ -94,7 +94,12 @@ impl Record {
                         .to_string_lossy()
                         .into_owned(),
                     detail: format!(
-                        "{path}, {label}, {counts}. {}",
+                        "{path}, {label}{}. {}",
+                        if counts.is_empty() {
+                            String::new()
+                        } else {
+                            format!(", {counts}")
+                        },
                         if restored {
                             "Recorded by this undo."
                         } else {
@@ -111,21 +116,17 @@ impl Record {
             .enumerate()
             .map(|(i, f)| (f.path.clone(), i))
             .collect();
-        let short = (4..=source.id.len())
-            .find(|&n| {
-                source.id.is_char_boundary(n)
-                    && records.iter().all(|other| {
-                        other.id == source.id || !other.id.starts_with(&source.id[..n])
-                    })
-            })
-            .unwrap_or(source.id.len());
+        let short = short_id(records, source);
         let label = if restored {
             "Restored".into()
         } else {
-            format!("Turn {}", &source.id[..short])
+            format!("Turn {short}")
         };
         let detail = if restored {
-            "Show the files this undo actually restored.".into()
+            format!(
+                "Show files restored by undo {short} of turn {}.",
+                target.original
+            )
         } else {
             format!(
                 "Show files recorded during {}, in thread {}.",
@@ -148,7 +149,15 @@ impl Record {
         let Some(source) = records.iter().find(|r| r.id == self.id) else {
             return;
         };
-        let request = source.request_ids.first().unwrap_or(&source.id);
+        let run = if self.restored {
+            records
+                .iter()
+                .find(|r| r.id == self.original)
+                .unwrap_or(source)
+        } else {
+            source
+        };
+        let request = run.request_ids.first().unwrap_or(&run.id);
         let request_id = format!("request-{request}");
         let title = snapshot
             .and_then(|s| s.messages.iter().find(|m| m.id == request_id))
@@ -168,7 +177,10 @@ impl Record {
             format!("{age} ago")
         };
         self.detail = if self.restored {
-            "Show the files this undo actually restored.".into()
+            format!(
+                "Undo {} restored files from {title}, {time}, in {thread}.",
+                short_id(records, source)
+            )
         } else {
             format!("Show files recorded during {title}, {time}, in {thread}.")
         };
@@ -213,6 +225,17 @@ impl Record {
             .and_then(|p| self.indices.get(p).copied())
             .or_else(|| (!self.files.is_empty()).then_some(0))
     }
+}
+fn short_id<'a>(records: &[TurnRecord], source: &'a TurnRecord) -> &'a str {
+    let size = (4..=source.id.len())
+        .find(|&n| {
+            source.id.is_char_boundary(n)
+                && records
+                    .iter()
+                    .all(|other| other.id == source.id || !other.id.starts_with(&source.id[..n]))
+        })
+        .unwrap_or(source.id.len());
+    &source.id[..size]
 }
 #[cfg(test)]
 mod tests {

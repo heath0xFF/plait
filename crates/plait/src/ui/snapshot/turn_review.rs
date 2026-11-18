@@ -55,6 +55,47 @@ pub(super) fn walk(h: &mut Harness, repository: &Path, suffix: &str) {
         scene(h, repository, kind, None);
         h.capture(&format!("{name}-{suffix}"));
     }
+    scene(
+        h,
+        repository,
+        "ready",
+        Some(Arc::new(plait_core::git::recorded_diff(
+            PATCH.as_bytes(),
+            true,
+            Duration::ZERO,
+        ))),
+    );
+    h.capture(&format!("turn-recorded-limited-{suffix}"));
+    for (name, change, patch) in [
+        ("empty-added", "added", b"diff --git a/empty b/empty\nnew file mode 100644\n--- /dev/null\n+++ b/empty\n".as_slice()),
+        ("empty-deleted", "deleted", b"diff --git a/empty b/empty\ndeleted file mode 100644\n--- a/empty\n+++ /dev/null\n".as_slice()),
+        ("latin1", "modified", b"diff --git a/latin1 b/latin1\n--- a/latin1\n+++ b/latin1\n@@ -1 +1 @@\n-caf\xe9\n+caf\xe8\n".as_slice()),
+    ] {
+        scene(h, repository, "ready", Some(Arc::new(plait_core::git::recorded_diff(patch, false, Duration::ZERO))));
+        h.update(|p, _, _| {
+            let mut data = record("last", &["last"], "ready");
+            data["paths"] = json!([{ "path": if name == "latin1" { "latin1" } else { "empty" }, "change": change, "added": if name == "latin1" { 1 } else { 0 }, "removed": if name == "latin1" { 1 } else { 0 } }]);
+            data["paths_total"] = json!(1);
+            inject(p, vec![data]);
+            p.turn_review.record = Some(Arc::new(Record::prepare(&p.turn_records.data, p.turn_review.target.as_ref().unwrap()).unwrap()));
+        });
+        h.capture(&format!("turn-recorded-{name}-{suffix}"));
+    }
+    scene(h, repository, "undo", None);
+    h.update(|p, w, cx| {
+        let mut restored = record("restore", &["undo-one"], "ready");
+        restored["kind"] = json!("undo");
+        restored["undoes"] = json!("last");
+        let mut another = restored.clone();
+        another["id"] = json!("another-undo");
+        another["created_at"] = json!(60_001);
+        inject(
+            p,
+            vec![another, restored, record("last", &["last"], "undone")],
+        );
+        p.open_review_scopes(w, cx);
+    });
+    h.capture(&format!("turn-recorded-undo-picker-{suffix}"));
     for empty in [false, true] {
         scene(h, repository, "old", None);
         h.update(|p, _, _| {
@@ -553,6 +594,74 @@ fn first_old_host_file_click_opens_current() {
         assert!(p.state.repository.selected.is_none());
     });
     drop(host);
+    drop(h);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn recorded_wording_names_only_available_states() {
+    if !isolated("turn_review::recorded_wording_names_only_available_states") {
+        return;
+    }
+    let (scratch, repository, mut h) = setup("review-wording");
+    for kind in ["loading", "unavailable", "old"] {
+        scene(&mut h, &repository, kind, None);
+        h.update(|p, _, _| {
+            p.turn_review.record = None;
+            let (label, detail) = p.review_scope_text();
+            assert_eq!(label, "Recorded");
+            assert!(!detail.contains("all current staged"));
+            if let Some(error) = &p.turn_review.error {
+                assert_eq!(detail, error.1);
+            } else {
+                assert!(detail.contains("Reading this run"));
+            }
+        });
+    }
+    scene(
+        &mut h,
+        &repository,
+        "ready",
+        Some(Arc::new(plait_core::git::recorded_diff(
+            PATCH.as_bytes(),
+            true,
+            Duration::ZERO,
+        ))),
+    );
+    h.update(|p, _, _| {
+        assert!(p.turn_review.diff.as_ref().unwrap().truncated);
+        assert!(
+            p.recorded_notice().is_none(),
+            "the shared diff notice is sufficient"
+        );
+        let (label, detail) = crate::ui::changes::diff_limit_notice(true);
+        assert_eq!(label, "Limited");
+        assert!(!detail.contains("staging") && !detail.contains("reviewed"));
+        let mut original = record("last", &["last"], "undone");
+        original["paths"][0]["added"] = Value::Null;
+        original["paths"][0]["removed"] = Value::Null;
+        let mut one = record("undo-one", &["undo-one"], "ready");
+        one["kind"] = json!("undo");
+        one["undoes"] = json!("last");
+        let mut two = one.clone();
+        two["id"] = json!("undo-two");
+        two["created_at"] = json!(100_000);
+        inject(p, vec![two, one, original]);
+        let original = Record::prepare(&p.turn_records.data, &target(p, "last", None)).unwrap();
+        assert_eq!(
+            original.files[0].detail,
+            "src/review.rs, Modified. Recorded during this run."
+        );
+        let mut details = Vec::new();
+        for id in ["undo-one", "undo-two"] {
+            let mut saved = Record::prepare(&p.turn_records.data, &target(p, id, None)).unwrap();
+            saved.describe(&p.turn_records.data, p.host.snapshot.as_deref());
+            assert!(saved.detail.contains("Document the behavior"));
+            details.push(saved.detail);
+        }
+        assert_ne!(details[0], details[1]);
+    });
+    h.draw();
     drop(h);
     std::fs::remove_dir_all(scratch).unwrap();
 }

@@ -418,20 +418,33 @@ impl Plait {
             ),
         }
     }
-    pub(super) fn review_scope_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        let (label, detail) = self
-            .turn_review
-            .record
-            .as_ref()
-            .map(|r| (r.label.clone(), r.detail.clone()))
-            .unwrap_or((
-                if self.turn_review.target.is_some() {
-                    "Recorded".into()
-                } else {
-                    "All changes".into()
-                },
+    pub(super) fn review_scope_text(&self) -> (String, String) {
+        if let Some(record) = &self.turn_review.record {
+            (record.label.clone(), record.detail.clone())
+        } else if self.turn_review.target.is_some() {
+            let detail = self
+                .turn_review
+                .error
+                .as_ref()
+                .map(|e| e.1.clone())
+                .unwrap_or_else(|| {
+                    if self.turn_review.loading {
+                        "Reading this run's recorded changes from the host."
+                    } else {
+                        "Show this run's recorded changes."
+                    }
+                    .into()
+                });
+            ("Recorded".into(), detail)
+        } else {
+            (
+                "All changes".into(),
                 "Show all current staged and unstaged files in this checkout.".into(),
-            ));
+            )
+        }
+    }
+    pub(super) fn review_scope_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let (label, detail) = self.review_scope_text();
         button("review-scope", label)
             .h(px(28.))
             .min_w_0()
@@ -686,6 +699,10 @@ impl Plait {
                     .on_activate(cx, |this, _, cx| this.review_comparison(true, cx)),
             )
     }
+    pub(super) fn recorded_notice(&self) -> Option<(&'static str, &'static str)> {
+        (self.turn_review.status == Some(review::Status::Mode))
+            .then_some(("Mode", "The recorded executable bit or file type changed."))
+    }
     pub(super) fn recorded_diff(&self, cx: &mut Context<Self>) -> AnyElement {
         let state = &self.turn_review;
         if state.loading && state.diff.is_none() {
@@ -757,15 +774,7 @@ impl Plait {
                 DiffControls::default(),
                 cx,
             );
-            if diff.truncated || state.status == Some(review::Status::Mode) {
-                let (label, detail) = if diff.truncated {
-                    (
-                        "Limited",
-                        "This preview exceeds the review limit. Open the file in your editor; automatic turn staging and Mark reviewed are unavailable.",
-                    )
-                } else {
-                    ("Mode", "The recorded executable bit or file type changed.")
-                };
+            if let Some((label, detail)) = self.recorded_notice() {
                 return column()
                     .flex_1()
                     .min_h_0()

@@ -1,4 +1,4 @@
-use super::{OpenRepository, Plait, Refresh, theme::*};
+use super::{OpenRepository, Plait, Refresh, theme::*, thread_controls::TextTooltip};
 use gpui::{prelude::*, *};
 use plait_core::{
     git::WriteOp,
@@ -9,6 +9,20 @@ use plait_core::{
 use std::{path::Path, sync::Arc};
 
 const DIFF_LINE_HEIGHT: f32 = 21.;
+
+pub(super) fn diff_limit_notice(recorded: bool) -> (&'static str, &'static str) {
+    if recorded {
+        (
+            "Limited",
+            "This recorded preview reached the 512 KiB or 10,000-line limit.",
+        )
+    } else {
+        (
+            "Preview limited to 512 KiB / 10,000 lines. Repository files are unchanged.",
+            "The preview is limited; repository files are unchanged.",
+        )
+    }
+}
 
 /// Lines picked in the Changes diff by clicking line numbers. It applies only
 /// while the same file and side are shown; another file ignores it.
@@ -730,6 +744,7 @@ impl Plait {
                 let widest = Some(diff.widest_row);
                 let elapsed = diff.elapsed;
                 let truncated = diff.truncated;
+                let (limit_label, limit_detail) = diff_limit_notice(id == "recorded-patch");
                 let gutter = || {
                     div()
                         .w(px(44.))
@@ -743,14 +758,17 @@ impl Plait {
                     .when(truncated, |el| {
                         el.child(
                             div()
+                                .id("diff-limit")
                                 .px_4()
                                 .py_2()
                                 .text_size(px(12.))
                                 .bg(rgb(colors().warn_fill))
                                 .text_color(rgb(colors().amber))
-                                .child(text!(
-                                    "Preview limited to 512 KiB / 10,000 lines. Repository files are unchanged."
-                                )),
+                                .child(limit_label)
+                                .aria_description(limit_detail)
+                                .tooltip(move |_, cx| {
+                                    cx.new(|_| TextTooltip(limit_detail.into())).into()
+                                }),
                         )
                     })
                     .child(
@@ -798,14 +816,18 @@ impl Plait {
                                             .id(("diff-pick", index))
                                             .gap_0()
                                             .flex_shrink_0()
-                                            .child(gutter().pr_2().child(
-                                                line.old_line
-                                                    .map_or(String::new(), |n| n.to_string()),
-                                            ))
-                                            .child(gutter().pr_3().child(
-                                                line.new_line
-                                                    .map_or(String::new(), |n| n.to_string()),
-                                            ))
+                                            .child(
+                                                gutter().pr_2().child(
+                                                    line.old_line
+                                                        .map_or(String::new(), |n| n.to_string()),
+                                                ),
+                                            )
+                                            .child(
+                                                gutter().pr_3().child(
+                                                    line.new_line
+                                                        .map_or(String::new(), |n| n.to_string()),
+                                                ),
+                                            )
                                             .when(picked, |el| el.text_color(rgb(colors().text)))
                                             .when(pickable, |el| {
                                                 el.cursor_pointer()
@@ -824,7 +846,11 @@ impl Plait {
                                             .gap_0()
                                             .w_full()
                                             .h(px(DIFF_LINE_HEIGHT))
-                                            .bg(rgb(if picked { mix(c.bg, c.blue, 0.22) } else { bg }))
+                                            .bg(rgb(if picked {
+                                                mix(c.bg, c.blue, 0.22)
+                                            } else {
+                                                bg
+                                            }))
                                             .font_family(mono())
                                             .text_size(px(12.))
                                             .line_height(px(DIFF_LINE_HEIGHT))
@@ -839,16 +865,14 @@ impl Plait {
                                             )
                                             .when_some(
                                                 hunks.as_ref().and_then(|target| {
-                                                    let hunk = diff.hunks.binary_search(&index).ok()?;
+                                                    let hunk =
+                                                        diff.hunks.binary_search(&index).ok()?;
                                                     Some((target, hunk))
                                                 }),
                                                 |el, (target, hunk)| {
                                                     el.group("diff-hunk")
                                                         .child(hunk_button(
-                                                            target,
-                                                            hunk,
-                                                            &line.text,
-                                                            cx,
+                                                            target, hunk, &line.text, cx,
                                                         ))
                                                         .when(
                                                             target.mode == DiffMode::Unstaged,
@@ -882,7 +906,11 @@ impl Plait {
                             .justify_between()
                             .text_size(px(11.))
                             .text_color(rgb(colors().subtle))
-                            .child(format!("{} patch lines · {} ms", count, elapsed.as_millis()))
+                            .child(format!(
+                                "{} patch lines · {} ms",
+                                count,
+                                elapsed.as_millis()
+                            ))
                             .children(hint),
                     )
                     .into_any_element()
