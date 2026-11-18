@@ -6,7 +6,8 @@ for acceptance evidence and open checks. **M2.5 shipped in v0.1.0-preview.8.
 M8 steps 1 and 2 (skills, prompt templates, and user instructions) shipped in
 v0.1.0-preview.9. M7 steps 1 (choosing a harness, and Codex) and 2 (each
 harness's own permissions, and Claude Code threads) shipped in
-v0.1.0-preview.10. M8 steps 3 and 4 follow M7.**
+v0.1.0-preview.10. M9 steps 1 to 3, M8 steps 3 and 4, and the rest of
+"Agreed next, for daily use" below are the current work.**
 
 ## Milestones
 
@@ -21,7 +22,7 @@ v0.1.0-preview.10. M8 steps 3 and 4 follow M7.**
 | M6 — Multiple machines | Unified project navigation across independent hosts, including disconnected/reconnecting states | Planned |
 | M7 — Any agent harness | Threads run by other agent harnesses (Claude Code, Codex, Pi, omp, Antigravity, and others) beside Pi, with the same conversation, approval, Git, and navigation views | Current work. Steps 1 and 2 (harness choice, Codex, each harness's own permissions, and Claude Code; protocol version 4) shipped in v0.1.0-preview.10; an ACP client follows, agreed first |
 | M8 — Skills, tools, and CLIs | Pi threads use the skills, prompt templates, global instructions, MCP servers, and command-line tools the person already set up for their agent, with each one visible in Settings and every call under Plait's approvals | Steps 1 (skills and user instructions) and 2 (prompt templates, Settings → Agent, and `/` completion) shipped in v0.1.0-preview.9; steps 3 (named CLIs) and 4 (MCP) follow M7 |
-| M9 — Turn records | The host keeps its own record of the checkout before and after every turn, in every harness: per-turn undo first, then committing by turn, review of what changed since the person last looked, and checks the host runs itself | Step 1, per-turn undo, is agreed and is the next work, ahead of M7's ACP client; the later steps are proposed |
+| M9 — Turn records | The host keeps its own record of the checkout before and after every turn, in every harness: per-turn undo first, then committing by turn, review of what changed since the person last looked, and checks the host runs itself | Steps 1 to 3 are agreed and are the current work, step 1 first, ahead of M7's ACP client; the later steps are proposed |
 
 Do not build the whole roadmap at once. Each change must compile, run, and have
 its own checks. Protocol, storage, and shared-contract changes need agreement
@@ -286,8 +287,9 @@ clash; choosing one inserts its text and runs nothing. The project's settings
 list them read-only, with Open folder and Refresh; turning one off stays in Pi's
 settings. Recorded in the [host contract](HOST.md#skills-and-user-instructions).
 
-Next, each agreed before it starts: step 3 adds named CLIs for sandboxed
-projects; step 4 adds MCP servers.
+Next: step 3 adds named CLIs for sandboxed projects; step 4 adds MCP servers.
+Both are agreed to be built (see "Agreed next, for daily use"); the details of
+each are agreed before it starts.
 
 **Direction for M9, turn records:** Plait's guard on files that had changes,
 its exact approvals, and its command sandbox protect a checkout only in Pi
@@ -348,33 +350,92 @@ made by the host rather than the harness.
   without undo, and v0.1.0-preview.11 does not add it. Until undo ships, a
   turn in those threads cannot be undone.
 
-Still to agree before implementation: the host protocol operation and its
-version; the cost target; how long records are kept; what is copied into the
-host's store so that pruning or rewriting history in the repository cannot
-break an undo; how files under Git filters (such as LFS) and line-ending
-conversion are recorded; and whether files ignored one at a time (such as
-`.env`), as opposed to ignored directories, are recorded.
+Agreed for implementation:
 
-Use existing tools for interactive shells and debugging. A future Open in Rex
-integration and native mobile companion are possibilities, not current features.
+- **Ignored files.** A file ignored one at a time, such as `.env`, is recorded
+  when it is at most 1 MB. Ignored directories, such as build output, are
+  not recorded, and a turn's record says which paths it does not cover.
+- **Exact bytes.** A record holds the working-tree bytes as they are, with Git
+  filters (such as LFS) and line-ending conversion off, so an undo writes back
+  exactly what was there.
+- **Its own copy.** The host's store holds its own copy of the earlier content
+  of every path a turn changed, so pruning or rewriting history in the
+  repository cannot break an undo.
+- **Kept** until the thread is deleted, or 30 days after the turn, whichever
+  comes first.
+- **Cost.** Recording an unchanged checkout of 50,000 files takes under 300 ms
+  on an Apple silicon Mac, measured by a test before it ships.
+- **Protocol.** Listing a thread's records and undoing a turn are new host
+  operations in a new protocol version, named in the
+  [host contract](HOST.md) when they are built. An older host offers no undo,
+  and the desktop says so.
+
+Use existing tools for editing, interactive shells, and debugging; "Ways out"
+below is how Plait hands off to them. A native mobile companion is a
+possibility, not a current feature.
 
 Build original application code and design. Compare other products by outcomes,
 not as source or layout templates. See [the originality policy](ORIGINALITY.md).
+
+## Agreed next, for daily use
+
+Agreed on 2026-11-18, to make Plait usable for a full day's work without
+another agent app beside it. Built in this order after M9 step 1, each on its
+own and released as it lands. Pi, Codex, and Claude Code are the harnesses for
+this work; the ACP client (M7 step 3) follows it.
+
+**A native acceptance check.** A script drives a separate development copy of
+Plait, with test data and its own host store, through what headless tests
+cannot see: moving the window by its bar, double-click and full screen,
+selecting text and following a link, typing and streaming, the approval
+shortcuts, and the settings pages. It takes over the pointer, so a person runs
+it when away, before a release. It is a development tool, not part of the app.
+
+**M9 step 2, commit by turn.** Changes shows, for each changed hunk, whether the
+person made it or which turn did. A turn's changes can be staged on their own,
+leaving the person's work in progress unstaged. A hunk that no longer matches
+the turn's record is refused, as a hunk that moved is today. A finished turn's
+closing line opens what that turn changed.
+
+**M9 step 3, since you last looked.** Plait remembers, for each file, the record
+the person last reviewed, and a file's diff can show only what changed since
+then. A file that a later turn changes again is marked as changed, not hidden.
+
+**Ways out.** Plait is not an editor or a terminal, so leaving for one is one
+action. From a file, a diff, or a changed-file row: open it in the person's
+editor at that line, or show it in Finder. From a project: open a terminal at
+its checkout. The editor and the terminal are each a command the person sets
+once in Settings, with `{file}`, `{line}`, and `{project}` filled in; ready
+choices include the system default and Neovim in a Rex tab. Plait starts the
+command and nothing more: it does not wait for it, read its output, or depend
+on Rex.
+
+**Branches.** From Changes: create a branch from the current commit and switch
+to it, or switch to an existing local branch. Uncommitted changes are carried
+as Git carries them, and a switch that would overwrite them is refused with
+Git's own message. There is no force, no merge, no rebase, and no branch
+deletion. These two are added to the Git writes Plait may make.
+
+**Images in messages.** A PNG or JPEG pasted or dropped into the message box is
+sent with the message when the thread's model accepts images, and shown in the
+conversation. The host stores it with the thread. A model or harness that
+cannot take images says so before sending. This changes the host protocol,
+recorded in the [host contract](HOST.md) when built.
+
+**Search in a conversation.** Find in the open conversation, as Find works in
+a file: matches in loaded messages, next and previous, and a count. Text that
+has not been loaded from the host is not searched, and the bar says so.
+
+**M8 steps 3 and 4, named CLIs and MCP servers.** As described under
+"Direction for M8": Pi threads use the command-line tools and then the MCP
+servers the person already set up for Pi, each listed in the project's
+settings and each call under Plait's approvals.
 
 ## Proposed, not yet agreed
 
 The later steps of M9, each agreed before it starts. All of them read the turn
 records described under "Direction for M9" above. None adds a write to the
 person's repository beyond the staging and committing Plait already does.
-
-**Step 2, commit by turn.** Changes shows, for each changed hunk, whether the
-person made it or which turn did. A turn's changes can be staged on their own,
-leaving the person's work in progress unstaged. A hunk that no longer matches
-the turn's record is refused, as a hunk that moved is today.
-
-**Step 3, since you last looked.** Plait remembers, for each file, the record
-the person last reviewed, and a file's diff can show only what changed since
-then. A file that a later turn changes again is marked as changed, not hidden.
 
 **Step 4, checks the host runs.** After a turn, the host can run a check the
 person named for the project, such as a build or a test run, and show its

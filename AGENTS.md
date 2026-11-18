@@ -8,8 +8,10 @@
 - Git reads in the app stay hardened: disable optional locks, external diff,
   textconv, and filters. Git writes are limited to what docs/ROADMAP.md agrees
   (staging by file or hunk, unstaging, committing, push, publish, fetch,
-  fast-forward pull, confirmed, undoable discard, and adding or removing an
-  optional per-thread worktree). Normal development commits are permitted.
+  fast-forward pull, confirmed, undoable discard, creating and switching
+  branches, restoring the files a turn changed when it is undone, and adding
+  or removing an optional per-thread worktree). Normal development commits are
+  permitted.
 - Show only real data in the app: no sample threads or placeholder machines.
   Test scenes may inject sample state, never in a shipped view. Do not imply execution.
 - Build original application code and design. Do not copy or port competitor code,
