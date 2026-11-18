@@ -25,7 +25,8 @@
 - Test parsers, async result guards, and repository edge cases.
 - Run cargo fmt --all -- --check, cargo clippy --workspace --all-targets -- -D warnings,
   and cargo test --workspace. Build and inspect the native app after UI changes.
-- When using Rex, run builds and app sessions in named panes in the current tab.
-  Rex is a development tool, not a build dependency.
+- Run builds and tests directly. Rex is optional and not a build dependency.
+- Do not run `scripts/acceptance-macos.sh` while a person is using this Mac: it
+  takes over the pointer and keyboard. It runs on CI after each push to `main`.
 - Read CONTRIBUTING.md for the work split. Agree before changing shared contracts;
   docs/ROADMAP.md records what is agreed for the current milestone.
