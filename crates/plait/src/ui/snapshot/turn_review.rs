@@ -57,13 +57,13 @@ pub(super) fn walk(h: &mut Harness, repository: &Path, suffix: &str) {
     }
     scene(h, repository, "ready", None);
     h.update(|p, _, cx| {
-        if let Load::Ready(snapshot) = &mut p.state.repository.snapshot {
-            Arc::make_mut(snapshot)
-                .changes
-                .iter_mut()
-                .filter(|c| c.path == Path::new("src/review.rs"))
-                .for_each(|c| c.worktree = b' ');
+        let mut changes = p.state.repository.snapshot.ready().unwrap().changes.clone();
+        for change in &mut changes {
+            if change.path == Path::new("src/review.rs") {
+                change.worktree = b' ';
+            }
         }
+        set_changes(p, changes);
         p.turn_review.current = true;
         p.sync_recorded_current(cx);
     });
@@ -443,14 +443,13 @@ fn current_selects_a_present_layer() {
     h.update(|p, _, cx| {
         use plait_core::{model::DiffMode, state::DiffKey};
         p.host.connected = false;
-        let mut snapshot = (**p.state.repository.snapshot.ready().unwrap()).clone();
-        snapshot.changes = vec![plait_core::model::Change {
+        let changes = vec![plait_core::model::Change {
             path: "src/review.rs".into(),
             original: None,
             index: b'M',
             worktree: b' ',
         }];
-        p.state.repository.snapshot = Load::Ready(Arc::new(snapshot));
+        set_changes(p, changes);
         p.state.repository.selected = Some(DiffKey {
             file: 0,
             mode: DiffMode::Unstaged,
@@ -461,9 +460,9 @@ fn current_selects_a_present_layer() {
             DiffMode::Staged
         );
         // A present staged selection stays selected when both layers exist.
-        if let Load::Ready(snapshot) = &mut p.state.repository.snapshot {
-            Arc::make_mut(snapshot).changes[0].worktree = b'M';
-        }
+        let mut changes = p.state.repository.snapshot.ready().unwrap().changes.clone();
+        changes[0].worktree = b'M';
+        set_changes(p, changes);
         p.sync_recorded_current(cx);
         assert_eq!(
             p.state.repository.selected.as_ref().unwrap().mode,
@@ -472,4 +471,15 @@ fn current_selects_a_present_layer() {
     });
     drop(h);
     std::fs::remove_dir_all(scratch).unwrap();
+}
+
+fn set_changes(p: &mut Plait, changes: Vec<plait_core::model::Change>) {
+    p.state.repository.snapshot = Load::Ready(Arc::new(plait_core::model::Snapshot {
+        root: p.host.checkout.clone(),
+        branch: "main".into(),
+        named: true,
+        tracking: None,
+        changes,
+        elapsed: Duration::ZERO,
+    }));
 }
