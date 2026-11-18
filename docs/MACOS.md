@@ -621,8 +621,9 @@ the harness's most recently used model, else its first. Switching project keeps
 the new thread open and shows that repository in the inspector. While it is
 open, a **New thread** row marks where it will land in the sidebar. Opening
 another thread sets it aside with its text, which Cmd-N brings back; Escape or
-**Discard** clears it. The text is kept while Plait is open, not across a
-restart. Cmd-Shift-N opens it with the model list open. A thread with no title
+**Discard** clears it. Draft text and image references are saved per checkout
+in the desktop recovery journal across restarts. Cmd-Shift-N opens it with the
+model list open. A thread with no title
 yet reads **New thread**. Cmd-Option-N still creates a worktree thread at once,
 since its worktree is made for it. Cmd-1 to Cmd-9
 count threads in sidebar order; Settings can change this to machines or

@@ -1739,3 +1739,36 @@ that dies of its own flood.
 Not exercised for either feature: a live model (an image-only message in
 particular), browser and Preview clipboards, a real pointer for paste and
 drop, and the installed app.
+
+## Thread-workspace refactor baseline
+
+Before separating thread workspace state from the root view, baseline
+measurements were recorded at commit `f0fc5f5` (including the conversation
+redesign in `f49309e`):
+
+- **Headless scenes:** `bash scripts/snapshots.sh` rendered 467 PNGs across
+  wide (`1380 × 860`) and narrow (`900 × 600`) windows using GPUI's offscreen
+  Metal renderer and Core Text.
+- **Frame cost (`PLAIT_BENCH_FRAMES=90 bash scripts/bench-frames.sh`, two
+  consecutive release runs, CPU `Window::draw` without GPU submission):**
+  - `e1` idle disconnected home: 0.32 / 0.32 ms median (0.37 / 0.39 ms p95)
+  - `e2` idle small conversation: 0.54 / 0.54 ms median (0.62 / 0.60 ms p95)
+  - `e3` streaming reveal (120 Hz): 3.16 / 2.88 ms median (3.94 / 3.79 ms p95)
+  - `images` (50 attached): 0.82 / 0.82 ms bottom, 1.64 / 1.63 ms scrolling
+  - `c1`–`c4` heavy conversation (3,750 rows): 0.99–1.06 ms steady, 2.35 / 2.47 ms scrolling
+  - `c5` conversation find new query: 4.37 / 4.44 ms median (4.50 / 4.79 ms p95)
+  - `a1`–`a4` Changes (2,000 files, 20k-line diff): 1.11–1.15 ms steady, 2.27–2.38 ms scrolling
+  - Recorded 5k-line diff: 0.76–0.81 ms steady, 1.72 / 1.67 ms scrolling
+  - `b1`–`b4` History (5,000 commits, 20k-line patch): 0.92–0.97 ms steady, 1.89–2.07 ms scrolling
+  - `f1`–`f2` Files (20k-line highlighted file): 0.60 / 0.59 ms steady, 1.26 / 1.26 ms scrolling
+  - `d1`–`d6` switching: 3.96 / 3.98 ms view switch, 20.19 / 19.91 ms uncached diff, 1.56 / 1.51 ms cached diff, 3.30 / 3.40 ms `step_file`, 3.44 / 3.37 ms thread switch, 0.73 / 0.59 ms first frame after install
+- **Process memory (`frame_bench`, release profile, `PLAIT_BENCH_FRAMES=5`,
+  headless test platform):** 92,143,616 bytes (87.9 MiB) maximum resident set
+  size and 74,908,248 bytes (71.4 MiB) peak memory footprint across the
+  generated fixtures. This excludes GPU textures, live host/sidecar processes,
+  and a native window.
+- **Instrumentation and fixture plan:** upcoming workspace-retention stages
+  will instrument active/hidden fetch, projection, decode, and layout counts
+  and verify generated 1 MiB prose, 16 MiB prose, tool-heavy, and image-heavy
+  fixtures with resident/footprint deltas and wire-frame sizes alongside frame
+  benchmarks.

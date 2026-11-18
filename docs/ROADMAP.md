@@ -497,18 +497,49 @@ network access or the person's own credentials.
 
 ## Agreed next: thread tabs
 
-Tabs initially hold threads only. Their state and presentation must be separate
-from thread content, so later content types can use the same open, select,
-order, and close behavior. This does not approve other tab content types yet.
-Closing a tab must not stop its run or archive its thread.
+Thread tabs are planned and agreed, not yet implemented in the desktop UI. The
+settled behavior and implementation stages are recorded here so workspace state
+separation can proceed without reopening product decisions:
 
-Implementation needs a design review first. The desktop currently keeps most
-workspace state on the root view and resets it when selecting a thread. Separate
-thread workspace state before adding the tab strip; do not add a second set of
-selection rules around the existing resets. Tab identity and transitions belong
-in headless state, and the strip belongs in GPUI. Agree the desktop recovery
-format and the change to the one-bar chrome before implementation. No host
-execution or permission change is needed merely to keep threads open.
+- **Tab content and uniqueness.** A tab holds one thread initially (a tagged
+  content kind with one implementation, leaving room for later content kinds
+  without implementing terminals or browsers now). Each thread has at most one
+  tab in a window; clicking a thread in the sidebar opens its tab or activates
+  the existing tab. Closing a tab flushes its draft/bookmark state and leaves
+  host runs and worktrees intact.
+- **Chrome and shortcuts (planned for the tab-UI stage).** Tabs will occupy a
+  top row visible even when the sidebar is hidden, clearing visible traffic
+  lights. A second row will hold the thread's four views (Conversation,
+  Changes, History, Files). Settings and Project settings will move to window
+  modals that preserve the active tab and view underneath. `Cmd-1` through
+  `Cmd-9` will select tabs, `Cmd-W` will close the active tab, `Cmd-Shift-W`
+  the window, `Cmd-Shift-T` reopen a closed tab, and `Ctrl-Tab` /
+  `Ctrl-Shift-Tab` cycle tabs.
+- **Residency and cost limits.** Only the visible workspace retains loaded
+  conversation history, Markdown projections, decoded images, diffs, files,
+  and its snapshot subscription. Cold tabs retain lightweight restorable
+  bookmarks and drafts without active fetching, parsing, layout, or painting.
+- **Stage boundaries.** Preparatory stages first separate plain core scopes,
+  move thread presentation out of the root window view, and route operations
+  and checkout context by owner while keeping today's single-selection behavior.
+  Later stages add cold workspace retention, the tab strip and view row, modal
+  settings, v2 durable tab/bookmark recovery, authoritative checkout write
+  exclusion, host-owned worktree creation, independent multi-checkout capacity,
+  a durable checkout queue, and optional storage/seeding/read-only extensions.
+- **Agreed v2 recovery layout (for the persistence stage).** Extend the private
+  desktop journal with a `schema_version: 2` index storing tab order, active
+  ID, thread-to-record references, and small bookmark headers, while storing
+  large drafts, pending submissions, and extended view blobs in separate
+  bounded, atomically replaced private files keyed by opaque IDs. Retain the
+  v1 backup until a validated reopen succeeds, keep existing host/checkout
+  identity checks and the 16-item per-thread submission bound, and leave unknown
+  future schemas untouched.
+- **Agreed proposed host capabilities (for the concurrency stages).** Use a
+  protocol revision after 6 with explicit capability flags
+  (`worktree_threads_v1`, `checkout_queue_v1`, `execution_class_v1`,
+  `worktree_storage_v1`, and per-harness `shared_reader`), preserving
+  backward compatibility with older hosts and single-writer checkout behavior
+  until each capability is complete.
 
 ## Agreed next: Linear
 

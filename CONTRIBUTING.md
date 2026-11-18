@@ -1,8 +1,10 @@
 # Contributing to Plait
 
-Plait is an early local macOS preview. Current work is **M2.5: the daily driver**
-on local execution; see the [roadmap](docs/ROADMAP.md). Read the [README](README.md), [architecture](docs/ARCHITECTURE.md),
-and [design guide](DESIGN.md) before making changes.
+Plait is an early local macOS preview. Current work follows the
+[roadmap](docs/ROADMAP.md): turn records (M9), MCP/skills (M8), and the
+workspace-isolation refactor agreed next for thread tabs. Read the
+[README](README.md), [architecture](docs/ARCHITECTURE.md), and [design
+guide](DESIGN.md) before making changes.
 
 ## Build from source
 
@@ -63,10 +65,14 @@ Keep one active writer per checkout, preserve pre-existing dirty work, and retai
 exact-call approval and sandbox checks. Models and Git must remain independent
 of GPUI; filesystem and Git work must stay off the render thread.
 
-Remote execution, Git writes beyond staging and committing (push, discard,
-history rewriting) and an embedded terminal are outside the current work, and
-agent orchestration is not part of Plait. See the [host contract](docs/HOST.md) for
-the complete safety boundary and the [roadmap](docs/ROADMAP.md) for later work.
+Remote execution, general Git history rewriting (merge, rebase, amend, branch
+deletion, force push), and an embedded terminal are outside the current work,
+and agent orchestration is not part of Plait. Git writes follow the allowlist
+agreed in the [roadmap](docs/ROADMAP.md) (staging by file or hunk, unstaging,
+committing, push, publish, fetch, fast-forward pull, confirmed undoable discard,
+creating and switching local branches, host turn-undo restoration, and optional
+per-thread worktrees). See the [host contract](docs/HOST.md) for the complete
+safety boundary and the [roadmap](docs/ROADMAP.md) for later work.
 
 ## Required checks
 

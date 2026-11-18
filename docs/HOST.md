@@ -100,7 +100,7 @@ Request IDs are nonempty ASCII identifiers (letters, digits, hyphen, underscore)
 maximum 128 bytes. They are permanent deduplication keys. Repeating an ID with
 identical input returns the original acceptance; changed input returns `conflict`.
 A client must retain an uncertain submission's ID, including across reconnect.
-Never retry an uncertain submission with a fresh ID. At most one active writing
+Never retry an uncertain submission with a fresh ID. At most one active
 run is permitted for a canonical checkout, including across different host stores.
 A host admits at most eight active checkouts. Empty submissions are rejected.
 A submission to a thread with an active run returns `busy`, unless a version 3

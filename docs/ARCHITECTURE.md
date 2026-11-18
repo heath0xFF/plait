@@ -79,15 +79,6 @@ ui/                     GPUI layout, actions, focus, lists, theme
     mentions.rs         background file ranking and its stale-result guard
     commands.rs         the local command table
     parent.rs           what the window supplies and performs for a composer
-  host.rs               background host requests and event subscriptions
-  history.rs            bounded history reads, projection dispatch, and reading controls
-  session.rs            desktop restore/save coordination and submission guards
-  markdown.rs           native conversation blocks: prose, code, tables, diffs
-  settings.rs           Settings: host status, its tabs, and New threads, Appearance, About
-  settings_project.rs   a project's settings page: its command policy and Pi setup
-  changes.rs            real local status and diff views
-  theme.rs              current palette, original controls, embedded glyphs
-  snapshot.rs           windowless scene snapshots on macOS and Linux (tests only)
 
 crates/plait-core/src/
 host.rs                 bounded Unix-socket framing and requests; background only
@@ -124,7 +115,6 @@ git.rs                  synchronous Git adapter: hardened reads; background only
   git/worktree.rs       add and remove optional per-thread worktrees
   git/record.rs         private checkout records, coverage, changed paths, pruning (M9)
   git/undo.rs           checked working-file restoration and durable undo journal (M9)
-fuzzy.rs                case-insensitive subsequence matching for pickers
 ```
 
 The desktop imports `plait_core`; the core has no GPUI dependencies. Core and
@@ -419,7 +409,7 @@ the running job. A repository change or refresh increments the epoch. An old
 result cannot overwrite the new repository. A stale file result can enter the
 current snapshot's cache, but cannot replace another selected file.
 
-Diffs are loaded on demand. Up to eight diffs are cached per status snapshot.
+Diffs are loaded on demand. Up to 16 diffs are cached per status snapshot.
 Refresh clears that cache. Threads within a checkout share its Git state.
 
 The checkout's file list is a third job, started only when a composer asks for
@@ -1091,12 +1081,15 @@ change needs explicit confirmation; the host's response determines the shown val
 
 ### New threads
 
-New Thread sends `create_thread` with the saved default model and focuses the
-new thread's composer; there is no intermediate page. When no default can be
-used, the model picker opens and the thread is created on selection. An
-unconfirmed creation keeps its request ID: the workspace shows it with a retry
-that reuses that ID, and a new request is not sent while it is pending. A model
-is recorded as recently used only after the host confirms the thread.
+New Thread (`Cmd-N`) opens an unsent draft in the active checkout (`ui/new_thread.rs`)
+and focuses its composer, preserving one draft per checkout in the desktop recovery
+journal (`core/session.rs`). Nothing is sent to the host until the first message
+is submitted; the desktop then sends `create_thread` and submits that message to
+the created thread. An unconfirmed creation keeps its request ID: the workspace
+shows a retry that reuses that ID, and a new request is not sent while it is
+pending. A model is recorded as recently used only after the host confirms the
+thread. `New Thread in Worktree` (`ui/worktree.rs`) creates the worktree first
+and sends `create_thread` immediately once the worktree exists.
 
 The app records root-view construction time, peak construction time,
 selection-handler-to-render time, and startup-to-first-render time. View →
