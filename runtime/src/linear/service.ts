@@ -64,7 +64,7 @@ export class LinearService {
   private setKeySequence = 0;
   private authMutation: Promise<void> = Promise.resolve();
   private readonly querySequence = new Map<string, number>();
-  private readonly inFlightWrites = new Map<string, { op: string; hash: string; promise: Promise<unknown> }>();
+  private readonly inFlightWrites = new Map<string, { op: string; hash: string; authGen: number; promise: Promise<unknown> }>();
 
   constructor(store: Store, storeDirectory: string, options: LinearServiceOptions = {}) {
     this.store = store;
@@ -158,6 +158,7 @@ export class LinearService {
       this.authGeneration++;
       this.cacheGeneration++;
       this.keyRejected = false;
+      this.inFlightWrites.clear();
       this.store.linear.clearAll();
       return formatAuthStatus(saved, false);
     });
@@ -169,6 +170,7 @@ export class LinearService {
     this.setKeySequence++;
     this.cacheGeneration++;
     this.keyRejected = false;
+    this.inFlightWrites.clear();
     return this.serializeAuthMutation(async () => {
       await this.authStore.remove();
       this.store.linear.clearAll();
@@ -624,6 +626,7 @@ export class LinearService {
     execute: () => Promise<T>,
     onExisting: (result: unknown) => Promise<T>,
   ): Promise<T> {
+    const { authGen } = await this.requireAuth();
     const saved = this.store.linear.getWrite(requestId);
     if (saved) {
       if (saved.op !== op || saved.hash !== hash) {
@@ -632,14 +635,14 @@ export class LinearService {
       return onExisting(saved.result);
     }
     const inflight = this.inFlightWrites.get(requestId);
-    if (inflight) {
+    if (inflight && inflight.authGen === authGen) {
       if (inflight.op !== op || inflight.hash !== hash) {
         fail('conflict', 'Request ID is already in flight for a different Linear write.');
       }
       return inflight.promise as Promise<T>;
     }
     const promise = execute();
-    this.inFlightWrites.set(requestId, { op, hash, promise });
+    this.inFlightWrites.set(requestId, { op, hash, authGen, promise });
     try {
       return await promise;
     } finally {

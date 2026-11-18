@@ -272,3 +272,28 @@ test('write operations enforce bounds, reject malformed inputs, and are not expo
   const toolNames = h.runtime.registry({} as never).snapshot().tools().map(({ tool }) => tool.name);
   assert.deepEqual(toolNames.sort(), ['command', 'edit', 'read', 'read_output', 'write']);
 });
+
+test('in-flight write is never joined after sign-out or workspace switch', async t => {
+  const h = await setup(t);
+  assert.equal((await h.call({ op: 'linear_set_key', key: h.fake.validKey })).ok, true);
+
+  let releaseFirst!: () => void;
+  const firstStarted = new Promise<void>(resolve => {
+    h.fake.enqueueFault(async () => {
+      resolve();
+      await new Promise<void>(done => { releaseFirst = done; });
+      return false;
+    });
+  });
+
+  const p1 = h.call({ op: 'linear_post_comment', issue_id: 'issue-142', body: 'WS1 comment', request_id: 'cross-session-id' });
+  await firstStarted;
+  assert.equal((await h.call({ op: 'linear_sign_out' })).ok, true);
+
+  // While signed out, reusing the same request_id must fail with linear_not_signed_in, not join p1.
+  const p2 = h.call({ op: 'linear_post_comment', issue_id: 'issue-142', body: 'WS1 comment', request_id: 'cross-session-id' });
+  releaseFirst();
+  const [, whileSignedOut] = await Promise.all([p1, p2]);
+  assert.equal(whileSignedOut.ok, false);
+  assert.equal(whileSignedOut.error.code, 'linear_not_signed_in');
+});
