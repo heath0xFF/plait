@@ -2086,8 +2086,9 @@ local client asks over the owner-only host socket.
 
 ### Not built in this stage
 
-- No desktop Linear tab or Settings UI yet (the desktop view follows thread
-  tabs).
+- No desktop UI yet (after thread tabs, the first desktop step adds Settings
+  key entry, an issue picker, and a thread label; a dedicated Linear view
+  arrives later alongside issue-triggered runs).
 - No browser OAuth sign-in or token refresh yet.
 - No automatic writes, background polling, or Linear change notifications.
-- No issue-triggered autonomous runs.
+- No issue-triggered autonomous runs (their rules are not yet agreed).

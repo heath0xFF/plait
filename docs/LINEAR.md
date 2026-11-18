@@ -2,22 +2,31 @@
 
 ## Status
 
-Stage L1 (host side) is implemented in `runtime/src/linear/` and documented in
-the [host contract](HOST.md#linear): API-key storage in `linear-auth.json`
-(mode `0600`), a hardened GraphQL client locked to
-`https://api.linear.app/graphql`, additive host operations for auth, teams,
-project binding, bounded paged issue reads and SQLite caching with offline
-fallback, local thread-to-issue links, and two deduplicated person-initiated
-writes (post comment and change workflow state). No desktop UI exists yet; the
-Linear tab follows thread tabs.
+- **Shipped in the host (`runtime/src/linear/`).** Stage L1 implements the
+  host contract documented in [HOST.md](HOST.md#linear): API-key storage in
+  `linear-auth.json` (mode `0600`), a hardened GraphQL client locked to
+  `https://api.linear.app/graphql`, additive host operations for auth, teams,
+  project binding, bounded paged issue reads and SQLite caching with offline
+  fallback, local thread-to-issue links, and two deduplicated person-initiated
+  writes (post comment and change workflow state). Nothing is visible in the
+  desktop app yet.
+- **Planned next.** After thread tabs, a small desktop step adds Settings
+  entry for the API key, an issue picker to start a thread from an issue, and
+  a label showing the linked issue on its thread. There is no Linear tab in
+  that step. A dedicated Linear view arrives later together with
+  issue-triggered runs, as the place where unattended work waits for review;
+  the rules for issue-triggered runs are not yet agreed.
+- **Unverified against Linear.** Nothing in this stage has been tried against
+  Linear's live GraphQL API or MCP server. Every automated test runs against a
+  local loopback fake server. An opt-in manual probe (`scripts/probe-linear.mjs`)
+  is provided to test the GraphQL client against a real Linear key without
+  running the full desktop.
 
-**Unverified against Linear:** nothing in this stage has been tried against
-Linear's live GraphQL API or MCP server. Every automated test runs against a
-local loopback fake server. An opt-in manual probe (`scripts/probe-linear.mjs`)
-is provided to test the GraphQL client against a real Linear key without
-running the full desktop.
+## Using Linear's MCP server from an agent
 
-## Start with the existing MCP support
+An agent can still use Linear's official MCP server through Plait's existing
+MCP support, though MCP is not the path Plait's own native Linear features
+take (native features use the host GraphQL client above).
 
 Linear provides an official Streamable HTTP MCP server at
 `https://mcp.linear.app/mcp`. Its documentation supports browser OAuth and an
@@ -89,9 +98,16 @@ check its source before using its APIs.
 
 Agreed:
 
-- **Native integration scope.** Native Linear support is agreed, beginning with
-  the host side in `runtime/`. The desktop view (a Linear tab) follows thread
-  tabs.
+- **Order of native work.**
+  1. Host foundation in `runtime/` (built; unverified against Linear).
+  2. After thread tabs, a small desktop step: enter the API key in Settings,
+     start a thread from an issue with a picker, and show the issue on its
+     thread as a label. No Linear tab in this step.
+  3. A dedicated Linear view arrives later together with issue-triggered runs,
+     as the place where unattended work waits for review.
+- **Native path vs MCP.** Plait's native Linear features use the host's
+  GraphQL client directly. Agents can still use Linear's official MCP server
+  when configured, but MCP is not the path Plait's own features take.
 - **Sign-in first step.** Start with a personal or restricted API key pasted in
   Settings and stored by the host in its own private file (mode `0600`), never
   in `host.sqlite` or any reply. Browser OAuth with PKCE comes later.
@@ -101,25 +117,21 @@ Agreed:
   automatically, and no agent, tool, or MCP server can reach these operations.
 - **Thread links.** One local source-issue link per thread, stored in the host
   without writing to Linear.
-- **No issue-triggered automation.** Agents picking up issues on their own are
-  not agreed and stay outside this work.
 
-Still open:
+Not yet agreed / still open:
 
+- **Issue-triggered runs.** Planned alongside the later Linear view, but their
+  rules are not agreed: which issues are eligible, what a run may do with
+  nobody there, and where it stops. They also require rewording Plait's rule
+  against agent orchestration, which has not been done.
 - Browser OAuth client registration, PKCE callback handling, and token refresh
   for distributed builds.
 - Which default workspace, team, and optional Linear project selectors to
-  present once the desktop Linear tab is built.
+  present in Settings and the issue picker.
 - Whether a thread will ever need more than one linked issue, and whether
   thread summaries should carry a linked-issue field in a future protocol
   version when the desktop stage lands.
 - Live verification against Linear's GraphQL and MCP endpoints.
-
-Using Linear MCP and building native issue navigation are separate steps. The
-former can validate the workflow without waiting for the desktop view.
-Scheduled runs, issue-triggered execution, and Linear agent delegation remain
-outside this agreement; they require the automation permission design in the
-roadmap.
 
 ## Sources
 

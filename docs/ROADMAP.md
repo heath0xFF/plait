@@ -512,27 +512,32 @@ execution or permission change is needed merely to keep threads open.
 
 ## Agreed next: Linear
 
-Native Linear integration is agreed, built in stages starting with the host
-side. The view itself (a Linear tab) follows thread tabs; nothing is visible in
-the desktop app yet. See [Linear integration](LINEAR.md).
+Native Linear integration is agreed and ordered in three steps. Nothing is
+visible in the desktop app yet, and nothing has been tried against Linear's
+live API. See [Linear integration](LINEAR.md).
 
-- **Sign-in.** Plait signs in to Linear with a personal or restricted API key
-  the person pastes. The host checks the key once against Linear and stores it
-  in its own private file beside `host.sqlite`, never in the database or any
-  reply. Browser OAuth sign-in is planned for later.
-- **Explicit writes only.** Plait may write to Linear in two ways, each only
-  when the desktop asks on an explicit person action: posting a comment on an
-  issue, and moving an issue to another workflow state in its team. Nothing is
-  written automatically, and no agent, tool, or MCP server can call these host
-  operations.
-- **This stage (host foundation).** Additive host operations in `runtime/` for
-  API-key sign-in and sign-out, listing teams and workflow states, binding a
-  project checkout to a team, bounded paged issue lists and details with
-  SQLite caching and offline fallback, local thread-to-issue links, and the two
-  deduplicated write operations. No background polling, no desktop UI, and no
-  protocol version change.
-- **Out of scope.** Issue-triggered autonomous runs remain unagreed and belong
-  under Automations below.
+1. **Host foundation (built in `runtime/`).** Additive host operations for
+   pasted API-key sign-in and sign-out (stored in a private `0600` file beside
+   `host.sqlite`, never in the database or any reply), listing teams and
+   workflow states, binding a project checkout to a team, bounded paged issue
+   lists and details with SQLite caching and offline fallback, local
+   thread-to-issue links, and two explicit person-initiated writes (post a
+   comment on an issue, and move an issue to another workflow state in its
+   team). Nothing writes automatically, no agent, tool, or MCP server can call
+   these host operations, there is no background polling, and the protocol
+   version is unchanged. Browser OAuth sign-in is planned for later.
+2. **First desktop step (planned, after thread tabs).** Enter the Linear API
+   key in Settings, pick an issue to start a thread from, and show the linked
+   issue on its thread as a label. There is no Linear tab in this step.
+3. **Linear view and issue-triggered runs (planned, rules not yet agreed).** A
+   dedicated Linear view arrives together with issue-triggered runs, as the
+   place where unattended work waits for review. The rules for issue-triggered
+   runs are not agreed yet—which issues are eligible, what a run may do with
+   nobody there, and where it stops—and they require rewording Plait's rule
+   against agent orchestration, which has not been done.
+
+An agent can still use Linear's own MCP server through Plait's MCP support,
+but MCP is not the path Plait's native Linear features take.
 
 ## Proposed, not yet agreed
 
