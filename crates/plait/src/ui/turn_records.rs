@@ -553,13 +553,18 @@ impl Plait {
                     .iter()
                     .map(|path| div().font_family(mono()).child(path.clone())),
             )
-            .when(blocked.changed_omitted > 0, |el| {
-                el.child(format!("{} more changed paths", blocked.changed_omitted))
-            })
             .when(!covered.is_empty(), |el| {
                 el.child(div().mt_2().child("Not covered"))
             })
-            .children(covered.iter().map(|text| div().child(text.clone())))
+            .children(covered.iter().map(|text| div().child(text.clone())));
+        Some(column().mt_2().mb_1().p_3().gap_2().border_1().border_color(rgb(colors().edge)).rounded_md()
+            .text_size(px(12.)).text_color(rgb(colors().muted))
+            .child(div().text_color(rgb(colors().text)).child("Changed since this turn"))
+            .child("Files found changed by you or a later run are left alone; Undo the rest restores only the other covered files.")
+            .child(list)
+            .when(blocked.changed_omitted > 0, |el| {
+                el.child(format!("{} more changed paths", blocked.changed_omitted))
+            })
             .when(blocked.omitted > 0, |el| {
                 el.child(format!("{} more not-covered paths", blocked.omitted))
             })
@@ -568,12 +573,7 @@ impl Plait {
                     "The host preview omitted {} further coverage entries.",
                     blocked.host_omitted
                 ))
-            });
-        Some(column().mt_2().mb_1().p_3().gap_2().border_1().border_color(rgb(colors().edge)).rounded_md()
-            .text_size(px(12.)).text_color(rgb(colors().muted))
-            .child(div().text_color(rgb(colors().text)).child("Changed since this turn"))
-            .child("Files found changed by you or a later run are left alone; Undo the rest restores only the other covered files.")
-            .child(list)
+            })
             .child(row().child(button("undo-rest", "Undo the rest").disabled(self.undo_refusal(line).is_some())
                 .on_activate(cx, move |this, window, cx| this.undo_run(&run, true, window, cx)))
                 .child(button("undo-cancel", "Cancel").on_activate(cx, |this, _, cx| this.cancel_undo_panel(cx))))
