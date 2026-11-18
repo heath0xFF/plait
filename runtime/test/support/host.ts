@@ -23,7 +23,7 @@ export async function until<T>(read: () => Promise<T>, accept: (value: T) => boo
     try { const value = await read(); if (accept(value)) return value; last = value; } catch (error) { last = error; }
     await delay(40);
   }
-  throw new Error(`Condition timed out: ${JSON.stringify(last)}`);
+  throw new Error(`Condition timed out: ${last instanceof Error ? last.message : JSON.stringify(last)}`);
 }
 // Tests inspect wire objects so schema failures remain visible rather than coerced.
 type Reply = { ok: boolean; result: { thread: Snapshot; threads: Snapshot[]; default_model: unknown; models: unknown[]; accepted: boolean }; error?: { code: string; message: string } };
@@ -58,14 +58,23 @@ export async function setup(t: { after: (fn: () => Promise<void>) => void }, sce
   await exec('/usr/bin/git', ['-C', repo, '-c', 'user.name=Test', '-c', 'user.email=test@invalid', 'commit', '-qm', 'fixture']);
   const children: ChildProcess[] = [];
   const start = async (mode = scenario) => {
-    const child = spawn(binary, ['run', '--store', store, '--runtime', fixture], { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, PLAIT_TEST_SCENARIO: mode } });
-    children.push(child);
-    let stderr = ''; child.stderr!.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-8192); });
-    await until(async () => {
-      if (child.exitCode !== null) throw new Error(`Host exited: ${stderr}`);
-      return request(store, { op: 'status' });
-    }, reply => reply.ok);
-    return child;
+    const deadline = Date.now() + 15000;
+    for (;;) {
+      const child = spawn(binary, ['run', '--store', store, '--runtime', fixture], { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, PLAIT_TEST_SCENARIO: mode } });
+      children.push(child);
+      let stderr = ''; child.stderr!.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-8192); });
+      const gone = () => child.exitCode !== null || child.signalCode !== null;
+      while (!gone() && Date.now() < deadline) {
+        try { if ((await request(store, { op: 'status' })).ok) return child; } catch { /* Not listening yet. */ }
+        await delay(40);
+      }
+      if (!gone()) throw new Error('Host did not answer in time.');
+      await delay(50);
+      // A killed host's runtime finishes the record it was taking before it lets go of the
+      // store. A host started sooner exits at once, and like the installed service is started again.
+      if (!/store already has a writer/.test(stderr) || Date.now() >= deadline) throw new Error(`Host exited: ${stderr}`);
+      await delay(100);
+    }
   };
   t.after(async () => {
     for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
