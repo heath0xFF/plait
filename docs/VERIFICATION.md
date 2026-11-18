@@ -1180,3 +1180,39 @@ the sandboxed helper median 243 ms (230–248), and the 200-file helper median
 local wall-clock samples, not isolated-system guarantees. The helper now starts
 one additional supervisor worker; the inventory reuses directory-name reads
 and does not run a Git process for each directory.
+
+### Release check for v0.1.0-preview.14
+
+On 2026-11-18, on the tree that was tagged, `bash scripts/check.sh` exited 0:
+630 Rust tests (171 desktop, 437 core, 14 host, 8 helper integration), 353
+runtime tests, TypeScript checks, and release builds.
+
+Before the release, a reviewer who had not written the code read the undo
+changes and reproduced eight defects with the release helper. Two lost data
+with no concurrent writer: a bare repository inside the checkout was recorded
+as ordinary files, so Undo the rest could delete its objects, and an untracked
+folder that could not be read was taken as absent, so undo could delete files
+that predated the run. Seven of the eight were fixed with the regression tests
+described above; the retention limit above is the eighth.
+
+Someone other than the fixer then ran separate reproductions of the bare
+repository, the unreadable folder, and the decomposed file name against the
+release helper built before the fixes, where each failed, and against the one
+built from them, where each passed. An index holding two names that differ
+only by case recorded and undid normally on both.
+
+The release helper was also run under its production sandbox, outside the test
+suite. On a linked worktree of a scratch repository: a record, a simulated run
+(an edit, a deletion, files created in new folders, a mode-only change, a
+retargeted symlink, an ignored file, a file with staged changes), a second
+record naming exactly those paths, an undo that an outside edit blocked without
+changing anything, and an undo that restored every file's bytes, mode, and link
+target while leaving the index and every file in the repository's Git
+directory byte-identical. On Plait's own main checkout and one of its linked
+worktrees: two records each into an empty store, with the listing of Git
+metadata (names, sizes, modes, times) and `git status` identical before and
+after. The linked worktree took 118 ms for the first record and 62 ms for the
+second.
+
+None of this is installed-app acceptance. Undo and Redo have not been tried
+against an installed host, and no paid harness was used.
