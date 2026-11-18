@@ -55,6 +55,27 @@ pub(super) fn walk(h: &mut Harness, repository: &Path, suffix: &str) {
         scene(h, repository, kind, None);
         h.capture(&format!("{name}-{suffix}"));
     }
+    for empty in [false, true] {
+        scene(h, repository, "old", None);
+        h.update(|p, _, _| {
+            p.tab = Workspace::Conversation;
+            if empty {
+                let mut data = record("last", &["last"], "ready");
+                data["paths"] = json!([]);
+                data["paths_total"] = json!(0);
+                inject(p, vec![data]);
+            }
+        });
+        h.capture(&format!(
+            "turn-old-host-{}-{suffix}",
+            if empty { "empty" } else { "links" }
+        ));
+    }
+    h.update(|p, _, cx| {
+        p.clear_turn_review();
+        p.state.repository.refresh();
+        p.pump(cx);
+    });
     scene(h, repository, "ready", None);
     h.update(|p, _, cx| {
         let mut changes = p.state.repository.snapshot.ready().unwrap().changes.clone();
@@ -482,4 +503,56 @@ fn set_changes(p: &mut Plait, changes: Vec<plait_core::model::Change>) {
         changes,
         elapsed: Duration::ZERO,
     }));
+}
+
+#[core::prelude::v1::test]
+fn first_old_host_file_click_opens_current() {
+    if !isolated("turn_review::first_old_host_file_click_opens_current") {
+        return;
+    }
+    let (scratch, repository, mut h) = setup("review-old-click");
+    let host = Host::start(|_| {
+        Some(
+            json!({"ok":false,"error":{"code":"invalid_request","message":"Unknown operation or field."}}),
+        )
+    });
+    h.update(|p, w, cx| {
+        assert!(!p.turn_review.older);
+        p.open_turn_review(target(p, "last", Some("src/review.rs")), w, cx);
+    });
+    wait(&mut h, |p| {
+        p.turn_review.older && p.turn_review.target.is_none()
+    });
+    h.update(|p, _, _| {
+        let selected = p.state.repository.selected.as_ref().unwrap();
+        assert_eq!(
+            p.state.repository.snapshot.ready().unwrap().changes[selected.file].path,
+            Path::new("src/review.rs")
+        );
+        let line = p.turn_records.lines.latest.as_ref().unwrap();
+        let detail = p.closing_file_detail(&line.files[0], line);
+        assert!(detail.contains("current Changes"));
+        assert!(!detail.contains("recorded"));
+        assert_eq!(p.tab, Workspace::Changes);
+    });
+    // A second click uses the known capability and performs no further probe.
+    let probes = host.requests.lock().unwrap().len();
+    h.update(|p, w, cx| p.open_turn_review(target(p, "last", Some("README.md")), w, cx));
+    assert_eq!(host.requests.lock().unwrap().len(), probes);
+    // A stale old-host response must never redirect another thread or checkout.
+    h.update(|p, w, cx| {
+        p.turn_review.older = false;
+        p.open_turn_review(target(p, "last", Some("src/review.rs")), w, cx);
+        p.host.checkout = repository.join("different");
+        p.host.connected = false;
+        p.tab = Workspace::Conversation;
+        p.state.repository.selected = None;
+    });
+    h.update(|p, _, _| {
+        assert_eq!(p.tab, Workspace::Conversation);
+        assert!(p.state.repository.selected.is_none());
+    });
+    drop(host);
+    drop(h);
+    std::fs::remove_dir_all(scratch).unwrap();
 }

@@ -112,6 +112,7 @@ pub struct File {
     pub name: String,
     pub counts: String,
     pub review_detail: String,
+    pub current_detail: String,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Line {
@@ -189,6 +190,10 @@ fn line(
                 .unwrap_or(file.path.as_os_str())
                 .to_string_lossy()
                 .replace(['\n', '\r', '\t'], " "),
+            current_detail: format!(
+                "Open {} in current Changes. Turn review needs a newer host.",
+                file.path.display()
+            ),
             review_detail: if current.kind == RecordKind::Undo {
                 format!("Review {} restored by this undo.", file.path.display())
             } else {

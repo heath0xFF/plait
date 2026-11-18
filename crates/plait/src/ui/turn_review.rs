@@ -19,6 +19,7 @@ use std::sync::Arc;
 #[derive(Default)]
 pub(super) struct TurnReview {
     pub target: Option<Target>,
+    pub window: Option<AnyWindowHandle>,
     pub record: Option<Arc<Record>>,
     pub diff: Option<Arc<Diff>>,
     pub status: Option<review::Status>,
@@ -58,6 +59,7 @@ impl Plait {
         let state = &mut self.turn_review;
         state.generation += 1;
         state.target = None;
+        state.window = None;
         state.record = None;
         state.diff = None;
         state.status = None;
@@ -177,9 +179,18 @@ impl Plait {
             result.record = Some(record);
             Ok(result)
         });
+        let window = self.turn_review.window;
         cx.spawn(async move |this, cx| {
             let result = task.await;
-            let _ = this.update(cx, |this, cx| this.review_loaded(stamp, result, cx));
+            if let Some(window) = window {
+                let _ = window.update(cx, |_, window, cx| {
+                    this.update(cx, |this, cx| {
+                        this.review_loaded(stamp, result, Some(window), cx)
+                    })
+                });
+            } else {
+                let _ = this.update(cx, |this, cx| this.review_loaded(stamp, result, None, cx));
+            }
         })
         .detach();
         cx.notify();
@@ -188,6 +199,7 @@ impl Plait {
         &mut self,
         stamp: Stamp,
         result: Result<Loaded, host::Error>,
+        window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
         self.turn_review.running = false;
@@ -216,6 +228,12 @@ impl Plait {
             }
             Err(error) if review::needs_host_update(&error) => {
                 self.turn_review.older = true;
+                if let Some(path) = stamp.target.as_ref().and_then(|target| target.path.clone())
+                    && let Some(window) = window
+                {
+                    self.open_thread_file(path, window, cx);
+                    return;
+                }
                 self.turn_review.error = Some((
                     "Older host",
                     "Turn review needs a newer host. Current Git changes are still available."
@@ -246,7 +264,14 @@ impl Plait {
         {
             return;
         }
+        if self.turn_review.older
+            && let Some(path) = &target.path
+        {
+            self.open_thread_file(path.clone(), window, cx);
+            return;
+        }
         self.clear_turn_review();
+        self.turn_review.window = Some(window.window_handle());
         self.turn_review.target = Some(target);
         self.diff_scroll = UniformListScrollHandle::new();
         self.file_scroll = UniformListScrollHandle::new();

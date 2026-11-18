@@ -94,6 +94,20 @@ pub(super) struct TurnRecords {
     pub(super) note: Option<(String, &'static str, String)>,
 }
 impl Plait {
+    pub(super) fn closing_file_detail<'a>(
+        &self,
+        file: &'a records::File,
+        line: &'a Line,
+    ) -> &'a str {
+        if self.turn_review.older {
+            &file.current_detail
+        } else if line.availability == Availability::Ready {
+            &file.review_detail
+        } else {
+            &line.review_detail
+        }
+    }
+
     fn record_stamp(&self) -> Option<Stamp> {
         let snapshot = self.host.snapshot.as_ref()?;
         (self.host.selected.as_deref() == Some(snapshot.id.as_str())).then(|| Stamp {
@@ -497,11 +511,7 @@ impl Plait {
                             target.path = Some(path.clone());
                             target
                         });
-                        let detail = if available {
-                            file.review_detail.clone()
-                        } else {
-                            line.review_detail.clone()
-                        };
+                        let detail = self.closing_file_detail(file, line).to_owned();
                         button(
                             SharedString::from(format!("run-file-{run}-{}", path.display())),
                             "",
@@ -511,7 +521,7 @@ impl Plait {
                         .h(px(22.))
                         .px_0()
                         .gap(px(3.))
-                        .aria_label(file.review_detail.clone())
+                        .aria_label(detail.clone())
                         .disabled(!available)
                         .tooltip(move |_, cx| cx.new(|_| TextTooltip(detail.clone())).into())
                         .child(
@@ -543,6 +553,11 @@ impl Plait {
                     }))
                     .when(line.files.is_empty(), |el| {
                         let target = target.clone();
+                        let detail = if older {
+                            "Turn review needs a newer host.".into()
+                        } else {
+                            line.review_detail.clone()
+                        };
                         el.child(
                             button(
                                 SharedString::from(format!("review-empty-{run}")),
@@ -552,7 +567,8 @@ impl Plait {
                             .px_0()
                             .text_color(rgb(colors().blue))
                             .underline()
-                            .aria_label("Review this turn's recorded changes")
+                            .aria_label(detail.clone())
+                            .tooltip(move |_, cx| cx.new(|_| TextTooltip(detail.clone())).into())
                             .disabled(!available)
                             .on_activate(
                                 cx,
@@ -566,7 +582,11 @@ impl Plait {
                     })
                     .when(line.files.len() > 3, |el| {
                         let target = target.clone();
-                        let detail = line.more_detail.clone();
+                        let detail = if older {
+                            "Turn review needs a newer host.".into()
+                        } else {
+                            line.more_detail.clone()
+                        };
                         el.child(
                             button(
                                 SharedString::from(format!("review-more-{run}")),
@@ -577,7 +597,7 @@ impl Plait {
                             .flex_shrink_0()
                             .text_color(rgb(colors().blue))
                             .underline()
-                            .aria_label(line.more_detail.clone())
+                            .aria_label(detail.clone())
                             .tooltip(move |_, cx| cx.new(|_| TextTooltip(detail.clone())).into())
                             .disabled(!available)
                             .on_activate(
