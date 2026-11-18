@@ -226,6 +226,10 @@ read, and a failure message long enough to wrap in the state line.
 
 ## Known gaps
 
+The [native acceptance check](#native-acceptance-check) below is implemented,
+but **has not yet been run against a window**. Its windowless checks do not
+close any of these native gaps.
+
 - Gatekeeper approval, installed authentication, and a live-model source change
   on a user-managed Mac need separate acceptance. CI does not replace them.
 - The bundle targets macOS 15+, but CI currently runs on macOS 26. Older-system
@@ -351,7 +355,177 @@ recorded here:
 - [ ] Cmd-P opens a file in the Files tab; Cmd-F, Cmd-G, and Cmd-Shift-G find
       and step; a file an agent edits rereads when the window is focused again.
 
+## Native acceptance check
+
+`scripts/acceptance-macos.sh` is a development check of a separate native
+process. **It has not yet been run against a window.** Its checks below are
+intended coverage, not native acceptance evidence. The first real run will
+most likely stop at Accessibility permission or expose a difference in GPUI's
+live accessibility tree, field focus, or window geometry. Palette roles were
+checked against the pinned `accesskit_macos` source, but their live names and
+press actions still need that run. The text-selection coordinates, a free
+stretch of the header, and macOS full-screen transitions are especially likely
+to need adjustment. A failure keeps the observation instead of converting it
+to a pass or silently using a pointer click.
+
+Build the normal development executables and runtime dependencies with
+`bash scripts/check.sh`, then run the check when the computer is free:
+
+```sh
+bash scripts/acceptance-macos.sh
+# Skip bar and panel drags, double-click, and conversation text selection:
+bash scripts/acceptance-macos.sh --no-pointer
+# Keep machine-readable results and diagnostics in a new directory:
+bash scripts/acceptance-macos.sh --artifacts /tmp/plait-acceptance-results
+```
+
+It requires the repository's normal macOS development tools (Python 3, Git,
+Xcode's Swift compiler, and Node for the development host). It installs no
+additional packages. `--app /path/to/plait` and `--host /path/to/plait-host`
+select already-built executables, including extracted CI packages. The
+terminal or runner needs **Accessibility** permission; macOS may also list
+the compiled `axdrive` helper. **Screen Recording** permits failure captures.
+The check never grants permissions or changes the system double-click setting.
+It uses no Apple events, so it needs no Automation permission. A missing
+Accessibility grant skips the native items with a reason. An inaccessible
+window after permission was granted fails setup. Skips are not passes.
+
+The normal run announces that it takes the pointer for a few minutes.
+`--no-pointer` still brings its own window forward and sends native key events;
+it is not a background check to run while typing elsewhere. Controls are
+pressed with the accessibility API, keys go to the launched PID, and only the
+six pointer items below post pointer events. Before a pointer gesture the
+helper checks that its starting point belongs to that PID, then restores the
+pointer's original position. The text-selection check temporarily uses the
+clipboard and restores every representation it could read; clipboard contents
+are never written to diagnostics.
+
+Isolation is independent of the executable name. A private temporary folder
+contains a copy of the desktop executable, `PLAIT_HOST_STORE`,
+`PLAIT_DESKTOP_STATE_DIR`, `PLAIT_DESKTOP_PREFERENCES_FILE`, a disposable home
+and Pi configuration, and a Git repository with two branches and two changed
+hunks. The app and host receive a small environment without inherited provider
+credentials or Git overrides; Git ignores system/global configuration, uses a
+test identity, and has signing and hooks disabled. The current system
+double-click choice is read once and mirrored into the disposable home's
+global preferences, so isolating CF preferences does not change that choice.
+Nothing is installed, and
+no LaunchAgent is registered. Only the owned PIDs/process group are stopped.
+The person's installed Plait may remain running.
+
+Conversation data comes from the **production host and Pi runtime**, talking
+to a scripted Anthropic-shaped SSE endpoint on loopback. Its event format
+follows `runtime/test/support/replay.ts`; journal seeding follows
+`runtime/test/support/installed-ui.ts`. A fixture model and a non-secret key
+exist only in the private Pi directory. A real host thread holds the scripted
+reply, pending edit approvals, and a deliberately slow stream. The desktop
+reads it through the normal socket protocol. No sample view, hidden app mode,
+real model, provider credential, or external service supplies the transcript.
+
+Each row below corresponds to a reported item (the four workspace tabs and
+seven Settings tabs each have separate results):
+
+| Item | What must be observed | Pointer |
+| --- | --- | --- |
+| Fixture isolation | Private host and desktop state, test Git identity, scripted conversation | No |
+| Native setup / permissions | PID-owned window and seeded assistant message; permission state recorded | No |
+| Traffic lights, sidebar hidden | All three light frames centered within 3 points of the 44-point bar, first about 14 points in, header toggle at least 4 points clear | No |
+| Drag sidebar bar | Empty rail strip moves the window; header control still activates | Yes |
+| Drag header bar | Empty header moves the window with sidebar hidden; header control still activates | Yes |
+| Double-click bar | Current system setting produces minimize, no movement, or resize; setting never changed | Yes |
+| Full screen and back | Native full-screen state changes both ways; header control responds afterwards | No |
+| Sidebar toggle and shortcut | AXPress and Cmd-B hide and restore it | No |
+| Inspector toggle and shortcut | AXPress and Cmd-L hide and restore it; skipped on a display too narrow for it | No |
+| Resize sidebar | Edge moves and new width is saved in private preferences | Yes |
+| Resize inspector | Edge moves and new width is saved; skipped on a narrow display | Yes |
+| Conversation tab | Selected state and message field | No |
+| Changes tab | Selected state and commit field | No |
+| History tab | Selected state and fixture baseline commit | No |
+| Files tab | Selected state and Open File control | No |
+| Settings | Cmd-comma opens Settings and Done is available | No |
+| New threads settings | Selected tab and Models section | No |
+| Providers settings | Selected tab and Find provider field | No |
+| Agents settings | Selected tab and Agent harnesses section | No |
+| Keyboard settings | Selected tab and Find shortcut field | No |
+| Editor settings | Selected tab and custom-command fields | No |
+| Appearance settings | Selected tab and Code font field | No |
+| About settings | Selected tab and About and updates section | No |
+| Project settings | Project's sidebar menu opens its Commands settings and returns | No |
+| Command palette | Cmd-K, typing and Return dispatch Changes | No |
+| Find in file | Cmd-F; three fixture matches; next/previous shortcuts and buttons; Escape | No |
+| Find in conversation | Same sequence against the host's three text matches | No |
+| Composer focus after tab switches | Clicked tabs and Cmd-Shift-1/2/3 preserve draft, return focus, and route later shortcuts and Find to the right view | No |
+| Switch branch | Picker selection and actual Git HEAD agree | No |
+| Create branch | New picker entry creates and switches the disposable branch | No |
+| Stage one hunk | First hunk enters Git's index; second remains unstaged | No |
+| Commit staged hunk | New commit and expected subject; empty index; second hunk retained | No |
+| Custom handoff settings | Typed commands saved to private preferences | No |
+| Open in Editor | Recorder receives exact file, current find-match line, and project arguments | No |
+| Open Terminal Here | Cmd-Option-T recorder receives exact project argument | No |
+| Show in Finder | Control is found; activation explicitly skipped (see below) | No |
+| Long message | Native Unicode key events produce an exact long draft, grow the field, and save it without sending | No |
+| Conversation text selection | Drag and Cmd-C copy a proper substring of the fixture reply | Yes |
+| Allow approval shortcut | Cmd-Option-Y resolves host approval and changes the exact fixture file | No |
+| Deny approval shortcut | Cmd-Option-period resolves host approval and leaves the file unchanged | No |
+| Streaming reply | At least two lengths of the writing label, followed by final assistant text | No |
+| Follow conversation link | Explicitly skipped because it would open the default browser | No |
+
+The script cannot substitute a custom command for **Show in Finder**:
+`plait_core::handoff::show_in_finder` always starts `/usr/bin/open -R`.
+It finds that control but does not activate it. Conversation links similarly
+open the system browser without a configurable override. Those two actions
+remain manual acceptance; this check never opens Finder, an editor, a terminal,
+or a browser. The editor and terminal custom commands only write their received
+arguments to files. Testing actual editor line navigation, Finder selection,
+Terminal/Rex startup and URL following still requires those applications.
+
+Other limits: AX geometry cannot certify drawn pixels or macOS 15 appearance;
+AXPress does not prove a mouse click's hit testing; the full-screen check does
+not visually inspect the hidden lights; double-click tests only the current
+system choice and checks resizing, not exact Fill margins. One long draft and
+one short stream do not establish sustained performance, caret/IME correctness,
+smoothness, scrolling, hover behavior, or VoiceOver usability. Settings checks
+verify navigation and named contents, not provider sign-in or every control.
+Live models, authentication, recovery, Stop, updates, signed commits, hooks,
+Git LFS and older systems remain separate checks.
+
+Output has one `PASS`, `FAIL` or `SKIPPED` line per item and a summary. Any
+failure exits nonzero; an all-skipped native run exits zero with explicit skips.
+Each failure attempts an AX dump and **only that PID's window screenshot**,
+using its window ID with `screencapture -l`; a capture failure gets its own
+reason file. Failures and skips retain the disposable folder and print its
+path. A completely passing run removes it. `--artifacts` copies generated
+results, logs, argument recordings and screenshots to the requested new
+folder. It does not copy host databases or executables. CI uploads these plus
+the console output. The advisory `native-acceptance` job runs only on pushes
+to `main`, reuses the package job's artifact without installing it, and has
+`continue-on-error`. There was no existing non-gating macOS job to append it
+to; the additional job does no Rust build. Tagged releases do not run or wait
+for it.
+
+Verified without a window: Swift compilation and its pure selector/key/Unicode/
+gap tests; Python tests of environment isolation, failure/skip reporting,
+traffic-light bounds and replay frames; the production host/replay transcript
+and allow/deny edit effects, growing stream, and argument recorder; shell syntax; workflow YAML and its non-gating,
+main-only condition; and `bash scripts/check.sh` (format, Clippy, workspace and
+runtime tests, release builds). The existing smoke AppleScript was compiled
+with `osacompile`, not executed; this check adds no AppleScript or JXA.
+ShellCheck was not installed during this verification. The check's own
+windowless entry points are:
+
+```sh
+bash scripts/acceptance-macos.sh --self-test
+bash scripts/acceptance-macos.sh --fixture-test --host target/debug/plait-host
+```
+
+Neither entry point launches the desktop, reads an accessibility tree, or
+sends keyboard/pointer events. They do not replace the first real native run.
+
 ## Manual release acceptance
+
+Once the native acceptance check above has passed its first real-window run,
+run it before tagging and inspect every failure and skip, then complete the
+remaining manual checks below. Until then it is an unproven advisory check.
 
 Use a disposable checkout and private host/session directories. Do not reuse
 another person's conversation, change OS security settings, or inject global

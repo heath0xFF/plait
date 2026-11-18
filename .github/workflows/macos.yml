@@ -124,6 +124,50 @@ jobs:
             target/release-inputs
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
+  # There is no existing non-gating macOS job to append this to. Reuse the
+  # package artifact instead of building again; never run this on a tag.
+  native-acceptance:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: package
+    continue-on-error: true
+    runs-on: macos-26
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Download the development package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download "$GITHUB_RUN_ID" --name "plait-macos-arm64-$GITHUB_SHA" --dir acceptance-package
+      - name: Extract without installing
+        run: |
+          mkdir -p acceptance-build/host
+          ditto -x -k acceptance-package/Plait-*-macos-arm64.zip acceptance-build
+          tar -xzf acceptance-build/Plait.app/Contents/Resources/Host.tar.gz -C acceptance-build/host
+      - name: Native acceptance (advisory)
+        timeout-minutes: 8
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          host=(acceptance-build/host/*/bin/plait-host)
+          bash scripts/acceptance-macos.sh \
+            --app acceptance-build/Plait.app/Contents/MacOS/plait \
+            --host "${host[0]}" --artifacts acceptance-results 2>&1 | tee acceptance-output.log
+      - name: Upload native observations and failure captures
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: plait-native-acceptance-${{ github.sha }}
+          path: |
+            acceptance-output.log
+            acceptance-results/
+          if-no-files-found: warn
+          retention-days: 14
+
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [check, package]

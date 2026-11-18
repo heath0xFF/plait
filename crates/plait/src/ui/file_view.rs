@@ -534,18 +534,7 @@ impl Plait {
         let query_empty = field
             .as_ref()
             .is_none_or(|field| field.read(cx).text().is_empty());
-        let status = if query_empty {
-            String::new()
-        } else if count == 0 {
-            "No matches".into()
-        } else {
-            format!(
-                "{} of {}{}",
-                current + 1,
-                count,
-                if count >= FIND_LIMIT { "+" } else { "" }
-            )
-        };
+        let status = find_status(query_empty, current, count);
         row()
             .id(id("bar"))
             .role(Role::Search)
@@ -565,7 +554,12 @@ impl Plait {
             }))
             .children(field.clone().map(|field| div().w(px(280.)).child(field)))
             .child(
+                // Plain text is not in the accessibility tree; the count is
+                // named so VoiceOver and the native acceptance check can read it.
                 div()
+                    .id(id("status"))
+                    .role(Role::Status)
+                    .aria_label(status.clone())
                     .min_w(px(72.))
                     .text_size(px(12.))
                     .text_color(rgb(colors().subtle))
@@ -816,10 +810,39 @@ fn size(bytes: u64) -> String {
     }
 }
 
+/// The find bar's count, shown and spoken: nothing before a query, then
+/// "No matches" or "3 of 17", with "+" once the match cap is reached.
+fn find_status(query_empty: bool, current: usize, count: usize) -> String {
+    if query_empty {
+        String::new()
+    } else if count == 0 {
+        "No matches".into()
+    } else {
+        format!(
+            "{} of {}{}",
+            current + 1,
+            count,
+            if count >= FIND_LIMIT { "+" } else { "" }
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use plait_core::file_view::prepare;
+
+    #[core::prelude::v1::test]
+    fn find_status_names_the_current_match_and_the_cap() {
+        assert_eq!(find_status(true, 0, 5), "");
+        assert_eq!(find_status(false, 0, 0), "No matches");
+        assert_eq!(find_status(false, 0, 3), "1 of 3");
+        assert_eq!(find_status(false, 2, 3), "3 of 3");
+        assert_eq!(
+            find_status(false, 0, FIND_LIMIT),
+            format!("1 of {FIND_LIMIT}+")
+        );
+    }
 
     #[core::prelude::v1::test]
     fn tabs_expand_and_styles_follow_them() {

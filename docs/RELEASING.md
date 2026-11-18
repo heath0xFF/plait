@@ -9,6 +9,13 @@ manifest, and publishes.
 1. Keep the Cargo version for `plait` and `plait-host` the same
    (`MAJOR.MINOR.PATCH`). A preview tag adds `-preview.N`, counting from 1.
 2. Merge to `main` with local checks passing (`scripts/check.sh`).
+   Once [native acceptance](VERIFICATION.md#native-acceptance-check) has passed
+   its first real-window run, run `bash scripts/acceptance-macos.sh` when the
+   computer is free **before tagging**, and inspect failures, screenshots and
+   skips alongside the remaining manual acceptance list. The script has not
+   yet been run against a window; its current evidence is windowless only.
+   Its advisory job on pushes to `main` may skip for missing macOS permissions
+   and cannot gate a release. An all-skipped run is not native acceptance.
 3. Tag the merged commit and push the tag. There is no need to wait for
    `main`'s macOS build first: the tag's build runs the same checks on the same
    commit and publishes nothing unless they pass.
