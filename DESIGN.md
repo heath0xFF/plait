@@ -189,7 +189,14 @@ conversation keeps a readable minimum width.
   Header lines that say something else (mode, rename, similarity, binary)
   stay. Hunk headers sit on a neutral fill with their ranges in hint color and
   Git's context, usually the function, in secondary text; Stage hunk and
-  Discard hunk appear on hover.
+  Discard hunk appear on hover. The branch name beside its icon, at the top
+  of Changes and of the inspector, is a control with a small chevron that
+  opens the palette over local branches: newest first, the current one
+  marked Current and not choosable, and a first row "Create branch <name>"
+  when the typed text is not a branch. While a branch write would be refused
+  (another Git write, or a thread running in this checkout) the name stays
+  readable in hint color, hover says why, and the palette names the reason
+  with every row unavailable.
 
 ## Tokens
 Colors are roles in one palette (`plait_core::theme::Palette`), so every theme

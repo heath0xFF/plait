@@ -1,5 +1,6 @@
 mod actions;
 mod appearance;
+mod branches;
 mod changes;
 mod commands;
 mod commit_panel;
@@ -84,6 +85,8 @@ actions!(
         Push,
         Pull,
         Fetch,
+        SwitchBranch,
+        NewBranch,
         NextThread,
         PreviousThread,
         Tab,
@@ -320,6 +323,7 @@ impl Plait {
                 this.normalize_checkout(cx);
                 this.deliver_files(cx);
                 this.deliver_quick_open(cx);
+                this.deliver_branches(cx);
                 this.pump(cx);
                 cx.notify();
             });
@@ -432,7 +436,8 @@ impl Plait {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Open repository (read-only)".into()),
+            // Opening only reads the folder; threads and Git writes come later, by choice.
+            prompt: Some("Open repository".into()),
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = prompt.await;
@@ -982,6 +987,12 @@ impl Render for Plait {
                 this.show_tab(Workspace::Changes, cx);
                 this.git_write(plait_core::git::WriteOp::Fetch, cx)
             }))
+            .on_action(cx.listener(|this, _: &SwitchBranch, window, cx| {
+                this.open_branches(false, window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &NewBranch, window, cx| this.open_branches(true, window, cx)),
+            )
             .on_action(
                 cx.listener(|this, _: &NextThread, window, cx| this.step_thread(true, window, cx)),
             )

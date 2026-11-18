@@ -611,7 +611,7 @@ pub(super) fn approval_label(mode: ApprovalMode) -> &'static str {
 /// A control that cannot be used now, such as the model during a run. It
 /// keeps its place and stays readable, in hint color, and hover says why.
 /// Pressing it still answers: its action reports the same reason.
-fn locked(control: Stateful<Div>, reason: Option<&'static str>) -> Stateful<Div> {
+pub(super) fn locked(control: Stateful<Div>, reason: Option<&'static str>) -> Stateful<Div> {
     let Some(reason) = reason else {
         return control;
     };

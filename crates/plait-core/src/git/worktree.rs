@@ -86,7 +86,7 @@ pub fn remove_worktree(main: &Path, path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn branch_exists(root: &Path, branch: &str) -> Result<bool> {
+pub(super) fn branch_exists(root: &Path, branch: &str) -> Result<bool> {
     let reference = format!("refs/heads/{branch}");
     let mut command = super::read_command(root)?;
     let raw = super::run(

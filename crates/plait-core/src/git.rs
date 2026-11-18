@@ -716,15 +716,20 @@ fn format_diff(bytes: &[u8], mut truncated: bool, elapsed: Duration, headers: Fi
     }
 }
 
+mod branch;
 mod counts;
 mod log;
 mod worktree;
 mod write;
 #[cfg(test)]
+use branch::parse_branches;
+pub use branch::{BRANCH_LIMIT, Branch, Branches, branches};
+#[cfg(test)]
 use counts::parse_numstat;
 pub use counts::{LineCount, line_counts};
 pub use log::{Commit, History, log, show};
 pub use worktree::{Worktree, add_worktree, remove_worktree};
+use write::BUSY;
 pub use write::{Backup, WriteOp, WriteOutcome, write};
 #[cfg(test)]
 use write::{hunk_patch, network_hint};

@@ -303,6 +303,22 @@ read, and a failure message long enough to wrap in the state line.
   refused because it would overwrite an uncommitted edit, and refused diverged
   push and pull). Pushing to GitHub over SSH or HTTPS with `gh` sign-in has been checked
   only by asking Git for credentials, not by a push from the installed app.
+- Creating and switching branches are covered by core tests against real
+  temporary repositories (create and switch back; a switch that would
+  overwrite an uncommitted edit refused with Git's message and nothing
+  changed; a non-conflicting edit and an untracked file carried; names with
+  spaces, `..`, a leading dash, `@{`, and an existing name refused; names with
+  slashes; a detached HEAD; a repository with no commits; a held
+  `index.lock`; the list's order, 500-branch cap, and current mark; a branch
+  checked out in another worktree, which Git refuses), by state tests that
+  only the newest list lands and that a switch reloads history, by desktop
+  tests that drive the palette with real keys (listing, the Create row only
+  for a new name, switching, creating, an invalid name) and refuse both writes
+  while another Git write is queued and while a thread runs in the checkout,
+  and by scene snapshots of the control and palette at both window sizes.
+  The control has not been used with a native pointer in the installed app,
+  its hover text has not been seen there, and no switch has run hooks or LFS
+  checkout filters from it.
 
 - Per-thread worktrees are covered against real repositories (refused before
   a first commit, created beside the repository on a new branch, and removal

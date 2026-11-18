@@ -10,7 +10,8 @@ Pi Durable TypeScript sidecar. There is no remote execution,
 embedded terminal, or editor. Git writes are limited to
 staging, unstaging, committing, pushing (or publishing a branch), fetching,
 fast-forward pulls, discarding unstaged changes after saving a copy for undo,
-and adding or removing an optional per-thread worktree.
+creating a branch at the current commit or switching to a local branch, and
+adding or removing an optional per-thread worktree.
 
 This remains an early local preview. Linux command execution and remote
 transport are not implemented. [Verification](VERIFICATION.md) records versioned
@@ -23,6 +24,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
   mod.rs                UI state and background-task dispatch
   actions.rs            every application action: ID, title, menu, default key
   commands.rs           command palette sources and the overlay above the workspace
+  branches.rs           the branch control and its palette: switch to or create a branch
   palette.rs            search field over a ranked list; ranking off the UI thread
   model_picker.rs       model catalog as a palette; default, favorites, new thread
   new_thread.rs         the new-thread draft: created on its first send, reply guards
@@ -109,6 +111,7 @@ tool_view.rs            what each tool call shows, and grouping of long runs
 selection.rs            selection order, ranges, word bounds, and copied text
 git.rs                  synchronous Git adapter: hardened reads; background only
   git/write.rs          stage, unstage, commit, push, pull, fetch, discard
+  git/branch.rs         list local branches; create and switch (via write)
   git/log.rs            commit history and one commit's patch (read-only)
   git/counts.rs         uncommitted line counts for named paths (read-only)
   git/worktree.rs       add and remove optional per-thread worktrees
@@ -295,9 +298,26 @@ implemented.
 ## Git boundary
 
 Read operations are `status(path)`, `diff(root, change, mode)`, `files(root)`,
-`log(root, skip, limit)`, and `show(root, id)`. The only write operation is
-`write(root, op)`: stage, unstage, stage all, unstage all, or commit. Each
-returns data or a user-facing error.
+`log(root, skip, limit)`, `show(root, id)`, and `branches(root)`. The only
+write operation is `write(root, op)`: stage, unstage, stage all, unstage all,
+commit, push, publish, fetch, pull, a hunk, discard, restore, create a branch,
+or switch branches. Each returns data or a user-facing error.
+
+Branches are read with `for-each-ref` over `refs/heads/`, newest committer
+date first, at most 500, when the branch palette opens, never on a status
+refresh; a newer request supersedes an older reply. Creating runs
+`git switch -q -c <name>` and switching runs `git switch -q --no-guess
+--end-of-options <name>`, both with the repository's configuration, so
+checkout filters and the post-checkout hook run, within 120 seconds. Before
+creating, Plait refuses a leading dash, `@{`, and `@`, then asks
+`git check-ref-format --branch` and requires it to print the name unchanged,
+then refuses an existing branch. A switch must name an existing
+`refs/heads/` entry, so `-`, `@{-1}`, commits, and remote branches are refused.
+Both refuse while the checkout's `index.lock` exists, since creating a branch
+does not touch the index and Git would not notice. Git's own refusal (changes
+that would be overwritten, a branch checked out in another worktree) is the
+result. A switch reloads history; a new branch does not, as its commits are
+the same.
 
 Reads and writes differ on purpose. A read must not run anything the
 repository configures, so it neutralizes filters and never runs hooks. A write

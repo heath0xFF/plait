@@ -306,7 +306,7 @@ impl Plait {
     }
 
     /// A thread is running in this checkout, so its edits may be half done.
-    fn running_here(&self) -> bool {
+    pub(super) fn running_here(&self) -> bool {
         let Some(root) = self.state.repository.snapshot.ready().map(|s| &s.root) else {
             return false;
         };

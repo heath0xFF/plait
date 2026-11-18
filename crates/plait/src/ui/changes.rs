@@ -324,16 +324,12 @@ impl Plait {
                             .gap_1()
                             .flex_shrink_0()
                             .child(
+                                // The control's own padding completes the gap after the icon.
                                 row()
+                                    .gap_1()
                                     .child(icon("branch").text_color(rgb(colors().muted)))
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .truncate()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .child(snapshot.branch.clone()),
-                                    )
+                                    .child(self.branch_control(compact, &snapshot.branch, cx))
+                                    .child(div().flex_1())
                                     .child(tag(
                                         format!(
                                             "{} changed {}",

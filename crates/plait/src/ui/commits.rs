@@ -8,7 +8,7 @@ use plait_core::{git::Commit, state::Load};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// How long ago, in the short form the thread list uses.
-fn age(time: i64, now: i64) -> String {
+pub(super) fn age(time: i64, now: i64) -> String {
     let seconds = (now - time).max(0);
     match seconds {
         0..60 => "now".into(),
@@ -20,7 +20,7 @@ fn age(time: i64, now: i64) -> String {
     }
 }
 
-fn now() -> i64 {
+pub(super) fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_secs() as i64)

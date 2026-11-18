@@ -1569,3 +1569,299 @@ fn line_counts_before_the_first_commit_count_staged_files_as_new() {
         [("staged.txt", Some(2), false), ("loose.txt", Some(1), true)]
     );
 }
+
+// ---- branches ----
+
+impl Repo {
+    /// Commit everything with a fixed committer time, so branch order is known.
+    fn commit_at(&self, time: i64) {
+        self.git(&["add", "."]);
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&self.0)
+            .args(["commit", "-q", "--allow-empty", "-m", "fixture"])
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_COMMITTER_DATE", format!("@{time} +0000"))
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    fn head_branch(&self) -> String {
+        self.out(&["branch", "--show-current"]).trim().to_owned()
+    }
+    fn names(&self) -> Vec<String> {
+        let list = branches(&self.0).unwrap().list;
+        list.into_iter().map(|b| b.name).collect()
+    }
+}
+
+fn create(repo: &Repo, name: &str) -> Result<WriteOutcome> {
+    write(&repo.0, &WriteOp::CreateBranch(name.into()))
+}
+
+fn switch(repo: &Repo, name: &str) -> Result<WriteOutcome> {
+    write(&repo.0, &WriteOp::SwitchBranch(name.into()))
+}
+
+#[test]
+fn create_switches_to_a_new_branch_and_switch_goes_back() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    repo.commit();
+    let head = repo.out(&["rev-parse", "HEAD"]);
+    let outcome = create(&repo, "feature/login").unwrap();
+    assert_eq!(outcome.summary, "Created feature/login and switched to it");
+    assert_eq!(repo.head_branch(), "feature/login");
+    // From the current commit.
+    assert_eq!(repo.out(&["rev-parse", "HEAD"]), head);
+    assert_eq!(status(&repo.0).unwrap().branch, "feature/login");
+    assert_eq!(switch(&repo, "main").unwrap().summary, "Switched to main");
+    assert_eq!(repo.head_branch(), "main");
+    switch(&repo, "feature/login").unwrap();
+    assert_eq!(repo.head_branch(), "feature/login");
+}
+
+#[test]
+fn a_switch_that_would_overwrite_changes_is_refused_and_changes_nothing() {
+    let repo = Repo::new();
+    repo.write("a.txt", "base\n");
+    repo.commit();
+    create(&repo, "side").unwrap();
+    repo.write("a.txt", "side\n");
+    repo.commit();
+    switch(&repo, "main").unwrap();
+    repo.write("a.txt", "dirty\n");
+    let index = fs::read(repo.0.join(".git/index")).unwrap();
+    let error = switch(&repo, "side").unwrap_err();
+    // Git's own words, shown as they are.
+    assert!(error.starts_with("Git: "), "{error}");
+    assert!(error.contains("would be overwritten"), "{error}");
+    assert_eq!(repo.head_branch(), "main");
+    assert_eq!(fs::read_to_string(repo.0.join("a.txt")).unwrap(), "dirty\n");
+    assert_eq!(fs::read(repo.0.join(".git/index")).unwrap(), index);
+}
+
+#[test]
+fn a_change_that_does_not_conflict_is_carried_across_a_switch() {
+    let repo = Repo::new();
+    repo.write("a.txt", "base\n");
+    repo.write("b.txt", "base\n");
+    repo.commit();
+    create(&repo, "side").unwrap();
+    repo.write("a.txt", "side\n");
+    repo.commit();
+    switch(&repo, "main").unwrap();
+    repo.write("b.txt", "mine\n");
+    repo.write("new.txt", "untracked\n");
+    switch(&repo, "side").unwrap();
+    assert_eq!(repo.head_branch(), "side");
+    assert_eq!(fs::read_to_string(repo.0.join("a.txt")).unwrap(), "side\n");
+    assert_eq!(fs::read_to_string(repo.0.join("b.txt")).unwrap(), "mine\n");
+    assert!(repo.0.join("new.txt").exists());
+    // A new branch carries them too.
+    create(&repo, "carried").unwrap();
+    assert_eq!(fs::read_to_string(repo.0.join("b.txt")).unwrap(), "mine\n");
+}
+
+#[test]
+fn invalid_and_existing_names_are_refused_before_anything_changes() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    repo.commit();
+    create(&repo, "other").unwrap();
+    switch(&repo, "main").unwrap();
+    let before = repo.names();
+    for name in [
+        "",
+        "  ",
+        "two words",
+        "a..b",
+        "-x",
+        "--force",
+        "@{-1}",
+        "main@{1}",
+        "@",
+        "HEAD",
+        "x.lock",
+        "trailing/",
+        "a\nb",
+    ] {
+        let error = create(&repo, name).unwrap_err();
+        assert!(
+            error.contains("not a valid branch name") || error.contains("Type a name"),
+            "{name:?}: {error}"
+        );
+    }
+    let error = create(&repo, "other").unwrap_err();
+    assert_eq!(
+        error,
+        "A branch named other already exists. Choose it in the list to switch to it."
+    );
+    assert_eq!(repo.names(), before);
+    assert_eq!(repo.head_branch(), "main");
+    // `@{-1}` names the branch before this one; a switch never follows it.
+    for name in ["@{-1}", "-", "missing", "HEAD", "origin/main"] {
+        let error = switch(&repo, name).unwrap_err();
+        assert_eq!(error, format!("There is no local branch named {name}."));
+    }
+    assert_eq!(repo.head_branch(), "main");
+}
+
+#[test]
+fn names_with_slashes_are_branches() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    repo.commit();
+    create(&repo, "team/feature/one").unwrap();
+    assert_eq!(repo.head_branch(), "team/feature/one");
+    // `team` cannot also be a branch: Git's own refusal is shown.
+    assert!(create(&repo, "team").unwrap_err().starts_with("Git: "));
+    switch(&repo, "main").unwrap();
+    switch(&repo, "team/feature/one").unwrap();
+    assert_eq!(repo.head_branch(), "team/feature/one");
+}
+
+#[test]
+fn branches_can_be_made_and_listed_from_a_detached_head() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    repo.commit();
+    repo.git(&["switch", "--detach", "HEAD"]);
+    let list = branches(&repo.0).unwrap().list;
+    assert_eq!(list.len(), 1);
+    assert!(!list[0].current, "no branch is current on a detached HEAD");
+    create(&repo, "rescued").unwrap();
+    assert_eq!(repo.head_branch(), "rescued");
+    repo.git(&["switch", "--detach", "HEAD"]);
+    switch(&repo, "main").unwrap();
+    assert_eq!(repo.head_branch(), "main");
+}
+
+#[test]
+fn a_repository_with_no_commits_lists_nothing_and_renames_its_unborn_branch() {
+    let repo = Repo::new();
+    assert_eq!(branches(&repo.0).unwrap(), Branches::default());
+    // Git moves the unborn HEAD to the new name; there is still no commit.
+    create(&repo, "start").unwrap();
+    assert_eq!(repo.head_branch(), "start");
+    assert!(branches(&repo.0).unwrap().list.is_empty());
+    assert!(
+        switch(&repo, "main")
+            .unwrap_err()
+            .contains("no local branch")
+    );
+}
+
+#[test]
+fn a_held_index_lock_refuses_both_writes_and_changes_nothing() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    repo.commit();
+    create(&repo, "other").unwrap();
+    repo.write(".git/index.lock", "");
+    let busy = "Another Git process is using this repository. Try again when it finishes.";
+    assert_eq!(create(&repo, "new").unwrap_err(), busy);
+    assert_eq!(switch(&repo, "main").unwrap_err(), busy);
+    assert_eq!(repo.head_branch(), "other");
+    assert!(!repo.names().contains(&"new".to_owned()));
+}
+
+#[test]
+fn the_list_is_newest_first_marks_the_current_branch_and_states_its_cap() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    repo.commit_at(1_700_000_000);
+    repo.git(&["switch", "-q", "-c", "older"]);
+    repo.commit_at(1_700_000_100);
+    repo.git(&["switch", "-q", "-c", "newest"]);
+    repo.commit_at(1_700_000_300);
+    repo.git(&["switch", "-q", "-c", "middle", "older"]);
+    repo.commit_at(1_700_000_200);
+    let list = branches(&repo.0).unwrap();
+    let shown: Vec<_> = list
+        .list
+        .iter()
+        .map(|b| (b.name.as_str(), b.current, b.time))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("newest", false, 1_700_000_300),
+            ("middle", true, 1_700_000_200),
+            ("older", false, 1_700_000_100),
+            ("main", false, 1_700_000_000),
+        ]
+    );
+    assert!(!list.more);
+    // One past the cap: the list stops there and says more exist.
+    let head = repo.out(&["rev-parse", "HEAD"]);
+    let refs: String = (0..BRANCH_LIMIT)
+        .map(|n| format!("create refs/heads/bulk/{n:04} {}\n", head.trim()))
+        .collect();
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(&repo.0)
+        .args(["update-ref", "--stdin"])
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(refs.as_bytes())
+        .unwrap();
+    assert!(child.wait().unwrap().success());
+    let list = branches(&repo.0).unwrap();
+    assert_eq!(list.list.len(), BRANCH_LIMIT);
+    assert!(list.more);
+}
+
+#[test]
+fn a_branch_in_another_worktree_is_marked_and_git_refuses_to_switch_to_it() {
+    let repo = Repo::new();
+    repo.write("a.txt", "a\n");
+    repo.commit();
+    let tree = add_worktree(&repo.0).unwrap();
+    let list = branches(&repo.0).unwrap().list;
+    let named = |list: &[Branch], name: &str| list.iter().find(|b| b.name == name).unwrap().clone();
+    let other = named(&list, &tree.branch);
+    assert!(!other.current && other.elsewhere.is_some());
+    assert!(named(&list, "main").elsewhere.is_none());
+    let error = switch(&repo, &tree.branch).unwrap_err();
+    assert!(
+        error.starts_with("Git: ") && error.contains("worktree"),
+        "{error}"
+    );
+    assert_eq!(repo.head_branch(), "main");
+    // The worktree's own view: its branch is current, main is elsewhere.
+    let inside = branches(&tree.path).unwrap().list;
+    assert!(named(&inside, &tree.branch).current);
+    assert!(named(&inside, "main").elsewhere.is_some());
+    remove_worktree(&repo.0, &tree.path).unwrap();
+}
+
+#[test]
+fn branch_records_are_validated() {
+    let list =
+        parse_branches(b"refs/heads/main\0*\x001700000000\0/repo\nrefs/heads/x\0 \x0012\0\n")
+            .unwrap();
+    assert_eq!(list.len(), 2);
+    assert!(list[0].current && list[0].elsewhere.is_none());
+    assert_eq!((list[1].name.as_str(), list[1].time), ("x", 12));
+    assert!(parse_branches(b"refs/tags/v1\0 \x001\0\n").is_err());
+    assert!(parse_branches(b"refs/heads/a\0 \x00soon\0\n").is_err());
+    assert!(parse_branches(b"refs/heads/a\0 \n").is_err());
+    // A name that is not UTF-8 is left out rather than changed.
+    assert!(
+        parse_branches(b"refs/heads/\xff\0 \x001\0\n")
+            .unwrap()
+            .is_empty()
+    );
+    assert!(parse_branches(b"").unwrap().is_empty());
+}

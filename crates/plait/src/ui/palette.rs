@@ -13,7 +13,7 @@ use super::{
 };
 use gpui::{prelude::*, *};
 use plait_core::fuzzy::fuzzy_match;
-use std::{collections::HashSet, ops::Range, sync::Arc};
+use std::{collections::HashSet, ops::Range, rc::Rc, sync::Arc};
 
 /// Rows shown before the list scrolls.
 const VISIBLE_ROWS: usize = 12;
@@ -366,6 +366,11 @@ pub(super) struct Options {
     pub note: Option<SharedString>,
 }
 
+/// Builds an item from the typed text, such as "Create branch <text>", given
+/// the caller's items; `None` offers nothing. The item is listed first, and
+/// `true` also starts the selection on it rather than on the best match.
+pub(super) type Typed = Rc<dyn Fn(&str, &[Item]) -> Option<(Item, bool)>>;
+
 pub(super) enum PaletteEvent {
     /// An enabled item was chosen.
     Run(Command),
@@ -380,8 +385,14 @@ pub(super) enum PaletteEvent {
 pub(super) struct Palette {
     options: Options,
     field: Entity<TextField>,
+    /// The caller's items, then the typed item when there is one.
     items: Vec<Item>,
     entries: Arc<[Entry]>,
+    /// How many of `items` are the caller's.
+    base: usize,
+    typed: Option<Typed>,
+    /// The typed item takes the selection when it appears.
+    typed_leads: bool,
     rows: Vec<Row>,
     /// A row index; always an item row.
     selected: Option<usize>,
@@ -418,8 +429,11 @@ impl Palette {
             selected: start(&rows, &entries, options.initial.as_deref()),
             options,
             field,
+            base: items.len(),
             items,
             entries,
+            typed: None,
+            typed_leads: false,
             rows,
             scroll: UniformListScrollHandle::new(),
             generation: 0,
@@ -430,8 +444,43 @@ impl Palette {
         this
     }
 
+    /// Whether the caller supplied no items; a typed item does not count.
     pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
+        self.base == 0
+    }
+
+    /// Offer an item built from the typed text, ahead of the matches.
+    pub fn set_typed(&mut self, typed: Typed, cx: &mut Context<Self>) {
+        self.typed = Some(typed);
+        self.requery(cx);
+    }
+
+    /// Put the typed item, if any, after the caller's items for `query`.
+    fn place_typed(&mut self, query: &str) {
+        // Most palettes offer nothing typed; their entries stay as built.
+        let Some(typed) = self.typed.clone() else {
+            return;
+        };
+        self.items.truncate(self.base);
+        let typed = typed(query.trim(), &self.items);
+        self.typed_leads = typed.as_ref().is_some_and(|(_, leads)| *leads);
+        self.items.extend(typed.map(|(item, _)| item));
+        self.entries = self.items.iter().map(Entry::from).collect();
+    }
+
+    /// The typed item's row first, above the ranked caller items.
+    fn with_typed(&self, mut rows: Vec<Row>) -> Vec<Row> {
+        if self.items.len() > self.base {
+            rows.insert(
+                0,
+                Row::Item {
+                    index: self.base,
+                    title: Vec::new(),
+                    detail: Vec::new(),
+                },
+            );
+        }
+        rows
     }
 
     /// Replace the items, keeping the query and following the selected item.
@@ -440,11 +489,14 @@ impl Palette {
             let index = self.rows.get(row)?.item()?;
             Some((self.entries[index].key.clone(), row))
         });
+        self.base = items.len();
         self.entries = items.iter().map(Entry::from).collect();
         self.items = items;
+        let query = self.field.read(cx).text().to_owned();
+        self.place_typed(&query);
         self.generation += 1;
         self.arranged = self.generation;
-        self.rows = arrange(&self.entries, self.field.read(cx).text());
+        self.rows = self.with_typed(arrange(&self.entries[..self.base], &query));
         self.selected = followed
             .and_then(|(key, row)| nearest(&self.rows, &self.entries, &key, row))
             .or_else(|| start(&self.rows, &self.entries, None));
@@ -481,13 +533,15 @@ impl Palette {
         self.generation += 1;
         let generation = self.generation;
         let query = self.field.read(cx).text().to_owned();
+        self.place_typed(&query);
         if query.trim().is_empty() {
-            return self.show(arrange(&self.entries, ""), generation, false, cx);
+            let rows = arrange(&self.entries[..self.base], "");
+            return self.show(rows, generation, false, cx);
         }
-        let entries = self.entries.clone();
+        let (entries, base) = (self.entries.clone(), self.base);
         let ranking = cx
             .background_executor()
-            .spawn(async move { arrange(&entries, &query) });
+            .spawn(async move { arrange(&entries[..base], &query) });
         cx.spawn(async move |this, cx| {
             let rows = ranking.await;
             let _ = this.update(cx, |this, cx| {
@@ -503,7 +557,14 @@ impl Palette {
     /// `searched` rows start on the best match; the preferred item is for the full list.
     fn show(&mut self, rows: Vec<Row>, generation: u64, searched: bool, cx: &mut Context<Self>) {
         let initial = self.options.initial.as_deref().filter(|_| !searched);
-        self.selected = start(&rows, &self.entries, initial);
+        let typed = self.items.len() > self.base;
+        let rows = self.with_typed(rows);
+        self.selected = if typed && !self.typed_leads && rows.len() > 1 {
+            // The best match, below the typed item.
+            start(&rows[1..], &self.entries, None).map(|row| row + 1)
+        } else {
+            start(&rows, &self.entries, initial)
+        };
         self.rows = rows;
         self.arranged = generation;
         self.reveal();
@@ -544,7 +605,7 @@ impl Palette {
         // Enter can arrive before the background ranking does. Rank now, so
         // the choice always matches the text in the field.
         if self.arranged != self.generation {
-            let rows = arrange(&self.entries, self.field.read(cx).text());
+            let rows = arrange(&self.entries[..self.base], self.field.read(cx).text());
             self.show(rows, self.generation, true, cx);
         }
         if let Some(row) = self.selected {
@@ -768,9 +829,16 @@ impl Palette {
     }
 
     fn footer(&self, searching: bool) -> impl IntoElement {
-        let matches = self.rows.iter().filter(|row| row.item().is_some()).count();
+        // The typed item is an offer, not a match.
+        let matches = self
+            .rows
+            .iter()
+            .filter(|row| row.item().is_some_and(|index| index < self.base))
+            .count();
+        let offered = self.items.len() > self.base;
         let status = self.options.note.clone().or_else(|| {
-            searching.then(|| match matches {
+            // With only the typed item, "0 matches" would contradict it.
+            (searching && !(offered && matches == 0)).then(|| match matches {
                 1 => "1 match".into(),
                 count => format!("{count} matches").into(),
             })

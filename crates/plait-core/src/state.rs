@@ -67,6 +67,11 @@ pub enum Job {
         root: PathBuf,
         id: String,
     },
+    /// Local branches, for the branch picker. `request` guards the reply.
+    Branches {
+        request: u64,
+        root: PathBuf,
+    },
 }
 
 pub enum Reply {
@@ -76,6 +81,7 @@ pub enum Reply {
     Write(Result<git::WriteOutcome, String>),
     Log(Result<git::History, String>),
     Show(Result<Arc<Diff>, String>),
+    Branches(Result<Arc<git::Branches>, String>),
 }
 
 /// Diffs kept for quick switching. A diff is at most 10,000 parsed lines, so
@@ -98,6 +104,7 @@ impl Job {
                 root, tip, skip, ..
             } => Reply::Log(git::log(root, tip.as_deref(), *skip, HISTORY_PAGE)),
             Self::Show { root, id, .. } => Reply::Show(git::show(root, id).map(Arc::new)),
+            Self::Branches { root, .. } => Reply::Branches(git::branches(root).map(Arc::new)),
         }
     }
 }
@@ -132,6 +139,11 @@ pub struct RepositoryState {
     /// The repository root from the last status read. Kept while a refresh
     /// runs, so writes and history need not wait for it; cleared on `open`.
     root: Option<PathBuf>,
+    /// Local branches, read each time the branch picker opens.
+    pub branches: Load<Arc<git::Branches>>,
+    /// Counts branch requests, so only the newest reply is kept.
+    branch_request: u64,
+    branches_queued: bool,
 }
 
 /// The one write that may be queued or running, and how the last one went.
@@ -194,6 +206,9 @@ impl RepositoryState {
             commits: CommitLog::default(),
             conflicts: 0,
             root: None,
+            branches: Load::Empty,
+            branch_request: 0,
+            branches_queued: false,
         };
         state.refresh();
         state
@@ -203,6 +218,10 @@ impl RepositoryState {
     pub fn open(&mut self, path: PathBuf) {
         self.path = path;
         self.root = None;
+        // A list of the previous checkout's branches must not land.
+        self.branch_request += 1;
+        self.branches = Load::Empty;
+        self.branches_queued = false;
         let wanted = self.commits.wanted;
         self.commits = CommitLog {
             epoch: self.commits.epoch + 1,
@@ -406,6 +425,34 @@ impl RepositoryState {
         Some(Job::Write { root, op })
     }
 
+    /// Read the local branches again, for the branch picker. Branches change
+    /// outside Plait, so an open picker never shows an older list.
+    pub fn request_branches(&mut self) {
+        self.branch_request += 1;
+        if self.root.is_none()
+            && let Load::Error(error) = &self.snapshot
+        {
+            self.branches = Load::Error(error.clone());
+            self.branches_queued = false;
+            return;
+        }
+        self.branches = Load::Loading;
+        self.branches_queued = true;
+    }
+
+    /// Branches need the root a status read reports.
+    fn branches_job(&mut self) -> Option<Job> {
+        if !self.branches_queued {
+            return None;
+        }
+        let root = self.root.clone()?;
+        self.branches_queued = false;
+        Some(Job::Branches {
+            request: self.branch_request,
+            root,
+        })
+    }
+
     /// The History view closed: a commit no longer needs to reload the list.
     pub fn leave_history(&mut self) {
         self.commits.wanted = false;
@@ -464,7 +511,7 @@ impl RepositoryState {
     }
 
     /// One job at a time. A write goes first so a click is never starved by
-    /// reads; then status and diffs, then history, then the file list.
+    /// reads; then status and diffs, then history, branches, and the file list.
     pub fn next_job(&mut self) -> Option<Job> {
         if self.running {
             return None;
@@ -473,6 +520,7 @@ impl RepositoryState {
             .write_job()
             .or_else(|| self.pending.take())
             .or_else(|| self.history_job())
+            .or_else(|| self.branches_job())
             .or_else(|| self.files_job())
             .or_else(|| self.prefetch.take())?;
         self.running = true;
@@ -519,9 +567,12 @@ impl RepositoryState {
                         if std::mem::take(&mut self.files_queued) {
                             self.files = Load::Error(error.clone());
                         }
-                        // Without a root, history waiting on one can never load.
+                        // Without a root, history and branches waiting on one can never load.
                         if self.root.is_none() {
                             self.fail_history(&error);
+                            if std::mem::take(&mut self.branches_queued) {
+                                self.branches = Load::Error(error.clone());
+                            }
                         }
                         self.snapshot = Load::Error(error);
                     }
@@ -550,8 +601,10 @@ impl RepositoryState {
                 }
             }
             (Job::Write { root, op }, Reply::Write(result)) => {
-                // A pull moves HEAD without a commit of ours; history must reload.
-                let moved = matches!(op, git::WriteOp::Pull) && result.is_ok();
+                // A pull or a switch moves HEAD without a commit of ours;
+                // history must reload.
+                let moved = matches!(op, git::WriteOp::Pull | git::WriteOp::SwitchBranch(_))
+                    && result.is_ok();
                 self.write.running = false;
                 if let Ok(outcome) = &result {
                     self.write.committed = outcome.commit.clone();
@@ -595,6 +648,14 @@ impl RepositoryState {
                         Err(error) => Load::Error(error),
                     };
                 }
+            }
+            (Job::Branches { request, .. }, Reply::Branches(result))
+                if request == self.branch_request =>
+            {
+                self.branches = match result {
+                    Ok(branches) => Load::Ready(branches),
+                    Err(error) => Load::Error(error),
+                };
             }
             (Job::Write { .. }, _) => self.write.running = false,
             _ => {}
@@ -1060,6 +1121,83 @@ mod tests {
         assert!(matches!(s.next_job(), Some(Job::Status { .. })));
         assert!(!s.write.busy());
         assert!(matches!(&s.write.note, Some((_, true))));
+    }
+
+    fn listed(names: &[&str]) -> Reply {
+        Reply::Branches(Ok(Arc::new(git::Branches {
+            list: names
+                .iter()
+                .map(|name| git::Branch {
+                    name: (*name).into(),
+                    current: false,
+                    time: 0,
+                    elsewhere: None,
+                })
+                .collect(),
+            more: false,
+        })))
+    }
+
+    #[test]
+    fn branches_are_reread_on_each_request_and_only_the_newest_reply_lands() {
+        let mut s = ready("repo");
+        s.request_branches();
+        let first = s.next_job().unwrap();
+        assert!(
+            matches!(&first, Job::Branches { root, .. } if root == std::path::Path::new("/repo"))
+        );
+        // Asked again before the first answer: the first is stale.
+        s.request_branches();
+        s.complete(first, listed(&["old"]));
+        assert!(matches!(s.branches, Load::Loading));
+        let second = s.next_job().unwrap();
+        s.complete(second, listed(&["main", "topic"]));
+        assert_eq!(s.branches.ready().unwrap().list.len(), 2);
+        // A refresh keeps the list; another checkout drops it and its reply.
+        s.refresh();
+        assert!(s.branches.ready().is_some());
+        s.request_branches();
+        let late = loop {
+            match s.next_job().unwrap() {
+                job @ Job::Branches { .. } => break job,
+                job => s.complete(job, Reply::Status(Ok(snapshot()))),
+            }
+        };
+        s.open("other".into());
+        s.complete(late, listed(&["main"]));
+        assert!(matches!(s.branches, Load::Empty));
+    }
+
+    #[test]
+    fn branches_waiting_on_a_failed_status_report_the_error() {
+        let mut s = RepositoryState::new("repo".into());
+        s.request_branches();
+        let status = s.next_job().unwrap();
+        s.complete(status, Reply::Status(Err("not a repository".into())));
+        assert!(matches!(&s.branches, Load::Error(e) if e == "not a repository"));
+        assert!(s.next_job().is_none());
+        // Asked again with the error still standing: it is reported at once.
+        s.request_branches();
+        assert!(matches!(&s.branches, Load::Error(_)));
+        assert!(s.next_job().is_none());
+    }
+
+    #[test]
+    fn a_branch_switch_rereads_status_and_shown_history_but_a_new_branch_keeps_history() {
+        let mut s = ready("repo");
+        s.request_history();
+        let first = s.next_job().unwrap();
+        s.complete(first, page(&["a"], false));
+        assert!(s.request_write(git::WriteOp::CreateBranch("topic".into())));
+        let write = s.next_job().unwrap();
+        s.complete(write, outcome("Created topic and switched to it"));
+        assert!(matches!(s.snapshot, Load::Loading));
+        assert!(s.commits.list.ready().is_some(), "same commits");
+        assert!(s.request_write(git::WriteOp::SwitchBranch("main".into())));
+        let write = s.next_job().unwrap();
+        s.complete(write, outcome("Switched to main"));
+        assert!(matches!(s.commits.list, Load::Loading));
+        assert_eq!(s.write.note, Some(("Switched to main".into(), false)));
     }
 
     #[test]

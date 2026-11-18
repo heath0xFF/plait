@@ -54,6 +54,10 @@ pub(super) enum Command {
     DefaultThinking(plait_core::host::ThinkingLevel),
     /// A checkout-relative path, from quick open.
     OpenFile(String),
+    /// A local branch to switch to, from the branch picker.
+    SwitchBranch(String),
+    /// A new branch's name, as typed in the branch picker.
+    CreateBranch(String),
 }
 
 impl Clone for Command {
@@ -62,6 +66,8 @@ impl Clone for Command {
             Self::Action(action) => Self::Action(action.boxed_clone()),
             Self::OpenThread(id) => Self::OpenThread(id.clone()),
             Self::OpenFile(path) => Self::OpenFile(path.clone()),
+            Self::SwitchBranch(name) => Self::SwitchBranch(name.clone()),
+            Self::CreateBranch(name) => Self::CreateBranch(name.clone()),
             Self::SignIn(id) => Self::SignIn(id.clone()),
             Self::OpenProject(path) => Self::OpenProject(path.clone()),
             Self::NewThread(choice) => Self::NewThread(choice.clone()),
@@ -105,6 +111,8 @@ pub(super) struct Overlay {
     pub stamp: Option<PickerStamp>,
     /// Quick open: its rows fill in when the file list arrives.
     pub files: bool,
+    /// The branch picker: its rows fill in when the branches arrive.
+    pub branches: bool,
     _events: Subscription,
 }
 
@@ -312,6 +320,7 @@ impl Plait {
             restore,
             stamp: purpose.map(|_| self.picker_stamp()),
             files: false,
+            branches: false,
             _events: events,
         });
         cx.notify();
@@ -401,6 +410,12 @@ impl Plait {
                 }
             }
             Command::OpenFile(path) => self.open_file(path.into(), None, cx),
+            Command::SwitchBranch(name) => {
+                self.branch_write(plait_core::git::WriteOp::SwitchBranch(name), cx)
+            }
+            Command::CreateBranch(name) => {
+                self.branch_write(plait_core::git::WriteOp::CreateBranch(name), cx)
+            }
             Command::DefaultThinking(level) => {
                 let mut preferences = self.preferences.value.clone();
                 preferences.default_thinking = Some(level);

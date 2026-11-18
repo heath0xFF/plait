@@ -17,9 +17,7 @@ impl Plait {
                     .h(px(36.))
                     .px_3()
                     .flex_shrink_0()
-                    .justify_between()
-                    .child(section_label("Working tree"))
-                    .child(tag("Git · read-only", colors().subtle)),
+                    .child(section_label("Working tree")),
             )
             .child(self.file_panel(true, cx))
             .child(self.resize_handle(Panel::Inspector, cx))

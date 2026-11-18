@@ -391,6 +391,7 @@ path alongside separate `PLAIT_HOST_STORE` and `PLAIT_DESKTOP_STATE_DIR` paths.
 | Cmd-Option-period | Deny Once | `approval.deny_once` |
 | Cmd-Option-Y | Allow Once | `approval.allow_once` |
 | Cmd-Shift-C | Commit Staged Changes… | `git.commit` |
+| Cmd-Shift-B | Switch Branch… | `git.switch_branch` |
 | Cmd-M | Minimize | `window.minimize` |
 | Cmd-1 to Cmd-9 | Jump to Sidebar Item 1–9 | `jump.1` to `jump.9` |
 | Tab | Focus Next Control | `focus.next` |
@@ -582,10 +583,28 @@ helpers, and, for HTTPS GitHub remotes, `gh auth login` if the GitHub CLI is
 installed. Plait never stores or reads the token. Push, Pull, and Fetch are
 also in the **Git** menu.
 
+The branch name at the top of Changes, and of the Git inspector, opens the
+branch list (**Switch Branch…**, Cmd-Shift-B, in the **Git** menu). It lists the
+checkout's local branches, most recently committed first, with the current one
+marked; a branch checked out in another worktree says which. Choose one to
+switch to it. Type a name that is not a branch and the first row reads
+**Create branch** *name*: it makes that branch at the current commit and
+switches to it. While what you type is part of a listed name, Enter takes the
+best match; **New Branch…** in the Git menu always starts on Create. Uncommitted
+changes come along as Git carries them. If switching would overwrite them, Git
+refuses and its message is the result line under the commit box; commit,
+stash, or discard them and try again. Git checks a new name first (no spaces,
+no `..`, no leading dash), and an existing name is refused rather than reused.
+The list shows up to 500 branches and says so when there are more. The branch
+name is locked, in hint color, while another Git action runs and while a thread
+is running in this checkout, since switching would change the files it is
+editing; hover says why. Plait acts on the checkout that is open, which may be
+a thread's worktree. There is no force, no remote-tracking checkout, and no
+branch deletion or renaming.
+
 **History** (Cmd-Shift-3) lists commits on the current branch, newest first, 100
 at a time. Select one to see its message and patch against its first parent.
-There is no merge, rebase, amend, or branch switching yet; use your own Git
-tools for those.
+There is no merge, rebase, or amend yet; use your own Git tools for those.
 
 ### Files
 

@@ -1,5 +1,6 @@
 //! Explicit Git writes the user asks for: staging, unstaging, committing,
-//! and exchanging commits with the branch's remote (push, publish, fetch).
+//! exchanging commits with the branch's remote (push, publish, fetch), and
+//! creating or switching local branches (see `branch`).
 //!
 //! Reads elsewhere in `git` neutralize filters and never run hooks. A write the
 //! user chose must produce what their own `git add` or `git commit` would, so
@@ -29,7 +30,8 @@ const NETWORK_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_PATHS: usize = 100_000;
 /// Hook output shown to the user is clipped to this many characters.
 const ERROR_TEXT_LIMIT: usize = 2000;
-const BUSY: &str = "Another Git process is using this repository. Try again when it finishes.";
+pub(super) const BUSY: &str =
+    "Another Git process is using this repository. Try again when it finishes.";
 
 /// One write. Paths are relative to the repository root, as `Change::path`
 /// reports them; a rename lists both its path and its original.
@@ -72,6 +74,12 @@ pub enum WriteOp {
     },
     /// Put back a file exactly as `Discard` saved it.
     Restore(Backup),
+    /// Create a local branch at the current commit and switch to it. The name
+    /// is checked by Git first; an existing name is refused.
+    CreateBranch(String),
+    /// Switch to an existing local branch. Git refuses a switch that would
+    /// overwrite uncommitted changes; others are carried along.
+    SwitchBranch(String),
 }
 
 /// A file's bytes saved in Git's object store before a discard. The object is
@@ -155,6 +163,8 @@ pub fn write(root: &Path, op: &WriteOp) -> Result<WriteOutcome> {
             hunk,
         } => discard(root, path, *untracked, hunk.as_ref()),
         WriteOp::Restore(backup) => restore(root, backup),
+        WriteOp::CreateBranch(name) => super::branch::create(root, name).map(done),
+        WriteOp::SwitchBranch(name) => super::branch::switch(root, name).map(done),
     }
 }
 

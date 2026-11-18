@@ -41,6 +41,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod branches;
 mod showcase;
 mod ways_out;
 
@@ -2008,6 +2009,7 @@ fn walk(output: Option<&Path>) {
         harnesses_walk(&mut harness, &repository, suffix);
         claude_walk(&mut harness, &repository, suffix);
         draft_scenes_walk(&mut harness, &repository, suffix);
+        branches::branches_walk(&mut harness, &repository, suffix);
         inspector_walk(&mut harness, &repository, suffix);
         navigation_walk(&mut harness, &repository, suffix);
         // Threads exist, but none is open.
