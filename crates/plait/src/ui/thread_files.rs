@@ -21,6 +21,10 @@ pub(super) struct ThreadFiles {
     thread: Option<String>,
     root: PathBuf,
     paths: Vec<PathBuf>,
+    provenance: Vec<PathBuf>,
+    record_paths: Vec<PathBuf>,
+    request_generation: u64,
+    requested: bool,
     counts: Vec<LineCount>,
     /// Finished write tools last seen, so streaming text does not refetch.
     tools_done: usize,
@@ -37,6 +41,34 @@ fn writes(name: &str) -> bool {
 }
 
 impl ThreadFiles {
+    fn select(&mut self, id: &str, root: &std::path::Path) {
+        if self.thread.as_deref() != Some(id) || self.root != root {
+            self.reset();
+            self.thread = Some(id.into());
+            self.root = root.into();
+        }
+    }
+
+    fn merge_paths(&mut self) {
+        self.paths = self
+            .provenance
+            .iter()
+            .chain(&self.record_paths)
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+    }
+
+    fn accept_paths(&mut self, generation: u64, files: Vec<PathBuf>) -> bool {
+        if self.request_generation != generation {
+            return false;
+        }
+        self.provenance = files;
+        self.merge_paths();
+        true
+    }
+
     /// Scene state, as if the host and Git had answered.
     #[cfg(test)]
     pub fn inject(&mut self, thread: &str, root: PathBuf, counts: Vec<LineCount>) {
@@ -61,6 +93,8 @@ impl ThreadFiles {
         let collapsed = self.collapsed;
         *self = Self {
             collapsed,
+            generation: self.generation + 1,
+            request_generation: self.request_generation + 1,
             ..Self::default()
         };
     }
@@ -80,22 +114,23 @@ impl Plait {
         let Some(snapshot) = self.host.snapshot.as_ref() else {
             return;
         };
-        if self.host.protocol() >= 5 && !self.turn_records.data.is_empty() {
-            return;
-        }
         let done = snapshot
             .tools
             .iter()
             .filter(|tool| writes(&tool.name) && tool.status != host::ToolStatus::Running)
             .count();
         let files = &self.thread_files;
-        if files.thread.as_deref() == Some(snapshot.id.as_str()) && files.tools_done == done {
+        if files.thread.as_deref() == Some(snapshot.id.as_str())
+            && files.root == snapshot.checkout
+            && files.tools_done == done
+            && files.requested
+        {
             return;
         }
         let id = snapshot.id.clone();
         let root = snapshot.checkout.clone();
-        self.thread_files.tools_done = done;
         self.fetch_thread_files(id, root, cx);
+        self.thread_files.tools_done = done;
     }
 
     /// Full paged records include command writes and are not capped by the
@@ -108,15 +143,14 @@ impl Plait {
         let Some(snapshot) = self.host.snapshot.as_ref() else {
             return;
         };
-        self.thread_files.generation += 1;
-        self.thread_files.thread = Some(snapshot.id.clone());
-        self.thread_files.root = snapshot.checkout.clone();
-        self.thread_files.paths = records
+        self.thread_files.select(&snapshot.id, &snapshot.checkout);
+        self.thread_files.record_paths = records
             .iter()
             .flat_map(|record| record.paths.iter().map(|path| path.path.clone()))
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect();
+        self.thread_files.merge_paths();
         self.count_thread_files(cx);
     }
 
@@ -131,19 +165,16 @@ impl Plait {
     }
 
     fn fetch_thread_files(&mut self, id: String, root: PathBuf, cx: &mut Context<Self>) {
-        let changed = self.thread_files.thread.as_deref() != Some(id.as_str());
-        if changed {
-            self.thread_files.paths.clear();
-            self.thread_files.counts.clear();
-        }
-        self.thread_files.thread = Some(id.clone());
-        self.thread_files.root = root;
+        self.thread_files.select(&id, &root);
         if !self.shows_thread_files() {
             return;
         }
-        self.thread_files.generation += 1;
-        let generation = self.thread_files.generation;
+        self.thread_files.requested = true;
+        self.thread_files.request_generation += 1;
+        let generation = self.thread_files.request_generation;
         let epoch = self.host.epoch;
+        let watch = self.host.watch_epoch;
+        let thread = id.clone();
         let task = cx.background_executor().spawn(async move {
             Client::from_environment()?
                 .request::<host::ChangedFilesReply>(&Request::changed_files(id))
@@ -151,13 +182,16 @@ impl Plait {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                if this.thread_files.generation != generation || this.host.epoch != epoch {
+                if this.thread_files.request_generation != generation
+                    || !this.host.accepts_watch(epoch, watch, &thread)
+                {
                     return;
                 }
                 match result {
                     Ok(reply) => {
-                        this.thread_files.paths = reply.files;
-                        this.count_thread_files(cx);
+                        if this.thread_files.accept_paths(generation, reply.files) {
+                            this.count_thread_files(cx);
+                        }
                     }
                     // A host from before this operation; stop asking it.
                     Err(host::Error::Rejected(_)) => {
@@ -173,11 +207,11 @@ impl Plait {
     }
 
     fn count_thread_files(&mut self, cx: &mut Context<Self>) {
+        self.thread_files.generation += 1;
         if self.thread_files.paths.is_empty() {
             self.thread_files.counts.clear();
             return cx.notify();
         }
-        self.thread_files.generation += 1;
         let generation = self.thread_files.generation;
         let root = self.thread_files.root.clone();
         let paths = self.thread_files.paths.clone();
@@ -360,4 +394,40 @@ fn file_row(index: usize, count: &LineCount, cx: &mut Context<Plait>) -> Statefu
         .on_click(
             cx.listener(move |this, _, window, cx| this.open_thread_file(path.clone(), window, cx)),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[core::prelude::v1::test]
+    fn records_merge_with_provenance_in_either_reply_order_and_when_expired() {
+        for records_first in [false, true] {
+            let mut files = ThreadFiles::default();
+            files.select("thread", std::path::Path::new("/repo"));
+            files.request_generation += 1;
+            let request = files.request_generation;
+            if !records_first {
+                assert!(files.accept_paths(request, vec!["legacy".into()]));
+            }
+            files.record_paths = vec!["command".into()];
+            files.merge_paths();
+            if records_first {
+                assert!(files.accept_paths(request, vec!["legacy".into()]));
+            }
+            assert_eq!(
+                files.paths,
+                vec![PathBuf::from("command"), PathBuf::from("legacy")]
+            );
+            files.record_paths.clear();
+            files.merge_paths();
+            assert_eq!(files.paths, vec![PathBuf::from("legacy")]);
+            files.select("other", std::path::Path::new("/repo"));
+            assert!(!files.accept_paths(request, vec!["late".into()]));
+            assert!(files.paths.is_empty());
+            let old = files.request_generation;
+            files.reset();
+            assert!(!files.accept_paths(old, vec!["late after reset".into()]));
+        }
+    }
 }
