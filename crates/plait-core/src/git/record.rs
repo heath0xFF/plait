@@ -355,8 +355,15 @@ fn record_with_paths(
         .collect();
     let mut ignored: BTreeSet<Vec<u8>> = private.ignored(&untracked)?.into_iter().collect();
     let ignored_directories = private.ignored_directories(&listing, &ignored)?;
+    let mut inspected_paths = private_paths.clone();
+    inspected_paths.extend(listing.iter().map(|entry| match entry {
+        Entry::Tracked { path, .. }
+        | Entry::Unmerged(path)
+        | Entry::Untracked(path)
+        | Entry::Ignored(path) => path.clone(),
+    }));
     let mut repositories: Vec<(Vec<u8>, Reason)> =
-        nested_directories(&private.root, &private_paths)
+        nested_directories(&private.root, &inspected_paths)
             .into_iter()
             .filter(|path| !submodules.contains(&path[..path.len() - 1]))
             .map(|path| (path, Reason::NestedRepository))
@@ -1733,9 +1740,17 @@ fn nested_directories(root: &Path, paths: &[Vec<u8>]) -> Vec<Vec<u8>> {
     ancestors(paths)
         .into_iter()
         .filter(|path| {
-            fs::symlink_metadata(root.join(OsStr::from_bytes(path)).join(".git")).is_ok()
+            let directory = root.join(OsStr::from_bytes(path));
+            repository_entries(|name| fs::symlink_metadata(directory.join(name)).is_ok())
         })
         .collect()
+}
+
+/// Recognize worktrees and Git directories without running Git in each folder.
+/// Ambiguous Git-shaped directories are excluded rather than risk their history.
+pub(super) fn repository_entries(mut exists: impl FnMut(&str) -> bool) -> bool {
+    exists(".git")
+        || (exists("HEAD") && (exists("commondir") || (exists("objects") && exists("refs"))))
 }
 
 /// Paths that changed between being planned and being taken; what the

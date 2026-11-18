@@ -646,3 +646,48 @@ fn changed_files_restore_without_borrowed_unchanged_blobs() {
         b"untouched borrowed blob"
     );
 }
+
+#[test]
+fn undo_rest_never_deletes_objects_needed_by_a_later_nested_commit() {
+    let f = Fixture::new();
+    f.repo.git(&["init", "--bare", "-q", "nested.git"]);
+    let nested = f.repo.0.join("nested.git");
+    let producer = Repo::new();
+    let before = f.take("before", None);
+    producer.write("first", "valuable first\n");
+    producer.commit();
+    producer.git(&[
+        "push",
+        "-q",
+        nested.to_str().unwrap(),
+        "HEAD:refs/heads/main",
+    ]);
+    let after = f.take("after", Some(&before));
+    producer.write("second", "later person work\n");
+    producer.commit();
+    producer.git(&[
+        "push",
+        "-q",
+        nested.to_str().unwrap(),
+        "HEAD:refs/heads/main",
+    ]);
+    let original = files(&nested);
+    assert!(after.paths.as_ref().unwrap().is_empty());
+    assert_eq!(f.undo(&before, &after, "undo", true).state, "undone");
+    assert_eq!(files(&nested), original);
+    f.repo.git(&["--git-dir=nested.git", "fsck", "--full"]);
+}
+
+#[test]
+fn a_git_directory_appearing_after_capture_blocks_old_record_paths() {
+    let f = Fixture::new();
+    fs::create_dir(f.repo.0.join("metadata")).unwrap();
+    f.repo.write("metadata/file", "before");
+    let before = f.take("before", None);
+    f.repo.write("metadata/file", "after");
+    let after = f.take("after", Some(&before));
+    f.repo.git(&["init", "--bare", "-q", "metadata"]);
+    let outcome = f.undo(&before, &after, "undo", true);
+    assert_eq!(outcome.changed_since, ["metadata/file"]);
+    assert_eq!(outcome.applied, 0);
+}

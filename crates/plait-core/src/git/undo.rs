@@ -375,6 +375,9 @@ fn parent(root: &File, path: &str, create: bool) -> Result<Option<(File, String)
             check(unsafe { libc::mkdirat(directory.as_raw_fd(), name.as_ptr(), 0o755) })?;
         }
         directory = open_at(&directory, part, libc::O_RDONLY | libc::O_DIRECTORY, 0)?;
+        if record::repository_entries(|name| stat(&directory, name).is_ok_and(|m| m.is_some())) {
+            return Err("Nested repositories cannot be restored.".into());
+        }
     }
     Ok(Some((directory, name)))
 }

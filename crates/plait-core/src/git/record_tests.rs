@@ -570,6 +570,32 @@ fn nested_repositories_and_submodules_are_not_covered() {
 }
 
 #[test]
+fn bare_and_separate_git_directories_are_excluded_across_creation_and_deletion() {
+    for name in ["mirror.git", "metadata"] {
+        let repo = committed();
+        let store = Scratch::new();
+        let before = take(&repo, &store, "before", None);
+        repo.git(&["init", "--bare", "-q", name]);
+        let created = take(&repo, &store, "created", Some(&before));
+        assert!(created.paths.as_ref().unwrap().is_empty());
+        assert!(uncovered_list(&created).contains(&(format!("{name}/"), Reason::NestedRepository)));
+        let existing = take(&repo, &store, "existing", None);
+        let (ok, tree) = store_git(
+            &store.0,
+            "sha1",
+            None,
+            &["ls-tree", "-r", "--name-only", &existing.commit],
+        );
+        assert!(ok);
+        assert!(!String::from_utf8(tree).unwrap().contains(name));
+        fs::remove_dir_all(repo.0.join(name)).unwrap();
+        let deleted = take(&repo, &store, "deleted", Some(&existing));
+        assert!(deleted.paths.as_ref().unwrap().is_empty());
+        assert!(uncovered_list(&deleted).contains(&(format!("{name}/"), Reason::NestedRepository)));
+    }
+}
+
+#[test]
 fn a_checkout_with_no_commits_is_recorded() {
     let repo = Repo::new();
     repo.write("first.txt", "first\n");
