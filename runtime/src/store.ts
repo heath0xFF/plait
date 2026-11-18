@@ -65,6 +65,13 @@ export class Store {
     this.db.exec('CREATE INDEX IF NOT EXISTS threads_recent ON threads(updated_at DESC)');
     this.outputs = new CommandOutputs(this.db);
     this.images = new Images(this.db);
+    // Repair queued cancellations made by earlier image-capable hosts, without reading BLOBs.
+    this.transaction(() => {
+      for (const row of this.db.prepare(`SELECT message_images.thread,message_images.request FROM message_images
+        JOIN requests ON requests.scope=message_images.thread AND requests.id=message_images.request WHERE requests.state='cancelled'`).all()) {
+        this.images.detach(String(row.thread), String(row.request));
+      }
+    });
     this.backfill();
     for (const snapshot of this.recoverable()) {
       if (snapshot.status === 'running' || snapshot.status === 'awaiting_approval') {
@@ -180,10 +187,13 @@ export class Store {
   }
   /** Cancels one queued input, or all of them, and returns how many. The request IDs stay used. */
   cancel(id: string, requestId?: string): number {
-    const changed = requestId === undefined
-      ? this.db.prepare("UPDATE requests SET state='cancelled',queue=NULL WHERE scope=? AND state='queued'").run(id)
-      : this.db.prepare("UPDATE requests SET state='cancelled',queue=NULL WHERE scope=? AND id=? AND state='queued'").run(id, requestId);
-    return Number(changed.changes);
+    return this.transaction(() => {
+      const changed = requestId === undefined
+        ? this.db.prepare("UPDATE requests SET state='cancelled',queue=NULL WHERE scope=? AND state='queued' RETURNING id").all(id)
+        : this.db.prepare("UPDATE requests SET state='cancelled',queue=NULL WHERE scope=? AND id=? AND state='queued' RETURNING id").all(id, requestId);
+      for (const row of changed) this.images.detach(id, String(row.id));
+      return changed.length;
+    });
   }
   /** Accepted inputs that never reached the conversation store, newest first, below a history position. */
   pendingBefore(id: string, anchor: number, rowid: number, limit: number): PendingInput[] {

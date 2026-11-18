@@ -349,16 +349,24 @@ Paste an image with Cmd-V, or drop PNG or JPEG files onto the message box.
 Each attachment has a thumbnail and **Remove**. Several images can accompany
 text, or be sent on their own. Activate a conversation thumbnail for a larger
 view; **Close** or Escape returns to the conversation. Draft images survive
-closing the window, and sent images survive a host restart. Removing an image
-or having its message accepted releases the desktop original once no draft or
-pending submission needs it. The host keeps sent images for the life of its
-store; archiving a thread does not reclaim them.
+closing the window, and sent images survive a host restart. New thread drafts
+stay with their checkout when switching projects. Discard saves immediately.
+Removing an image or having its message accepted releases the desktop original
+once no draft or pending submission needs it. The host keeps images that entered
+the conversation for the life of its store; archiving a thread does not reclaim
+them. Cancelling a queued message
+releases its images if no other accepted message uses them; unused uploads
+expire after 24 hours.
 
 Both desktop and host allow four different images, at most 5 MiB each and
 5 MiB combined, up to 8,192 pixels on either side and 16,777,216 pixels total.
 The bytes determine PNG or JPEG, not the file extension. **Refused** explains
 the reason on hover. Plait never shrinks or recompresses the original to make
-it fit. Choose a smaller file yourself if needed.
+it fit. Choose a smaller file yourself if needed. The refusal clears on the
+next text edit. **Failed** means an original could not be restored; hover for
+the reason and remove the unavailable attachment before sending. **Uploading**
+keeps Send disabled until the host replies, and pending rows show their image
+count. Paste and drop leave a disabled message box unchanged.
 
 **Text only** means the selected model reports that it cannot accept images;
 remove them or choose another model. **Update host** means images need a
@@ -371,13 +379,14 @@ text. TIFF-only images are refused rather than converted. When the clipboard
 offers both text and an image, text is pasted and the image is not attached.
 Drop the image file onto the message box, or copy the image alone, to attach it.
 Copied file paths keep their ordinary text-paste behavior. The clipboard read
-itself is synchronous; validation follows immediately and thumbnail preparation
-runs in the background.
+itself is synchronous; header validation follows immediately. Hashing and
+thumbnail preparation run in the background.
 
 Sent originals live with the thread in the private host store, never in the
 repository or an Undo record. Draft originals live in the desktop's private
-session directory. Archive and Remove do not erase retained originals; removing
-the respective state store removes them. [The host contract](HOST.md#limits-and-retention)
+session directory. Archive does not erase host originals; Remove releases
+unreferenced desktop draft originals. Removing the respective state store
+removes its originals. [The host contract](HOST.md#limits-and-retention)
 gives the paths and upload expiry rules. [Verification](VERIFICATION.md#images-in-messages)
 distinguishes offscreen and scripted checks from installed-app acceptance.
 

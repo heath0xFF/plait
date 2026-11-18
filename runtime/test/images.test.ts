@@ -172,3 +172,65 @@ test('four base64 blocks plus worst allowed text fit the harness line bound',()=
   // More than a MiB remains even reserving 64 KiB for serialized text and 4 KiB for framing.
   assert.ok(encoded+65536+4096+1 < MAX_LINE_BYTES-1024*1024);
 });
+
+for (const operation of ['cancel_queued','stop'] as const) test(`${operation} releases only images no remaining accepted input owns`,async t=>{
+  const h=await codex(t); const thread=await h.create(); const call=(input:any)=>h.call(input,6);
+  const shared=await upload(call,thread.id);
+  const cancelled=await upload(call,thread.id,Buffer.concat([png,Buffer.from('cancelled')]));
+  await h.submit(thread.id,'active',{images:[shared.id],protocol_version:6}); await h.asked(thread.id);
+  for(const [request,image] of [['keep',shared],['discard',cancelled]] as const) {
+    assert.equal((await call({op:'submit',thread_id:thread.id,request_id:request,text:'',images:[image.id],when_busy:'follow_up'})).ok,true);
+  }
+  assert.equal((await call({op:operation,thread_id:thread.id,...(operation==='cancel_queued'?{request_id:'discard'}:{})})).ok,true);
+  const db=h.runtime.store.db;
+  assert.equal(db.prepare('SELECT used FROM images WHERE thread=? AND id=?').get(thread.id,cancelled.id)!.used,0);
+  assert.equal(db.prepare('SELECT used FROM images WHERE thread=? AND id=?').get(thread.id,shared.id)!.used,1);
+  assert.deepEqual(h.runtime.store.images.forRequest(thread.id,'discard'),[]);
+  // Edit can recover the original during the bounded unattached-image grace period.
+  assert.equal(h.runtime.store.images.read(thread.id,cancelled.id,0).image.id,cancelled.id);
+  if(operation==='cancel_queued') await h.call({op:'stop',thread_id:thread.id});
+  await h.idle(thread.id);
+  db.prepare('UPDATE images SET created=0').run();
+  await h.close();
+  const reopened=new Store(h.store); t.after(()=>reopened.close());
+  assert.equal(reopened.db.prepare('SELECT id FROM images WHERE id=?').get(cancelled.id),undefined);
+  assert.equal(reopened.images.forRequest(thread.id,'active')[0].id,shared.id);
+});
+
+for(const [name,make] of [['codex',codex],['claude',claude]] as const) test(`${name} image-only input has no empty text block`,async t=>{
+  const h=await make(t); const thread=await h.create(); const image=await upload(input=>h.call(input,6),thread.id);
+  assert.equal((await h.call({op:'submit',thread_id:thread.id,request_id:'image-only',text:'',images:[image.id]},6)).ok,true);
+  await h.finish(thread.id);
+  const frames=(await readFile(join(h.store,name==='codex'?'frames.jsonl':'claude-images.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+  const input=name==='codex'?frames.find(f=>f.method==='turn/start').params.input:frames.filter(f=>f.stdin).map(f=>JSON.parse(f.stdin)).find(f=>f.type==='user').message.content;
+  assert.equal(input.length,1); assert.equal(input[0].type,'image');
+});
+test('Pi image-only input leaves the pinned provider free to supply its text placeholder',async t=>{
+  const h=await socketHost(t,'images'); const thread=await h.create(); const call=(input:any)=>request(h.store,{protocol_version:6,...input}) as Promise<any>;
+  const image=await upload(call,thread.id);
+  assert.equal((await call({op:'submit',thread_id:thread.id,request_id:'image-only',text:'',images:[image.id]})).ok,true);
+  await until(()=>call({op:'watch',thread_id:thread.id}),reply=>reply.result.thread.status==='idle');
+  const contexts=(await readFile(join(h.store,'model-contexts.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+  assert.deepEqual(contexts[0].find((m:any)=>m.role==='user').content,[{type:'image',mimeType:'image/png',data:png.toString('base64')}]);
+});
+test('opening a Codex thread before the catalog arrives resolves text-only capability',async t=>{
+  const h=await codex(t,'text-only'); const thread=await h.create(); await h.close();
+  const resumed=h.reopen();
+  assert.equal(resumed.runtime.snapshot(thread.id).image_input,'unknown');
+  const watched=await resumed.call({op:'watch',thread_id:thread.id},6);
+  assert.equal(watched.result.thread.image_input,'no');
+  const image=await upload(input=>resumed.call(input,6),thread.id);
+  assert.equal((await resumed.call({op:'submit',thread_id:thread.id,request_id:'text-only',text:'',images:[image.id]},6)).error?.code,'model_unavailable');
+  assert.equal(resumed.runtime.store.inputs(thread.id).length,0);
+});
+test('reopen releases image associations left by an older host cancellation',async t=>{
+  const {base}=await setup(t); const store=new Store(base);
+  const image=store.images.put('t',id(png),0,png.length,png.toString('base64')).image!;
+  const snapshot:Snapshot={id:'t',checkout:'/repo',model:{provider:'p',model_id:'m'},status:'idle',messages:[],tools:[],live_text:'',pending_approval:null,error:null,truncated:false};
+  store.enqueue('cancelled','',{}, {mode:'follow_up',approval:'ask'},snapshot,[image.id]);
+  store.db.prepare("UPDATE requests SET state='cancelled',queue=NULL").run();
+  store.close();
+  const reopened=new Store(base); t.after(()=>reopened.close());
+  assert.deepEqual(reopened.images.forRequest('t','cancelled'),[]);
+  assert.equal(reopened.db.prepare('SELECT used FROM images').get()!.used,0);
+});

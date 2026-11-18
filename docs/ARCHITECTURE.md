@@ -743,7 +743,10 @@ The desktop saves originals in `session/images/<sha256>` under its private
 state directory, mode 0700 with mode 0600 files. On macOS this defaults to
 `~/Library/Application Support/Plait/session/images`; `PLAIT_DESKTOP_STATE_DIR`
 can move the enclosing session directory. The journal holds only references
-in existing-thread drafts, the new-thread draft, and pending submissions.
+in existing-thread drafts, new-thread drafts scoped to each checkout, and pending
+submissions. Changing checkout saves and sets aside its new-thread draft;
+Discard saves the removal immediately. Editing a queued message reserves the
+empty composer until cancellation returns, so text and attachments restore together.
 Original files are synced before references enter a draft. Sending flushes the
 journal, uploads originals, then submits their IDs. A refusal preserves the
 draft; only an acknowledgement for its unchanged revision clears it. Removing
@@ -774,19 +777,33 @@ an already allocated image, just as text paste already reads the person's
 clipboard whole. It is read only on an explicit paste action, never during
 render, focus, or control enablement. Immediately on return, Plait checks the
 byte/type/dimension/count limits and drops refused bytes without caching,
-logging, or saving them. Pixel decoding and thumbnailing remain background
-work. The pinned native GPUI reader prefers text over images, then PNG over
-JPEG and other image representations. A text-plus-image paste therefore keeps
+logging, or saving them. These immediate checks read headers only; Plait's
+SHA-256 hashing, pixel decoding, and thumbnailing run in background work.
+GPUI itself computes a non-cryptographic image ID while constructing its
+clipboard result; that cost is part of the synchronous read exception. An
+immutable prepared original carries its digest through persistence without
+hashing again. The pinned native GPUI reader prefers text over images, then
+PNG over JPEG and other image representations. A text-plus-image paste therefore keeps
 ordinary text behavior. TIFF-only images are refused, without conversion.
 
 Conversation rendering draws prepared `RenderImage` pixels only. Visible rows
 schedule missing thumbnails after rendering returns; fetching, disk reads,
 and decoding happen on the background executor. At most four reads/decodes
-run at once and the cache holds at most 32 results, including errors. A larger
-view has one separately prepared image, up to 1,600 pixels per side. Results
+run at once and the least-recently-used cache holds at most 128 results,
+including errors. It retains decoded thumbnails, not original bytes: at most
+128 × 192 × 192 × 4 = 18 MiB of pixel payload. Hits refresh recency without
+fetching or decoding. A larger view has one separately prepared image, up to
+1,600 pixels per side (9.77 MiB). These bounds exclude renderer copies, small
+metadata, and temporary decode allocations. Decoding records oriented
+dimensions for the tooltip and larger view. Results
 must match connection epoch, watch generation, thread ID, and cache selection;
 a larger-view result also matches its own generation. Changing thread or
-connection drops the cache. Draft thumbnail replies match composer generation.
+connection drops the cache. Draft thumbnail replies match composer generation
+and discard pixels for references removed while loading. A missing original
+shows Failed with its reason on hover and prevents sending. Uploading marks a
+pending image submission and blocks sending that draft twice; pending rows
+show the image count even without text. Disabled composers reject paste/drop,
+and a refused attachment's notice clears on the next text edit.
 The journal and caches contain no image data in snapshot frames.
 
 The release frame benchmark includes 50 distinct image references with a

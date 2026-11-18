@@ -238,7 +238,12 @@ export class Runtime {
         const id = String(request.thread_id); this.snapshot(id);
         return this.store.images.read(id, String(request.image_id), Number(request.offset));
       }
-      case 'watch': return { thread: this.snapshot(String(request.thread_id)) };
+      case 'watch': {
+        const id = String(request.thread_id);
+        // An opened Codex thread must use the catalog, even before Settings loads it.
+        if (this.snapshot(id).harness?.id === 'codex') await this.codex.entry();
+        return { thread: this.snapshot(id) };
+      }
       case 'submit': return this.submit(String(request.thread_id), String(request.request_id), String(request.text),
         request.approval === 'auto' ? 'auto' : 'ask', request.when_busy as QueueMode | undefined, request.images as string[] | undefined);
       case 'stop': {
@@ -601,7 +606,7 @@ export class Runtime {
   private async piInput(session: Session, requestId: string, text: string) {
     const expanded = await expandInput(text, session);
     const images = this.imageData(session.snapshot.id, requestId);
-    return images.length ? [{ type: 'text' as const, text: expanded }, ...images.map(image => ({ type: 'image' as const, mimeType: image.ref.media_type, data: image.data }))] : expanded;
+    return images.length ? [...(expanded ? [{ type: 'text' as const, text: expanded }] : []), ...images.map(image => ({ type: 'image' as const, mimeType: image.ref.media_type, data: image.data }))] : expanded;
   }
   private async draft(session: Session, requestId: string, text: string): Promise<SubmissionDraft> {
     const earlier = await session.harness!.commit(tx => tx.submissionByRequest(session.root!.id, steerKey(requestId)), context);

@@ -11,6 +11,8 @@ pub(super) struct Attachments {
     pub generation: u64,
     pub loading: bool,
     pub error: Option<String>,
+    pub failed: Option<String>,
+    pub uploading: bool,
     pub blocked: Option<(String, String)>,
 }
 impl Composer {
@@ -25,14 +27,26 @@ impl Composer {
             .collect();
     }
     pub(super) fn remove_image(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !self.enabled {
+            return;
+        }
         self.images
             .references
             .retain(|reference| reference.id != id);
         self.images.pixels.remove(id);
         self.images.pins.remove(id);
         self.images.error = None;
+        if self.images.references.is_empty() {
+            self.images.failed = None;
+        }
         self.draft.revision += 1;
         cx.notify();
+    }
+    pub fn set_images_uploading(&mut self, uploading: bool, cx: &mut Context<Self>) {
+        if self.images.uploading != uploading {
+            self.images.uploading = uploading;
+            cx.notify();
+        }
     }
     pub fn saved_images(&self) -> &[ImageRef] {
         &self.images.references
@@ -83,6 +97,8 @@ impl Composer {
         self.pin_images(&references);
         self.images.references = references.clone();
         self.images.pixels.clear();
+        self.images.failed = None;
+        self.images.error = None;
         self.images.loading = !references.is_empty();
         let generation = self.images.generation;
         let pending_pin = images::pin(&references);
@@ -115,8 +131,12 @@ impl Composer {
                 }
                 this.images.loading = false;
                 match result {
-                    Ok((pixels, _pin)) => this.images.pixels = pixels,
-                    Err(error) => this.images.error = Some(error),
+                    Ok((mut pixels, _pin)) => {
+                        // Removed references may finish loading, but must not retain pixels.
+                        pixels.retain(|id, _| this.images.references.iter().any(|r| &r.id == id));
+                        this.images.pixels = pixels;
+                    }
+                    Err(error) => this.images.failed = Some(error),
                 }
                 cx.notify();
             });
@@ -131,26 +151,43 @@ impl Composer {
         .detach();
     }
     pub(super) fn image_send_blocked(&self) -> bool {
-        self.images.loading || (!self.images.references.is_empty() && self.images.blocked.is_some())
+        self.images.loading
+            || self.images.uploading
+            || (!self.images.references.is_empty()
+                && (self.images.blocked.is_some()
+                    || self
+                        .images
+                        .references
+                        .iter()
+                        .any(|r| !self.images.pixels.contains_key(&r.id))))
     }
     fn refuse_image(&mut self, reason: String, cx: &mut Context<Self>) {
         self.images.error = Some(reason);
         cx.notify();
     }
     pub(super) fn paste_images(&mut self, bytes: Vec<u8>, cx: &mut Context<Self>) {
+        if !self.enabled {
+            return;
+        }
         // Clipboard allocation is GPUI's; reject immediately, before retaining or decoding it.
-        let info = match images::inspect(&bytes) {
+        let info = match images::describe(&bytes) {
             Ok(info) => info,
             Err(error) => return self.refuse_image(error, cx),
         };
-        let mut all = self.images.references.clone();
-        all.push(info);
-        if let Err(error) = images::validate_message(&all) {
-            return self.refuse_image(error, cx);
+        if self.images.references.len() >= images::COUNT {
+            return self.refuse_image("A message can have at most 4 images.".into(), cx);
+        }
+        if self.images.references.iter().map(|r| r.size).sum::<usize>() + info.size
+            > images::MESSAGE_BYTES
+        {
+            return self.refuse_image("Images in a message must total at most 5 MiB.".into(), cx);
         }
         self.add_images(Vec::new(), Some(bytes), cx);
     }
     pub(super) fn drop_images(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        if !self.enabled {
+            return;
+        }
         if paths.len() + self.images.references.len() > images::COUNT {
             return self.refuse_image("A message can have at most 4 images.".into(), cx);
         }
@@ -173,18 +210,19 @@ impl Composer {
             for path in paths {
                 inputs.push(images::read_file(&path)?);
             }
+            let inputs = inputs
+                .into_iter()
+                .map(images::Prepared::new)
+                .collect::<Result<Vec<_>, _>>()?;
             let mut all = current;
-            for bytes in &inputs {
-                all.push(images::inspect(bytes)?);
-                images::validate_message(&all)?;
-            }
+            all.extend(inputs.iter().map(|input| input.reference().clone()));
+            images::validate_message(&all)?;
             inputs
                 .into_iter()
-                .map(|bytes| {
-                    let pixels = decode(&bytes, 192)?;
-                    let reference = images::inspect(&bytes)?;
-                    let pin = images::pin(std::slice::from_ref(&reference))?;
-                    images::persist(&bytes)?;
+                .map(|input| {
+                    let pixels = decode(input.bytes(), 192)?;
+                    let pin = images::pin(std::slice::from_ref(input.reference()))?;
+                    let reference = input.persist()?;
                     Ok((reference, pixels, pin))
                 })
                 .collect::<Result<Vec<_>, String>>()
@@ -231,12 +269,33 @@ impl Composer {
                         div()
                             .w(px(80.))
                             .h(px(64.))
+                            .id(SharedString::from(format!("draft-image-{id}")))
+                            .when(!self.images.pixels.contains_key(&id), |slot| {
+                                let reason = self
+                                    .images
+                                    .failed
+                                    .clone()
+                                    .unwrap_or_else(|| "Preparing image thumbnail.".into());
+                                slot.tooltip(move |_, cx| {
+                                    cx.new(|_| TextTooltip(reason.clone())).into()
+                                })
+                            })
                             .child(match self.images.pixels.get(&id) {
                                 Some(pixels) => img(pixels.clone())
                                     .size_full()
                                     .object_fit(ObjectFit::Contain)
                                     .into_any_element(),
-                                None => div().child("Loading").into_any_element(),
+                                None => div()
+                                    .size_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(if self.images.loading {
+                                        "Loading"
+                                    } else {
+                                        "Failed"
+                                    })
+                                    .into_any_element(),
                             }),
                     )
                     .child(
@@ -249,7 +308,15 @@ impl Composer {
                     ),
             );
         }
-        let state = if let Some(error) = &self.images.error {
+        let state = if self.images.uploading {
+            Some((
+                "Uploading".into(),
+                "Sending image originals to the host. The draft stays until acceptance.".into(),
+            ))
+        } else if !self.images.references.is_empty() && self.images.failed.is_some() {
+            // Each unavailable slot already names its failure and has the reason on hover.
+            None
+        } else if let Some(error) = &self.images.error {
             Some(("Refused".to_owned(), error.clone()))
         } else if self.images.loading {
             Some(("Loading".into(), "Preparing image thumbnails.".into()))
@@ -261,7 +328,11 @@ impl Composer {
         if let Some((label, detail)) = state {
             strip = strip.child(
                 theme::button("image-state", label)
-                    .text_color(rgb(colors().amber))
+                    .text_color(rgb(if self.images.uploading {
+                        colors().blue
+                    } else {
+                        colors().amber
+                    }))
                     .tooltip(move |_, cx| cx.new(|_| TextTooltip(detail.clone())).into()),
             );
         }
@@ -292,6 +363,21 @@ impl Composer {
     }
     pub(in crate::ui) fn scene_remove(&mut self, id: &str, cx: &mut Context<Self>) {
         self.remove_image(id, cx);
+    }
+    pub(in crate::ui) fn scene_image_status(
+        &self,
+    ) -> (bool, bool, Option<&str>, Option<&str>, usize, bool) {
+        (
+            self.images.loading,
+            self.image_send_blocked(),
+            self.images.error.as_deref(),
+            self.images.failed.as_deref(),
+            self.images.pixels.len(),
+            self.images.uploading,
+        )
+    }
+    pub(in crate::ui) fn scene_history(&self) -> Arc<[String]> {
+        self.draft.history.entries()
     }
     pub(in crate::ui) fn scene_submit(&mut self, cx: &mut Context<Self>) {
         self.submit(false, cx);

@@ -145,6 +145,7 @@ function handle(frame: Frame) {
         id: name, model: name, displayName: name.toUpperCase(), description: '', hidden, isDefault: name === 'gpt-fake',
         supportedReasoningEfforts: [{ reasoningEffort: 'low', description: '' }, { reasoningEffort: 'high', description: '' }],
         defaultReasoningEffort: 'low',
+        ...(scenario === 'text-only' ? { inputModalities: ['text'] } : {}),
       });
       return params.cursor === 'page-2'
         ? reply(id, { data: [model('gpt-fake-mini'), model('gpt-hidden', true)], nextCursor: null })

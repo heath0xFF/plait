@@ -5261,7 +5261,7 @@ fn image_replies_require_the_original_host_thread_and_generation() {
         assert!(!cache.complete(&expected, &actual, "late".into(), Err("fixture".into())));
         assert_eq!(cache.len(), 1);
     }
-    for index in 0..50 {
+    for index in 0..150 {
         assert!(cache.complete(
             &expected,
             &expected,
@@ -5269,7 +5269,7 @@ fn image_replies_require_the_original_host_thread_and_generation() {
             Err("fixture".into())
         ));
     }
-    assert_eq!(cache.len(), 32);
+    assert_eq!(cache.len(), super::images::THUMBNAILS);
 }
 
 #[core::prelude::v1::test]
@@ -5509,5 +5509,420 @@ fn host_acceptance_collects_the_original_after_clearing_the_draft() {
     server.join().unwrap();
     assert_eq!(plait_core::images::local(&reference).unwrap(), bytes);
     std::fs::remove_file(socket).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn image_lru_retains_hot_and_scrollback_pixels() {
+    if !isolated("image_lru_retains_hot_and_scrollback_pixels") {
+        return;
+    }
+    let key = (1, 1, THREAD.to_owned());
+    let mut cache = super::images::ImageCache::scene(key.clone(), Default::default());
+    let pixels = images::fixtures()[0].1.clone();
+    let mut requests = 0;
+    for index in (0..50).chain((0..50).rev()).chain(0..50) {
+        let id = index.to_string();
+        if !cache.contains(&id) {
+            requests += 1;
+            cache.complete(&key, &key, id.clone(), Ok(pixels.clone().into()));
+        }
+        cache.touch(&id);
+    }
+    assert_eq!(
+        requests, 50,
+        "scrolling back must not fetch or decode again"
+    );
+    for index in 50..super::images::THUMBNAILS {
+        cache.complete(&key, &key, index.to_string(), Ok(pixels.clone().into()));
+    }
+    cache.touch("0");
+    cache.complete(&key, &key, "new".into(), Ok(pixels.into()));
+    assert!(cache.contains("0"));
+    assert!(!cache.contains("1"));
+    assert_eq!(cache.len(), super::images::THUMBNAILS);
+}
+
+#[core::prelude::v1::test]
+fn image_disabled_refusal_and_prompt_history() {
+    if !isolated("image_disabled_refusal_and_prompt_history") {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("plait-image-input-{}", std::process::id()));
+    let repository = fixture_repository(&root);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.fresh_composer(&repository);
+    images::install(&mut harness, 1);
+    let fixture = images::fixtures();
+    let path = root.join("drop.png");
+    let bytes = include_bytes!("../../../../runtime/test/support/images/0.png");
+    std::fs::write(&path, bytes).unwrap();
+    for reason in [
+        "Creating thread",
+        "Host disconnected",
+        "Restoring saved work",
+    ] {
+        harness.composer(|composer, window, cx| {
+            composer.set_enabled(false, Some(reason.into()), cx);
+            let revision = composer.saved_draft().1;
+            composer.scene_refuse(bytes.to_vec(), cx);
+            composer.scene_drop(vec![path.clone()], cx);
+            composer.type_text("ignored", window, cx);
+            assert_eq!(composer.saved_draft().1, revision);
+            assert!(composer.saved_images().is_empty());
+            assert!(!composer.scene_image_status().0);
+        });
+    }
+    harness.composer(|composer, window, cx| {
+        composer.set_enabled(true, None, cx);
+        composer.scene_refuse(vec![0; 16], cx);
+        assert!(composer.scene_image_status().2.is_some());
+        composer.type_text("Remember this illustrated prompt", window, cx);
+        assert!(composer.scene_image_status().2.is_none());
+        composer.scene_images(
+            vec![fixture[0].0.clone()],
+            std::collections::HashMap::from([(fixture[0].0.id.clone(), fixture[0].1.clone())]),
+            cx,
+        );
+        composer.scene_submit(cx);
+        assert!(
+            composer
+                .scene_history()
+                .iter()
+                .any(|text| text == "Remember this illustrated prompt")
+        );
+    });
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn image_restore_failure_blocks_sending() {
+    if !isolated("image_restore_failure_blocks_sending") {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("plait-image-failed-{}", std::process::id()));
+    let repository = fixture_repository(&root);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.fresh_composer(&repository);
+    images::install(&mut harness, 1);
+    let reference = images::fixtures()[0].0.clone();
+    harness.composer(|composer, _, cx| composer.restore_images(vec![reference.clone()], cx));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while harness.composer(|composer, _, _| composer.scene_image_status().0) {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    harness.composer(|composer, _, cx| {
+        let status = composer.scene_image_status();
+        assert!(status.1);
+        assert!(status.3.unwrap().contains("opened"));
+        composer.scene_submit(cx);
+        assert!(composer.saved_draft().2.is_none());
+        assert_eq!(composer.saved_images(), &[reference]);
+    });
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn image_upload_state_blocks_duplicate_send() {
+    if !isolated("image_upload_state_blocks_duplicate_send") {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("plait-image-upload-{}", std::process::id()));
+    let repository = fixture_repository(&root);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.fresh_composer(&repository);
+    images::install(&mut harness, 1);
+    let fixture = images::fixtures();
+    harness.composer(|composer, _, cx| {
+        composer.scene_images(
+            vec![fixture[0].0.clone()],
+            std::collections::HashMap::from([(fixture[0].0.id.clone(), fixture[0].1.clone())]),
+            cx,
+        )
+    });
+    let revision = harness.composer(|composer, _, _| composer.saved_draft().1);
+    harness.update(|plait, _, cx| {
+        let pending = plait
+            .host
+            .submissions
+            .begin_images(
+                THREAD,
+                "".into(),
+                None,
+                None,
+                Some(revision),
+                vec![fixture[0].0.clone()],
+            )
+            .unwrap();
+        plait
+            .host
+            .submissions
+            .start_send(THREAD, &pending.request_id);
+        plait.sync_composer(cx);
+    });
+    harness.composer(|composer, _, cx| {
+        assert!(composer.scene_image_status().5);
+        assert!(composer.scene_image_status().1);
+        composer.scene_submit(cx);
+        assert!(composer.saved_draft().2.is_none());
+    });
+    assert_eq!(
+        super::thread_controls::pending_description("", 1),
+        "1 image"
+    );
+    assert_eq!(
+        super::thread_controls::pending_description("", 3),
+        "3 images"
+    );
+    assert_eq!(
+        super::thread_controls::pending_description("Look", 2),
+        "Look · 2 images"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn image_drafts_stay_with_their_checkout() {
+    if !isolated("image_drafts_stay_with_their_checkout") {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("plait-image-checkouts-{}", std::process::id()));
+    let a = fixture_repository(&root.join("a"));
+    let b = fixture_repository(&root.join("b"));
+    let mut harness = Harness::new(&a, None, 900., 600.);
+    harness.fresh_composer(&a);
+    let (directory, host) = plait_core::session::locations().unwrap();
+    let (journal, _) = plait_core::session::Journal::open(&directory, host.clone()).unwrap();
+    harness.update(|plait, window, cx| {
+        plait.host.status.as_mut().unwrap().protocol_version = 6;
+        plait.session.journal = Some(journal.clone());
+        plait.session.data.as_mut().unwrap().host_store = host;
+        plait.open_draft(window, cx);
+    });
+    let fixture = images::fixtures();
+    for (index, text) in ["Draft for A", "Draft for B"].into_iter().enumerate() {
+        let bytes = [
+            include_bytes!("../../../../runtime/test/support/images/0.png").as_slice(),
+            include_bytes!("../../../../runtime/test/support/images/1.png").as_slice(),
+        ][index];
+        plait_core::images::persist(bytes).unwrap();
+        harness.update(|plait, window, cx| {
+            let composer = plait.draft.composer.clone().unwrap();
+            composer.update(cx, |composer, cx| {
+                assert!(composer.is_empty());
+                composer.type_text(text, window, cx);
+                composer.scene_images(
+                    vec![fixture[index].0.clone()],
+                    std::collections::HashMap::from([(
+                        fixture[index].0.id.clone(),
+                        fixture[index].1.clone(),
+                    )]),
+                    cx,
+                );
+            });
+            plait.capture_session(cx);
+            plait.change_checkout(if index == 0 { b.clone() } else { a.clone() }, window, cx);
+        });
+    }
+    harness.update(|plait, _, cx| {
+        let composer = plait.draft.composer.as_ref().unwrap().read(cx);
+        assert_eq!(composer.saved_draft().0, "Draft for A");
+        assert_eq!(composer.saved_images(), &[fixture[0].0.clone()]);
+        plait.capture_session(cx);
+    });
+    journal.flush().unwrap();
+    let saved: plait_core::session::Session =
+        serde_json::from_slice(&std::fs::read(directory.join("desktop.json")).unwrap()).unwrap();
+    assert_eq!(saved.new_draft_for(&a).unwrap().text, "Draft for A");
+    assert_eq!(saved.new_draft_for(&b).unwrap().text, "Draft for B");
+    assert_eq!(
+        saved.new_draft_for(&b).unwrap().images,
+        &[fixture[1].0.clone()]
+    );
+    // Discard must queue its own save, without another edit or close event.
+    harness.update(|plait, window, cx| plait.discard_draft(window, cx));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while directory.join("images").join(&fixture[0].0.id).exists() {
+        assert!(
+            Instant::now() < deadline,
+            "discard did not collect the original"
+        );
+        harness.settle();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let saved: plait_core::session::Session =
+        serde_json::from_slice(&std::fs::read(directory.join("desktop.json")).unwrap()).unwrap();
+    assert!(saved.new_draft_for(&a).is_none());
+    assert!(saved.new_draft_for(&b).is_some());
+    assert!(directory.join("images").join(&fixture[1].0.id).exists());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// One controlled reply lets tests edit/remove while the production socket request is in flight.
+fn delayed_image_reply(
+    reply: serde_json::Value,
+) -> (
+    std::sync::mpsc::Receiver<serde_json::Value>,
+    std::sync::mpsc::Sender<()>,
+    std::thread::JoinHandle<()>,
+) {
+    use std::{
+        io::{BufRead, BufReader, Write},
+        os::unix::{fs::PermissionsExt, net::UnixListener},
+    };
+    let store = PathBuf::from(std::env::var_os("PLAIT_HOST_STORE").unwrap());
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = store.join("host.sock");
+    let listener = UnixListener::bind(&path).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let (arrived, received) = std::sync::mpsc::channel();
+    let (release, wait) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let mut line = String::new();
+        BufReader::new(socket.try_clone().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        arrived.send(serde_json::from_str(&line).unwrap()).unwrap();
+        wait.recv_timeout(Duration::from_secs(10)).unwrap();
+        writeln!(socket, "{reply}").unwrap();
+        std::fs::remove_file(path).unwrap();
+    });
+    (received, release, server)
+}
+
+#[core::prelude::v1::test]
+fn image_queued_edit_preserves_attachments() {
+    if !isolated("image_queued_edit_preserves_attachments") {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("plait-image-queued-{}", std::process::id()));
+    let repository = fixture_repository(&root);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.fresh_composer(&repository);
+    images::install(&mut harness, 1);
+    let reference = plait_core::images::persist(include_bytes!(
+        "../../../../runtime/test/support/images/0.png"
+    ))
+    .unwrap();
+    use plait_core::host::{QueueMode, Queued};
+    let mut reply = serde_json::Value::Null;
+    harness.update(|plait, _, cx| {
+        let snapshot = Arc::make_mut(plait.host.snapshot.as_mut().unwrap());
+        reply = serde_json::json!({"ok":true,"result":{"thread":{
+            "id":THREAD,"checkout":repository,"model":{"provider":"faux","model_id":"faux-1"},
+            "status":"idle","messages":[],"tools":[],"live_text":"","pending_approval":null,"error":null,"truncated":false,"queued":[]
+        }}});
+        snapshot.queued.push(Queued {
+            id: "request-queued-image".into(),
+            request_id: "queued-image".into(),
+            text: "Edit this image".into(),
+            mode: QueueMode::FollowUp,
+            approval: ApprovalMode::Ask,
+        });
+        plait.host.submissions.restore_accepted(
+            THREAD.into(),
+            plait_core::host_state::PendingSubmit {
+                text: "Edit this image".into(),
+                images: vec![reference.clone()],
+                request_id: "queued-image".into(),
+                draft_revision: Some(1),
+                approval: None,
+                when_busy: Some(QueueMode::FollowUp),
+            },
+        );
+        plait.sync_composer(cx);
+    });
+    let (received, release, server) = delayed_image_reply(reply);
+    harness.update(|plait, window, cx| {
+        plait.cancel_input("queued-image".into(), true, window, cx);
+        plait.composers[THREAD].update(cx, |composer, cx| {
+            let revision = composer.saved_draft().1;
+            composer.type_text("An edit during cancellation", window, cx);
+            composer.scene_refuse(
+                include_bytes!("../../../../runtime/test/support/images/1.png").to_vec(),
+                cx,
+            );
+            assert!(
+                composer.is_empty(),
+                "cancellation must reserve the empty draft"
+            );
+            assert_eq!(composer.saved_draft().1, revision);
+        });
+        // The deterministic executor runs the socket task after this UI turn.
+        release.send(()).unwrap();
+    });
+    assert_eq!(
+        received.recv_timeout(Duration::from_secs(5)).unwrap()["op"],
+        "cancel_queued"
+    );
+    server.join().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while harness.composer(|composer, _, _| {
+        composer.saved_images().is_empty() || composer.scene_image_status().0
+    }) {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    harness.composer(|composer, _, _| {
+        assert_eq!(composer.saved_draft().0, "Edit this image");
+        assert_eq!(composer.saved_images(), &[reference]);
+        assert_eq!(composer.scene_image_status().4, 1);
+        assert!(!composer.scene_image_status().1);
+    });
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn image_removed_during_restore_drops_pixels() {
+    if !isolated("image_removed_during_restore_drops_pixels") {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("plait-image-late-{}", std::process::id()));
+    let repository = fixture_repository(&root);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.fresh_composer(&repository);
+    images::install(&mut harness, 1);
+    let reference = images::fixtures()[0].0.clone();
+    let bytes = include_bytes!("../../../../runtime/test/support/images/0.png");
+    let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut data = String::new();
+    for chunk in bytes.chunks(3) {
+        let word = (u32::from(chunk[0]) << 16)
+            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        for index in 0..4 {
+            data.push(if index > chunk.len() {
+                '='
+            } else {
+                alphabet[((word >> (18 - index * 6)) & 63) as usize] as char
+            });
+        }
+    }
+    let (received, release, server) = delayed_image_reply(
+        serde_json::json!({"ok":true,"result":{"image":reference,"offset":0,"data":data}}),
+    );
+    harness.composer(|composer, _, cx| {
+        composer.restore_thread_images(vec![reference.clone()], THREAD.into(), cx);
+        assert!(composer.scene_image_status().0);
+        composer.scene_remove(&reference.id, cx);
+        release.send(()).unwrap();
+    });
+    assert_eq!(
+        received.recv_timeout(Duration::from_secs(5)).unwrap()["op"],
+        "image_read"
+    );
+    server.join().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while harness.composer(|composer, _, _| composer.scene_image_status().0) {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    harness.composer(|composer, _, _| {
+        assert!(composer.saved_images().is_empty());
+        assert_eq!(composer.scene_image_status().4, 0);
+    });
     std::fs::remove_dir_all(root).unwrap();
 }

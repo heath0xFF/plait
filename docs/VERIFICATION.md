@@ -1409,7 +1409,7 @@ chunk offsets, incomplete uploads, and thread ownership. An isolated desktop
 test keeps the text, images, and revision on refusal, saves and reopens existing-thread and new-thread image
 drafts, and blocks known text-only models and older hosts. Cache completion
 tests reject another thread, connection epoch, or watch generation and enforce
-the 32-entry bound. The host refuses a known text-only Pi model before accepting
+the 128-entry bound. The host refuses a known text-only Pi model before accepting
 the message. A headless input test dispatches Cmd-V through the composer,
 checks text precedence with mixed clipboard entries, and runs the file-drop
 preparation path with a misleading extension, checking persisted originals.
@@ -1424,7 +1424,8 @@ an earlier attempt while a retry is still reading files. Cleanup follows a succe
 the durable draft's bytes.
 
 Host retention remains a storage limit: accepted originals stay in
-`host.sqlite` for the life of the store, even after archive or cancellation.
+`host.sqlite` for the life of the store once they enter the conversation, even
+after archive or stopping a run.
 There is no age-based collection of accepted images. For example, 100 distinct
 5 MiB screenshots each day for 30 days means 3,000 × 5 MiB = 15,000 MiB,
 or about 14.65 GiB of image payload, plus SQLite page/index overhead and its
@@ -1433,32 +1434,59 @@ threads. Bytes occupy the separate `images` table's BLOB column;
 `message_images` holds associations. Ordinary thread/snapshot/history queries
 read references and metadata only, never those BLOBs. Bytes are selected for
 explicit image reads and harness input. Removing the host store removes them;
-unused uploads expire after 24 hours.
+unused uploads expire after 24 hours. Cancelling queued messages or stopping
+a run removes their queued associations; an original with no remaining accepted
+owner enters that same 24-hour grace period. Startup repairs associations left
+by earlier hosts. SQLite reuses deleted pages; pruning does not shrink the
+database file on disk.
+
+Regression tests exercise edits while queued cancellation is awaiting a reply,
+checkout-specific new-thread drafts and immediate Discard saves, cancelled-image
+collection with shared accepted ownership, header-only paste validation,
+LRU recency and 50-image scroll-back reuse, unavailable originals blocking Send,
+Uploading with image-only pending labels, disabled paste/drop, refusal clearing
+on edit, prompt history for illustrated messages, removed images finishing
+late, EXIF-rotated display dimensions, and Codex capability resolution before
+its first watched snapshot. Scripted Pi, Codex and Claude Code inputs contain
+only image blocks for image-only messages. Pinned source confirms their input
+shapes; live provider acceptance and provider-specific refusals remain untested.
 
 Claude Code's pinned SDK has no model image-capability field;
 unknown support is deliberately allowed, not inferred from model names.
 
 `scripts/snapshots.sh` renders one and several composer images, Text only,
-Update host, a request with several images, and the larger view at 1380 and 900
-points. These scenes were inspected offscreen with Metal and Core Text.
+Update host, Uploading with an image-only pending message, an unavailable
+original, a request with several images, and the larger view at 1380 and 900
+points. All sixteen image scenes were inspected offscreen with Metal and Core Text.
 `scripts/bench-frames.sh`, release profile, measured 30 CPU frames of a
-50-image conversation: median 0.92 ms at rest (p95 1.04 ms) and 1.76 ms scrolling
-(p95 1.89 ms). Thumbnails were prepared in advance and the cache was bounded
-to 32 entries. This is render/layout/prepaint/paint cost, not GPU, network,
-decode, or input-to-display latency.
+50-image conversation: median 0.85 ms at rest (p95 0.96 ms) and 1.68 ms scrolling
+(p95 1.77 ms). Thumbnails were prepared in advance. The LRU cache retains up to
+128 decoded 192-pixel thumbnails: at most 18 MiB of RGBA pixel payload, plus
+metadata and renderer storage. The separate enlarged image is bounded to
+1600 × 1600 pixels (9.77 MiB); temporary background decode allocations are
+separate. This is render/layout/prepaint/paint cost, not GPU, network, decode,
+or input-to-display latency.
 
 `bash scripts/bench-images.sh` measures production Rust fetch, hash validation,
 PNG decode, and 192-pixel thumbnail preparation through a real local Rust host
 and SQLite-backed runtime. It uses generated 3840 × 2160 PNGs with valid
 ancillary padding, release builds, two warmups, and ten measured thumbnails.
 The former 2 MiB maximum with 32 KiB reads took 64 requests and median
-58.040 ms (p95/max 59.572 ms). At the new 5 MiB maximum, the old read scheme
-required 160 requests and median 225.856 ms (p95/max 232.030 ms); 512 KiB reads
-require ten requests and median 57.954 ms (p95/max 59.976 ms). The old scheme
+57.450 ms (p95/max 63.318 ms). At the 5 MiB maximum, the old read scheme
+required 160 requests and median 257.026 ms (p95/max 279.542 ms); 512 KiB reads
+require ten requests and median 55.795 ms (p95/max 59.144 ms). The old scheme
 is reproduced in the offline fixture, with the larger size limit enabled for
 that comparison. Measurements include socket connections, host/runtime
 framing, SQLite reads, base64 decoding, and thumbnail preparation; they exclude
 upload, process startup, GPU drawing, and UI scheduling. No model runs.
+
+The same script traverses 50 distinct 320 × 180 PNG originals through the
+production client and thumbnail cache, then traverses them in reverse. The
+first pass fetched and prepared 50 thumbnails in 23.984 ms with 50 socket
+requests; the return pass took 0.008 ms with zero requests or decodes. This is
+a cache traversal, not a native scroll gesture. Host request logs verify the
+counts. Entries beyond the 128-image bound may be fetched again after eviction;
+switching threads or connections clears this memory cache.
 
 ### Native clipboard exception and probe
 
@@ -1466,8 +1494,11 @@ GPUI reads the person's clipboard synchronously and allocates the complete
 representation before Plait can check its size. This documented bounded-read
 exception applies only to an explicit paste action; text paste already has
 that behavior. Plait immediately validates limits and drops refused bytes,
-without retaining them in a draft, cache, or log. Accepted image decoding and
-thumbnailing run on the background executor.
+without retaining them in a draft, cache, or log. Plait checks headers on the
+UI thread and computes SHA-256 once in background preparation, alongside
+decoding and thumbnailing. The pinned GPUI still computes its own image ID
+when constructing the clipboard result; its hash and allocation costs are
+included in the synchronous-read measurement.
 
 Run `bash scripts/check-clipboard.sh` explicitly on macOS to pin native GPUI
 representation behavior and measure the read. It creates no app window, saves
@@ -1479,10 +1510,11 @@ probe. It is opt-in so the ordinary test suite does not replace the clipboard.
 
 For valid, ancillary-data-padded PNG fixtures of 5,000,000 and 20,000,000 bytes,
 30 release samples after five warmups measured synchronous read + validation
-+ drop: respectively median 8.365 ms / p95 8.668 ms / max 8.696 ms and
-median 1.063 ms / p95 1.127 ms / max 1.130 ms. The 5,000,000-byte image is
-now accepted, including hashing; the 20,000,000-byte image is refused before
-hashing. No pixels were decoded. These timings cover a local pasteboard owner, not the
++ drop: respectively median 0.271 ms / p95 0.284 ms / max 0.288 ms and
+median 1.120 ms / p95 1.177 ms / max 1.424 ms. The 5,000,000-byte image passes
+header checks; the 20,000,000-byte image is refused by size. Both measurements
+include GPUI's image-ID hash; neither computes Plait's SHA-256 digest nor decodes
+pixels. These timings cover a local pasteboard owner, not the
 potential delay of another application's promised data provider.
 
 A native screenshot clipboard probe offered PNG and TIFF and GPUI selected

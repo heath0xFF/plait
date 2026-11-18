@@ -52,7 +52,7 @@ export type CodexRunContext = {
   changed(path: string): void;
 };
 
-const content = (value: string, images: ImageData[]): UserInput[] => [{ type: 'text', text: value, text_elements: [] }, ...images.map(image => ({ type: 'image' as const, url: `data:${image.ref.media_type};base64,${image.data}` }))];
+const content = (value: string, images: ImageData[]): UserInput[] => [...(value ? [{ type: 'text' as const, text: value, text_elements: [] as [] }] : []), ...images.map(image => ({ type: 'image' as const, url: `data:${image.ref.media_type};base64,${image.data}` }))];
 
 export class CodexRun {
   private readonly context: CodexRunContext;

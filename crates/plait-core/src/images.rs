@@ -74,8 +74,26 @@ pub fn validate_message(images: &[ImageRef]) -> Result<(), String> {
     }
     Ok(())
 }
-/// No pixel allocation: check bytes and dimensions before decoding or retaining anything.
+/// Header metadata has no digest: safe for the explicit paste action's immediate checks.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Header {
+    pub media_type: String,
+    pub size: usize,
+    pub width: u32,
+    pub height: u32,
+}
 pub fn inspect(bytes: &[u8]) -> Result<ImageRef, String> {
+    let info = describe(bytes)?;
+    Ok(ImageRef {
+        id: format!("{:x}", Sha256::digest(bytes)),
+        media_type: info.media_type,
+        size: info.size,
+        width: info.width,
+        height: info.height,
+    })
+}
+/// Reads only format markers and dimensions; never hashes or decodes pixels.
+pub fn describe(bytes: &[u8]) -> Result<Header, String> {
     if bytes.is_empty() || bytes.len() > IMAGE_BYTES {
         return Err("Each image must be at most 5 MiB.".into());
     }
@@ -130,8 +148,7 @@ pub fn inspect(bytes: &[u8]) -> Result<ImageRef, String> {
         return Err("Only PNG and JPEG images are supported.".into());
     };
     dimensions(width, height)?;
-    Ok(ImageRef {
-        id: format!("{:x}", Sha256::digest(bytes)),
+    Ok(Header {
         media_type: media_type.into(),
         size: bytes.len(),
         width,
@@ -158,7 +175,7 @@ pub fn read_file(path: &Path) -> Result<Vec<u8>, String> {
     file.take(IMAGE_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| "The image file could not be read.")?;
-    inspect(&bytes)?;
+    describe(&bytes)?;
     Ok(bytes)
 }
 fn directory() -> Result<std::path::PathBuf, String> {
@@ -282,9 +299,31 @@ pub(crate) fn sweep(directory: &Path) -> Result<(), String> {
 pub fn collect() -> Result<(), String> {
     sweep(&crate::session::locations()?.0)
 }
+/// Immutable bytes and their digest, prepared once on a background executor.
+pub struct Prepared {
+    bytes: Vec<u8>,
+    reference: ImageRef,
+}
+impl Prepared {
+    pub fn new(bytes: Vec<u8>) -> Result<Self, String> {
+        let reference = inspect(&bytes)?;
+        Ok(Self { bytes, reference })
+    }
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+    pub fn reference(&self) -> &ImageRef {
+        &self.reference
+    }
+    pub fn persist(&self) -> Result<ImageRef, String> {
+        persist_prepared(&self.bytes, &self.reference)
+    }
+}
 pub fn persist(bytes: &[u8]) -> Result<ImageRef, String> {
+    persist_prepared(bytes, &inspect(bytes)?)
+}
+fn persist_prepared(bytes: &[u8], image: &ImageRef) -> Result<ImageRef, String> {
     let _storage = STORAGE.lock().unwrap();
-    let image = inspect(bytes)?;
     let path = directory()?.join(&image.id);
     match OpenOptions::new()
         .write(true)
@@ -307,7 +346,7 @@ pub fn persist(bytes: &[u8]) -> Result<ImageRef, String> {
     std::fs::File::open(directory()?)
         .and_then(|file| file.sync_all())
         .map_err(|_| "Cannot sync draft image storage.")?;
-    Ok(image)
+    Ok(image.clone())
 }
 pub fn local(image: &ImageRef) -> Result<Vec<u8>, String> {
     let _storage = STORAGE.lock().unwrap();
@@ -465,4 +504,21 @@ mod tests {
         assert!(read_file(&path).is_err());
         fs::remove_dir_all(root).unwrap();
     }
+}
+
+#[cfg(test)]
+#[test]
+fn paste_header_validation_does_not_digest_the_original() {
+    let mut original = TEST_PNG_HEADER.to_vec();
+    original.resize(IMAGE_BYTES, 1);
+    let header = describe(&original).unwrap();
+    let prepared = Prepared::new(original.clone()).unwrap();
+    original[IMAGE_BYTES - 1] = 2;
+    // Header checks ignore pixel payload; the background preparation alone names the bytes.
+    assert_eq!(describe(&original).unwrap(), header);
+    assert_ne!(
+        Prepared::new(original).unwrap().reference().id,
+        prepared.reference().id
+    );
+    assert_eq!(describe(prepared.bytes()).unwrap().size, IMAGE_BYTES);
 }

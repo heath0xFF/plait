@@ -51,6 +51,9 @@ pub struct Thread {
 pub struct Session {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_draft: Option<(PathBuf, Draft)>,
+    /// Drafts set aside in other checkouts; the current one retains the older journal field.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub new_drafts: BTreeMap<PathBuf, Draft>,
     pub schema_version: u32,
     pub host_store: PathBuf,
     pub checkout: Option<PathBuf>,
@@ -85,6 +88,7 @@ impl Session {
         Self {
             schema_version: 1,
             new_draft: None,
+            new_drafts: BTreeMap::new(),
             host_store,
             checkout: None,
             selected: None,
@@ -92,10 +96,37 @@ impl Session {
         }
     }
 
+    pub fn new_draft_for(&self, checkout: &Path) -> Option<&Draft> {
+        self.new_draft
+            .as_ref()
+            .filter(|(path, _)| path == checkout)
+            .map(|(_, draft)| draft)
+            .or_else(|| self.new_drafts.get(checkout))
+    }
+    pub fn set_new_draft(&mut self, checkout: PathBuf, draft: Draft) {
+        if let Some((path, old)) = self.new_draft.take()
+            && path != checkout
+        {
+            self.new_drafts.insert(path, old);
+        }
+        self.new_drafts.remove(&checkout);
+        self.new_draft = Some((checkout, draft));
+    }
+    pub fn clear_new_draft(&mut self, checkout: &Path) {
+        if self
+            .new_draft
+            .as_ref()
+            .is_some_and(|(path, _)| path == checkout)
+        {
+            self.new_draft = None;
+        }
+        self.new_drafts.remove(checkout);
+    }
     pub fn image_ids(&self) -> impl Iterator<Item = &str> {
         self.new_draft
             .iter()
             .flat_map(|(_, draft)| &draft.images)
+            .chain(self.new_drafts.values().flat_map(|draft| &draft.images))
             .chain(self.threads.values().flat_map(|thread| {
                 thread.draft.images.iter().chain(
                     thread
@@ -117,11 +148,16 @@ impl Session {
                 .checkout
                 .as_ref()
                 .is_some_and(|path| !path.is_absolute())
-            || self.threads.len() > 512
+            || self.threads.len() + self.new_drafts.len() > 512
         {
             return Err("Saved workspace has invalid paths or exceeds its thread limit.".into());
         }
-        if let Some((checkout, draft)) = &self.new_draft {
+        for (checkout, draft) in self
+            .new_draft
+            .iter()
+            .map(|(path, draft)| (path, draft))
+            .chain(self.new_drafts.iter())
+        {
             if !checkout.is_absolute() || draft.text.len() > 256 * 1024 {
                 return Err("Saved new-thread draft exceeds its limits.".into());
             }

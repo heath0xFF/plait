@@ -113,12 +113,11 @@ impl Plait {
 
     fn draft_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<Composer> {
         let composer = cx.new(|cx| Composer::new(window, cx));
-        if let Some((checkout, draft)) = self
+        if let Some(draft) = self
             .session
             .data
             .as_ref()
-            .and_then(|data| data.new_draft.as_ref())
-            && checkout == &self.host.checkout
+            .and_then(|data| data.new_draft_for(&self.host.checkout))
         {
             let draft = draft.clone();
             composer.update(cx, |composer, cx| {
@@ -149,9 +148,7 @@ impl Plait {
     /// finishes on the host, but its reply opens nothing and sends nothing.
     pub(super) fn discard_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
-        if let Some(data) = &mut self.session.data {
-            data.new_draft = None;
-        }
+        self.clear_new_draft(cx);
         self.draft = super::new_thread::Draft {
             generation: self.draft.generation + 1,
             ..Default::default()
@@ -471,9 +468,7 @@ impl Plait {
             return;
         };
         // The next New Thread starts afresh.
-        if let Some(data) = &mut self.session.data {
-            data.new_draft = None;
-        }
+        self.clear_new_draft(cx);
         self.draft = super::new_thread::Draft {
             generation: self.draft.generation + 1,
             ..Default::default()

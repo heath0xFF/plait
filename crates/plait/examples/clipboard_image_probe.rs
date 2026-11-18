@@ -43,7 +43,7 @@ fn main() {
                     };
                     assert_eq!(format!("{:?}", image.format).to_lowercase(), expected);
                     assert_eq!(
-                        plait_core::images::inspect(&image.bytes).is_ok(),
+                        plait_core::images::describe(&image.bytes).is_ok(),
                         expected != "tiff"
                     );
                 }
@@ -58,7 +58,8 @@ fn main() {
                             "image {:?}, {} bytes; validation: {:?}",
                             image.format,
                             image.bytes.len(),
-                            plait_core::images::inspect(&image.bytes).map(|image| image.media_type)
+                            plait_core::images::describe(&image.bytes)
+                                .map(|image| image.media_type)
                         ),
                         ClipboardEntry::String(_) => println!("text representation"),
                         ClipboardEntry::ExternalPaths(paths) => {
@@ -86,7 +87,7 @@ fn main() {
                 if let ClipboardEntry::Image(image) = entry {
                     assert_eq!(image.bytes.len(), bytes);
                     assert_eq!(
-                        plait_core::images::inspect(&image.bytes).is_ok(),
+                        plait_core::images::describe(&image.bytes).is_ok(),
                         bytes <= plait_core::images::IMAGE_BYTES
                     );
                 }

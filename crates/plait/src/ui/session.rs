@@ -170,9 +170,15 @@ impl Plait {
             cx.notify();
             return;
         }
-        // A draft on screen moves with the project; one set aside stays aside.
+        // A draft belongs to its checkout, including while another project is open.
         let drafting = self.draft_visible();
         self.capture_session(cx);
+        if self.host.checkout != path {
+            self.draft = super::new_thread::Draft {
+                generation: self.draft.generation + 1,
+                ..Default::default()
+            };
+        }
         let mut preferences = self.preferences.value.clone();
         preferences.navigation.open(&path);
         self.persist_navigation(preferences, cx);
@@ -203,7 +209,9 @@ impl Plait {
         self.navigation.menu = None;
         self.settings_open = false;
         self.new_thread_open = false;
-        self.draft.open = drafting;
+        if drafting {
+            self.open_draft(window, cx);
+        }
         self.file_scroll = UniformListScrollHandle::new();
         self.notice = None;
         self.state.repository.open(path);
@@ -271,7 +279,7 @@ impl Plait {
         if let Some(composer) = &self.draft.composer {
             let composer = composer.read(cx);
             let (text, revision, submitted) = composer.saved_draft();
-            next.new_draft = Some((
+            next.set_new_draft(
                 self.host.checkout.clone(),
                 Draft {
                     text: text.into(),
@@ -279,7 +287,7 @@ impl Plait {
                     submitted: submitted.clone(),
                     images: composer.saved_images().to_vec(),
                 },
-            ));
+            );
         }
         if self.host.checkout.is_absolute() {
             next.checkout = Some(self.host.checkout.clone());
@@ -353,6 +361,16 @@ impl Plait {
         }
         self.session.data = Some(next);
         self.schedule_session_save(removed_image, cx);
+    }
+
+    pub(super) fn clear_new_draft(&mut self, cx: &mut Context<Self>) {
+        if let Some(data) = &mut self.session.data {
+            data.clear_new_draft(&self.host.checkout);
+            if let Some(journal) = &self.session.journal {
+                journal.queue(data.clone());
+            }
+            self.schedule_session_save(true, cx);
+        }
     }
 
     fn schedule_session_save(&mut self, immediately: bool, cx: &mut Context<Self>) {

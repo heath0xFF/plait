@@ -1,5 +1,6 @@
 // Run via scripts/bench-images.sh: real local host, offline store, production Rust fetch/decode.
 import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
 import { crc32, deflateSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -39,5 +40,25 @@ for(const [size,mode] of [[2*1024*1024,'old-chunks'],[IMAGE_BYTES,'old-chunks'],
     const expected=Math.ceil(size/(mode==='old-chunks'?32768:512*1024));
     assert.equal(counts.length,12); assert.ok(counts.every(count=>count===expected));
     console.log(`${size} bytes; ${mode}; ${expected} requests/thumbnail; ${result.stdout.split('\n').find(line=>line.startsWith('THUMBNAIL_BENCH'))}`);
+    if(mode==='new-chunks') {
+      const small=await readFile(new URL('./support/images/0.png',import.meta.url));
+      const db = new DatabaseSync(join(h.store,'host.sqlite'));
+      const images=[];
+      for(let n=0;n<50;n++) {
+        const bytes=Buffer.concat([small,Buffer.from(String(n))]);
+        const id=createHash('sha256').update(bytes).digest('hex');
+        const uploaded=await request(h.store,{op:'image_put',protocol_version:6,thread_id:thread.id,image_id:id,total:bytes.length,offset:0,data:bytes.toString('base64')});
+        assert.equal(uploaded.ok,true,JSON.stringify(uploaded));
+        // Retain the fixture as if accepted, without running a harness; unattached uploads cap at 16.
+        db.prepare('UPDATE images SET used=1 WHERE thread=? AND id=?').run(thread.id,id);
+        images.push({id,...describe(bytes)});
+      }
+      db.close();
+      const result=await exec('cargo',['test','--locked','--release','-p','plait','ui::images::thumbnail_scrollback_bench','--','--exact','--ignored','--nocapture'],{cwd:resolve('..'),env:{...process.env,PLAIT_HOST_STORE:h.store,PLAIT_IMAGE_SCROLL_BENCH:JSON.stringify({thread:thread.id,images})},maxBuffer:1024*1024});
+      const all=(await readFile(join(h.store,'image-requests.jsonl'),'utf8')).trim().split('\n').map(Number);
+      assert.equal(all.length,62); assert.ok(all.slice(12).every(count=>count===1));
+      console.log(result.stdout.split('\n').filter(line=>line.startsWith('SCROLLBACK_BENCH')).join('\n'));
+    }
+
   } finally { for(const fn of cleanup.reverse()) await fn(); }
 }

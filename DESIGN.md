@@ -78,9 +78,12 @@ conversation keeps a readable minimum width.
 - **Images.** Requests show small thumbnails below their text, aligned to its
   column. Activating one opens a larger view with Close; Escape returns to the
   conversation. The message box shows attached thumbnails with Remove before
-  sending. Text only, Update host, Loading, and Refused name states in a word
-  or two; the reason is hover text. A refusal leaves the draft intact. No
-  attachment disappears silently, and no original is resized to fit a limit.
+  sending. Text only, Update host, Loading, Failed, Uploading, and Refused name
+  states in a word or two; the reason is hover text. Failed originals block
+  sending, and Uploading prevents duplicate sends. Pending messages name their
+  image count even without text. A refusal leaves the draft intact and clears
+  on the next edit. No attachment disappears silently, and no original is
+  resized to fit a limit.
   A message allows up to 5 MiB of original image bytes, including a single
   full-size screenshot. PNG/JPEG, count/dimension limits, persistence, and clipboard exceptions
   follow the [host contract](docs/HOST.md#protocol-version-6-images-unreleased)

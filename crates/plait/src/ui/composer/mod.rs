@@ -410,6 +410,7 @@ impl Composer {
     }
 
     fn changed(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.images.error = None;
         self.reveal_cursor = true;
         self.stop.disarm();
         window.notify_text_input_changed(&self.focus);
@@ -429,6 +430,9 @@ impl Composer {
             && self.draft.marked.is_none()
         {
             let text = self.draft.value.text.clone();
+            if !text.trim().is_empty() {
+                self.draft.history.record(&text);
+            }
             self.draft.submitted = Some((text.clone(), self.draft.revision));
             Some(text)
         } else {

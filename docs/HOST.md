@@ -1846,8 +1846,11 @@ Originals are BLOBs in `STORE/host.sqlite`, keyed by thread and hash, with
 associations in `message_images`. The owner-only host store defaults to
 `~/.local/share/plait`; images are never written to the checkout, repository,
 or the checkout records used for Undo. They survive host restart. Accepted
-images last as long as the host store, including after archive or cancellation;
-removing the store removes them. Incomplete and unattached uploads expire
+images that entered the conversation last as long as the host store, including
+after archive or stopping a run; removing the store removes them. Cancelling a
+queued message (also through Stop) releases its associations. Images with no
+remaining accepted owner become unattached, with a fresh 24-hour grace period
+for Edit or retry recovery. Incomplete and unattached uploads expire
 after 24 hours, pruned on startup and upload, with at most 16 per thread and
 128 across the store. Harnesses may also retain content in their own native
 conversation storage as part of their ordinary history.
@@ -1855,5 +1858,6 @@ conversation storage as part of their ordinary history.
 Pi receives `{type:"image",mimeType,data}` alongside text. Codex receives
 `{type:"image",url:"data:image/png;base64,..."}` in `turn/start` or `turn/steer`.
 Claude Code receives Anthropic base64 image source blocks through the pinned
-Agent SDK's streaming `SDKUserMessage` input. [Verification](VERIFICATION.md#images-in-messages)
+Agent SDK's streaming `SDKUserMessage` input. Image-only inputs contain no empty
+text block in any of the three adapters. [Verification](VERIFICATION.md#images-in-messages)
 records scripted coverage and the absence of live-model acceptance evidence.

@@ -829,6 +829,8 @@ impl Plait {
             Some("Restoring saved work…".into())
         } else if !self.session_accepts_thread(id) {
             Some("Thread checkout differs from the saved draft. Original work is preserved.".into())
+        } else if self.thread_controls.editing.get(id) == Some(&self.host.epoch) {
+            Some("Restoring the queued message. Wait for cancellation to finish.".into())
         } else if !self.host.connected {
             Some("Host disconnected. Reconnect to send.".into())
         } else if self.host.snapshot.is_none() {
@@ -867,6 +869,15 @@ impl Plait {
         };
         let agent = self.agent_commands();
         composer.update(cx, |composer, cx| {
+            let revision = composer.saved_draft().1;
+            composer.set_images_uploading(
+                self.host.submissions.all(id).iter().any(|pending| {
+                    pending.draft_revision == Some(revision)
+                        && !pending.images.is_empty()
+                        && self.host.submissions.is_sending(&pending.request_id)
+                }),
+                cx,
+            );
             composer.set_image_support(
                 self.host.protocol(),
                 self.host

@@ -26,6 +26,7 @@ pub(super) struct ThreadControls {
     pub picker_thread: Option<(String, u64)>,
     pub(super) note: Option<(String, String, bool)>,
     cancelling: HashMap<String, u64>,
+    pub(super) editing: HashMap<String, u64>,
     pub(super) usage_open: bool,
     /// Approval choices made this session, by thread. `None` is an explicit
     /// return to the default, so it shadows an older saved choice.
@@ -408,7 +409,7 @@ impl Plait {
             .map(|p| p.text.clone())
     }
 
-    fn cancel_input(
+    pub(super) fn cancel_input(
         &mut self,
         request_id: String,
         restore: bool,
@@ -419,6 +420,7 @@ impl Plait {
             return;
         };
         if !self.host.connected
+            || (restore && self.thread_controls.editing.get(&snapshot.id) == Some(&self.host.epoch))
             || self.thread_controls.cancelling.get(&request_id) == Some(&self.host.epoch)
         {
             return;
@@ -448,8 +450,15 @@ impl Plait {
         self.thread_controls
             .cancelling
             .insert(request_id.clone(), self.host.epoch);
+        if restore {
+            self.thread_controls
+                .editing
+                .insert(id.clone(), self.host.epoch);
+        }
+        self.sync_composer(cx);
         self.host_request::<host::ThreadReply>(Request::cancel_queued(id.clone(), request_id.clone()), window, cx, move |this, result, window, cx| {
             this.thread_controls.cancelling.remove(&request_id);
+            this.thread_controls.editing.remove(&id);
             match result {
                 Ok(reply) if reply.thread.id == id && reply.thread.checkout == checkout && !reply.thread.queued.iter().any(|q| q.request_id == request_id) => {
                     this.host.submissions.forget_accepted(&id, &request_id);
@@ -505,7 +514,16 @@ impl Plait {
                 QueueMode::FollowUp => "Follow-up",
                 QueueMode::Steer => "Steering",
             };
-            let edit = draft_empty && self.queued_text(queued).is_some();
+            let edit = draft_empty
+                && self.queued_text(queued).is_some()
+                && self.thread_controls.editing.get(&snapshot.id) != Some(&self.host.epoch);
+            let image_count = self
+                .host
+                .submissions
+                .accepted(&snapshot.id)
+                .iter()
+                .find(|p| p.request_id == queued.request_id)
+                .map_or(0, |p| p.images.len());
             stack = stack.child(
                 row()
                     .gap_2()
@@ -517,7 +535,7 @@ impl Plait {
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .child(queued.text.clone()),
+                            .child(pending_description(&queued.text, image_count)),
                     )
                     .when(edit, |el| {
                         el.child(
@@ -566,20 +584,38 @@ impl Plait {
                     .gap_2()
                     .w_full()
                     .min_w_0()
-                    .child(tag(
-                        if sending { "Sending…" } else { "Unconfirmed" },
-                        if sending {
+                    .child(
+                        button(
+                            SharedString::from(format!("pending-{request_id}")),
+                            if sending && !pending.images.is_empty() {
+                                "Uploading"
+                            } else if sending {
+                                "Sending"
+                            } else {
+                                "Unconfirmed"
+                            },
+                        )
+                        .text_color(rgb(if sending {
                             colors().blue
                         } else {
                             colors().amber
-                        },
-                    ))
+                        }))
+                        .tooltip({
+                            let detail = if sending {
+                                "Sending this message and its images to the host.".to_owned()
+                            } else {
+                                detail.to_owned()
+                            };
+                            move |_, cx| cx.new(|_| TextTooltip(detail.clone())).into()
+                        }),
+                    )
                     .child(
                         div()
-                            .flex_1()
+                            .when(pending.text.is_empty(), |el| el.flex_none())
+                            .when(!pending.text.is_empty(), |el| el.flex_1())
                             .min_w_0()
                             .truncate()
-                            .child(pending.text.clone()),
+                            .child(pending_description(&pending.text, pending.images.len())),
                     )
                     .child(
                         button(
@@ -977,6 +1013,19 @@ fn harness_mark(id: HarnessId, label: SharedString, tip: SharedString) -> Statef
             Some(logo) => el.child(logo.text_color(rgb(colors().muted))),
             None => el.child(label),
         })
+}
+
+pub(super) fn pending_description(text: &str, images: usize) -> String {
+    let count = match images {
+        0 => return text.into(),
+        1 => "1 image".into(),
+        n => format!("{n} images"),
+    };
+    if text.is_empty() {
+        count
+    } else {
+        format!("{text} · {count}")
+    }
 }
 
 #[cfg(test)]

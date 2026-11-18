@@ -11,7 +11,29 @@ use std::{
 };
 
 pub(super) fn decode(bytes: &[u8], edge: u32) -> Result<Arc<RenderImage>, String> {
-    let info = images::inspect(bytes)?;
+    Ok(decode_image(bytes, edge)?.pixels)
+}
+#[derive(Clone)]
+pub(super) struct Decoded {
+    pub pixels: Arc<RenderImage>,
+    dimensions: Option<(u32, u32)>,
+}
+impl From<Arc<RenderImage>> for Decoded {
+    fn from(pixels: Arc<RenderImage>) -> Self {
+        Self {
+            pixels,
+            dimensions: None,
+        }
+    }
+}
+impl Decoded {
+    fn dimensions(&self, reference: &ImageRef) -> (u32, u32) {
+        self.dimensions
+            .unwrap_or((reference.width, reference.height))
+    }
+}
+fn decode_image(bytes: &[u8], edge: u32) -> Result<Decoded, String> {
+    let info = images::describe(bytes)?;
     let format = if info.media_type == "image/png" {
         image::ImageFormat::Png
     } else {
@@ -36,20 +58,25 @@ pub(super) fn decode(bytes: &[u8], edge: u32) -> Result<Arc<RenderImage>, String
     let mut decoded = image::DynamicImage::from_decoder(decoder)
         .map_err(|_| "The image could not be decoded.")?;
     decoded.apply_orientation(orientation);
+    let dimensions = Some((decoded.width(), decoded.height()));
     let mut pixels = decoded.thumbnail(edge, edge).into_rgba8();
     for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
-    Ok(Arc::new(RenderImage::new(vec![image::Frame::new(pixels)])))
+    Ok(Decoded {
+        pixels: Arc::new(RenderImage::new(vec![image::Frame::new(pixels)])),
+        dimensions,
+    })
 }
 
-type PreparedImage = Result<Arc<RenderImage>, String>;
+type PreparedImage = Result<Decoded, String>;
+pub(super) const THUMBNAILS: usize = 128;
 type EnlargedImage = (ImageRef, Option<PreparedImage>);
 
 #[derive(Default)]
 pub(super) struct ImageCache {
     key: Option<(u64, u64, String)>,
-    ready: HashMap<String, Result<Arc<RenderImage>, String>>,
+    ready: HashMap<String, PreparedImage>,
     pending: HashSet<String>,
     order: VecDeque<String>,
     pub enlarged: Option<EnlargedImage>,
@@ -73,7 +100,8 @@ impl ImageCache {
             return false;
         }
         self.pending.remove(&id);
-        while self.ready.len() >= 32 {
+        self.order.retain(|key| key != &id);
+        while self.ready.len() >= THUMBNAILS && !self.ready.contains_key(&id) {
             if let Some(old) = self.order.pop_front() {
                 self.ready.remove(&old);
             } else {
@@ -83,6 +111,16 @@ impl ImageCache {
         self.order.push_back(id.clone());
         self.ready.insert(id, result);
         true
+    }
+    pub(super) fn touch(&mut self, id: &str) {
+        if self.ready.contains_key(id) {
+            self.order.retain(|key| key != id);
+            self.order.push_back(id.to_owned());
+        }
+    }
+    #[cfg(test)]
+    pub(super) fn contains(&self, id: &str) -> bool {
+        self.ready.contains_key(id)
     }
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
@@ -111,13 +149,17 @@ impl Plait {
                     missing.push(reference.clone());
                 }
                 let image = reference.clone();
+                let (width, height) = ready
+                    .and_then(|r| r.as_ref().ok())
+                    .map(|r| r.dimensions(reference))
+                    .unwrap_or((reference.width, reference.height));
                 let detail = ready
                     .and_then(|r| r.as_ref().err())
                     .cloned()
                     .unwrap_or_else(|| {
                         format!(
                             "{} × {} · {} bytes · Open image",
-                            reference.width, reference.height, reference.size
+                            width, height, reference.size
                         )
                     });
                 button(SharedString::from(format!("image-{}", reference.id)), "")
@@ -128,7 +170,7 @@ impl Plait {
                     .border_1()
                     .border_color(rgb(colors().border))
                     .child(match ready {
-                        Some(Ok(pixels)) => img(pixels.clone())
+                        Some(Ok(pixels)) => img(pixels.pixels.clone())
                             .size_full()
                             .object_fit(ObjectFit::Contain)
                             .into_any_element(),
@@ -141,10 +183,20 @@ impl Plait {
                     })
             }));
         // Schedule only visible rows, after this render has returned.
-        if !missing.is_empty() {
+        if !references.is_empty() {
+            let visible = references.iter().map(|r| r.id.clone()).collect::<Vec<_>>();
             let weak = cx.weak_entity();
             cx.defer(move |cx| {
-                let _ = weak.update(cx, |this, cx| this.load_images(key, missing, cx));
+                let _ = weak.update(cx, |this, cx| {
+                    if this.images.key.as_ref() == Some(&key) {
+                        for id in visible {
+                            this.images.touch(&id);
+                        }
+                    }
+                    if !missing.is_empty() {
+                        this.load_images(key, missing, cx);
+                    }
+                });
             });
         }
         row.into_any_element()
@@ -178,7 +230,7 @@ impl Plait {
                 let bytes = Client::from_environment()
                     .and_then(|client| client.image(&expected.2, &reference))
                     .map_err(|error| error.to_string())?;
-                decode(&bytes, 192)
+                decode_image(&bytes, 192)
             });
             let key = key.clone();
             cx.spawn(async move |this, cx| {
@@ -212,7 +264,7 @@ impl Plait {
             let bytes = Client::from_environment()
                 .and_then(|client| client.image(&expected.2, &reference))
                 .map_err(|error| error.to_string())?;
-            decode(&bytes, 1600)
+            decode_image(&bytes, 1600)
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
@@ -240,6 +292,11 @@ impl Plait {
     ) -> Option<AnyElement> {
         let (reference, pixels) = self.images.enlarged.as_ref()?;
         let bounds = window.viewport_size();
+        let (width, height) = pixels
+            .as_ref()
+            .and_then(|r| r.as_ref().ok())
+            .map(|r| r.dimensions(reference))
+            .unwrap_or((reference.width, reference.height));
         Some(
             div()
                 .absolute()
@@ -259,7 +316,7 @@ impl Plait {
                         .child(
                             row()
                                 .justify_between()
-                                .child(format!("{} × {}", reference.width, reference.height))
+                                .child(format!("{width} × {height}"))
                                 .child(button("close-image", "Close").on_activate(
                                     cx,
                                     |this, window, cx| {
@@ -278,7 +335,7 @@ impl Plait {
                                 .items_center()
                                 .justify_center()
                                 .child(match pixels {
-                                    Some(Ok(pixels)) => img(pixels.clone())
+                                    Some(Ok(pixels)) => img(pixels.pixels.clone())
                                         .size_full()
                                         .object_fit(ObjectFit::Contain)
                                         .into_any_element(),
@@ -303,7 +360,10 @@ impl ImageCache {
         Self {
             key: Some(key),
             order: pixels.keys().cloned().collect(),
-            ready: pixels,
+            ready: pixels
+                .into_iter()
+                .map(|(id, pixels)| (id, pixels.map(Into::into)))
+                .collect(),
             ..Default::default()
         }
     }
@@ -337,4 +397,70 @@ fn thumbnail_transfer_bench() {
         (samples[4] + samples[5]) / 2.,
         samples[9]
     );
+}
+
+#[cfg(test)]
+#[core::prelude::v1::test]
+fn exif_dimensions_match_the_drawn_orientation() {
+    let mut jpeg = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+        .encode_image(&image::DynamicImage::new_rgb8(80, 40))
+        .unwrap();
+    // TIFF orientation 6: rotate 90 degrees clockwise.
+    let exif = b"Exif\0\0II\x2a\0\x08\0\0\0\x01\0\x12\x01\x03\0\x01\0\0\0\x06\0\0\0\0\0\0\0";
+    let mut bytes = vec![255, 216, 255, 225];
+    bytes.extend_from_slice(&((exif.len() + 2) as u16).to_be_bytes());
+    bytes.extend_from_slice(exif);
+    bytes.extend_from_slice(&jpeg[2..]);
+    let reference = images::inspect(&bytes).unwrap();
+    assert_eq!((reference.width, reference.height), (80, 40));
+    for edge in [192, 1600] {
+        let decoded = decode_image(&bytes, edge).unwrap();
+        assert_eq!(decoded.dimensions(&reference), (40, 80));
+    }
+}
+
+#[cfg(test)]
+#[core::prelude::v1::test]
+#[ignore = "Run scripts/bench-images.sh with its private offline host"]
+fn thumbnail_scrollback_bench() {
+    use std::time::Instant;
+    #[derive(serde::Deserialize)]
+    struct Input {
+        thread: String,
+        images: Vec<ImageRef>,
+    }
+    let input: Input =
+        serde_json::from_str(&std::env::var("PLAIT_IMAGE_SCROLL_BENCH").unwrap()).unwrap();
+    assert_eq!(input.images.len(), 50);
+    let client = Client::from_environment().unwrap();
+    let key = (1, 1, input.thread.clone());
+    let mut cache = ImageCache {
+        key: Some(key.clone()),
+        ..Default::default()
+    };
+    for (name, indices) in [
+        ("forward", (0..50).collect::<Vec<_>>()),
+        ("scroll-back", (0..50).rev().collect()),
+    ] {
+        let started = Instant::now();
+        let mut requests = 0;
+        for index in indices {
+            let reference = &input.images[index];
+            if !cache.contains(&reference.id) {
+                let bytes = client.image(&input.thread, reference).unwrap();
+                requests += reference.size.div_ceil(images::READ_CHUNK);
+                cache.complete(&key, &key, reference.id.clone(), decode_image(&bytes, 192));
+            }
+            cache.touch(&reference.id);
+        }
+        if name == "scroll-back" {
+            assert_eq!(requests, 0);
+        }
+        println!(
+            "SCROLLBACK_BENCH {name}: {requests} socket requests, {:.3} ms; {} thumbnails retained",
+            started.elapsed().as_secs_f64() * 1000.,
+            cache.len()
+        );
+    }
 }

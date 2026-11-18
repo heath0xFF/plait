@@ -142,7 +142,7 @@ export class ClaudeSession {
    */
   send(text: string, _requestId: string, images: ImageData[] = []): string {
     const uuid = randomUUID();
-    this.input.push({ type: 'user', message: { role: 'user', content: images.length ? [{ type: 'text', text }, ...images.map(image => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: image.ref.media_type, data: image.data } }))] : text }, parent_tool_use_id: null, uuid });
+    this.input.push({ type: 'user', message: { role: 'user', content: images.length ? [...(text ? [{ type: 'text' as const, text }] : []), ...images.map(image => ({ type: 'image' as const, source: { type: 'base64' as const, media_type: image.ref.media_type, data: image.data } }))] : text }, parent_tool_use_id: null, uuid });
     return uuid;
   }
 

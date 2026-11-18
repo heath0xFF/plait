@@ -67,7 +67,7 @@ pub(super) fn install(harness: &mut Harness, count: usize) {
             references
                 .iter()
                 .rev()
-                .take(32)
+                .take(super::super::images::THUMBNAILS)
                 .map(|reference| {
                     let pixels = fixture
                         .iter()
@@ -108,10 +108,50 @@ pub(super) fn walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         )
     });
     harness.capture(&format!("images-composer-several-{suffix}"));
+    harness.update(|plait, _, cx| {
+        let composer = plait.composers[THREAD].clone();
+        let revision = composer.update(cx, |composer, cx| {
+            let revision = composer.saved_draft().1;
+            composer.restore_draft(String::new(), revision, None, cx);
+            revision
+        });
+        let pending = plait
+            .host
+            .submissions
+            .begin_images(
+                THREAD,
+                String::new(),
+                None,
+                None,
+                Some(revision),
+                fixture.iter().map(|(r, _)| r.clone()).collect(),
+            )
+            .unwrap();
+        plait
+            .host
+            .submissions
+            .start_send(THREAD, &pending.request_id);
+        plait.sync_composer(cx);
+    });
+    harness.capture(&format!("images-uploading-{suffix}"));
+    harness.update(|plait, _, cx| {
+        plait.host.submissions = Default::default();
+        plait.sync_composer(cx);
+    });
+    harness.composer(|composer, window, cx| {
+        composer.type_text("Compare the attached screens.", window, cx);
+    });
+
     harness.composer(|composer, _, cx| composer.set_image_support(6, Some("no"), cx));
     harness.capture(&format!("images-text-only-{suffix}"));
     harness.composer(|composer, _, cx| composer.set_image_support(5, Some("yes"), cx));
     harness.capture(&format!("images-older-host-{suffix}"));
+    harness.composer(|composer, _, cx| {
+        composer.set_image_support(6, Some("yes"), cx);
+        composer.restore_images(vec![fixture[0].0.clone()], cx);
+    });
+    harness.capture(&format!("images-unavailable-{suffix}"));
+
     harness.composer(|composer, _, cx| {
         composer.scene_images(Vec::new(), HashMap::new(), cx);
         composer.set_image_support(6, Some("yes"), cx);
@@ -125,7 +165,8 @@ pub(super) fn walk(harness: &mut Harness, repository: &Path, suffix: &str) {
                 include_bytes!("../../../../../runtime/test/support/images/0.png"),
                 1600,
             )
-            .unwrap())),
+            .unwrap()
+            .into())),
         ))
     });
     harness.capture(&format!("images-enlarged-{suffix}"));

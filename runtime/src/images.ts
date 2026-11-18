@@ -93,6 +93,16 @@ export class Images {
     this.db.prepare('INSERT INTO message_images VALUES(?,?,?)').run(thread, request, JSON.stringify(ids));
     for (const id of ids) this.db.prepare('UPDATE images SET used=1 WHERE thread=? AND id=?').run(thread, id);
   }
+  /** Cancelled queued inputs never entered the conversation. Keep a day for Edit/retry recovery. */
+  detach(thread: string, request: string) {
+    const row = this.db.prepare('DELETE FROM message_images WHERE thread=? AND request=? RETURNING ids').get(thread, request);
+    if (!row) return;
+    for (const id of JSON.parse(String(row.ids)) as string[]) {
+      this.db.prepare(`UPDATE images SET used=0,created=? WHERE thread=? AND id=? AND NOT EXISTS
+        (SELECT 1 FROM message_images, json_each(message_images.ids) WHERE thread=? AND json_each.value=?)`)
+        .run(Date.now(), thread, id, thread, id);
+    }
+  }
   forRequest(thread: string, request: string): ImageRef[] {
     const row = this.db.prepare('SELECT ids FROM message_images WHERE thread=? AND request=?').get(thread, request);
     return row ? this.refs(thread, JSON.parse(String(row.ids))) : [];
