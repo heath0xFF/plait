@@ -631,3 +631,53 @@ test('partial GraphQL responses are not cached as complete data', async t => {
   assert.equal(second.result.partial, false);
   assert.equal(second.result.teams[0].states.length, 5);
 });
+
+test('superseded listIssues for another filter does not overwrite newer issue summaries in cache', async t => {
+  const h = await setupHarness(t);
+  assert.equal((await h.call({ op: 'linear_set_key', key: h.fake.validKey })).ok, true);
+
+  let releaseStale!: () => void;
+  const staleStarted = new Promise<void>(resolve => {
+    h.fake.enqueueFault(async (_req, res) => {
+      resolve();
+      await new Promise<void>(done => { releaseStale = done; });
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        data: {
+          issues: {
+            nodes: [{
+              id: 'issue-142',
+              identifier: 'PLA-142',
+              title: 'STALE_CROSS_FILTER_TITLE',
+              url: 'https://linear.app/acme/issue/PLA-142',
+              priority: 2,
+              updatedAt: '2026-11-18T10:00:00.000Z',
+              team: { id: 'team-pla' },
+              state: { id: 'state-progress', name: 'In Progress', type: 'started' },
+              assignee: null,
+              labels: { nodes: [] },
+            }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      }));
+      return true;
+    });
+  });
+
+  const staleReq = h.call({ op: 'linear_list_issues', team_id: 'team-pla', filter: 'active' });
+  await staleStarted;
+
+  h.fake.issues[0].title = 'FRESH_CROSS_FILTER_TITLE';
+  const freshReply = await h.call({ op: 'linear_list_issues', team_id: 'team-pla', filter: 'all' });
+  assert.equal(freshReply.ok, true);
+  assert.equal(freshReply.result.issues[0].title, 'FRESH_CROSS_FILTER_TITLE');
+
+  releaseStale();
+  await staleReq;
+
+  const cachedAll = await h.call({ op: 'linear_list_issues', team_id: 'team-pla', filter: 'all' });
+  assert.equal(cachedAll.ok, true);
+  assert.equal(cachedAll.result.cached, true);
+  assert.equal(cachedAll.result.issues[0].title, 'FRESH_CROSS_FILTER_TITLE');
+});

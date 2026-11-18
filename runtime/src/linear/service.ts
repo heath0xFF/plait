@@ -338,6 +338,8 @@ export class LinearService {
     }
     const scope = `issues:${key}`;
     const seq = this.nextQuery(scope);
+    const teamScope = `team-issues:${params.teamId}`;
+    const teamSeq = this.nextQuery(teamScope);
     try {
       const fresh = await this.client.listIssues(auth.api_key, {
         teamId: params.teamId,
@@ -350,7 +352,7 @@ export class LinearService {
       }
       this.keyRejected = false;
       const fetchedAt = this.now();
-      if (!fresh.partial && this.canPopulateCache(scope, seq, authGen, cacheGen)) {
+      if (!fresh.partial && this.canPopulateCache(scope, seq, authGen, cacheGen) && this.querySequence.get(teamScope) === teamSeq) {
         this.store.linear.saveIssuesPage(
           key,
           params.teamId,
@@ -432,6 +434,7 @@ export class LinearService {
       if (!fresh.data) fail('not_found', 'Linear issue not found.');
       const fetchedAt = this.now();
       if (isFirstPage && !fresh.partial && this.canPopulateCache(scope, seq, authGen, cacheGen)) {
+        if (fresh.data.team_id) this.nextQuery(`team-issues:${fresh.data.team_id}`);
         this.store.linear.saveIssueDetail(fresh.data, fetchedAt);
       }
       return {
