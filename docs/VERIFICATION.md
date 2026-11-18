@@ -766,6 +766,35 @@ No installed app was launched or inspected for this stage. No real configured
 server, external-network MCP endpoint, browser sign-in, or saved OAuth token
 was exercised. Those remain separate acceptance work; sign-in is not implemented.
 
+### Release check for v0.1.0-preview.16
+
+On 2026-11-18, on the tree that was tagged, `bash scripts/check.sh` exited 0
+with the Git that CI's fixtures use first on the path: 632 Rust tests (171
+desktop, 439 core, 14 host, 8 helper integration), 423 runtime tests,
+TypeScript checks, and release builds.
+
+Before the release, a reviewer who had not written the code read the MCP
+changes and confirmed eleven defects by experiment with fixture servers. Two
+were ways out of the sandbox: the network exception given to a sandboxed stdio
+server also let it connect to the host's own socket, where it could switch its
+project to trusted, and a server's configured environment reached the
+unsandboxed guardian. Two could expose a secret: variable expansion read the
+runtime's whole environment, and one server's tools were registered before a
+later server's credentials were known to the scrubber. The rest were
+misleading characters in approvals, a crash on deeply nested arguments, a
+flood from one server stalling other threads, a hidden tool offered under a
+prototype name, and descendants that leave the process group. An earlier read
+had found that a server defined by a repository's own `.pi/mcp.json` was on by
+default, that scrubbing rewrote ordinary output, and that a display label was
+stored for every offered tool. All were fixed with the regression tests
+described above, except the process-group boundary, which is documented as for
+commands. The same reviewer then checked each fix against its original
+reproduction and found them closed, with nothing new.
+
+None of this used a real MCP server, a real credential, an external network
+endpoint, or the installed app. Servers that need a browser sign-in are not
+started in this release.
+
 ## Agent harnesses and Codex
 
 Protocol tests accept the version 4 operations and fields only with version 4,
