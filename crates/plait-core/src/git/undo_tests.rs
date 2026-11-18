@@ -651,6 +651,15 @@ fn changed_files_restore_without_borrowed_unchanged_blobs() {
 fn undo_rest_never_deletes_objects_needed_by_a_later_nested_commit() {
     let f = Fixture::new();
     f.repo.git(&["init", "--bare", "-q", "nested.git"]);
+    // A push drops the fixtures' environment settings for the repository that
+    // receives it, so that repository's own config turns maintenance off.
+    for (key, value) in [
+        ("maintenance.auto", "false"),
+        ("gc.auto", "0"),
+        ("receive.autoGC", "false"),
+    ] {
+        f.repo.git(&["--git-dir=nested.git", "config", key, value]);
+    }
     let nested = f.repo.0.join("nested.git");
     let producer = Repo::new();
     let before = f.take("before", None);
