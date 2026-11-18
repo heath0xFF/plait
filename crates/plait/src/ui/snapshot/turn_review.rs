@@ -651,11 +651,16 @@ fn recorded_wording_names_only_available_states() {
         two["id"] = json!("undo-two");
         two["created_at"] = json!(100_000);
         inject(p, vec![two, one, original]);
-        let original = Record::prepare(&p.turn_records.data, &target(p, "last", None)).unwrap();
+        let mut original = Record::prepare(&p.turn_records.data, &target(p, "last", None)).unwrap();
         assert_eq!(
             original.files[0].detail,
             "src/review.rs, Modified. Recorded during this run."
         );
+        original.describe(&p.turn_records.data, p.host.snapshot.as_deref());
+        assert!(original.detail.contains('\n'));
+        let detail = crate::ui::turn_review::review_picker_detail(&original);
+        assert!(!detail.contains(['\n', '\r']));
+        assert!(detail.contains("Not covered: build/"));
         let mut details = Vec::new();
         for id in ["undo-one", "undo-two"] {
             let mut saved = Record::prepare(&p.turn_records.data, &target(p, id, None)).unwrap();

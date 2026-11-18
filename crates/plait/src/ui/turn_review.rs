@@ -490,6 +490,7 @@ impl Plait {
                 };
                 if let Ok(mut record) = Record::prepare(&data, &next) {
                     record.describe(&data, history.as_deref());
+                    let detail = review_picker_detail(&record);
                     let label = if target
                         .as_ref()
                         .is_some_and(|t| t.original == r.id && t.record != r.id)
@@ -498,7 +499,7 @@ impl Plait {
                     } else {
                         record.label
                     };
-                    choices.push((label, record.detail, next));
+                    choices.push((label, detail, next));
                 }
             }
             (stamp, choices)
@@ -807,4 +808,9 @@ impl Plait {
             .into_any_element()
         }
     }
+}
+
+pub(super) fn review_picker_detail(record: &Record) -> String {
+    // Scope rows have one fixed-height line; keep coverage searchable on it.
+    record.detail.lines().collect::<Vec<_>>().join(" · ")
 }
