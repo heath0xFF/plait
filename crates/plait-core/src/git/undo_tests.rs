@@ -709,3 +709,22 @@ fn making_an_unreadable_directory_readable_does_not_authorize_deleting_its_files
         b"valuable untouched\n"
     );
 }
+
+#[test]
+fn decomposed_names_have_one_entry_and_default_undo_restores_them() {
+    let f = Fixture::new();
+    let name = "cafe\u{301}.txt";
+    f.repo.write(name, "before\n");
+    f.repo.commit();
+    let before = f.take("b", None);
+    let reader = Reader::open(&f.located, &f.store.0).unwrap();
+    let entries = reader.entries(&before.commit).unwrap();
+    assert_eq!(entries.keys().collect::<Vec<_>>(), [&name.to_string()]);
+    f.repo.write(name, "after\n");
+    let after = f.take("a", Some(&before));
+    assert_eq!(reader.entries(&after.commit).unwrap().len(), 1);
+    assert_eq!(after.paths.as_ref().unwrap().len(), 1);
+    let undone = f.undo(&before, &after, "u", false);
+    assert_eq!(undone.state, "undone");
+    assert_eq!(fs::read_to_string(f.repo.0.join(name)).unwrap(), "before\n");
+}

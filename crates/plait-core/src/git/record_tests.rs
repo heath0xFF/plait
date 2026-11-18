@@ -1552,3 +1552,25 @@ fn retention_never_drops_private_copies_of_borrowed_before_blobs() {
     assert!(ok);
     assert_eq!(bytes, b"keep\n");
 }
+
+#[test]
+fn equivalent_names_are_rejected_but_distinct_hard_links_are_not() {
+    let repo = Repo::new();
+    repo.write("cafe\u{301}", "before");
+    let aliases = vec![
+        "cafe\u{301}".as_bytes().to_vec(),
+        "caf\u{e9}".as_bytes().to_vec(),
+    ];
+    if repo.0.join("caf\u{e9}").exists() {
+        assert!(reject_aliases(&repo.0, &aliases, &mut HashMap::new()).is_err());
+    }
+    fs::hard_link(repo.0.join("cafe\u{301}"), repo.0.join("other")).unwrap();
+    assert!(
+        reject_aliases(
+            &repo.0,
+            &[aliases[0].clone(), b"other".to_vec()],
+            &mut HashMap::new()
+        )
+        .is_ok()
+    );
+}

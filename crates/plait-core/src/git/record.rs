@@ -334,7 +334,7 @@ fn record_with_paths(
         files: tracked,
         submodules,
     } = indexed(located, &private)?;
-    let rehash = if private.fresh {
+    let mut rehash = if private.fresh {
         private.seed(located, &config, &tracked)?
     } else {
         Vec::new()
@@ -342,7 +342,7 @@ fn record_with_paths(
     let (head, head_ref) = person_head(&located.root)?;
     let mut listing = private.status()?;
     let private_paths = private.index_paths()?;
-    let tracked: HashSet<Vec<u8>> = tracked.into_iter().collect();
+    let mut tracked: HashSet<Vec<u8>> = tracked.into_iter().collect();
     let untracked: Vec<Vec<u8>> = private_paths
         .iter()
         .filter(|path| !tracked.contains(*path))
@@ -361,7 +361,29 @@ fn record_with_paths(
         .collect();
     let mut inventory = inventory(&private.root, &skipped)?;
     // Reuse the directory inventory to reconcile filesystem aliases with Git.
-    for (old, new) in renamed_spellings(&located.root, &private_paths, &mut inventory.names) {
+    let reconcile = (!rehash.is_empty()).then(|| {
+        private_paths
+            .iter()
+            .chain(&rehash)
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    for (old, new) in renamed_spellings(
+        &located.root,
+        reconcile.as_deref().unwrap_or(&private_paths),
+        &mut inventory.names,
+    ) {
+        for path in &mut rehash {
+            if *path == old {
+                *path = new.clone();
+            }
+        }
+        if tracked.contains(&old) {
+            tracked.insert(new.clone());
+        }
+        if ignored.remove(&old) {
+            ignored.insert(new.clone());
+        }
         listing.retain(|entry| !matches!(entry, Entry::Tracked { path, .. } if path == &old));
         listing.push(Entry::Tracked {
             path: old,
@@ -418,6 +440,9 @@ fn record_with_paths(
     not_covered.extend(changing(&located.root, &plan.add));
     not_covered.sort();
     not_covered.dedup();
+    if private.fresh || !plan.add.is_empty() || !plan.remove.is_empty() {
+        reject_aliases(&located.root, &private.index_paths()?, &mut inventory.names)?;
+    }
     let tree = private.write_tree()?;
     if private.fresh {
         // A copied index can return its cached root tree without writing it.
@@ -731,6 +756,8 @@ impl Private {
             fs::write(dir.join("HEAD"), "ref: refs/heads/none\n").map_err(store)?;
         }
         let mut overrides = config.overrides();
+        // Records use the directory entry spelling, including decomposed names.
+        overrides.push("core.precomposeUnicode=false".into());
         overrides.push(format!("core.excludesFile={}", exclude.display()));
         Ok(Self {
             root: located.root.clone(),
@@ -1240,6 +1267,22 @@ fn renamed_spellings(
         }
     }
     result
+}
+
+/// Distinct names may be hard links; only different spellings of one directory
+/// entry are aliases. Never publish a tree that can address the same entry twice.
+fn reject_aliases(
+    root: &Path,
+    paths: &[Vec<u8>],
+    directories: &mut HashMap<PathBuf, BTreeSet<OsString>>,
+) -> Result<()> {
+    let entries: HashSet<_> = paths.iter().collect();
+    for (_, actual) in renamed_spellings(root, paths, directories) {
+        if entries.contains(&actual) {
+            return Err("Record contains equivalent file names.".into());
+        }
+    }
+    Ok(())
 }
 
 fn converted(
