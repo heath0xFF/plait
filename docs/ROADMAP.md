@@ -509,6 +509,14 @@ names what has to be settled first.
   more would help is not known yet. Candidates: open a file in a Neovim that
   is already running instead of a new tab; send a thread's command to a named
   pane; a link from a Rex pane back to its thread.
+- **Usage.** A page that says how much the agents have used: at first only
+  the number of tokens over the last so many days, for all threads together.
+  Later, perhaps by harness, model, project, or thread. It is counted on the
+  host from what each harness reports, kept on the person's machine, and sent
+  nowhere. To settle: what Pi, Codex, and Claude Code each report and whether
+  the counts can be compared; where the host keeps a daily total, which is a
+  change to what it stores and reports; and whether to show a cost, which
+  needs prices that change.
 - **An editor.** Edit a file in Plait, not only read it. The planned file
   editor (M4) is not designed. To settle: how much editing is wanted beyond
   the hand-off to the person's own editor; and whether it is native, built on
