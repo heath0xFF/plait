@@ -165,7 +165,10 @@ The latest release is **v0.1.0-preview.11**.
   `AGENTS.md`, listed in each project's settings and offered when you type `/`. MCP
   servers and named CLIs are planned (M8).
 - **Not an IDE.** There is no file editor, embedded terminal, merge, rebase, or
-  branch switching. The Files tab is read-only.
+  branch switching. The Files tab is read-only. Instead Plait hands off: Open
+  in Editor opens the file on screen at its line in your editor, Show in Finder
+  reveals it, and Open Terminal Here opens the project's checkout, each with
+  what you choose in Settings → Editor.
 - **Verification is public.** What CI and installed-app checks cover, and what
   they do not yet, is in [Verification](docs/VERIFICATION.md).
 

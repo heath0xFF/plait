@@ -14,7 +14,11 @@
 //! refused, which actions a keystroke would collide with, and how an
 //! assignment changes the map. The editor's view is in settings_keyboard.rs.
 
-use super::{jump::*, *};
+use super::{
+    jump::*,
+    ways_out::{OpenInEditor, OpenTerminal, ShowInFinder},
+    *,
+};
 use std::{collections::BTreeMap, rc::Rc};
 
 /// Where an action appears besides its shortcut.
@@ -97,6 +101,10 @@ pub(super) const ACTIONS: &[AppAction] = &[
     entry("project.settings", "Project Settings…", "File", None, Item, || Box::new(ProjectSettings)),
     entry("file.open", "Open File…", "File", Some("cmd-p"), Item, || Box::new(QuickOpen)),
     entry("git.refresh", "Refresh Git Status", "File", Some("cmd-r"), Item, || Box::new(Refresh)),
+    // Ways out. Option and Command, with E for editor and T for terminal.
+    entry("file.open_in_editor", "Open in Editor", "File", Some("cmd-alt-e"), Group, || Box::new(OpenInEditor)),
+    entry("file.show_in_finder", "Show in Finder", "File", None, Item, || Box::new(ShowInFinder)),
+    entry("project.open_terminal", "Open Terminal Here", "File", Some("cmd-alt-t"), Item, || Box::new(OpenTerminal)),
     entry("window.close", "Close Window", "File", Some("cmd-w"), Group, || Box::new(Close)),
     entry("palette.toggle", "Command Palette…", "View", Some("cmd-k"), Item, || Box::new(CommandPalette)),
     entry("view.toggle_sidebar", "Toggle Sidebar", "View", Some("cmd-b"), Group, || Box::new(ToggleSidebar)),

@@ -4,6 +4,7 @@
 //! choices that belong to one desktop installation, so it never leaves the Mac.
 
 use crate::{
+    handoff::{self, EditorChoice, Purpose, TerminalChoice},
     host::{ModelChoice, ThinkingLevel, harness::HarnessId},
     model::Project,
 };
@@ -127,6 +128,12 @@ pub struct Preferences {
     /// one this client does not know reads, and is written, as Pi.
     #[serde(deserialize_with = "lenient_harness", serialize_with = "known_harness")]
     pub default_harness: HarnessId,
+    /// What Open in Editor runs. Set it through `set_open_files_with`.
+    #[serde(deserialize_with = "lenient")]
+    pub open_files_with: EditorChoice,
+    /// What Open Terminal Here runs. Set it through `set_open_terminals_with`.
+    #[serde(deserialize_with = "lenient")]
+    pub open_terminals_with: TerminalChoice,
 }
 
 /// A value this client does not know (written by a newer one) reads as the
@@ -216,6 +223,25 @@ impl Preferences {
         self.recent_models.truncate(RECENT_LIMIT);
     }
 
+    /// Choose what opens files. A custom command that cannot be used is not
+    /// kept; the error says why.
+    pub fn set_open_files_with(&mut self, choice: EditorChoice) -> Result<(), String> {
+        if let EditorChoice::Custom(command) = &choice {
+            handoff::template(command, Purpose::Editor)?;
+        }
+        self.open_files_with = choice;
+        Ok(())
+    }
+
+    /// Choose what opens terminals, as `set_open_files_with` does.
+    pub fn set_open_terminals_with(&mut self, choice: TerminalChoice) -> Result<(), String> {
+        if let TerminalChoice::Custom(command) = &choice {
+            handoff::template(command, Purpose::Terminal)?;
+        }
+        self.open_terminals_with = choice;
+        Ok(())
+    }
+
     /// Replace the shortcut overrides, within the limits a load applies.
     pub fn set_keymap(&mut self, keymap: Keymap) {
         self.keymap = keymap;
@@ -241,6 +267,11 @@ impl Preferences {
         trim_oldest(&mut self.favorite_models, FAVORITE_LIMIT);
         self.recent_models.truncate(RECENT_LIMIT);
         self.trim_keymap();
+        // A hand-edited command that cannot be used reads as the default.
+        let files = std::mem::take(&mut self.open_files_with);
+        let _ = self.set_open_files_with(files);
+        let terminals = std::mem::take(&mut self.open_terminals_with);
+        let _ = self.set_open_terminals_with(terminals);
         self
     }
 }
@@ -488,6 +519,61 @@ mod tests {
         let written = serde_json::to_string(&saved).unwrap();
         let read: Preferences = serde_json::from_str(&written).unwrap();
         assert_eq!(read.code_font(), Some("JetBrains Mono"));
+    }
+
+    #[test]
+    fn editor_and_terminal_choices_round_trip_and_refuse_unusable_commands() {
+        // A file saved before the settings existed opens with the system's choices.
+        let older: Preferences = serde_json::from_str(r#"{"hide_inspector":true}"#).unwrap();
+        assert_eq!(older.open_files_with, EditorChoice::System);
+        assert_eq!(older.open_terminals_with, TerminalChoice::Terminal);
+        let root = scratch("ways-out");
+        let path = root.join("desktop.json");
+        let editors = [
+            EditorChoice::System,
+            EditorChoice::RexNeovim,
+            EditorChoice::Custom("zed '{file}:{line}'".into()),
+        ];
+        let terminals = [
+            TerminalChoice::Terminal,
+            TerminalChoice::Rex,
+            TerminalChoice::Custom("wezterm start --cwd {project}".into()),
+        ];
+        for (editor, terminal) in editors.into_iter().zip(terminals) {
+            let mut chosen = Preferences::default();
+            chosen.set_open_files_with(editor.clone()).unwrap();
+            chosen.set_open_terminals_with(terminal.clone()).unwrap();
+            save(&path, &chosen).unwrap();
+            let loaded = load(&path).unwrap();
+            assert_eq!(loaded.open_files_with, editor);
+            assert_eq!(loaded.open_terminals_with, terminal);
+        }
+        // An unusable command is refused and the previous choice stays.
+        let mut chosen = Preferences::default();
+        chosen.set_open_files_with(EditorChoice::RexNeovim).unwrap();
+        let error = chosen
+            .set_open_files_with(EditorChoice::Custom("zed 'unclosed {file}".into()))
+            .unwrap_err();
+        assert!(error.contains("single quote"), "{error}");
+        assert!(
+            chosen
+                .set_open_terminals_with(TerminalChoice::Custom("kitty {file}".into()))
+                .is_err()
+        );
+        assert_eq!(chosen.open_files_with, EditorChoice::RexNeovim);
+        assert_eq!(chosen.open_terminals_with, TerminalChoice::Terminal);
+        // A hand-edited command that cannot be used, or a choice from a newer
+        // client, reads as the default and leaves the rest of the file.
+        fs::write(
+            &path,
+            r#"{"open_files_with":{"with":"custom","command":"zed"},"open_terminals_with":{"with":"someday"},"hide_inspector":true}"#,
+        )
+        .unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.open_files_with, EditorChoice::System);
+        assert_eq!(loaded.open_terminals_with, TerminalChoice::Terminal);
+        assert!(loaded.hide_inspector);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

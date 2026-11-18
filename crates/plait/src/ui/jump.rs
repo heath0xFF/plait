@@ -22,6 +22,8 @@ pub(super) enum PreferenceGroup {
     Keyboard,
     /// Settings → New threads: the harness new threads start in.
     Agent,
+    /// Settings → Editor: what opens files and terminals.
+    Editor,
     /// Layout choices made outside Settings, such as hiding the Git inspector.
     View,
 }
@@ -125,6 +127,7 @@ impl Plait {
                 this.apply_theme(cx);
                 // Settings opened before this read shows the default font.
                 this.show_code_font(cx);
+                this.show_editor_commands(cx);
                 // The system's font needs no check; a chosen one is drawn
                 // only after it has been found installed and measured.
                 if this.preferences.value.code_font().is_some() {

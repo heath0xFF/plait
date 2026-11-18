@@ -21,7 +21,7 @@ pub(super) struct LinePick {
 }
 
 impl LinePick {
-    fn range(&self) -> std::ops::RangeInclusive<usize> {
+    pub(super) fn range(&self) -> std::ops::RangeInclusive<usize> {
         self.anchor.min(self.end)..=self.anchor.max(self.end)
     }
 }
@@ -477,6 +477,14 @@ impl Plait {
                             this.open_file(path.clone(), None, cx)
                         }),
                 )
+            })
+            .when(super::ways_out::on_disk(change), |el| {
+                el.child(super::ways_out::editor_button(
+                    "diff-editor",
+                    &change.display_path(),
+                    self.shortcut_aria("file.open_in_editor"),
+                    cx,
+                ))
             })
             .child({
                 let stage = key.mode == DiffMode::Unstaged;

@@ -371,6 +371,8 @@ path alongside separate `PLAIT_HOST_STORE` and `PLAIT_DESKTOP_STATE_DIR` paths.
 | Cmd-O | Open Repository… | `repository.open` |
 | Cmd-P | Open File… | `file.open` |
 | Cmd-R | Refresh Git Status | `git.refresh` |
+| Cmd-Option-E | Open in Editor | `file.open_in_editor` |
+| Cmd-Option-T | Open Terminal Here | `project.open_terminal` |
 | Cmd-W | Close Window | `window.close` |
 | Cmd-K | Command Palette… | `palette.toggle` |
 | Cmd-B | Toggle Sidebar | `view.toggle_sidebar` |
@@ -602,6 +604,45 @@ polls. A file changed on disk is redrawn with **Updated from disk**; one that wa
 deleted keeps its last version on screen with a note. Binary files, files over
 8 MB, and text that is not UTF-8 are described instead of drawn. Files open
 inside the checkout only, and never through a symbolic link. There is no editing.
+
+### Editor, Finder, and terminal
+
+Plait hands off to the tools you already use. **Open in Editor**
+(Cmd-Option-E) opens the file on screen at its line: in Files, the current find
+match, or else the first line on screen; in Changes, the selected file at the
+line you picked, or else at its diff's first change. **Show in Finder** reveals
+the same file, and **Open Terminal Here** (Cmd-Option-T) opens the open
+project's checkout. All three are in the File menu and the command palette;
+the Files header has **Editor** and **Finder**, and a Changes diff header has
+**Editor**. Hover over a control to see what it will open, at which line, and
+with what. A file deleted from the checkout has nothing to open.
+
+**Settings → Editor** chooses what runs:
+
+- **Open files with**: **System default** (the app macOS uses for the file's
+  type, without a line), **Neovim in Rex** (`nvim +line -- file` in a new Rex
+  tab at the checkout), or **Custom**.
+- **Open terminals with**: **Terminal**, **Rex tab** (a Rex tab at the
+  checkout), or **Custom**.
+
+A custom command is one line, such as `zed {file}:{line}` or
+`/opt/homebrew/bin/wezterm start --cwd {project}`. `{file}` is the file's full
+path, `{line}` its line, and `{project}` the checkout's path; a placeholder can
+sit inside a word. Single quotes, double quotes, and backslashes group and
+escape words as in a shell, but the command is not run through a shell, so `$`,
+`~`, globs, and backticks are plain text. A file command needs `{file}`; a
+terminal command can use only `{project}`. A command that cannot be used is not
+saved, and the line beneath the field says why. Plait does not read your
+shell's `PATH`, so name a program outside `/usr/bin` and `/bin` by its full
+path. The choices are kept in `desktop.json`.
+
+The Rex choices talk to Rex through AppleScript, addressed by its bundle ID, so
+Rex and Rex Beta both answer. macOS may first need Plait allowed to control Rex
+in System Settings → Privacy & Security → Automation; until then using it says
+so. Plait does not need Rex: without it the choice stays, and using it says
+that Rex is not installed. Plait starts the command and does not wait for it or
+read its output. Only a command that cannot start, or that exits with an error
+within two seconds, is reported, in one sentence above the workspace.
 
 ## Updates
 

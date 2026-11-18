@@ -11,6 +11,7 @@ use super::{
     palette::{Item, Options, Palette},
     text_field::{TextField, TextFieldEvent},
     theme::*,
+    ways_out,
 };
 use gpui::{prelude::*, *};
 use plait_core::{
@@ -20,14 +21,14 @@ use plait_core::{
 };
 use std::{ops::Range, path::PathBuf, sync::Arc};
 
-const LINE_HEIGHT: f32 = 20.;
+pub(super) const LINE_HEIGHT: f32 = 20.;
 const TAB_WIDTH: usize = 4;
 
 #[derive(Default)]
 pub(super) struct FileViewer {
     /// Checkout-relative path, and the root it is relative to.
     pub path: Option<PathBuf>,
-    root: PathBuf,
+    pub root: PathBuf,
     pub opened: Option<Arc<Opened>>,
     pub error: Option<String>,
     pub loading: bool,
@@ -38,7 +39,7 @@ pub(super) struct FileViewer {
     pub scroll: UniformListScrollHandle,
     pub find: Find,
     /// A line to show once the file is read.
-    reveal: Option<usize>,
+    pub reveal: Option<usize>,
 }
 
 #[derive(Default)]
@@ -53,7 +54,7 @@ pub(super) struct Find {
 
 impl Plait {
     /// The root quick-open paths are relative to: the repository's top level.
-    fn file_root(&self) -> PathBuf {
+    pub(super) fn file_root(&self) -> PathBuf {
         self.state
             .repository
             .snapshot
@@ -405,7 +406,14 @@ impl Plait {
             .child(
                 button("file-quick-open", "Open File…")
                     .on_activate(cx, |this, window, cx| this.quick_open(window, cx)),
-            );
+            )
+            .child(ways_out::editor_button(
+                "file-editor",
+                &display,
+                self.shortcut_aria("file.open_in_editor"),
+                cx,
+            ))
+            .child(ways_out::finder_button("file-finder", &display, cx));
         let body = match (&viewer.error, viewer.opened.as_deref(), viewer.loading) {
             (Some(error), _, _) => {
                 empty("This file cannot be shown", error.clone()).into_any_element()

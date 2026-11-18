@@ -1,5 +1,5 @@
 //! The application's Settings page: host status first, then New threads,
-//! Providers, Agents, Keyboard, Appearance, and About. Only what applies to the
+//! Providers, Agents, Keyboard, Editor, Appearance, and About. Only what applies to the
 //! whole app or host is here; a project's own settings have their own page
 //! (settings_project.rs), and a thread's are under its message box.
 
@@ -32,16 +32,19 @@ pub(super) enum SettingsTab {
     Providers,
     Agents,
     Keyboard,
+    /// What Open in Editor and Open Terminal Here run.
+    Editor,
     Appearance,
     About,
 }
 
 impl SettingsTab {
-    pub(super) const ALL: [Self; 6] = [
+    pub(super) const ALL: [Self; 7] = [
         Self::NewThreads,
         Self::Providers,
         Self::Agents,
         Self::Keyboard,
+        Self::Editor,
         Self::Appearance,
         Self::About,
     ];
@@ -52,6 +55,7 @@ impl SettingsTab {
             Self::Providers => "Providers",
             Self::Agents => "Agents",
             Self::Keyboard => "Keyboard",
+            Self::Editor => "Editor",
             Self::Appearance => "Appearance",
             Self::About => "About",
         }
@@ -434,6 +438,7 @@ impl Plait {
             SettingsTab::Providers => self.provider_settings(cx).into_any_element(),
             SettingsTab::Agents => self.harness_settings(cx).into_any_element(),
             SettingsTab::Keyboard => self.keyboard_settings(cx).into_any_element(),
+            SettingsTab::Editor => self.editor_settings(cx).into_any_element(),
             SettingsTab::Appearance => self.view_settings(cx).into_any_element(),
             SettingsTab::About => self.build_details(cx).into_any_element(),
         };

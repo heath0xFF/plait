@@ -25,6 +25,7 @@ mod selection;
 mod session;
 mod settings;
 mod settings_agent;
+mod settings_editor;
 mod settings_keyboard;
 mod settings_policy;
 mod settings_project;
@@ -37,6 +38,7 @@ mod thread_controls;
 mod thread_files;
 mod tool_card;
 mod update;
+mod ways_out;
 mod window_bar;
 mod worktree;
 
@@ -137,6 +139,10 @@ pub struct Plait {
     /// Shared by both pages: opening either starts it at the top.
     settings_scroll: ScrollHandle,
     keyboard: settings_keyboard::KeyboardState,
+    /// Settings → Editor: the custom command fields.
+    editor_settings: settings_editor::EditorSettings,
+    /// Open in Editor, Show in Finder, and Open Terminal Here.
+    ways_out: ways_out::WaysOut,
     policy: settings_policy::PolicyState,
     agent: settings_agent::AgentState,
     harnesses: harnesses::HarnessesState,
@@ -221,6 +227,8 @@ impl Plait {
             settings_tab: Default::default(),
             settings_scroll: ScrollHandle::new(),
             keyboard: Default::default(),
+            editor_settings: Default::default(),
+            ways_out: Default::default(),
             policy: Default::default(),
             agent: Default::default(),
             harnesses: Default::default(),
@@ -490,6 +498,7 @@ impl Plait {
             Some(settings::SettingsPage::Application) => {
                 self.prepare_keyboard(cx);
                 self.prepare_code_font(cx);
+                self.prepare_editor_settings(cx);
                 self.prepare_providers(cx);
             }
             Some(settings::SettingsPage::Project) => {
@@ -999,6 +1008,7 @@ impl Render for Plait {
             }))
             .on_action(cx.listener(|_, _: &Minimize, window, _| window.minimize_window()))
             .map(|root| self.on_jump_actions(root, cx))
+            .map(|root| self.on_ways_out_actions(root, cx))
             .map(|root| self.on_approval_actions(root, cx))
             .map(|root| self.on_selection_actions(root, cx))
             .map(|root| self.on_keyboard_controls(root, cx))

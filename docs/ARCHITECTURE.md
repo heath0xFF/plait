@@ -52,6 +52,8 @@ ui/                     GPUI layout, actions, focus, lists, theme
   settings.rs           the Settings page (the app and host) and its tabs
   settings_project.rs   a project's own settings page, from its sidebar menu
   settings_keyboard.rs  the shortcut editor
+  settings_editor.rs    Settings → Editor: what opens files and terminals
+  ways_out.rs           Open in Editor, Show in Finder, Open Terminal Here; starts them
   settings_policy.rs    the checkout's command policy, read from the host
   settings_providers.rs provider sign-in, API keys, and custom endpoints
   update.rs             release checks and in-app update installation
@@ -60,6 +62,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
   appearance.rs         light and dark themes, the themes folder, and their settings
   snapshot.rs           headless scene snapshots of the root view (tests only)
   snapshot/showcase.rs  README screenshots over a sample project (tests only)
+  snapshot/ways_out.rs  which file and line the ways out pick; Settings → Editor (tests only)
   composer/             native input, IME, clipboard, undo, and its events
     draft.rs            text, selection, undo, acceptance guard, prompt recall
     history.rs          prompts already sent in the thread
@@ -90,6 +93,7 @@ state.rs                selection, collapse state, request queue, cache
 model.rs                plain Rust data, no GPUI
 machine.rs              this machine's display name
 preferences.rs          desktop-only preferences and Cmd-number order
+handoff.rs              editor and terminal commands: parsing, escaping, starting
 fuzzy.rs                subsequence matching and scoring for pickers
 navigation.rs           project grouping, activity tracking, filtering, and jump order
 session.rs              private desktop journal, identity checks, writer lock
@@ -410,7 +414,8 @@ desktop installation live in `plait_core::preferences`, saved as JSON at
 (`$XDG_CONFIG_HOME/plait/desktop.json` or `~/.config/plait/desktop.json`
 elsewhere). It holds what Cmd-1 to Cmd-9 select, the approval default, whether
 the Git inspector is hidden, favorite and recently used models, shortcut
-overrides by stable action ID, and the harness new threads start in (Pi unless
+overrides by stable action ID, what opens files and terminals (see "Ways out"
+below), and the harness new threads start in (Pi unless
 chosen; a harness this client does not know reads as Pi). A draft starts in
 that harness while the host lists it as ready, and in Pi otherwise. `PLAIT_DESKTOP_PREFERENCES_FILE` selects an
 absolute preferences path for an isolated development instance. The model
@@ -432,6 +437,38 @@ written before a field existed loads with that field's default.
 Cmd-1 to Cmd-9 count matching real host threads in project order on the local
 machine. A machine or project selects its first matching thread; an empty row
 does nothing. Jumping expands collapsed parents.
+
+### Ways out
+
+Open in Editor, Show in Finder, and Open Terminal Here are the only places the
+desktop starts a program of the person's choosing. `ui/ways_out.rs` picks the
+file and line on screen (the Files tab's current find match or first visible
+line; in Changes the picked line or the diff's first change, mapped to the
+file's own line numbers) and the open checkout. `plait_core::handoff` turns the
+choice saved in Settings → Editor into a program and arguments:
+
+- The system default is `/usr/bin/open <file>`; Finder is `/usr/bin/open -R`;
+  Terminal is `/usr/bin/open -b com.apple.Terminal <checkout>`.
+- Neovim in Rex and a Rex tab are AppleScript run by `/usr/bin/osascript`,
+  addressed to Rex by bundle ID (`com.superlogical.rex`). The editor's script
+  runs `nvim +<line> -- <file>` with `run command … at <checkout>`; the
+  terminal's opens the checkout with `open`. Each path is escaped twice, as a
+  POSIX shell word in single quotes and then as an AppleScript string, by pure
+  functions with tests.
+- A custom command is one line split into words with shell quoting rules
+  (single and double quotes, backslash) and `{file}`, `{line}`, and `{project}`
+  filled inside each word. It never goes through a shell, so nothing in it is
+  expanded. A command that does not parse, or lacks `{file}` for files, or uses
+  anything but `{project}` for terminals, is refused before it is saved.
+
+The program starts on the background executor with no input, its output
+discarded, and its error output kept only until it exits. The desktop checks it
+every 50 ms for two seconds without blocking a thread; an exit with an error
+in that time becomes one sentence in the notice line. After that the process is
+left to run, and a thread empties its error output and reaps it when it exits.
+Plait does not depend on Rex: without it, `osascript` fails at once, and the
+sentence says Rex is not installed. Test builds record the command instead of
+starting it.
 
 ### Projects and thread activity
 

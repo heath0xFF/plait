@@ -7,6 +7,7 @@ pub mod diff;
 pub mod file_view;
 pub mod fuzzy;
 pub mod git;
+pub mod handoff;
 pub mod highlight;
 pub mod host;
 pub mod host_state;

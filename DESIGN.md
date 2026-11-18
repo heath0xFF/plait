@@ -137,10 +137,19 @@ conversation keeps a readable minimum width.
   (Project settings…). What applies to the whole app or host is in Settings.
   A control names its state in a word or two; what it means goes in hover
   text, not a permanent line.
+- **Ways out.** Plait is not an editor or a terminal, so leaving for one is one
+  action: Open in Editor (the file on screen, at its line), Show in Finder, and
+  Open Terminal Here (the open checkout), in the menus, the palette, and as
+  quiet Editor and Finder controls in the Files header and an Editor control
+  among the Changes diff's actions. Nothing is added to the conversation.
+  Hover says what will open, where, and with what. A failure is one sentence in
+  the notice line, naming the command.
 - **Settings.** Host status and Reconnect first, then New threads, Providers,
-  Agents, Keyboard, Appearance, and About tabs. New threads holds the defaults
+  Agents, Keyboard, Editor, Appearance, and About tabs. New threads holds the defaults
   a new thread starts with: harness, model, thinking, and Pi's approvals.
-  Agents lists each harness, its setup, and its default permissions.
+  Agents lists each harness, its setup, and its default permissions. Editor
+  holds what opens files and terminals: a ready choice, or a custom command
+  whose field says beneath it why one cannot be used.
   Appearance lists light and dark themes side by side, each with a swatch of
   its background, text, and accents. The host status and tabs stay visible while
   the active section scrolls. Each setting is a label and one line

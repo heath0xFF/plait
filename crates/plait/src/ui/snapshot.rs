@@ -42,6 +42,7 @@ use std::{
 };
 
 mod showcase;
+mod ways_out;
 
 const THREAD: &str = "thr_5791c2e4";
 
@@ -1999,6 +2000,7 @@ fn walk(output: Option<&Path>) {
         settings_walk(&mut harness, &repository, suffix);
         settings_controls_walk(&mut harness, &repository, suffix);
         files_walk(&mut harness, suffix);
+        ways_out::ways_out_walk(&mut harness, &repository, suffix);
         theme_walk(&mut harness, &repository, suffix);
         palette_walk(&mut harness, &repository, suffix);
         picker_walk(&mut harness, &repository, suffix);

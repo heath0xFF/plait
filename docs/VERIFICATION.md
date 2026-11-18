@@ -535,6 +535,40 @@ file drew in 0.6 ms at rest and 1.2 ms per frame while wheel-scrolling. Native
 pointer use, find shortcuts, and reloading after an agent's edit are open in the
 [preview.8 acceptance](#v010-preview8-acceptance) list.
 
+## Ways out
+
+Core tests split custom command lines with single quotes, double quotes, and
+backslashes, refuse unclosed quotes, a trailing backslash, line breaks, a
+missing program, unknown placeholders, an editor command without `{file}`, and
+a terminal command with anything but `{project}`, and fill placeholders inside
+each word in one pass. The two escaping layers are tested on paths with spaces,
+single and double quotes, backslashes, `$`, backticks, line breaks, tabs,
+non-ASCII text, shell punctuation, a leading dash, and an empty path. On a Mac,
+`/usr/bin/osascript` reads each AppleScript literal back unchanged (`return`
+only, which reaches no application), and the full Rex command line, read back
+the same way and run by `/bin/sh` and `/bin/zsh` with `printf` in place of
+Neovim, gives every word back whole. An ignored test compiles both Rex scripts
+for every such path with `osacompile` against Rex's dictionary; it compiles and
+does not run them, and needs Rex installed. A preferences test round-trips each
+choice, reads an older file as the system default and Terminal, refuses an
+unusable custom command, and reads a hand-edited one as the default.
+
+Desktop harness tests record the command each action would start; test builds
+never start one. They check the file and line picked in Files (the first line
+on screen, after scrolling, a line asked for but not yet drawn, and the current
+find match), in Changes (the first change, a picked line, a staged diff that
+begins with a removed line, and a deleted file that has nothing to open), the
+Option-Command-E shortcut, Show in Finder and Open Terminal Here arguments,
+the Rex scripts, the hover text, and a saved command that no longer reads. A
+Settings test refuses an unusable command, saves a usable one to the test's
+own preferences file, and shows it again on reopening. Scenes draw Settings →
+Editor with ready choices and with custom commands, and the Files and Changes
+headers with their Editor and Finder controls.
+
+None of this has been run against a real editor, Finder, Terminal, or Rex:
+whether Rex opens the tab and Neovim lands on the line, what each app does
+when it is not running, and the two-second failure window are unchecked.
+
 ## Themes
 
 Core tests parse both published Base16 layouts, name what is wrong with a broken
