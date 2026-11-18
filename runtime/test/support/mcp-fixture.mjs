@@ -57,8 +57,11 @@ createInterface({ input: process.stdin }).on('line', async line => {
   const reply = result => send({ id: message.id, result });
   if (message.method === 'initialize') {
     if (mode.startsWith('flood')) {
-      const line = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/progress', params: { text: mode === 'flood-bytes' ? 'x'.repeat(1024 * 1024) : 'progress' } }) + '\n';
-      const count = mode === 'flood-bytes' ? 40 : mode === 'flood-sustained' ? 100 : 20000;
+      // Lines small enough for the pipe to take, and few enough that bytes run out before messages do.
+      const line = JSON.stringify({ jsonrpc: '2.0', method: 'notifications/progress', params: { text: mode === 'flood-bytes' ? 'x'.repeat(64 * 1024) : 'progress' } }) + '\n';
+      const count = mode === 'flood-bytes' ? 600 : mode === 'flood-sustained' ? 100 : 20000;
+      // A full pipe can refuse a write outright. A server that dies of its own flood has still failed.
+      process.stdout.on('error', () => process.exit(1));
       const flood = () => { for (let i = 0; i < count; i++) process.stdout.write(line); };
       flood(); setInterval(flood, mode === 'flood-sustained' ? 50 : 10); return;
     }
