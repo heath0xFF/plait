@@ -58,9 +58,19 @@ fn banner(tint: u32) -> Div {
         .border_color(rgb(colors().border))
 }
 
-/// How far the copy control of a message sits above its first line. It
-/// stays inside the row's top padding, so reaching it keeps the row hovered.
-const COPY_LIFT: f32 = 18.;
+/// The author and copy control share one line, clear of selectable text.
+const AUTHOR_LINE: f32 = 22.;
+
+fn message_author(author: &'static str) -> Div {
+    div()
+        .h(px(AUTHOR_LINE))
+        .flex()
+        .items_center()
+        .text_size(px(12.))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(colors().muted))
+        .child(author)
+}
 
 /// The turn line hangs in the middle of the conversation's 24-point left
 /// margin, so text keeps the composer's edges and the marks stay clear of
@@ -193,42 +203,28 @@ impl Plait {
             row: index,
             block: 0,
         };
-        let body = match self.formatted.messages.get(&message.id) {
-            Some(parsed) if user => self.request(&site, &parsed.blocks),
-            Some(parsed) => self.markdown(&site, &parsed.blocks, &message.id, cx),
-            // The projection arrives with the snapshot; this is a one-frame fallback.
-            None if user => request_prose()
-                .child(message.text.clone())
-                .into_any_element(),
-            None => prose().child(message.text.clone()).into_any_element(),
-        };
+        let body = (!message.text.is_empty() || message.images.is_empty()).then(|| {
+            match self.formatted.messages.get(&message.id) {
+                Some(parsed) if user => self.request(&site, &parsed.blocks),
+                Some(parsed) => self.markdown(&site, &parsed.blocks, &message.id, cx),
+                // The projection arrives with the snapshot; this is a one-frame fallback.
+                None => prose().child(message.text.clone()).into_any_element(),
+            }
+        });
         let body = column()
+            .w_full()
+            .min_w_0()
             .gap_2()
             .children(self.history_parts(
                 Key::Message(message.id.clone()),
                 Some(HistoryField::Text),
                 cx,
             ))
-            .child(body)
+            .children(body)
             .when(!message.images.is_empty(), |el| {
                 el.child(self.image_row(&message.images, cx))
             })
-            // The latest turn's record sits with its state, where the line ends.
-            .when_some(
-                self.conversation_snapshot().and_then(|shown| {
-                    history::row_record(&self.formatted.turn_summaries, shown, &message.id).filter(
-                        |_| {
-                            self.host.protocol() < 5
-                                || !self
-                                    .turn_records
-                                    .lines
-                                    .covered
-                                    .contains(&Key::Message(message.id.clone()))
-                        },
-                    )
-                }),
-                |el, summary| el.child(self.turn_record(&message.id, summary, cx)),
-            );
+            .when(user, |el| el.p_3().rounded_md().bg(rgb(colors().panel)));
         let part = self
             .history
             .cache
@@ -257,8 +253,7 @@ impl Plait {
             let text = message.text.clone();
             move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
         });
-        // A request heads its turn on the turn line; the label is for
-        // assistive technology.
+        // The author stays visible even when the copy action is hidden.
         let id = (
             ElementId::from("live-message"),
             SharedString::from(message.id.clone()),
@@ -268,22 +263,41 @@ impl Plait {
             if user { "Your" } else { "Assistant" },
             message.text
         );
-        // A block, not a flex row, so long text wraps at the column width.
-        div()
+        column()
             .id(id)
             .role(Role::Group)
             .aria_label(label)
             .relative()
+            .w_full()
+            .min_w_0()
+            .gap_1()
             .when(user, |el| {
-                el.child(strand_mark(REQUEST_LINE / 2., RING, colors().muted, true))
+                el.child(strand_mark(AUTHOR_LINE / 2., RING, colors().muted, true))
             })
-            .child(body)
             .child(
-                div()
-                    .absolute()
-                    .top(px(-COPY_LIFT))
-                    .right_0()
-                    .child(copy.h(px(COPY_LIFT)).bg(rgb(colors().bg))),
+                row()
+                    .w_full()
+                    .justify_between()
+                    .gap_2()
+                    .child(message_author(if user { "You" } else { "Assistant" }))
+                    .child(copy.h(px(AUTHOR_LINE))),
+            )
+            .child(body)
+            // A record stays on the open surface, never inside a request panel.
+            .when_some(
+                self.conversation_snapshot().and_then(|shown| {
+                    history::row_record(&self.formatted.turn_summaries, shown, &message.id).filter(
+                        |_| {
+                            self.host.protocol() < 5
+                                || !self
+                                    .turn_records
+                                    .lines
+                                    .covered
+                                    .contains(&Key::Message(message.id.clone()))
+                        },
+                    )
+                }),
+                |el, summary| el.child(self.turn_record(&message.id, summary, cx)),
             )
             .into_any_element()
     }
@@ -455,6 +469,10 @@ impl Plait {
             .id("live-stream")
             .role(Role::Group)
             .aria_label(format!("Assistant is writing: {text}"))
+            .w_full()
+            .min_w_0()
+            .gap_1()
+            .child(message_author("Assistant"))
             .child(body)
             .into_any_element()
     }
@@ -572,17 +590,16 @@ impl Plait {
         else {
             return div().into_any_element();
         };
-        // Top padding leaves room for a message's copy control; a reply sits
-        // closer to the tool calls that follow it than to what came before,
-        // and a request stands clear of the turn above it.
+        // Requests stand clear of the previous turn. Replies and streaming
+        // text use the same spacing, so completion does not move the author.
         let request = matches!(row, Row::Message(message) if message.role == MessageRole::User);
         let recorded = history::records::closing_key(row)
             .and_then(|key| self.turn_records.lines.rows.get(&key))
             .filter(|_| self.host.protocol() >= 5);
         let (content, top, bottom) = match row {
-            Row::Message(message) if request => (self.live_message(message, index, cx), 22., 2.),
-            Row::Message(message) => (self.live_message(message, index, cx), COPY_LIFT, 6.),
-            Row::Streaming(text) => (self.live_stream(text, index, cx), 14., 8.),
+            Row::Message(message) if request => (self.live_message(message, index, cx), 24., 8.),
+            Row::Message(message) => (self.live_message(message, index, cx), 16., 8.),
+            Row::Streaming(text) => (self.live_stream(text, index, cx), 16., 8.),
             Row::Reasoning(message) => (
                 self.reasoning(&message.id, &message.reasoning, index, false, cx),
                 6.,
@@ -599,7 +616,7 @@ impl Plait {
         // The line starts with the first row: at the ring of a request, and
         // otherwise where the row's content begins, not in the space above it.
         let from = match (index, request) {
-            (0, true) => top + REQUEST_LINE / 2.,
+            (0, true) => top + AUTHOR_LINE / 2.,
             (0, false) => top,
             _ => 0.,
         };

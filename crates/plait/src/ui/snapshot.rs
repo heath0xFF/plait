@@ -44,6 +44,7 @@ use std::{
 mod branches;
 mod find;
 mod mcp;
+mod messages;
 mod showcase;
 mod turn_review;
 mod undo;
@@ -2032,6 +2033,7 @@ fn walk(output: Option<&Path>) {
         streaming_walk(&mut harness, &repository, suffix);
         tool_states_walk(&mut harness, &repository, suffix);
         reading_walk(&mut harness, &repository, suffix);
+        messages::walk(&mut harness, &repository, suffix);
         find::find_walk(&mut harness, &repository, suffix);
         undo::undo_walk(&mut harness, &repository, suffix);
         turn_review::walk(&mut harness, &repository, suffix);

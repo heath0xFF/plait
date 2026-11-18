@@ -685,6 +685,10 @@ func selfTest() {
     check(!permitsPointer(target: own, pid: 42, window: 8, frame: rect, point: CGPoint(x: 177.5, y: 15)), "menu bar point refused")
     check(!permitsPointer(target: nil, pid: 42, window: 8, frame: rect, point: point), "unknown mouse target refused")
     check(!permitsPointer(target: own, pid: 42, window: nil, frame: rect, point: point), "unknown own window refused")
+    check(messageSelectionSpan(box: CGRect(x: 300, y: 200, width: 500, height: 30)) == nil, "message shorter than header plus line is rejected")
+    if let (from, to) = messageSelectionSpan(box: CGRect(x: 300, y: 200, width: 500, height: 47)) {
+        check(from == CGPoint(x: 303, y: 236) && to == CGPoint(x: 460, y: 236), "message drag clears author header line")
+    } else { check(false, "selectable message frame accepted") }
     if failures > 0 { exit(1) }
     print("axdrive self-test passed")
 }
@@ -932,7 +936,9 @@ func run(_ arguments: [String]) throws {
     case "select-text":
         guard let expected = extra["--text"], !expected.isEmpty else { die(usage, 2) }
         let node = waitFor(pid, selector)
-        guard let box = node.frame, box.width > 80, box.height >= 12 else { die("message has no selectable frame") }
+        guard let box = node.frame, let (from, to) = messageSelectionSpan(box: box) else {
+            die("message has no selectable frame")
+        }
         // Keep every clipboard representation in memory; none enters artifacts.
         let board = NSPasteboard.general
         let saved = (board.pasteboardItems ?? []).map { item in
@@ -948,8 +954,6 @@ func run(_ arguments: [String]) throws {
             board.writeObjects(items)
         }
         front(pid)
-        let from = CGPoint(x: box.minX + 3, y: box.minY + 10)
-        let to = CGPoint(x: min(box.maxX - 3, box.minX + 160), y: from.y)
         pointer(pid, at: [from, to]) { drag(from, to) }
         board.clearContents()
         try postKey(pid, parseCombo("cmd+c"))
@@ -967,6 +971,18 @@ func run(_ arguments: [String]) throws {
     default:
         die(usage, 2)
     }
+}
+
+/// First-line drag span inside a message AXGroup, skipping the 22-point author
+/// header line and 4-point gap above the message text.
+func messageSelectionSpan(box: CGRect) -> (CGPoint, CGPoint)? {
+    let textTop: CGFloat = 26
+    guard box.width > 80, box.height >= textTop + 12 else { return nil }
+    let y = min(box.maxY - 6, box.minY + textTop + 10)
+    return (
+        CGPoint(x: box.minX + 3, y: y),
+        CGPoint(x: min(box.maxX - 3, box.minX + 160), y: y)
+    )
 }
 
 do {

@@ -951,8 +951,14 @@ streaming reply, reasoning, tool rows, and turn records are not, and pages that
 are not loaded are never read for a search.
 
 Conversation events use GPUI's variable-height `list`. The conversation is
-drawn as a log of turns: a request heads its turn at a ring on the turn line,
-and replies and tool calls are open text beside it. Each row draws its own
+drawn as a log of turns: a request heads its turn at a ring on the turn line.
+Requests use a neutral panel and a visible You label; replies use an Assistant
+label and stay open beside the line, as do tool calls. The request projection
+in `plait_core::markdown::Message::request` (`markdown/request.rs`) separates
+quoted context on the background executor without interpreting the rest of the
+request as Markdown. The source
+is retained for Copy message; selection and find use the projected blocks.
+Stored messages and the host protocol do not change. Each row draws its own
 piece of that line across its full height, padding included, so the pieces
 meet; a row needs only its own kind and position, so no pass over the
 transcript runs per frame. An earlier turn's record is part of its last

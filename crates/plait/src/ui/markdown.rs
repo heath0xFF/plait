@@ -344,8 +344,7 @@ impl Plait {
             Kind::List { depth, marker } => self.list_item(site, block, *depth, *marker),
             Kind::Table(table) => self.table(site, block, table, key),
             Kind::Diff(lines) => self.diff(site, block, lines, key),
-            // Headings stay within the interface's sizes and one step apart,
-            // so a reply's sections never outrank the request above them.
+            // Keep reply headings within the interface's compact type scale.
             Kind::Heading(level) => prose()
                 .w_full()
                 .min_w_0()
@@ -384,19 +383,32 @@ impl Plait {
             .into_any_element()
     }
 
-    /// A request as it was written: plain text, in the request's own size.
+    /// Keep instructions literal; only quoted context gets a separate inset.
     pub(super) fn request(&self, site: &Site, blocks: &[Block]) -> AnyElement {
+        if let [block] = blocks
+            && !matches!(block.kind, Kind::Quote)
+        {
+            return prose()
+                .w_full()
+                .min_w_0()
+                .child(self.block_text(site, block, 0..block.text.len(), false))
+                .into_any_element();
+        }
         let blocks = blocks.iter().enumerate().map(|(index, block)| {
             let site = Site {
                 block: index,
                 ..site.clone()
             };
-            request_prose().w_full().min_w_0().child(self.block_text(
-                &site,
-                block,
-                0..block.text.len(),
-                false,
-            ))
+            prose()
+                .w_full()
+                .min_w_0()
+                .when(matches!(block.kind, Kind::Quote), |el| {
+                    el.pl_3()
+                        .border_l_1()
+                        .border_color(rgb(colors().edge))
+                        .text_color(rgb(colors().muted))
+                })
+                .child(self.block_text(&site, block, 0..block.text.len(), false))
         });
         column()
             .w_full()

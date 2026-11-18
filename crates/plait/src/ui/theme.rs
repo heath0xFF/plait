@@ -326,18 +326,6 @@ pub fn prose() -> Div {
     div().text_size(px(13.)).line_height(px(21.))
 }
 
-/// Line height of a request, which centers its ring on the turn line.
-pub const REQUEST_LINE: f32 = 22.;
-
-/// A request's own words. It heads its turn, so it is a size above the
-/// replies and outranks any heading inside them.
-pub fn request_prose() -> Div {
-    div()
-        .text_size(px(14.))
-        .line_height(px(REQUEST_LINE))
-        .font_weight(FontWeight::SEMIBOLD)
-}
-
 /// Pulls a disclosure row left so its chevron sits on the text edge.
 pub const TOOL_INSET: f32 = 5.;
 

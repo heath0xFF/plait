@@ -399,10 +399,17 @@ fn hex(value: &str) -> Option<u32> {
 /// scheme's own grays, whose roles vary from scheme to scheme.
 pub fn derive(scheme: &Scheme) -> Palette {
     let [bg, rail, ..] = scheme.base;
-    // Body text at least 7:1 (WCAG AAA), toward the scheme's strongest foreground.
-    let text = floor(scheme.base[5], bg, scheme.base[7], 7.0);
+    // Body text at least 7:1 (WCAG AAA) on both the main surface and request
+    // panels, moving toward the scheme's strongest foreground.
+    let mut text = floor(scheme.base[5], &[bg], scheme.base[7], 7.0);
+    let mut panel = mix(bg, text, 0.06);
+    if contrast(text, panel) < 7.0 {
+        text = floor(text, &[bg, panel], scheme.base[7], 7.0);
+        panel = mix(bg, text, 0.06);
+        text = floor(text, &[bg, panel], scheme.base[7], 7.0);
+    }
     let shade = |amount| mix(bg, text, amount);
-    let accent = |index: usize| floor(scheme.base[index], bg, text, 3.0);
+    let accent = |index: usize| floor(scheme.base[index], &[bg, panel], text, 3.0);
     let (mint, blue, violet, red, amber) = (
         accent(0xB),
         accent(0xD),
@@ -415,11 +422,11 @@ pub fn derive(scheme: &Scheme) -> Palette {
         light,
         bg,
         rail,
-        panel: shade(0.06),
+        panel,
         border: shade(0.12),
         text,
-        muted: floor(shade(0.68), bg, text, 4.5),
-        subtle: floor(shade(0.52), bg, text, 3.2),
+        muted: floor(shade(0.68), &[bg, panel], text, 4.5),
+        subtle: floor(shade(0.52), &[bg, panel], text, 3.2),
         mint,
         blue,
         violet,
@@ -442,22 +449,22 @@ pub fn derive(scheme: &Scheme) -> Palette {
     }
 }
 
-/// `color` moved toward `toward` until it has `ratio` contrast with `bg`;
-/// toward black or white when `toward` itself falls short.
-fn floor(color: u32, bg: u32, toward: u32, ratio: f64) -> u32 {
-    let extreme = if luminance(bg) > 0.18 {
+/// `color` moved toward `toward` until it has `ratio` contrast with every
+/// surface in `surfaces`; toward black or white when `toward` itself falls short.
+fn floor(color: u32, surfaces: &[u32], toward: u32, ratio: f64) -> u32 {
+    let extreme = if luminance(surfaces[0]) > 0.18 {
         0x000000
     } else {
         0xffffff
     };
-    let toward = if contrast(toward, bg) >= ratio {
+    let toward = if surfaces.iter().all(|&bg| contrast(toward, bg) >= ratio) {
         toward
     } else {
         extreme
     };
     let mut amount = 0.;
     let mut result = color;
-    while contrast(result, bg) < ratio && amount < 1. {
+    while surfaces.iter().any(|&bg| contrast(result, bg) < ratio) && amount < 1. {
         amount += 0.05;
         result = mix(color, toward, amount);
     }
@@ -550,11 +557,25 @@ mod tests {
         for theme in themes {
             let p = theme.palette;
             let name = &theme.name;
-            assert!(contrast(p.text, p.bg) >= 7., "{name} text");
-            assert!(contrast(p.muted, p.bg) >= 4.5, "{name} muted");
-            assert!(contrast(p.subtle, p.bg) >= 3., "{name} subtle");
-            for accent in [p.mint, p.blue, p.violet, p.red, p.amber] {
-                assert!(contrast(accent, p.bg) >= 3., "{name} accent {accent:06x}");
+            for (surface_name, surface) in [("bg", p.bg), ("panel", p.panel)] {
+                assert!(
+                    contrast(p.text, surface) >= 7.,
+                    "{name} text on {surface_name}"
+                );
+                assert!(
+                    contrast(p.muted, surface) >= 4.5,
+                    "{name} muted on {surface_name}"
+                );
+                assert!(
+                    contrast(p.subtle, surface) >= 3.,
+                    "{name} subtle on {surface_name}"
+                );
+                for accent in [p.mint, p.blue, p.violet, p.red, p.amber] {
+                    assert!(
+                        contrast(accent, surface) >= 3.,
+                        "{name} accent {accent:06x} on {surface_name}"
+                    );
+                }
             }
             assert_eq!(
                 p.light,

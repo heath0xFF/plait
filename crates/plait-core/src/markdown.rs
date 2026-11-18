@@ -11,6 +11,8 @@ use crate::{
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use std::{collections::HashMap, ops::Range, sync::Arc};
 
+mod request;
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Kind {
     #[default]
@@ -582,7 +584,7 @@ impl Transcript {
                     .filter(|cached| cached.source == message.text);
                 let parsed = cached.cloned().unwrap_or_else(|| {
                     Arc::new(match message.role {
-                        MessageRole::User => Message::plain(&message.text),
+                        MessageRole::User => Message::request(&message.text),
                         MessageRole::Assistant => Message::parse(&message.text),
                     })
                 });

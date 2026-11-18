@@ -49,11 +49,14 @@ conversation keeps a readable minimum width.
 - **Conversation.** A log of turns, not a chat. A turn is one request and
   everything up to the next request. A one-point turn line runs down the
   conversation's left margin, outside the text column, so text keeps the
-  composer's edges. A request heads its turn: left-aligned, semibold, and a
-  size above the replies, with a ring on the line. Replies, reasoning, and
-  tool calls are open text beside the line; headings inside a reply stay
-  smaller than or equal to the request. Each finished recorded run closes at
-  a filled node, including one with no answer. Its record is drawn there: the
+  composer's edges. A request heads its turn with a ring on the line and a
+  visible You label. Its text and images sit in a lightly raised neutral
+  panel, left-aligned, with regular-weight body text. Quoted context has a
+  one-point neutral rule and muted text inside that panel; the outer `>`
+  marks are not drawn. Other request syntax stays literal. Replies carry a
+  visible Assistant label, including while streaming, and stay open on the
+  conversation surface. Reasoning and tool calls stay compact beside the line.
+  Each finished recorded run closes at a filled node, including one with no answer. Its record is drawn there: the
   step count and the files the host recorded changing, including
   command writes. Three file names and a count of the rest stay on one line;
   each name opens that exact record's before/after diff in Changes, blue and
@@ -72,11 +75,11 @@ conversation keeps a readable minimum width.
   that turn has finished, its record. The state is said there once, not
   repeated in the answer above. While the rows on screen stop short of the
   latest turn (scrolled back from the newest row, or reading older history),
-  the line stops short of that node. Messages carry no visible author label;
-  give each row a full author/context label for assistive technology. Copy
-  controls stay out of sight until the pointer is over their row or they take
-  keyboard focus. Away from the newest row, one control at the bottom of the
-  conversation jumps back to it.
+  the line stops short of that node. Give each row a full author/context label
+  for assistive technology as well as its visible author. Copy controls share
+  the author's header line and stay out of sight until the pointer is over
+  their row or they take keyboard focus. Away from the newest row, one control
+  at the bottom of the conversation jumps back to it.
 - **Images.** Requests show small thumbnails below their text, aligned to its
   column. Activating one opens a larger view with Close; Escape returns to the
   conversation. The message box shows attached thumbnails with Remove before
@@ -288,10 +291,11 @@ a `+` or `−` gutter mark with a faint mint or rose line tint. Selected
 text is main text at low opacity, so it reads the same on every surface. Inline
 code is main text on the panel color.
 
-System sans-serif at 11–15 points, with 13 points for body and navigation. A
-request is 14 points semibold; headings inside a reply are 15, 14, and 13
-points bold. Code, file paths, and commands use the system's monospaced font
-(SF Mono) at 12 points, or an installed monospaced family named in Settings →
+System sans-serif at 11–15 points, with 13 points for body and navigation.
+Requests and replies both use 13-point regular text with 21-point line height;
+author labels use 12-point medium text. Headings inside a reply are 15, 14,
+and 13 points bold. Code, file paths, and commands use the system's monospaced
+font (SF Mono) at 12 points, or an installed monospaced family named in Settings →
 Appearance; a family that is not installed, or whose characters differ in
 width, is not drawn, so code keeps one character width. Conversation content,
 the composer, and settings pages are capped at 760 points; the turn line, in

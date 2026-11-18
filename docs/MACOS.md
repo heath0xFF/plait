@@ -509,6 +509,20 @@ later changes, but an external editor racing the final checks can still lose
 a change, and failures after writes begin can be partial. Read the explicit
 [verification limits](VERIFICATION.md#turn-undo-desktop-controls).
 
+## Reading messages
+
+Your messages have a **You** label and a neutral background panel. Model
+replies have an **Assistant** label and stay on the open conversation surface,
+including while they stream. Both use regular-weight body text. The rings,
+turn lines, closing nodes, and run controls remain beside the conversation.
+
+Quoted lines in your message have muted text and a thin inset rule. Their
+outer `>` marks are hidden up to the request block limit; empty `>` lines and
+other request syntax stay as written. **Copy message** copies the original source,
+including those marks. Select text to
+copy only what is drawn. Copy controls appear in the author line on hover or
+keyboard focus.
+
 ## Keyboard controls
 
 When focus is in the conversation, Home or Cmd-Up goes to the beginning of the
