@@ -1933,3 +1933,161 @@ the record's Git line-count classification, so non-UTF-8 text stays text and its
 raw bytes remain in the patch. Complete page validation and patch preparation
 run off the UI thread. These operations provide no staging,
 attribution proof, or reviewed baseline, and make no change to undo semantics.
+
+## Linear
+
+These additive host operations let the desktop manage Linear sign-in, read
+bounded team and issue data through a local SQLite cache, persist local
+thread-to-issue links, and perform two explicit person-initiated writes. Like
+[Recorded turn review](#recorded-turn-review), they omit `protocol_version`:
+versions 1–6 retain their existing request, `ThreadSummary`, and `Snapshot`
+shapes unchanged. An older host rejects these operation names with
+`invalid_request`. Unknown fields (including `protocol_version`) are refused.
+
+No agent, model tool, or MCP server can call these operations, and nothing runs
+in the background or polls Linear on a timer. Requests are made only when a
+local client asks over the owner-only host socket.
+
+### What crosses the socket and where the key lives
+
+- **Desktop to host, once:** a personal or restricted Linear API key in
+  `linear_set_key`. The host validates it with one identity query (`viewer` and
+  `organization`) against `https://api.linear.app/graphql` before saving it.
+  If Linear rejects the key or cannot be reached, nothing is written.
+- **Credential storage:** the key and non-secret workspace/viewer identity live
+  in `STORE/linear-auth.json` with mode `0600`, written atomically through a
+  sibling temporary file and synced rename. Symlinks are refused, and loosened
+  permissions are restored to `0600` on read. The key is never written to
+  `host.sqlite`. `linear_sign_out` deletes `linear-auth.json` and clears all
+  Linear caches and recent write records.
+- **Host to desktop, never:** the API key, credential file paths, raw Linear
+  HTTP bodies, or raw Linear response headers. Error messages are fixed host
+  text; validation errors name the field and never repeat its value.
+- **Transport hardening:** the client calls only `https://api.linear.app/graphql`
+  (overridable only via a constructor argument in tests, never from environment
+  variables, settings, or protocol fields) using `Authorization: <key>` (no
+  `Bearer` prefix for API keys), `redirect: 'error'`, a 10-second deadline, a
+  2 MiB response body cap, and fixed GraphQL documents with variables. No
+  attachment URL or link inside an issue is ever fetched. Every string from
+  Linear passes display escaping (`escapeDisplay`) and field-length bounds
+  before leaving the host.
+
+### Operations
+
+```json
+{"op":"linear_auth_status"}
+{"op":"linear_set_key","key":"SECRET"}
+{"op":"linear_sign_out"}
+{"op":"linear_list_teams","refresh":false}
+{"op":"linear_bind_project","checkout":"/absolute/checkout","team_id":"TEAM_ID","team_key":"PLA","team_name":"Plait"}
+{"op":"linear_get_project_binding","checkout":"/absolute/checkout"}
+{"op":"linear_list_issues","team_id":"TEAM_ID","filter":"active","search":"retry","cursor":"CURSOR","refresh":false}
+{"op":"linear_get_issue","issue_id":"ISSUE_ID","comments_cursor":"CURSOR","refresh":false}
+{"op":"linear_link_thread","thread_id":"THREAD_ID","issue_id":"ISSUE_ID","identifier":"PLA-142","url":"https://linear.app/org/issue/PLA-142","title":"Fix retry backoff"}
+{"op":"linear_unlink_thread","thread_id":"THREAD_ID"}
+{"op":"linear_get_thread_link","thread_id":"THREAD_ID"}
+{"op":"linear_list_thread_links","limit":200,"cursor":"1763400000000:THREAD_ID"}
+{"op":"linear_post_comment","issue_id":"ISSUE_ID","body":"Comment text","request_id":"CLIENT_UUID"}
+{"op":"linear_update_issue_state","issue_id":"ISSUE_ID","state_id":"STATE_ID","request_id":"CLIENT_UUID"}
+```
+
+- **`linear_auth_status`, `linear_set_key`, `linear_sign_out`** return:
+  ```json
+  {"signed_in":true,"status":"signed_in","workspace_id":"ORG_ID","workspace_name":"Acme","workspace_url_key":"acme","viewer_id":"USER_ID","viewer_name":"Alex"}
+  ```
+  `status` is `signed_out`, `signed_in`, or `key_rejected`. When signed out,
+  `signed_in` is `false` and metadata fields are `null`. `key` must be
+  printable ASCII without whitespace or control characters, at most 4,096 bytes.
+- **`linear_list_teams`** (`refresh` optional, default `false`) returns
+  `{"teams":[{"id":"TEAM_ID","key":"PLA","name":"Plait","states":[{"id":"STATE_ID","name":"In Progress","type":"started","position":3}]}],"cached":false,"stale":false,"cached_at":1763300000000,"cache_age_seconds":0,"partial":false,"warning":null}`.
+  Bounded to 50 teams and 50 workflow states per team.
+- **`linear_bind_project`** and **`linear_get_project_binding`** bind a
+  canonical Git checkout (checked by canonical path, device, and inode, as in
+  [Command policy](#command-policy)) to a team ID (pass `"team_id":null` to
+  unbind; `team_key` and `team_name` are optional). Both return
+  `{"checkout":"/canonical/checkout","binding":null}` or
+  `{"checkout":"/canonical/checkout","binding":{"workspace_id":"ORG_ID","team_id":"TEAM_ID","team_key":"PLA","team_name":"Plait","updated_at":1763300000000}}`.
+- **`linear_list_issues`** takes `team_id`, preset `filter` (`active`,
+  `assigned`, `backlog`, `completed`, or `all`), optional `search` (at most 200
+  characters), optional `cursor` (at most 512 bytes), and optional `refresh`.
+  Returns 50 summary rows per page (never descriptions, attachments, or
+  comments):
+  ```json
+  {"issues":[{"id":"ISSUE_ID","identifier":"PLA-142","title":"Fix retry backoff","url":"https://linear.app/acme/issue/PLA-142","priority":2,"updated_at":"2026-11-18T12:00:00.000Z","team_id":"TEAM_ID","state":{"id":"STATE_ID","name":"In Progress","type":"started"},"assignee":{"name":"Alex"},"labels":[{"id":"LABEL_ID","name":"host"}]}],"has_more":true,"next_cursor":"CURSOR","cached":false,"stale":false,"cached_at":1763300000000,"cache_age_seconds":0,"partial":false,"warning":null}
+  ```
+- **`linear_get_issue`** takes `issue_id`, optional `comments_cursor`, and
+  optional `refresh`. Returns the issue summary fields plus `description` (at
+  most 64 KiB), `attachments` (at most 20 `{id,title,url}` metadata records,
+  never fetched), and paged `comments` (at most 25 per page, 16 KiB body each,
+  with `comments_has_more` and `comments_next_cursor`), alongside `cached`,
+  `stale`, `cached_at`, `cache_age_seconds`, `partial`, and `warning`.
+- **`linear_link_thread`, `linear_unlink_thread`, `linear_get_thread_link`, and
+  `linear_list_thread_links`** manage local thread-to-issue links in
+  `host.sqlite`. Links never write to Linear.
+  - `linear_link_thread` persists `{thread_id,issue_id,identifier,url,title,linked_at}`
+    for an existing thread (`identifier` matches `^[A-Z][A-Z0-9]{0,15}-\d{1,9}$`,
+    `url` is an `https:` URL without credentials, `title` is at most 512
+    characters) and returns `{"link":LINK}`.
+  - `linear_unlink_thread` returns `{"thread_id":"THREAD_ID","removed":true}`.
+  - `linear_get_thread_link` returns `{"thread_id":"THREAD_ID","link":LINK|null}`.
+  - `linear_list_thread_links` returns every link in stable order
+    (`linked_at DESC, thread_id ASC`), paged with optional `limit` (1–500,
+    default 200) and `cursor` (`<linked_at>:<thread_id>`), capped at 750,000
+    JSON bytes per page: `{"links":[LINK],"next_cursor":null}`.
+  - Deleting a thread row removes its link automatically via an SQLite
+    `AFTER DELETE ON threads` trigger.
+  - **Thread summaries unchanged:** `ThreadSummary` and `Snapshot` do not carry
+    the linked issue in protocol versions 1–6; clients use
+    `linear_list_thread_links` to load links in one request instead of per
+    thread. Whether summaries carry a linked-issue field is left to the desktop
+    stage, with a protocol version bump if needed. No change notifications are
+    emitted for links in this stage.
+- **`linear_post_comment`** posts one comment on `issue_id` with `body` (at
+  most 16 KiB UTF-8, nonempty) and caller-chosen `request_id`
+  (`^[A-Za-z0-9_-]{1,128}$`). Invalidates cached entries for the issue and
+  returns `{"comment_id":"COMMENT_ID","issue":DETAIL|null,"partial":false,"warning":null}`.
+  Repeating `request_id` with identical input returns the saved result without
+  posting again (retrying only the refresh read if the initial refresh failed);
+  reusing `request_id` with different input returns `conflict`.
+- **`linear_update_issue_state`** moves `issue_id` to `state_id` with
+  caller-chosen `request_id`. Before sending the mutation, the host verifies
+  against cached team workflow states that `state_id` belongs to the issue's
+  team (rejecting mismatches with `invalid_request`). Invalidates cached
+  entries for the issue and its team, deduplicates by `request_id` as above,
+  and returns `{"issue":DETAIL|null,"partial":false,"warning":null}`.
+
+### Caching, limits, and errors
+
+- **SQLite tables (`host.sqlite`, additive):** `linear_projects`,
+  `linear_cache_meta`, `linear_cache_teams`, `linear_cache_issues`,
+  `linear_cache_pages`, `linear_cache_details`, `linear_thread_links`, and
+  `linear_writes`. Existing stores gain these tables idempotently on open.
+- **TTLs and bounds:**
+  - Teams and workflow states: 15-minute TTL (50 teams, 50 states/team).
+  - Issue list summaries: 3-minute page TTL; `linear_cache_issues` holds at
+    most 500 rows per team; `linear_cache_pages` holds at most 100 pages (LRU).
+  - Issue details (first comments page): 2-minute TTL, LRU cap of 200 issues.
+  - Recent write deduplication records: latest 500 writes.
+  - All Linear requests are bounded to 65,000 bytes.
+- **Offline fallback and async guards:** When Linear cannot be reached (network
+  error, timeout, HTTP 5xx, refused redirect, or oversized response), read
+  operations serve any existing cached entry with `"cached":true,"stale":true`
+  and `cache_age_seconds`. Superseded queries and requests that were in flight
+  during `linear_sign_out` or `linear_set_key` never overwrite or repopulate
+  the cache.
+- **Error codes:** `linear_not_signed_in`, `linear_key_rejected` (HTTP 401,
+  HTTP 403 on read, or GraphQL `AUTHENTICATION_ERROR`), `linear_read_only_key`
+  (HTTP 403 or GraphQL `FORBIDDEN` on a write), `linear_rate_limited` (HTTP 429
+  or GraphQL `RATELIMITED`, reporting the wait seconds derived from
+  `Retry-After`, `X-RateLimit-Complexity-Reset`, and
+  `X-RateLimit-Requests-Reset`), `linear_offline`, `invalid_request`,
+  `not_found`, and `conflict`. HTTP 200 responses carrying GraphQL `errors`
+  beside usable `data` succeed with `"partial":true` and a fixed `warning`.
+
+### Not built in this stage
+
+- No desktop Linear tab or Settings UI yet (the desktop view follows thread
+  tabs).
+- No browser OAuth sign-in or token refresh yet.
+- No automatic writes, background polling, or Linear change notifications.
+- No issue-triggered autonomous runs.

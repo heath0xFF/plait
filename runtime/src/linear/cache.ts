@@ -4,6 +4,7 @@ import {
   LINEAR_CACHE_MAX_DETAILS,
   LINEAR_CACHE_MAX_ISSUES_PER_TEAM,
   LINEAR_CACHE_MAX_PAGES,
+  LINEAR_MAX_RECENT_WRITES,
 } from './types.ts';
 import type {
   LinearIssueDetail,
@@ -100,6 +101,14 @@ export class LinearCache {
       BEGIN
         DELETE FROM linear_thread_links WHERE thread_id = OLD.id;
       END;
+      CREATE TABLE IF NOT EXISTS linear_writes(
+        request_id TEXT PRIMARY KEY,
+        op TEXT NOT NULL,
+        hash TEXT NOT NULL,
+        result TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS linear_writes_recent ON linear_writes(created_at DESC);
     `);
   }
 
@@ -325,7 +334,7 @@ export class LinearCache {
     });
   }
 
-  /** Clears all cached Linear API responses (e.g. on sign-out or switching keys). */
+  /** Clears all cached Linear API responses and write deduplication records (e.g. on sign-out). */
   clearAll(): void {
     this.transaction(() => {
       this.db.prepare('DELETE FROM linear_cache_meta').run();
@@ -333,6 +342,32 @@ export class LinearCache {
       this.db.prepare('DELETE FROM linear_cache_issues').run();
       this.db.prepare('DELETE FROM linear_cache_pages').run();
       this.db.prepare('DELETE FROM linear_cache_details').run();
+      this.db.prepare('DELETE FROM linear_writes').run();
+    });
+  }
+
+  getWrite(requestId: string): { op: string; hash: string; result: unknown } | null {
+    const row = this.db.prepare('SELECT op, hash, result FROM linear_writes WHERE request_id=?').get(requestId);
+    if (!row) return null;
+    return { op: String(row.op), hash: String(row.hash), result: JSON.parse(String(row.result)) };
+  }
+
+  saveWrite(requestId: string, op: string, hash: string, result: unknown, createdAt: number): void {
+    this.transaction(() => {
+      this.db.prepare(`
+        INSERT INTO linear_writes(request_id, op, hash, result, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(request_id) DO UPDATE SET
+          result=excluded.result,
+          created_at=excluded.created_at
+      `).run(requestId, op, hash, JSON.stringify(result), createdAt);
+
+      this.db.prepare(`
+        DELETE FROM linear_writes
+        WHERE request_id NOT IN (
+          SELECT request_id FROM linear_writes ORDER BY created_at DESC, request_id ASC LIMIT ?
+        )
+      `).run(LINEAR_MAX_RECENT_WRITES);
     });
   }
 

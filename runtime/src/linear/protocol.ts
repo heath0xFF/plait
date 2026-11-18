@@ -1,6 +1,6 @@
 import { fail } from '../protocol.ts';
 import { validateLinearKey } from './auth.ts';
-import { FIELD_LIMITS, LINEAR_FILTER_PRESETS } from './types.ts';
+import { FIELD_LIMITS, LINEAR_COMMENT_BODY_MAX_BYTES, LINEAR_FILTER_PRESETS } from './types.ts';
 import type { LinearFilterPreset } from './types.ts';
 
 type OperationSpec = { required: readonly string[]; optional: readonly string[] };
@@ -18,6 +18,8 @@ const OPERATIONS: Record<string, OperationSpec> = {
   linear_unlink_thread: { required: ['thread_id'], optional: [] },
   linear_get_thread_link: { required: ['thread_id'], optional: [] },
   linear_list_thread_links: { required: [], optional: ['limit', 'cursor'] },
+  linear_post_comment: { required: ['issue_id', 'body', 'request_id'], optional: [] },
+  linear_update_issue_state: { required: ['issue_id', 'state_id', 'request_id'], optional: [] },
 };
 
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -25,6 +27,8 @@ const IDENTIFIER_PATTERN = /^[A-Z][A-Z0-9]{0,15}-\d{1,9}$/;
 const LINK_CURSOR_PATTERN = /^(\d{1,16}):([A-Za-z0-9_-]{1,128})$/;
 const TEAM_KEY_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 const CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
+// Multiline comments permit tabs and newlines, but reject NUL and other C0/DEL control bytes.
+const COMMENT_CONTROL_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 export const LINEAR_LINKS_MAX_LIMIT = 500;
 export const LINEAR_LINKS_DEFAULT_LIMIT = 200;
 
@@ -155,6 +159,21 @@ export function validateLinearRequest(input: unknown): LinearRequest {
         if (typeof request.cursor !== 'string') fail('invalid_request', 'Invalid cursor.');
         parseLinkCursor(request.cursor);
       }
+      return request;
+    case 'linear_post_comment':
+      checkId(request.issue_id, 'issue_id');
+      checkId(request.request_id, 'request_id');
+      if (typeof request.body !== 'string' || !request.body.trim() || COMMENT_CONTROL_PATTERN.test(request.body)) {
+        fail('invalid_request', 'body must be a nonempty string without control characters.');
+      }
+      if (Buffer.byteLength(request.body, 'utf8') > LINEAR_COMMENT_BODY_MAX_BYTES) {
+        fail('invalid_request', 'body must be at most 16 KiB.');
+      }
+      return request;
+    case 'linear_update_issue_state':
+      checkId(request.issue_id, 'issue_id');
+      checkId(request.state_id, 'state_id');
+      checkId(request.request_id, 'request_id');
       return request;
     default:
       fail('invalid_request', 'Unknown operation or field.');

@@ -2,9 +2,20 @@
 
 ## Status
 
-Investigation and proposal, not a shipped native integration. Plait has generic
-MCP support, but a live Linear connection has not been verified. No Linear
-account, issue, credential, or permission was changed for this investigation.
+Stage L1 (host side) is implemented in `runtime/src/linear/` and documented in
+the [host contract](HOST.md#linear): API-key storage in `linear-auth.json`
+(mode `0600`), a hardened GraphQL client locked to
+`https://api.linear.app/graphql`, additive host operations for auth, teams,
+project binding, bounded paged issue reads and SQLite caching with offline
+fallback, local thread-to-issue links, and two deduplicated person-initiated
+writes (post comment and change workflow state). No desktop UI exists yet; the
+Linear tab follows thread tabs.
+
+**Unverified against Linear:** nothing in this stage has been tried against
+Linear's live GraphQL API or MCP server. Every automated test runs against a
+local loopback fake server. An opt-in manual probe (`scripts/probe-linear.mjs`)
+is provided to test the GraphQL client against a real Linear key without
+running the full desktop.
 
 ## Start with the existing MCP support
 
