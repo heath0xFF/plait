@@ -482,6 +482,39 @@ to the agent unless the person sends it.
 - **Run the proof.** A command that shows, on the person's own Mac, the sandbox
   refusing what it says it refuses and an undo restoring identical files.
 
+**Ideas, not yet shaped.** Wanted, but none is designed or agreed, and each
+names what has to be settled first.
+
+- **Tabs.** Keep several things open at once and move between them without
+  going back to the sidebar. Wanted sooner than the rest of this list. To
+  settle: what a tab holds (a thread, a file, a view of a project), and how it
+  sits with the one-bar chrome, which today rules out a tab strip.
+- **Threads, files, and Git side by side.** One window that shows a
+  conversation, a file, and the working tree's changes together, instead of
+  the tabs that replace the conversation today. To settle: what it shows at
+  900 points, and whether it replaces the Git inspector or grows from it.
+- **Hosts that Plait runs for you.** A host in the cloud, reached like any
+  other machine, for people who do not want to run their own. It could be how
+  Plait pays for itself. It needs remote hosts first (M3), and a position on
+  what a hosted checkout may hold and who can read it.
+- **Linear.** Start a thread from an issue, and keep the two pointing at each
+  other. To settle: whether Plait writes back to the issue, and which of the
+  agent's own Linear tools already cover it.
+- **A browser.** See a page the work produced, or one the agent needs, without
+  leaving the window. Previews (M5) are the planned first step. To settle:
+  whether the agent can drive it, which changes what a thread can reach.
+- **Rendered Markdown.** Read a Markdown file as a document, not as source.
+  Part of previews (M5).
+- **Closer work with Rex.** Opening a file or a terminal in Rex is built. What
+  more would help is not known yet. Candidates: open a file in a Neovim that
+  is already running instead of a new tab; send a thread's command to a named
+  pane; a link from a Rex pane back to its thread.
+- **An editor.** Edit a file in Plait, not only read it. The planned file
+  editor (M4) is not designed. To settle: how much editing is wanted beyond
+  the hand-off to the person's own editor; and whether it is native, built on
+  the file viewer, or a web editor component, which would bring a web view
+  into an app whose interface has none.
+
 ## Performance goals
 
 Targets from the product brief. Headless frame-cost measurements, which
