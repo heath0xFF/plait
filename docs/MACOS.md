@@ -161,12 +161,20 @@ all servers off; trusted projects follow Pi's enabled setting until changed.
 Hover a row for its source file, program or URL host, and why it is off. An
 invalid entry or Pi's disabled MCP extension must be fixed in Pi first.
 
-Servers are listed but **not yet used by threads**. A known OAuth server with
-no saved sign-in says **Sign in with Pi**; after signing in through Pi, use
-**Refresh** here. Saved sign-ins are not checked against a server, and an HTTP
-server whose sign-in requirements are unknown is not labelled as needing one.
-Older hosts that do not report MCP servers show no section. These controls
-apply to Pi; Codex and Claude Code keep their own MCP configuration.
+Pi threads now find and call tools from enabled stdio servers and HTTP servers
+that need no sign-in or a configured header key. The first tool search connects
+them; each call gets its own `mcp:server/tool` row. Servers stop with the run.
+Trusted projects follow the thread's approval mode. A sandboxed project always
+asks **Use <tool> from <server>**, even in Auto mode, because MCP permits network
+access while keeping the command filesystem sandbox.
+
+Refresh shows real connection state and the last observed tool count after a run
+has connected a server. Failures appear in Problems with a redacted stderr tail.
+A known OAuth server says **Sign in with Pi** or **Sign-in saved**; using saved
+OAuth credentials and provider-backed authentication is still planned. An
+uncontacted HTTP server is not assumed to need sign-in. Older hosts that do not
+report MCP servers show no section. These controls apply to Pi; Codex and Claude
+Code keep their own MCP configuration.
 
 The desktop never receives a stored credential. Changes apply to new threads and
 new messages at once. A run already in progress continues with the providers it

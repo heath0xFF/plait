@@ -15,7 +15,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
         libc::fcntl(3, libc::F_SETFD, libc::FD_CLOEXEC);
         libc::fcntl(4, libc::F_SETFD, libc::FD_CLOEXEC);
     }
-    guard(command, "sandboxed")
+    guard(command, "sandboxed", io::stdin(), Stdio::null())
 }
 
 /// Runs a command as the user, without Seatbelt, for a project whose owner
@@ -32,21 +32,26 @@ pub fn run_trusted(args: Vec<String>) -> io::Result<()> {
             libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
         }
     }
-    guard(command, "trusted")
+    guard(command, "trusted", io::stdin(), Stdio::null())
 }
 
-fn inherited_descriptor_limit() -> i32 {
+pub(crate) fn inherited_descriptor_limit() -> i32 {
     let limit = unsafe { libc::getdtablesize() };
     limit.clamp(5, 65_536)
 }
 
-fn guard(mut command: Command, label: &str) -> io::Result<()> {
-    let mut child = command.stdin(Stdio::null()).process_group(0).spawn()?;
+pub(crate) fn guard(
+    mut command: Command,
+    label: &str,
+    mut lifetime: impl Read + Send + 'static,
+    stdin: Stdio,
+) -> io::Result<()> {
+    let mut child = command.stdin(stdin).process_group(0).spawn()?;
     let group = child.id() as i32;
     // A pipe is a lifetime lease: even SIGKILL of Node closes it and stops tools.
     thread::spawn(move || {
         loop {
-            match io::stdin().read(&mut [0u8; 1]) {
+            match lifetime.read(&mut [0u8; 1]) {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     thread::sleep(std::time::Duration::from_millis(10));

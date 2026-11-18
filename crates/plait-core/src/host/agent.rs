@@ -111,6 +111,16 @@ pub enum McpTransport {
     Other,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum McpState {
+    Connected,
+    Stopped,
+    Failed,
+    #[serde(other)]
+    Other,
+}
+
 /// Metadata only: no arguments, environment, headers, URL paths, or credentials.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct McpServer {
@@ -128,6 +138,9 @@ pub struct McpServer {
     pub signed_in: bool,
     pub disabled_reason: Option<String>,
     pub problem: Option<String>,
+    /// Observed in this host's lifetime, absent until a run starts the server.
+    pub state: Option<McpState>,
+    pub tool_count: Option<u32>,
 }
 
 /// What a run in `checkout` would be offered now, under its current policy.
@@ -187,9 +200,18 @@ mod tests {
         assert_eq!(reply.mcp_servers[0].transport, Some(McpTransport::Http));
         assert_eq!(reply.mcp_servers[0].needs_sign_in, None);
         assert!(reply.mcp_servers[0].program.is_none());
+        assert!(reply.mcp_servers[0].state.is_none());
+        assert!(reply.mcp_servers[0].tool_count.is_none());
+        value["mcp_servers"][0]["state"] = "connected".into();
+        value["mcp_servers"][0]["tool_count"] = 8.into();
+        let reply: AgentResources = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(reply.mcp_servers[0].state, Some(McpState::Connected));
+        assert_eq!(reply.mcp_servers[0].tool_count, Some(8));
         value["mcp_servers"][0]["transport"] = "future".into();
+        value["mcp_servers"][0]["state"] = "future".into();
         let reply: AgentResources = serde_json::from_value(value).unwrap();
         assert_eq!(reply.mcp_servers[0].transport, Some(McpTransport::Other));
+        assert_eq!(reply.mcp_servers[0].state, Some(McpState::Other));
         assert_eq!(
             serde_json::to_value(Request::set_mcp_server(
                 "/repo".into(),

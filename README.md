@@ -167,8 +167,9 @@ The latest release is **v0.1.0-preview.15**.
 - **Your Pi setup, partly.** Threads get your Pi skills (including
   `/skill:name`), prompt templates, and user-level
   `AGENTS.md`, listed in each project's settings and offered when you type `/`.
-  Project settings also lists Pi MCP servers and saves switches for that project;
-  threads do not use those servers yet. Named CLIs are planned (M8).
+  Pi threads find and call tools from configured stdio and header-auth HTTP MCP
+  servers, with per-project switches and per-call approvals. MCP browser sign-in
+  and named CLIs are planned (M8).
 - **Not an IDE.** There is no file editor, embedded terminal, merge, or rebase.
   The Files tab is read-only. Instead Plait hands off: Open in Editor opens the
   file on screen at its line in your editor, Show in Finder reveals it, and

@@ -3,6 +3,7 @@ mod files;
 mod fingerprint;
 mod installation;
 mod lease;
+mod mcp;
 mod record;
 mod service;
 mod startup;
@@ -40,6 +41,9 @@ fn run() -> io::Result<()> {
     }
     if operation == "trusted-command" {
         return command::run_trusted(args.collect());
+    }
+    if operation == "mcp-server" {
+        return mcp::run(args.collect());
     }
     // The host's records of a checkout; JSON on stdin and stdout.
     match operation.as_str() {

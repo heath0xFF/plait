@@ -14,7 +14,8 @@ import { fail, HostError } from './protocol.ts';
 import { rangeArgs, rangeText, outputTail } from './tool-output.ts';
 import type { CommandOutputs, TextRange } from './tool-output.ts';
 import type { Snapshot } from './protocol.ts';
-import type { RunAuthorization } from './authorization.ts';
+import type { AuthorizationPolicy, RunAuthorization } from './authorization.ts';
+import type { McpRun } from './mcp/tools.ts';
 import { readableFolders, skillFile } from './skills.ts';
 import type { SkillEntry } from './skills.ts';
 
@@ -33,6 +34,8 @@ export type ToolState = {
   skills?: SkillEntry[];
   forget?(path: string): void;
   loginEnvironment?: Promise<LoginEnvironment>;
+  mcp?: McpRun;
+  mcpApproval?: AuthorizationPolicy;
 };
 export function registry(state: ToolState) {
   const result = createRegistry();
@@ -122,5 +125,6 @@ export function registry(state: ToolState) {
     },
   }));
   result.install(defineExtension({ name: 'plait-local', tools }));
+  state.mcp?.install(result);
   return result;
 }

@@ -293,30 +293,43 @@ policy, with a deliberate confirmation of Trusted access. Stop revokes pending a
 cancels work. Interrupted work must not replay automatically after host failure.
 These boundaries need the tests listed in HOST.md before valuable-repository use.
 
-### Pi MCP configuration, without execution
+### Pi MCP tools
 
-`runtime/src/mcp/config.ts` reads bounded Pi configuration and saved sign-in
-metadata. It uses `@earendil-works/pi-mcp` **1.5.2** validation and follows the
-same revision's `extensions/mcp/config`, `core/mcp-servers`, and MCP OAuth key
-rules. It implements no transport and resolves no environment or shell values.
-`skills.ts` obtains Pi's built-in MCP enabled state through the existing
-package resolver, then includes MCP metadata only for a settings report;
-normal run discovery does not read MCP configuration or register its tools.
+`runtime/src/mcp/config.ts` validates bounded Pi configuration with
+`@earendil-works/pi-mcp` **1.5.2** and follows that revision's project replacement,
+restricted override, namespace, and exposure rules. Run discovery reads each
+applicable configuration file once; settings additionally reads saved sign-in
+metadata without using or refreshing credentials. `mcp/policy.ts` applies
+checkout-identity-bound switches after merge. Other harnesses bypass this path.
 
-`mcp/policy.ts` keeps each project switch in the host settings table, keyed by
-canonical checkout and server name and checked against the directory identity.
-`agent_resources` and `set_mcp_server` return the same sanitized report. The
-latter is an additive version 3 operation; snapshots and protocol negotiation
-are unchanged. The [host contract](HOST.md#mcp-server-listing-and-project-switches)
-defines the fields, defaults, merge rules, and unknown sign-in state.
+`mcp/tools.ts` installs search only for eligible enabled servers. First search
+connects them, then installs one deferred, sequential, unsafe-to-replay tool per
+remote tool. Pi Durable freezes a tool task's `api.agent()` before execution;
+the search wrapper supplies the tools just discovered to the pinned search
+implementation. Code mode is never installed. Stable collision-checked names
+cannot shadow local tools; safe display labels are saved in host settings so
+live and historical rows retain `mcp:server/tool` across restarts.
 
-The core decodes metadata with no GPUI dependency and accepts an absent list
-from older hosts. `settings_agent.rs` prepares row text on the background
-executor and draws the MCP section only on the project's settings page. A
-switch waits for the host reply; connection and checkout guards reject stale
-results. `snapshot/mcp.rs` injects sample rows for wide and narrow scenes.
-The next stage still needs server lifetime, tool discovery, approvals, calls,
-cancellation, and refusal to replay effects; this stage performs none of them.
+`mcp/transport.ts` owns execution-time value resolution and transports.
+`PipeTransport` connects to `plait-host mcp-server`; the Rust guardian owns the
+stdio process group, writer leases, and a separate lifetime pipe. The stdio
+server cannot inherit private descriptors. Sandboxed servers use the command
+filesystem profile with network permission added; trusted servers use the
+shared login environment. Streamable HTTP uses bounded fetches with no redirects
+or OAuth provider. Sampling and elicitation are declined by the pinned client.
+`mcp/secrets.ts` scrubs configured and resolved values before registration,
+presentation, and durable storage. Large results use `CommandOutputs` and
+`read_output`. Closing a run revokes permission and closes its transports before
+releasing the checkout. Recovery never restarts an old MCP effect.
+
+The [host contract](HOST.md#mcp-server-listing-and-project-switches) records
+permissions, bounds, deadlines, and sign-in limitations. `agent_resources` adds
+optional observations only after a real connection; configuration fingerprints
+and checkout identity reject stale observations. No protocol version changes. The core decodes these
+fields without GPUI; `settings_agent.rs` prepares text off render. Switch replies
+retain the existing checkout, host epoch, and refresh guards. `snapshot/mcp.rs`
+injects settings, observed counts, tool rows, and approvals for headless scenes.
+OAuth reuse/refresh and browser sign-in remain planned.
 
 ### Run authorization
 

@@ -21,8 +21,10 @@ export type McpServer = {
   signed_in: boolean;
   disabled_reason: string | null;
   problem: string | null;
+  state?: 'connected' | 'stopped' | 'failed';
+  tool_count?: number;
 };
-type Entry = { name: string; source: string; override_source: string | null; config: McpServerConfig; transport: 'stdio' | 'http' };
+export type Entry = { name: string; source: string; override_source: string | null; config: McpServerConfig & { exposure?: string; toolExposure?: Record<string, string>; auth?: unknown }; transport: 'stdio' | 'http' };
 type State = { entries: Map<string, Entry>; namespaces: Map<string, string>; invalid: Map<string, McpServer>; problems: Problem[] };
 const FILE_LIMIT = 1024 * 1024;
 const OVERRIDES = new Set(['enabled', 'exposure', 'toolExposure']);
@@ -142,10 +144,16 @@ function signIn(entry: Entry, auth: Record<string, unknown>) {
 
 /** Disabled entries remain visible. Pi's built-in MCP switch is an absolute gate. */
 export async function listMcp(checkout: string, trusted: boolean, agentDir: string, piEnabled: boolean) {
+  const { servers, problems } = await loadMcp(checkout, trusted, agentDir, piEnabled, true);
+  return { servers, problems };
+}
+
+/** Private execution definitions stay in memory; only the metadata is reported. */
+export async function loadMcp(checkout: string, trusted: boolean, agentDir: string, piEnabled: boolean, describe = false) {
   const state: State = { entries: new Map(), namespaces: new Map(), invalid: new Map(), problems: [] };
   await merge(join(agentDir, 'mcp.json'), false, state);
   if (trusted) await merge(join(checkout, '.pi', 'mcp.json'), true, state);
-  const auth = [...state.entries.values()].some(entry => entry.transport === 'http')
+  const auth = describe && [...state.entries.values()].some(entry => entry.transport === 'http')
     ? await json(join(agentDir, 'mcp-auth.json'), state.problems) ?? {} : {};
   const servers = [...state.entries.values()].map((entry): McpServer => {
     const enabled = piEnabled && trusted && entry.config.enabled !== false;
@@ -155,9 +163,10 @@ export async function listMcp(checkout: string, trusted: boolean, agentDir: stri
       program: entry.transport === 'stdio' && 'command' in config ? basename(config.command.trim().split(/\s/)[0]) : null,
       host: entry.transport === 'http' && 'url' in config ? new URL(config.url).host : null,
       enabled, can_enable: piEnabled, ...signIn(entry, auth), problem: null,
-      disabled_reason: !piEnabled ? 'MCP is disabled in Pi settings.' : !trusted ? 'Off until enabled for this sandboxed project.'
+      disabled_reason: config.auth ? 'Provider authentication is planned; use a configured header key for now.'
+        : !piEnabled ? 'MCP is disabled in Pi settings.' : !trusted ? 'Off until enabled for this sandboxed project.'
         : !enabled ? 'Disabled in Pi configuration.' : null,
     };
   });
-  return { servers: [...servers, ...state.invalid.values()], problems: state.problems };
+  return { servers: [...servers, ...state.invalid.values()], problems: state.problems, entries: state.entries };
 }

@@ -53,7 +53,7 @@ pub(super) struct AgentView {
 
 pub(super) struct McpRow {
     pub(super) name: SharedString,
-    pub(super) state: &'static str,
+    pub(super) state: SharedString,
     transport: &'static str,
     pub(super) hover: SharedString,
     label: SharedString,
@@ -63,16 +63,36 @@ pub(super) struct McpRow {
 
 impl From<McpServer> for McpRow {
     fn from(server: McpServer) -> Self {
-        let state = if server.problem.is_some() {
+        use plait_core::host::agent::McpState;
+        let state = if server.state == Some(McpState::Failed) && server.needs_sign_in == Some(true)
+        {
+            "Sign in with Pi"
+        } else if server.state == Some(McpState::Failed) {
+            "Problem"
+        } else if server.problem.is_some() {
             "Invalid"
         } else if server.needs_sign_in == Some(true) && !server.signed_in {
             "Sign in with Pi"
         } else if server.signed_in {
             "Sign-in saved"
-        } else if server.enabled {
-            "Listed"
-        } else {
+        } else if !server.enabled {
             "Off"
+        } else if server
+            .disabled_reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("Provider authentication"))
+        {
+            "Pi auth planned"
+        } else if server.state == Some(McpState::Connected) {
+            "Connected"
+        } else if server.state == Some(McpState::Stopped) {
+            "Stopped"
+        } else {
+            "Ready to search"
+        };
+        let state = match server.tool_count {
+            Some(count) if server.state.is_some() => format!("{state} · {count} tools"),
+            _ => state.into(),
         };
         let mut hover = vec![server.source.to_string_lossy().into_owned()];
         if let Some(source) = &server.override_source {
@@ -85,11 +105,16 @@ impl From<McpServer> for McpRow {
             hover.push(reason.clone());
         }
         if server.needs_sign_in == Some(true) && !server.signed_in {
-            hover.push("Sign in with Pi, then Refresh here.".into());
+            hover.push("Sign in with Pi. Using Pi's browser sign-in is planned.".into());
         } else if server.signed_in {
-            hover.push("Pi holds a saved sign-in; its validity has not been checked.".into());
+            hover.push("Pi holds a saved sign-in; its validity has not been checked. Using it in Plait is planned.".into());
         } else if server.needs_sign_in.is_none() && server.problem.is_none() {
             hover.push("Whether this server needs sign-in is unknown until it connects.".into());
+        }
+        if server.tool_count.is_some() {
+            hover.push(
+                "Tool count observed during the latest run that connected this server.".into(),
+            );
         }
         Self {
             label: format!(
@@ -99,7 +124,7 @@ impl From<McpServer> for McpRow {
             )
             .into(),
             name: server.name.into(),
-            state,
+            state: state.into(),
             transport: match server.transport {
                 Some(McpTransport::Stdio) => "stdio",
                 Some(McpTransport::Http) => "HTTP",
@@ -389,12 +414,10 @@ impl Plait {
     }
 
     fn mcp_settings(&self, servers: &[McpRow], cx: &mut Context<Self>) -> Div {
-        let mut section = settings::section("MCP servers")
-            // Remove with the stage that connects servers and offers their tools to Pi.
-            .child(tag(
-                "Servers are listed but not yet used by threads.",
-                colors().subtle,
-            ));
+        let mut section = settings::section("MCP servers").child(tag(
+            "Pi finds tools on demand. Each server stops when the run ends.",
+            colors().subtle,
+        ));
         let all = self.agent.expanded || servers.len() <= FOLDED;
         for (index, server) in servers
             .iter()
@@ -423,7 +446,7 @@ impl Plait {
                             .child(server.name.clone()),
                     )
                     .child(tag(server.transport, colors().subtle).flex_shrink_0())
-                    .child(tag(server.state, colors().muted).flex_shrink_0())
+                    .child(tag(server.state.clone(), colors().muted).flex_shrink_0())
                     .child(
                         chip(
                             ("mcp-switch", index),

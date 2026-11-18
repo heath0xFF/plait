@@ -3,10 +3,11 @@ import { fail } from './protocol.ts';
 export type EffectCall = Readonly<{
   toolId: string;
   name: 'edit' | 'write' | 'command';
-  arguments: Readonly<Record<string, string>>;
+  arguments: Readonly<Record<string, unknown>>;
   dirtyPaths: readonly string[];
   // Present only for a trusted run, so approval text can describe it honestly.
   commandPolicy?: 'trusted';
+  mcp?: Readonly<{ server: string; tool: string }>;
 }>;
 
 export interface AuthorizationPolicy {

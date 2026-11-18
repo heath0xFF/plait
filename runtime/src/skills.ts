@@ -7,8 +7,8 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { DefaultPackageManager, SettingsManager, formatSkillsForPrompt, getAgentDir, loadSkills, stripFrontmatter } from '@earendil-works/pi-coding-agent';
 import type { Skill } from '@earendil-works/pi-coding-agent';
-import { listMcp } from './mcp/config.ts';
-import type { McpServer } from './mcp/config.ts';
+import { loadMcp } from './mcp/config.ts';
+import type { Entry, McpServer } from './mcp/config.ts';
 import { describeTemplate, expandTemplate } from './templates.ts';
 import type { Origin, TemplateEntry } from './templates.ts';
 import { fail } from './protocol.ts';
@@ -46,6 +46,7 @@ export type Resources = {
   instructions?: { path: string; text: string };
   problems: Problem[];
   mcpServers?: McpServer[];
+  mcpEntries?: Map<string, Entry>;
 };
 type Resolved = Awaited<ReturnType<DefaultPackageManager['resolve']>>;
 type Guard = { holds: string[]; credentials: string[] };
@@ -78,11 +79,11 @@ async function resources(checkout: string, trusted: boolean, agentDir: string, o
   // Missing packages are skipped: a run never installs anything.
   const resolved = await packages.resolve(async () => 'skip');
   const guard = await guarded(agentDir, options.protect ?? []);
-  const mcp = options.describe ? await listMcp(checkout, trusted, agentDir,
-    resolved.extensions.find(entry => entry.path === 'builtin:mcp')?.enabled === true) : undefined;
+  const mcp = await loadMcp(checkout, trusted, agentDir,
+    resolved.extensions.find(entry => entry.path === 'builtin:mcp')?.enabled === true, options.describe);
   if (mcp) problems.push(...mcp.problems);
   return {
-    ...(mcp ? { mcpServers: mcp.servers } : {}),
+    mcpServers: mcp.servers, mcpEntries: mcp.entries,
     skills: await skills(resolved, checkout, agentDir, guard, problems),
     templates: await templates(resolved, guard, options.describe === true, problems),
   };

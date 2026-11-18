@@ -1,4 +1,4 @@
-import { listMcp } from '../src/mcp/config.ts';
+import { loadMcp } from '../src/mcp/config.ts';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider, fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import type { FauxResponseStep } from '@earendil-works/pi-ai/providers/faux';
@@ -6,6 +6,8 @@ import { Runtime } from '../src/runtime.ts';
 import { defineExtension, hook, ToolTask } from '@earendil-works/pi-durable';
 import { appendFile } from 'node:fs/promises';
 import { appendFileSync, writeFileSync, readFileSync } from 'node:fs';
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import type { ToolState } from '../src/tools.ts';
 import { RunAuthorization } from '../src/authorization.ts';
@@ -14,8 +16,16 @@ import { serve } from '../src/stdio.ts';
 writeFileSync(join(process.argv[2], 'fixture-processes.json'), JSON.stringify({ node: process.pid, host: process.ppid, store: process.argv[2] }));
 const models = createModels();
 const mode = process.env.PLAIT_TEST_SCENARIO;
+if (mode?.startsWith('mcp-')) {
+  const spawn = childProcess.spawn;
+  childProcess.spawn = ((...args: Parameters<typeof spawn>) => {
+    appendFileSync(join(process.argv[2], 'mcp-spawns.jsonl'), JSON.stringify({ operation: Array.isArray(args[1]) ? args[1][0] : null }) + '\n');
+    return spawn(...args);
+  }) as typeof spawn;
+  syncBuiltinESMExports();
+}
 const compacting = mode?.startsWith('self-host-compaction');
-const fast = compacting || mode === 'v3-long';
+const fast = compacting || mode === 'v3-long' || mode?.startsWith('mcp-');
 // Records what the model is told (instructions and tool declarations) for one request.
 const recordContext = (context: { messages: unknown }) => {
   appendFileSync(join(process.argv[2], 'model-contexts.jsonl'), JSON.stringify(context.messages) + '\n');
@@ -29,7 +39,16 @@ const faux = fauxProvider({
 });
 const call = (name: string, args: Record<string, string | number>, id: string) => fauxAssistantMessage([fauxToolCall(name, args, { id })], { stopReason: 'toolUse' });
 const overloaded = () => fauxAssistantMessage([], { stopReason: 'error', errorMessage: 'overloaded_error: SECRET_PROVIDER_TOKEN_DO_NOT_LEAK' });
-const responses: FauxResponseStep[] = compacting ? Array.from({ length: 40 }, () => async (context: { messages: unknown }) => {
+const responses: FauxResponseStep[] = mode?.startsWith('mcp-') ? [
+  context => { appendFileSync(join(process.argv[2], 'mcp-context.jsonl'), JSON.stringify(context) + '\n'); return call('tool_search', { query: 'echo fixture', limit: 20 }, 'search-mcp'); },
+  context => {
+    appendFileSync(join(process.argv[2], 'mcp-context.jsonl'), JSON.stringify(context) + '\n');
+    const tool = context.messages.flatMap(message => message.role === 'system' ? message.toolsAdded ?? [] : [])
+      .find(tool => tool.description.startsWith('mcp:docs/echo:'));
+    return tool ? call(tool.name, { text: 'fixture echo' }, 'call-mcp') : fauxAssistantMessage('No MCP tool was offered.');
+  },
+  context => { appendFileSync(join(process.argv[2], 'mcp-context.jsonl'), JSON.stringify(context) + '\n'); return fauxAssistantMessage('Fixture MCP run complete.'); },
+] : compacting ? Array.from({ length: 40 }, () => async (context: { messages: unknown }) => {
   const text = JSON.stringify(context.messages);
   const summary = text.includes('You are a context summarization assistant');
   appendFileSync(join(process.argv[2], 'compaction-observed.jsonl'), JSON.stringify({ summary, goal: text.includes('KEEP_SELF_HOST_GOAL'), length: text.length }) + '\n');
@@ -106,8 +125,8 @@ models.setProvider(faux.provider);
 class FixtureRuntime extends Runtime {
   // Scenarios must not depend on the skills or instructions of the machine running them.
   override async resources(checkout: string, trusted: boolean, describe = false) {
-    const mcp = describe ? await listMcp(checkout, trusted, join(this.directory, 'test-pi'), true) : undefined;
-    return { skills: [], templates: [], problems: mcp?.problems ?? [], mcpServers: mcp?.servers };
+    const mcp = await loadMcp(checkout, trusted, join(this.directory, 'test-pi'), true, describe);
+    return { skills: [], templates: [], problems: mcp.problems, mcpServers: mcp.servers, mcpEntries: mcp.entries };
   }
   override async open(...args: Parameters<Runtime['open']>) {
     await super.open(...args);
@@ -130,6 +149,7 @@ class FixtureRuntime extends Runtime {
     }));
   }
   override registry(state: ToolState) {
+    if (mode?.startsWith('mcp-')) state.loginEnvironment = Promise.resolve({ env: { HOME: this.directory, PATH: '/usr/bin:/bin' }, source: 'login-shell' });
     if (mode === 'permissive-policy') {
       // This test-only policy proves authorization cannot replace file or sandbox checks.
       state.authorization = new RunAuthorization({ async authorize() {} });

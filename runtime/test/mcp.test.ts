@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import { DefaultPackageManager, SettingsManager } from '@earendil-works/pi-coding-agent';
-import { listMcp } from '../src/mcp/config.ts';
+import { listMcp, loadMcp } from '../src/mcp/config.ts';
 import { mcpPolicy, setMcpEnabled } from '../src/mcp/policy.ts';
 import { commandPolicy, setCommandPolicy } from '../src/command/policy.ts';
 import { report } from '../src/skills.ts';
@@ -70,6 +70,12 @@ test('MCP merge matches pinned Pi: replacement, restricted overrides, validation
     assert.equal(ours.problems.length, theirs.errors.length);
   }
   const { servers } = await f.list();
+  const trusted = await loadMcp(f.repo, true, f.agent, true);
+  const sandboxed = await loadMcp(f.repo, false, f.agent, true);
+  assert.deepEqual(trusted.entries.get('replaced')?.config, { command: 'replacement', enabled: true });
+  assert.deepEqual(sandboxed.entries.get('replaced')?.config, { url: 'https://old.example/mcp', headers: { Authorization: 'secret' } });
+  assert.deepEqual(trusted.entries.get('base')?.config.toolExposure, { find: 'codemode-deferred' });
+  assert.equal(sandboxed.entries.get('base')?.config.toolExposure, undefined);
   assert.equal(servers.find(server => server.name === 'replaced')?.transport, 'stdio');
   assert.equal(servers.find(server => server.name === 'base')?.program, 'node');
   assert.equal(servers.find(server => server.name === 'stays')?.program, 'uvx');

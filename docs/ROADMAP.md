@@ -289,7 +289,7 @@ clash; choosing one inserts its text and runs nothing. The project's settings
 list them read-only, with Open folder and Refresh; turning one off stays in Pi's
 settings. Recorded in the [host contract](HOST.md#skills-and-user-instructions).
 
-Next: step 4 adds MCP servers, and its details are agreed under "Agreed next,
+Step 4 now adds configured MCP tool calls; browser sign-in remains planned. Its details are agreed under "Agreed next,
 for daily use". Step 3, named CLIs for sandboxed projects, is agreed and
 waits until a sandboxed project needs it.
 
@@ -456,6 +456,15 @@ project.
   not send a server's secrets to the model or the desktop, declines a server's
   requests to sample the model or question the person, and does not repeat a
   call after a host restart.
+
+**Built for step 4:** bounded configuration discovery and project switches;
+run-scoped, guardian-owned stdio and header-key/anonymous HTTP connections;
+deferred search and one row per tool; exact-call approval under both project
+policies; bounded output; secret redaction; sampling/elicitation refusal; and
+no replay after restart. Settings shows observed counts and connection problems.
+Browser OAuth sign-in, reuse/refresh of Pi's tokens, and provider-backed `auth`
+remain planned. Verification uses scripted stdio and loopback HTTP fixtures,
+not real servers or the installed app.
 
 **M8 step 3, named CLIs, is agreed but waits.** It matters only in a project
 the person has sandboxed: a trusted project, the default, already runs any

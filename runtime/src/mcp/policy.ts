@@ -18,7 +18,9 @@ export function mcpPolicy(settings: Settings, checkout: string, identity: FileId
       const value = JSON.parse(saved) as { root?: Partial<FileIdentity>; enabled?: unknown } | null;
       if (typeof value?.root?.dev !== 'string' || typeof value.root.ino !== 'string' || typeof value.enabled !== 'boolean') throw new Error();
       if (value.root.dev !== identity.dev || value.root.ino !== identity.ino) return server;
-      return { ...server, enabled: value.enabled, disabled_reason: value.enabled ? null : 'Disabled for this project.' };
+      return { ...server, enabled: value.enabled, disabled_reason: value.enabled
+        ? server.disabled_reason?.startsWith('Provider authentication') ? server.disabled_reason : null
+        : 'Disabled for this project.' };
     } catch {
       return { ...server, enabled: false, disabled_reason: 'The saved project switch could not be read. Set it again.' };
     }

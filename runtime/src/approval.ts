@@ -93,6 +93,14 @@ export class InteractiveApproval implements AuthorizationPolicy {
 }
 
 function describeApproval(call: EffectCall): Approval {
+  if (call.mcp) return {
+    id: randomUUID(), tool_id: call.toolId, kind: 'command',
+    summary: `Use ${call.mcp.tool} from ${call.mcp.server}`,
+    details: JSON.stringify(call.arguments), dirty_paths: [],
+    risk: call.commandPolicy === 'trusted'
+      ? 'Only this exact MCP call is approved. The server has full user access and network access.'
+      : 'Only this exact MCP call is approved. The server can use the network. Local servers can read the checkout and command toolchain paths; writes are limited to private scratch and the thread build cache. Server hints never waive approval.',
+  };
   if (call.commandPolicy === 'trusted') return {
     id: randomUUID(), tool_id: call.toolId, kind: call.name === 'command' ? 'command' : 'edit',
     summary: call.name === 'command' ? TRUSTED_COMMAND_SUMMARY : `Change ${call.arguments.path}`,

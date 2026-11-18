@@ -651,7 +651,7 @@ a real Pi setup with 66 skills (29 turned off in settings) took 7–20 ms per ru
 A live model choosing and following a skill in the installed app has not been
 checked.
 
-## MCP configuration listing
+## MCP configuration and tool calls
 
 `runtime/test/mcp.test.ts` compares accepted servers and rejected entries with
 Pi 1.5.2's actual configuration loader: trusted project replacement, restricted
@@ -670,14 +670,39 @@ serialized reports contain none of those values. OAuth tests cover normalized
 namespace/URL keys, legacy keys without migration, wrong-URL rejection, saved
 tokens, and unknown requirements for an uncontacted HTTP server.
 
+`mcp-tools.macos.test.ts` uses a scripted stdio fixture behind the real guardian
+and Seatbelt profile, plus a loopback-only HTTP fixture. It checks trusted Ask
+and Auto calls, allow/deny decisions, mandatory sandbox approvals even in Auto,
+Stop during approval, argument and checkout identity guards after approval,
+process-group cleanup, crashes and stderr diagnostics,
+10-second startup and configured call timeouts, sampling/elicitation refusal,
+collision-safe names, deferred exposure, and bounded output with stored overflow.
+The sandbox test proves checkout reads, denied checkout/Git/outside writes and
+outside reads, scratch/cache writes, and permitted loopback networking. Header
+authentication resolves only during search; a 401 is reported as requiring Pi
+sign-in without retrying or exposing its body.
+
+`host-mcp.macos.test.ts` runs the actual daemon and Pi Durable against scripted
+model output and the fixture server. It checks discovery, per-call approval,
+`mcp:server/tool` in snapshots and history, actual counts after shutdown, and a
+switched-off server with no guardian spawn or search tool. Killing the host
+kills the server group; restarting and submitting new work does not repeat its
+interrupted call. Seeded env/header/command secrets are searched for in tool
+metadata, approvals, captured model contexts, snapshots, history, output storage,
+and durable database bytes. These checks establish known-value redaction, not
+resistance to an arbitrary server deliberately encoding credentials.
+
 Core tests decode older hosts and unknown fields/transports and serialize the
 version 3 switch request. Desktop tests cover state wording, source details,
-and stale connection/checkout replies. `project-settings-mcp-wide` and
-`project-settings-mcp-narrow` draw the section from injected metadata;
-`project-settings-no-mcp-*` draws its absence. The headless scenes do not prove
-native pointer interaction or accessibility. No MCP server, browser sign-in,
-network connection, model tool call, or installed-app acceptance is exercised:
-this stage only lists configuration and saves project switches.
+and stale connection/checkout replies. `project-settings-mcp-*`,
+`project-settings-mcp-observed-*`, `project-settings-no-mcp-*`, and
+`mcp-tool-approval-*` draw injected metadata and a separate tool/approval row at
+1380×860 and 900×600. Headless Metal/Core Text rendering does not prove native
+pointer interaction, focus, accessibility, or installed-app behavior.
+
+No installed app was launched or inspected for this stage. No real configured
+server, external-network MCP endpoint, browser sign-in, or saved OAuth token
+was exercised. Those remain separate acceptance work; sign-in is not implemented.
 
 ## Agent harnesses and Codex
 

@@ -1,7 +1,7 @@
 //! MCP settings use injected metadata; these scenes never contact a host or server.
 use super::{Harness, fixture_repository, isolated};
 use crate::ui::settings_agent::AgentView;
-use plait_core::host::agent::{AgentResources, McpServer, McpTransport};
+use plait_core::host::agent::{AgentResources, McpServer, McpState, McpTransport};
 use std::{path::Path, sync::Arc};
 
 fn resources(checkout: &Path) -> AgentResources {
@@ -18,6 +18,8 @@ fn resources(checkout: &Path) -> AgentResources {
         signed_in,
         disabled_reason: (!enabled).then(|| "Off until enabled for this sandboxed project.".into()),
         problem: None,
+        state: None,
+        tool_count: None,
     };
     let mut invalid = server("invalid-config", McpTransport::Http, false, None, false);
     invalid.transport = None;
@@ -63,6 +65,15 @@ pub(super) fn mcp_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.capture(&format!("project-settings-mcp-{suffix}"));
     harness.update(|plait, _, _| {
         let mut reply = resources(&plait.host.checkout);
+        reply.mcp_servers[0].state = Some(McpState::Connected);
+        reply.mcp_servers[0].tool_count = Some(8);
+        reply.mcp_servers[1].state = Some(McpState::Stopped);
+        reply.mcp_servers[1].tool_count = Some(3);
+        plait.agent.view = Some(Arc::new(AgentView::new(reply)));
+    });
+    harness.capture(&format!("project-settings-mcp-observed-{suffix}"));
+    harness.update(|plait, _, _| {
+        let mut reply = resources(&plait.host.checkout);
         reply.mcp_servers.clear();
         plait.agent.view = Some(Arc::new(AgentView::new(reply)));
         plait
@@ -71,13 +82,29 @@ pub(super) fn mcp_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     });
     harness.capture(&format!("project-settings-no-mcp-{suffix}"));
     harness.update(|plait, _, _| plait.settings_open = false);
+    harness.connect(repository, true);
+    harness.change_snapshot(|snapshot| {
+        snapshot.messages[0].text = "Find the setup guide in our configured documentation server.".into();
+        snapshot.messages[1].text = "I found the documentation search tool. I’ll use it for the setup guide.".into();
+        snapshot.tools[0].name = "tool_search".into();
+        snapshot.tools[0].input = r#"{"query":"documentation search"}"#.into();
+        snapshot.tools[0].output = "Loaded the documentation search tool.".into();
+        snapshot.tools[1].name = "mcp:docs/search".into();
+        snapshot.tools[1].input = r#"{"query":"setup guide"}"#.into();
+        let approval = snapshot.pending_approval.as_mut().unwrap();
+        approval.summary = "Use search from docs".into();
+        approval.details = r#"{"query":"setup guide"}"#.into();
+        approval.dirty_paths.clear();
+        approval.risk = "Only this exact MCP call is approved. The server can use the network. Local servers can read the checkout and command toolchain paths; writes are limited to private scratch and the thread build cache. Server hints never waive approval.".into();
+    });
+    harness.capture(&format!("mcp-tool-approval-{suffix}"));
 }
 
 #[test]
 fn mcp_rows_explain_configuration_and_sign_in() {
     let view = AgentView::new(resources(Path::new("/repo")));
     let rows = &view.mcp_servers;
-    assert_eq!(rows[0].state, "Listed");
+    assert_eq!(rows[0].state, "Ready to search");
     assert!(rows[0].enabled && rows[0].hover.contains("uvx"));
     assert_eq!(rows[1].state, "Off");
     assert!(rows[1].hover.contains("sandboxed project"));
@@ -88,6 +115,13 @@ fn mcp_rows_explain_configuration_and_sign_in() {
     let mut old = resources(Path::new("/repo"));
     old.mcp_servers.clear();
     assert!(AgentView::new(old).mcp_servers.is_empty());
+    let mut observed = resources(Path::new("/repo"));
+    observed.mcp_servers[0].state = Some(McpState::Connected);
+    observed.mcp_servers[0].tool_count = Some(8);
+    assert_eq!(
+        AgentView::new(observed).mcp_servers[0].state,
+        "Connected · 8 tools"
+    );
 }
 
 #[test]

@@ -1176,9 +1176,21 @@ history reads never restart model work automatically.
 
 ### MCP server listing and project switches
 
-The first MCP stage lists configuration only. No server starts or connects, no
-configuration value is expanded, and no MCP tool or instruction reaches a Pi
-thread. Codex and Claude Code continue to use their own MCP setup.
+Pi threads use configured stdio servers and Streamable HTTP servers that need
+no sign-in or use keys supplied by the configuration. Each run reads the bounded user file and,
+for a trusted project, the project file once during resource discovery. Changes
+apply to the next run. Missing files cost a failed open; malformed, oversized,
+and unreadable files are problems rather than run failures. Codex and Claude
+Code continue to use their own MCP setup and make none of these reads.
+
+With no eligible server switched on, there is no MCP process, credential
+resolution, network request, or search tool. Otherwise `tool_search` is offered;
+its first call connects the enabled servers and registers their tools as deferred.
+All exposures except `hidden` use search, including Pi's `codemode` and `direct`;
+per-tool exposure overrides and patterns are honored. Each tool is a separate
+call, shown as `mcp:server/tool`. Server instructions never enter the model's
+instructions. Names have a reserved prefix and stable hash, are checked for
+collisions, and cannot replace built-in tools.
 
 The host reads `mcp.json` in Pi's agent directory (normally `~/.pi/agent`), then
 `<checkout>/.pi/mcp.json` only for trusted commands. Merge and validation follow
@@ -1223,6 +1235,10 @@ refresh token, not that it is valid. This read uses Pi's normalized server
 namespace and URL key in `mcp-auth.json`, with its legacy URL-only fallback,
 without migrating, refreshing, or writing credentials. A server with known
 OAuth requirements and no saved tokens reads **Sign in with Pi** in the desktop.
+Browser sign-in, reuse/refresh of Pi's OAuth tokens, and Pi provider-backed
+`auth` are planned, not executed in this stage. Known OAuth servers are skipped.
+An HTTP authentication challenge marks the server as needing sign-in without
+opening a browser, retrying the request, or exposing the response body.
 
 A desktop can save its project choice and receive a refreshed `agent_resources`
 reply with:
@@ -1241,8 +1257,67 @@ disable setting. Missing servers return `not_found`; blocked entries return
 
 This is an additive version 3 operation, not a protocol version bump. Older
 hosts omit `mcp_servers` and show no section; older clients ignore the new list.
-There is no connection, tool count, tool search, execution, approval, or MCP
-sign-in flow yet. Those belong to the next stage.
+After a run connects a server, its matching configuration may also report
+`state` (`connected`, `stopped`, or `failed`) and `tool_count` from its real
+listing. These observations live only in this host, are invalidated by a
+configuration or checkout-identity change, and disappear after host restart. Settings never connects
+a server to fill them in. Startup failures and disconnected servers appear under
+Problems with a bounded, redacted stderr tail; other servers and the run continue.
+
+**Approval and containment.** Trusted projects follow the thread's Ask or Auto
+mode. Sandboxed projects always ask for each call, including in Auto mode. The
+existing `command` approval kind reads **Use <tool> from <server>**, with only
+that call's arguments. Read-only annotations and other server hints cannot skip
+approval. Stop revokes a pending answer before any call is dispatched.
+
+A stdio server is started by `plait-host mcp-server`, not Pi's process transport.
+The guardian retains the store and checkout leases and closes all private file
+descriptors in the server. A separate lifetime pipe kills the server's process
+group on Stop, run completion, failure, or host/sidecar death. Its working
+directory follows Pi's configured `cwd`, relative to the checkout; `~` in the
+program, arguments, and working directory expands as in Pi.
+
+In a sandboxed project the filesystem profile is the command profile:
+
+- Read checkout contents (including ignored files), private scratch, the
+  thread's build cache, system paths (`/System`, `/usr`, `/bin`, `/sbin`,
+  `/Library/Developer`, `/private/var/db`, installed Xcode, and `/opt/homebrew`),
+  the resolved Node executable and Apple/Rust toolchains, Cargo source caches,
+  discovered skill folders, and a linked worktree's shared Git directory.
+  File metadata may be read anywhere; other file contents remain denied.
+- Write only private scratch, that thread's Cargo/target cache, and `/dev/null`.
+  Checkout and Git writes remain denied, as do outside files and sibling caches.
+  Cache-root removal and permission changes are denied. HOME and TMPDIR stay
+  private even when the configuration supplies those environment keys.
+- MCP additionally permits network access, including loopback, and the two
+  macOS network configuration services (`configd` and `networkd`). Commands
+  themselves retain their existing no-network profile.
+
+Trusted stdio servers have the user's login-shell environment and full account
+access. The run shares its existing lazy login-environment lookup with commands.
+Thread-owned files are checked before and reconciled after trusted calls.
+Configured `${VAR}`, `$VAR`, escaping (`$$`, `$!`), and `!command` values in env
+and headers resolve only on first search. Credential commands run under a
+guardian and the same project policy, with a 10-second deadline, and produce no
+transcript or command log. Secrets are scrubbed from server metadata, results,
+stored output, approvals, and diagnostics. HTTP uses the configured endpoint
+with redirects and authentication recovery disabled; it starts no server process.
+
+**Bounds and recovery.** Startup (including configuration value resolution and
+tool listing) has a 10-second deadline. Calls default to 60 seconds; a positive
+configured `timeout` in seconds overrides it, capped at 15 minutes. There are
+four concurrent startup attempts. Listing is bounded to 500 tools and 1 MiB
+of metadata per server; each wire message is bounded to 16 MiB. Text and
+structured results use the existing `CommandOutputs` store (16 MiB per output,
+32 newest outputs per thread), with a 12 KB tail preview and `read_output`
+continuations. Non-text content is omitted with an explicit notice; message
+images are a separate milestone. Sampling and elicitation have no handlers and
+receive method-not-found replies.
+
+Both search and calls are registered as unsafe to replay. Failed connections and
+calls are never retried. After a host restart the interrupted call is shown as
+interrupted; a new submission is required for new work. No protocol version was
+changed.
 
 ## Safety boundary
 
