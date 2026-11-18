@@ -43,6 +43,7 @@ use std::{
 
 mod branches;
 mod find;
+mod mcp;
 mod showcase;
 mod ways_out;
 
@@ -2027,6 +2028,7 @@ fn walk(output: Option<&Path>) {
         composer_v3_walk(&mut harness, &repository, suffix);
         settings_walk(&mut harness, &repository, suffix);
         settings_controls_walk(&mut harness, &repository, suffix);
+        mcp::mcp_walk(&mut harness, &repository, suffix);
         files_walk(&mut harness, suffix);
         ways_out::ways_out_walk(&mut harness, &repository, suffix);
         theme_walk(&mut harness, &repository, suffix);
@@ -3978,6 +3980,7 @@ fn settings_controls_walk(harness: &mut Harness, repository: &Path, suffix: &str
             model_invocation,
         };
         let sample = AgentResources {
+            mcp_servers: vec![],
             checkout: plait.host.checkout.clone(),
             trusted: false,
             instructions: Some(Instructions {

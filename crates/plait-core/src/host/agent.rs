@@ -11,6 +11,12 @@ use std::path::PathBuf;
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
     /// Hosts from before this operation reject it as `invalid_request`.
+    SetMcpServer {
+        checkout: PathBuf,
+        name: String,
+        enabled: bool,
+        protocol_version: u32,
+    },
     AgentResources {
         checkout: PathBuf,
         protocol_version: u32,
@@ -18,6 +24,15 @@ pub enum Request {
 }
 
 impl Request {
+    pub fn set_mcp_server(checkout: PathBuf, name: String, enabled: bool) -> Self {
+        Self::SetMcpServer {
+            checkout,
+            name,
+            enabled,
+            protocol_version: 3,
+        }
+    }
+
     pub fn agent_resources(checkout: PathBuf) -> Self {
         Self::AgentResources {
             checkout,
@@ -86,6 +101,35 @@ pub struct Problem {
     pub message: String,
 }
 
+/// A configured MCP transport. Invalid entries need not identify a transport.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum McpTransport {
+    Stdio,
+    Http,
+    #[serde(other)]
+    Other,
+}
+
+/// Metadata only: no arguments, environment, headers, URL paths, or credentials.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct McpServer {
+    pub name: String,
+    pub transport: Option<McpTransport>,
+    pub source: PathBuf,
+    pub override_source: Option<PathBuf>,
+    pub program: Option<String>,
+    pub host: Option<String>,
+    pub enabled: bool,
+    pub can_enable: bool,
+    /// None means a connection would be needed to know whether sign-in is required.
+    pub needs_sign_in: Option<bool>,
+    /// Pi holds tokens; this does not claim that they are still valid.
+    pub signed_in: bool,
+    pub disabled_reason: Option<String>,
+    pub problem: Option<String>,
+}
+
 /// What a run in `checkout` would be offered now, under its current policy.
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct AgentResources {
@@ -96,6 +140,9 @@ pub struct AgentResources {
     pub skills: Vec<Skill>,
     pub templates: Vec<Template>,
     pub problems: Vec<Problem>,
+    /// Hosts predating MCP listing omit this list.
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServer>,
 }
 
 #[cfg(test)]
@@ -121,10 +168,36 @@ mod tests {
                 "later":true}"#,
         )
         .unwrap();
+        assert!(reply.mcp_servers.is_empty());
         assert_eq!(reply.instructions.unwrap().bytes, 12);
         assert!(!reply.skills[0].model_invocation);
         assert_eq!(reply.skills[0].origin, Origin::User);
         assert_eq!(reply.templates[0].origin, Origin::Other);
         assert_eq!(reply.problems[0].path, None);
+    }
+    #[test]
+    fn mcp_metadata_and_switch_tolerate_additions_without_a_version_bump() {
+        let mut value = serde_json::json!({
+            "checkout": "/repo", "trusted": true, "skills": [], "templates": [], "problems": [],
+            "mcp_servers": [{"name": "docs", "transport": "http", "source": "/agent/mcp.json",
+                "host": "docs.example", "enabled": true, "can_enable": true,
+                "needs_sign_in": null, "signed_in": false, "future": 1}]
+        });
+        let reply: AgentResources = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(reply.mcp_servers[0].transport, Some(McpTransport::Http));
+        assert_eq!(reply.mcp_servers[0].needs_sign_in, None);
+        assert!(reply.mcp_servers[0].program.is_none());
+        value["mcp_servers"][0]["transport"] = "future".into();
+        let reply: AgentResources = serde_json::from_value(value).unwrap();
+        assert_eq!(reply.mcp_servers[0].transport, Some(McpTransport::Other));
+        assert_eq!(
+            serde_json::to_value(Request::set_mcp_server(
+                "/repo".into(),
+                "docs".into(),
+                false
+            ))
+            .unwrap(),
+            serde_json::json!({"op": "set_mcp_server", "checkout": "/repo", "name": "docs", "enabled": false, "protocol_version": 3})
+        );
     }
 }

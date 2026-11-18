@@ -155,6 +155,19 @@ offered. Trusted requires confirmation of full user access, network,
 Git writes, and the ability to change already-modified files. It affects the next
 run; an active run retains its original policy. The approval default is independent.
 
+**MCP servers** on the project's page lists the servers configured for Pi,
+with an On/Off switch saved for this checkout. Sandboxed projects start with
+all servers off; trusted projects follow Pi's enabled setting until changed.
+Hover a row for its source file, program or URL host, and why it is off. An
+invalid entry or Pi's disabled MCP extension must be fixed in Pi first.
+
+Servers are listed but **not yet used by threads**. A known OAuth server with
+no saved sign-in says **Sign in with Pi**; after signing in through Pi, use
+**Refresh** here. Saved sign-ins are not checked against a server, and an HTTP
+server whose sign-in requirements are unknown is not labelled as needing one.
+Older hosts that do not report MCP servers show no section. These controls
+apply to Pi; Codex and Claude Code keep their own MCP configuration.
+
 The desktop never receives a stored credential. Changes apply to new threads and
 new messages at once. A run already in progress continues with the providers it
 started with. Existing threads retain their exact saved model; changing the

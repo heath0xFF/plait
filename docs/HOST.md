@@ -1151,6 +1151,7 @@ discovery. It never returns file contents:
  "instructions":{"path":"/home/.pi/agent/AGENTS.md","bytes":2150},
  "skills":[{"name":"release-notes","description":"…","origin":"user","path":"…/SKILL.md","model_invocation":true}],
  "templates":[{"name":"review","description":"Review a change","argument_hint":"<path>","origin":"user","path":"…/review.md"}],
+ "mcp_servers":[],
  "problems":[{"path":"…/SKILL.md","message":"description is required"}]}
 ```
 
@@ -1163,14 +1164,84 @@ description at most 1024 characters, and the whole reply stays under the
 client's 1 MiB frame; anything left out is said first in `problems`. Hosts
 from before this operation reject it as `invalid_request`.
 
-Not yet included: extensions, MCP servers, and named CLIs. See the
-[roadmap](ROADMAP.md).
+MCP server metadata is also listed, as described below. Extensions and named
+CLIs are not included. See the [roadmap](ROADMAP.md).
 
 Automatic model-context compaction keeps all original history entries. Its
 internal summary entries are omitted from displayed messages. If a required
 summary fails, version 3 reports `context_compaction`; older clients retain the
 existing `runtime_error` shape. A new user submission can retry; host restart or
 history reads never restart model work automatically.
+
+### MCP server listing and project switches
+
+The first MCP stage lists configuration only. No server starts or connects, no
+configuration value is expanded, and no MCP tool or instruction reaches a Pi
+thread. Codex and Claude Code continue to use their own MCP setup.
+
+The host reads `mcp.json` in Pi's agent directory (normally `~/.pi/agent`), then
+`<checkout>/.pi/mcp.json` only for trusted commands. Merge and validation follow
+Pi **1.5.2**, using the pinned `@earendil-works/pi-mcp` validator:
+
+- A full project entry replaces the user entry of the same name. An entry
+  without `command`, `url`, or `type` may override only `enabled`, `exposure`,
+  and `toolExposure`; all other user fields stay in place.
+- An invalid entry is reported and skipped; a rejected project replacement
+  leaves the valid user entry intact. Names whose `-` and `_` spellings share
+  a tool namespace conflict. Legacy SSE is refused.
+- A project entry cannot select a provider credential through `auth`. A
+  restricted override may retain `auth` from the user entry.
+- Pi's `-builtin:mcp` setting disables every server. Pi's package resolver
+  supplies this setting, including trusted project overrides. Plait never
+  loads the extension itself.
+
+`agent_resources` adds `mcp_servers`, with at most 500 entries under its existing
+reply budget. Each row has this shape:
+
+```json
+{"name":"docs","transport":"http","source":"/home/.pi/agent/mcp.json",
+ "override_source":null,"program":null,"host":"docs.example",
+ "enabled":false,"can_enable":true,"needs_sign_in":null,"signed_in":false,
+ "disabled_reason":"Off until enabled for this sandboxed project.","problem":null}
+```
+
+`transport` is `stdio`, `http`, or null for an invalid entry. `program` is only
+the executable's basename, never its arguments; `host` is only the URL host,
+never credentials, path, query, or fragment. `source` names the defining file;
+`override_source` names a restricted project override. `problem` explains an
+invalid row; rejected entries and unreadable files also appear in `problems`.
+Files are read up to 1 MiB each. Parse errors contain no file excerpts, and
+neither environment values, headers, OAuth secrets nor resolved `!command` or
+`${VAR}` values enter the reply.
+
+`needs_sign_in` is true when an OAuth configuration or matching saved OAuth
+state identifies browser sign-in, false for stdio or header/provider auth,
+and null when it cannot be known without connecting. Public HTTP servers are
+not assumed to need sign-in. `signed_in` says only that Pi holds an access or
+refresh token, not that it is valid. This read uses Pi's normalized server
+namespace and URL key in `mcp-auth.json`, with its legacy URL-only fallback,
+without migrating, refreshing, or writing credentials. A server with known
+OAuth requirements and no saved tokens reads **Sign in with Pi** in the desktop.
+
+A desktop can save its project choice and receive a refreshed `agent_resources`
+reply with:
+
+```json
+{"op":"set_mcp_server","protocol_version":3,"checkout":"/absolute/checkout","name":"docs","enabled":true}
+```
+
+The host stores the boolean by canonical checkout and server name, bound to
+the checkout directory's device and inode, in its settings table. It never
+edits Pi's files. A sandboxed checkout defaults to off; a trusted checkout
+follows Pi's `enabled` until changed. A saved choice overrides that default
+under either policy, but cannot enable an invalid entry or bypass Pi's MCP
+disable setting. Missing servers return `not_found`; blocked entries return
+`permission_denied`. A new directory at the same path does not inherit a choice.
+
+This is an additive version 3 operation, not a protocol version bump. Older
+hosts omit `mcp_servers` and show no section; older clients ignore the new list.
+There is no connection, tool count, tool search, execution, approval, or MCP
+sign-in flow yet. Those belong to the next stage.
 
 ## Safety boundary
 

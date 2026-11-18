@@ -148,7 +148,7 @@ const fields3: Record<string, string[]> = {
   list_threads: [], history: ['thread_id'], history_text: ['thread_id', 'ref', 'offset'],
   rename_thread: ['thread_id', 'title'], archive_thread: ['thread_id', 'archived'], watch_threads: [],
   configure_thread: ['thread_id'], cancel_queued: ['thread_id', 'request_id'], changed_files: ['thread_id'],
-  agent_resources: ['checkout'],
+  agent_resources: ['checkout'], set_mcp_server: ['checkout', 'name', 'enabled'],
 };
 // Version 4 adds harnesses: an operation to list them and a choice when a thread starts.
 const fields4: Record<string, string[]> = { harnesses: [], set_harness_path: ['harness'], set_harness_mode: ['harness', 'mode'], set_up_harness: ['harness'] };
@@ -199,7 +199,7 @@ export function validate(value: unknown): Request {
     fail('invalid_request', 'approval must be ask or auto and requires protocol_version 2.');
   }
   for (const key of expected) {
-    if (key === 'allow' || key === 'archived') {
+    if (key === 'allow' || key === 'archived' || key === 'enabled') {
       if (typeof request[key] !== 'boolean') fail('invalid_request', `${key} must be boolean.`);
     } else if (key === 'offset') {
       if (!Number.isSafeInteger(request[key]) || (request[key] as number) < 0) fail('invalid_request', 'offset must be a non-negative integer.');

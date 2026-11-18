@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, rename } from 'node:fs/promises';
+import { mkdir, rename, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { commandPolicy, parseCommandPolicy, setCommandPolicy } from '../src/command/policy.ts';
@@ -100,7 +100,7 @@ test('agent_resources reports under the checkout\'s current policy, only for ver
   const f = await setup(t);
   const resources = () => request(f.store, { op: 'agent_resources', checkout: join(f.repo, '.'), protocol_version: 3 }) as Promise<{ ok: boolean; result: Record<string, unknown> }>;
   // The test runtime offers none of the machine's own setup; the shape and trust are what matter here.
-  assert.deepEqual(await resources(), { ok: true, result: { checkout: f.repo, trusted: false, instructions: null, skills: [], templates: [], problems: [] } });
+  assert.deepEqual(await resources(), { ok: true, result: { checkout: f.repo, trusted: false, instructions: null, skills: [], templates: [], mcp_servers: [], problems: [] } });
   await set(f, 'trusted');
   assert.equal((await resources()).result.trusted, true);
   for (const invalid of [
@@ -109,4 +109,26 @@ test('agent_resources reports under the checkout\'s current policy, only for ver
     { op: 'agent_resources', checkout: f.repo, thread_id: 't', protocol_version: 3 },
     { op: 'agent_resources', checkout: join(f.base, 'missing'), protocol_version: 3 },
   ]) assert.equal((await send(f.store, invalid)).error?.code, 'invalid_request', JSON.stringify(invalid));
+});
+
+
+test('MCP switch operation returns the refreshed safe report and survives host restart', { timeout: 60000 }, async t => {
+  const f = await setup(t);
+  const agent = join(f.store, 'test-pi'); await mkdir(agent);
+  const config = JSON.stringify({ mcpServers: { local: { command: 'never-spawn-this', args: ['SECRET_ARG'] } } });
+  await writeFile(join(agent, 'mcp.json'), config);
+  const read = () => request(f.store, { op: 'agent_resources', checkout: f.repo, protocol_version: 3 }) as unknown as Promise<{ result: { mcp_servers: { enabled: boolean }[] } }>;
+  const change = (enabled: boolean, name = 'local') => request(f.store, { op: 'set_mcp_server', checkout: join(f.repo, '.'), name, enabled, protocol_version: 3 });
+  assert.equal((await read()).result.mcp_servers[0].enabled, false);
+  const enabled = await change(true);
+  assert.equal(enabled.ok, true);
+  assert.ok(!JSON.stringify(enabled).includes('SECRET_ARG'));
+  assert.equal((await read()).result.mcp_servers[0].enabled, true);
+  f.host.kill('SIGKILL'); await delay(500); await f.start();
+  assert.equal((await read()).result.mcp_servers[0].enabled, true);
+  assert.equal((await change(false)).ok, true);
+  await set(f, 'trusted');
+  assert.equal((await read()).result.mcp_servers[0].enabled, false);
+  assert.equal((await change(true, 'missing')).error?.code, 'not_found');
+  assert.equal(await readFile(join(agent, 'mcp.json'), 'utf8'), config, 'Pi configuration is never edited');
 });

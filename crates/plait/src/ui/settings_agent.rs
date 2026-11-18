@@ -2,15 +2,15 @@
 //! threads in the open checkout, read from the host with the same discovery a
 //! run makes.
 //!
-//! Read-only. Turning a skill or template off stays in Pi's own settings,
+//! Turning a skill or template off stays in Pi's own settings,
 //! which Plait follows, so there is one place to manage them. Every string the
 //! page and the composer draw is made once, on the background executor, when
 //! the reply arrives; rendering formats nothing.
 
-use super::{Plait, composer::AgentCommand, settings, theme::*};
+use super::{Plait, composer::AgentCommand, settings, theme::*, thread_controls::TextTooltip};
 use gpui::{prelude::*, *};
 use plait_core::host::{
-    agent::{AgentResources, Request},
+    agent::{AgentResources, McpServer, McpTransport, Request},
     providers,
 };
 use std::{path::PathBuf, sync::Arc};
@@ -22,9 +22,10 @@ const DETAIL: usize = 140;
 
 #[derive(Default)]
 pub(super) struct AgentState {
-    key: Option<(u64, PathBuf)>,
+    pub(super) key: Option<(u64, PathBuf)>,
     pub(super) view: Option<Arc<AgentView>>,
     busy: bool,
+    pub(super) revision: u64,
     note: Option<String>,
     expanded: bool,
     /// Given to composers before the setup is read, so an unchanged empty list costs nothing.
@@ -46,7 +47,69 @@ pub(super) struct AgentView {
     skills: Vec<Row>,
     templates: Vec<Row>,
     problems: Vec<Row>,
+    pub(super) mcp_servers: Vec<McpRow>,
     pub(super) commands: Arc<[AgentCommand]>,
+}
+
+pub(super) struct McpRow {
+    pub(super) name: SharedString,
+    pub(super) state: &'static str,
+    transport: &'static str,
+    pub(super) hover: SharedString,
+    label: SharedString,
+    pub(super) enabled: bool,
+    can_enable: bool,
+}
+
+impl From<McpServer> for McpRow {
+    fn from(server: McpServer) -> Self {
+        let state = if server.problem.is_some() {
+            "Invalid"
+        } else if server.needs_sign_in == Some(true) && !server.signed_in {
+            "Sign in with Pi"
+        } else if server.signed_in {
+            "Sign-in saved"
+        } else if server.enabled {
+            "Listed"
+        } else {
+            "Off"
+        };
+        let mut hover = vec![server.source.to_string_lossy().into_owned()];
+        if let Some(source) = &server.override_source {
+            hover.push(format!("Project override: {}", source.display()));
+        }
+        if let Some(target) = server.program.as_ref().or(server.host.as_ref()) {
+            hover.push(target.clone());
+        }
+        if let Some(reason) = server.disabled_reason.as_ref().or(server.problem.as_ref()) {
+            hover.push(reason.clone());
+        }
+        if server.needs_sign_in == Some(true) && !server.signed_in {
+            hover.push("Sign in with Pi, then Refresh here.".into());
+        } else if server.signed_in {
+            hover.push("Pi holds a saved sign-in; its validity has not been checked.".into());
+        } else if server.needs_sign_in.is_none() && server.problem.is_none() {
+            hover.push("Whether this server needs sign-in is unknown until it connects.".into());
+        }
+        Self {
+            label: format!(
+                "{}: {} for this project",
+                server.name,
+                if server.enabled { "On" } else { "Off" }
+            )
+            .into(),
+            name: server.name.into(),
+            state,
+            transport: match server.transport {
+                Some(McpTransport::Stdio) => "stdio",
+                Some(McpTransport::Http) => "HTTP",
+                _ => "Unknown",
+            },
+            hover: hover.join("\n").into(),
+            enabled: server.enabled,
+            can_enable: server.can_enable,
+        }
+    }
 }
 
 /// The first line, cut to `DETAIL` characters.
@@ -119,6 +182,7 @@ impl AgentView {
             .collect();
         Self {
             trusted: reply.trusted,
+            mcp_servers: reply.mcp_servers.into_iter().map(McpRow::from).collect(),
             instructions: reply.instructions.as_ref().map(|file| Row {
                 title: "User instructions".into(),
                 detail: size(file.bytes).into(),
@@ -160,6 +224,7 @@ impl Plait {
         }
         self.agent = AgentState {
             key: Some(key),
+            revision: self.agent.revision.wrapping_add(1),
             expanded: self.agent.expanded,
             empty: self.agent.empty.clone(),
             ..Default::default()
@@ -169,10 +234,16 @@ impl Plait {
 
     /// Read the setup again: Pi's files can change while the app is open.
     pub(super) fn refresh_agent(&mut self, cx: &mut Context<Self>) {
+        self.request_agent(None, cx);
+    }
+
+    fn request_agent(&mut self, change: Option<(String, bool)>, cx: &mut Context<Self>) {
         if self.agent.busy || !self.host.connected || cfg!(test) {
             return;
         }
         self.agent.busy = true;
+        self.agent.revision = self.agent.revision.wrapping_add(1);
+        let revision = self.agent.revision;
         self.agent.note = None;
         let key = (self.host.epoch, self.host.checkout.clone());
         let checkout = self
@@ -183,8 +254,12 @@ impl Plait {
             .map_or_else(|| key.1.clone(), |snapshot| snapshot.root.clone());
         let task = cx.background_executor().spawn(async move {
             let canonical = std::fs::canonicalize(&checkout)?;
-            let reply: AgentResources = plait_core::host::Client::from_environment()?
-                .send(&Request::agent_resources(canonical.clone()))?;
+            let request = match change {
+                Some((name, enabled)) => Request::set_mcp_server(canonical.clone(), name, enabled),
+                None => Request::agent_resources(canonical.clone()),
+            };
+            let reply: AgentResources =
+                plait_core::host::Client::from_environment()?.send(&request)?;
             if reply.checkout != canonical {
                 return Err(plait_core::host::Error::Protocol(
                     "Host returned another checkout's agent setup.".into(),
@@ -195,22 +270,8 @@ impl Plait {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                if this.agent.key.as_ref() != Some(&key)
-                    || this.host.epoch != key.0
-                    || this.host.checkout != key.1
-                {
+                if !this.accept_agent(&key, revision, result) {
                     return;
-                }
-                this.agent.busy = false;
-                match result {
-                    Ok(view) => this.agent.view = Some(Arc::new(view)),
-                    Err(error) => {
-                        this.agent.note = Some(if providers::needs_host_update(&error) {
-                            "Update the host to list your agent's skills and templates.".into()
-                        } else {
-                            providers::refusal(&error)
-                        })
-                    }
                 }
                 this.sync_composer(cx);
                 cx.notify();
@@ -219,9 +280,38 @@ impl Plait {
         .detach();
     }
 
+    /// A refresh or saved switch must still belong to the same connection and checkout.
+    pub(super) fn accept_agent(
+        &mut self,
+        key: &(u64, PathBuf),
+        revision: u64,
+        result: Result<AgentView, plait_core::host::Error>,
+    ) -> bool {
+        if self.agent.revision != revision
+            || self.agent.key.as_ref() != Some(key)
+            || self.host.epoch != key.0
+            || self.host.checkout != key.1
+        {
+            return false;
+        }
+        self.agent.busy = false;
+        match result {
+            Ok(view) => self.agent.view = Some(Arc::new(view)),
+            Err(error) => {
+                self.agent.note = Some(if providers::needs_host_update(&error) {
+                    "Update the host to manage your Pi setup.".into()
+                } else {
+                    providers::refusal(&error)
+                })
+            }
+        }
+        true
+    }
+
     /// Trust changes which project skills and templates load, so read them again.
     pub(super) fn forget_agent(&mut self) {
         self.agent.key = None;
+        self.agent.revision = self.agent.revision.wrapping_add(1);
     }
 
     pub(super) fn agent_settings(&self, cx: &mut Context<Self>) -> Div {
@@ -240,7 +330,7 @@ impl Plait {
         });
         let mut page = settings::section("Your Pi agent").child(settings::setting(
             "What threads here are offered",
-            "Skills, prompt templates, and instructions from your Pi setup, found the way Pi finds them. Turn one off in Pi's settings; Plait follows them.",
+            "Skills, prompt templates, instructions, and MCP servers from your Pi setup. Skills and templates follow Pi's settings.",
             refresh,
         ));
         if let Some(note) = &self.agent.note {
@@ -275,6 +365,9 @@ impl Plait {
         column()
             .gap_4()
             .child(page)
+            .when(!view.mcp_servers.is_empty(), |el| {
+                el.child(self.mcp_settings(&view.mcp_servers, cx))
+            })
             .child(settings::section("Instructions").child(instructions))
             .child(self.list(
                 "Skills",
@@ -293,6 +386,72 @@ impl Plait {
             .when(!view.problems.is_empty(), |el| {
                 el.child(self.list("Problems", "agent-problems", &view.problems, "", cx))
             })
+    }
+
+    fn mcp_settings(&self, servers: &[McpRow], cx: &mut Context<Self>) -> Div {
+        let mut section = settings::section("MCP servers")
+            // Remove with the stage that connects servers and offers their tools to Pi.
+            .child(tag(
+                "Servers are listed but not yet used by threads.",
+                colors().subtle,
+            ));
+        let all = self.agent.expanded || servers.len() <= FOLDED;
+        for (index, server) in servers
+            .iter()
+            .take(if all { servers.len() } else { FOLDED })
+            .enumerate()
+        {
+            let hover = server.hover.clone();
+            let name = server.name.clone();
+            let enabled = !server.enabled;
+            let available = server.can_enable
+                && self.host.connected
+                && !self.agent.busy
+                && self.agent.key.as_ref() == Some(&(self.host.epoch, self.host.checkout.clone()));
+            section = section.child(
+                row()
+                    .id(("mcp-server", index))
+                    .min_w_0()
+                    .gap_2()
+                    .h(px(28.))
+                    .tooltip(move |_, cx| cx.new(|_| TextTooltip(hover.to_string())).into())
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(server.name.clone()),
+                    )
+                    .child(tag(server.transport, colors().subtle).flex_shrink_0())
+                    .child(tag(server.state, colors().muted).flex_shrink_0())
+                    .child(
+                        chip(
+                            ("mcp-switch", index),
+                            if server.enabled { "On" } else { "Off" },
+                            server.enabled,
+                        )
+                        .role(Role::Switch)
+                        .aria_label(server.label.clone())
+                        .disabled(!available)
+                        .when(available, |el| {
+                            el.on_activate(cx, move |this, _, cx| {
+                                this.request_agent(Some((name.to_string(), enabled)), cx);
+                            })
+                        }),
+                    ),
+            );
+        }
+        section.when(!all, |el| {
+            el.child(
+                button("mcp-show-all", format!("Show all {}", servers.len())).on_activate(
+                    cx,
+                    |this, _, cx| {
+                        this.agent.expanded = true;
+                        cx.notify();
+                    },
+                ),
+            )
+        })
     }
 
     fn list(

@@ -1,3 +1,4 @@
+import { listMcp } from '../src/mcp/config.ts';
 import { createModels } from '@earendil-works/pi-ai/models';
 import { fauxProvider, fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import type { FauxResponseStep } from '@earendil-works/pi-ai/providers/faux';
@@ -104,7 +105,10 @@ faux.setResponses(responses);
 models.setProvider(faux.provider);
 class FixtureRuntime extends Runtime {
   // Scenarios must not depend on the skills or instructions of the machine running them.
-  override async resources() { return { skills: [], templates: [], problems: [] }; }
+  override async resources(checkout: string, trusted: boolean, describe = false) {
+    const mcp = describe ? await listMcp(checkout, trusted, join(this.directory, 'test-pi'), true) : undefined;
+    return { skills: [], templates: [], problems: mcp?.problems ?? [], mcpServers: mcp?.servers };
+  }
   override async open(...args: Parameters<Runtime['open']>) {
     await super.open(...args);
     if (mode === 'cleanup') {

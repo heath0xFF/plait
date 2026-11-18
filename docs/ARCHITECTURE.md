@@ -208,6 +208,31 @@ policy, with a deliberate confirmation of Trusted access. Stop revokes pending a
 cancels work. Interrupted work must not replay automatically after host failure.
 These boundaries need the tests listed in HOST.md before valuable-repository use.
 
+### Pi MCP configuration, without execution
+
+`runtime/src/mcp/config.ts` reads bounded Pi configuration and saved sign-in
+metadata. It uses `@earendil-works/pi-mcp` **1.5.2** validation and follows the
+same revision's `extensions/mcp/config`, `core/mcp-servers`, and MCP OAuth key
+rules. It implements no transport and resolves no environment or shell values.
+`skills.ts` obtains Pi's built-in MCP enabled state through the existing
+package resolver, then includes MCP metadata only for a settings report;
+normal run discovery does not read MCP configuration or register its tools.
+
+`mcp/policy.ts` keeps each project switch in the host settings table, keyed by
+canonical checkout and server name and checked against the directory identity.
+`agent_resources` and `set_mcp_server` return the same sanitized report. The
+latter is an additive version 3 operation; snapshots and protocol negotiation
+are unchanged. The [host contract](HOST.md#mcp-server-listing-and-project-switches)
+defines the fields, defaults, merge rules, and unknown sign-in state.
+
+The core decodes metadata with no GPUI dependency and accepts an absent list
+from older hosts. `settings_agent.rs` prepares row text on the background
+executor and draws the MCP section only on the project's settings page. A
+switch waits for the host reply; connection and checkout guards reject stale
+results. `snapshot/mcp.rs` injects sample rows for wide and narrow scenes.
+The next stage still needs server lifetime, tool discovery, approvals, calls,
+cancellation, and refusal to replay effects; this stage performs none of them.
+
 ### Run authorization
 
 `runtime/src/authorization.ts` owns a run's activation and revocation. Each new

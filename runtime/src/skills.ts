@@ -7,6 +7,8 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { DefaultPackageManager, SettingsManager, formatSkillsForPrompt, getAgentDir, loadSkills, stripFrontmatter } from '@earendil-works/pi-coding-agent';
 import type { Skill } from '@earendil-works/pi-coding-agent';
+import { listMcp } from './mcp/config.ts';
+import type { McpServer } from './mcp/config.ts';
 import { describeTemplate, expandTemplate } from './templates.ts';
 import type { Origin, TemplateEntry } from './templates.ts';
 import { fail } from './protocol.ts';
@@ -43,6 +45,7 @@ export type Resources = {
   templates: TemplateEntry[];
   instructions?: { path: string; text: string };
   problems: Problem[];
+  mcpServers?: McpServer[];
 };
 type Resolved = Awaited<ReturnType<DefaultPackageManager['resolve']>>;
 type Guard = { holds: string[]; credentials: string[] };
@@ -71,11 +74,15 @@ export async function discover(checkout: string, trusted: boolean, options: Disc
 
 async function resources(checkout: string, trusted: boolean, agentDir: string, options: DiscoverOptions, problems: Problem[]) {
   const settingsManager = SettingsManager.create(checkout, agentDir, { projectTrusted: trusted });
-  const packages = new DefaultPackageManager({ cwd: checkout, agentDir, settingsManager });
+  const packages = new DefaultPackageManager({ cwd: checkout, agentDir, settingsManager, builtinExtensions: ['mcp'] });
   // Missing packages are skipped: a run never installs anything.
   const resolved = await packages.resolve(async () => 'skip');
   const guard = await guarded(agentDir, options.protect ?? []);
+  const mcp = options.describe ? await listMcp(checkout, trusted, agentDir,
+    resolved.extensions.find(entry => entry.path === 'builtin:mcp')?.enabled === true) : undefined;
+  if (mcp) problems.push(...mcp.problems);
   return {
+    ...(mcp ? { mcpServers: mcp.servers } : {}),
     skills: await skills(resolved, checkout, agentDir, guard, problems),
     templates: await templates(resolved, guard, options.describe === true, problems),
   };
@@ -274,7 +281,7 @@ function bounded<T>(items: T[], kind: string, budget: { left: number }, reserve:
  * The `agent_resources` reply: what a run in this checkout would be offered, with
  * where each came from and what could not be used. Never any file's contents.
  */
-export function report(checkout: string, trusted: boolean, found: Resources) {
+export function report(checkout: string, trusted: boolean, found: Resources, servers = found.mcpServers ?? []) {
   // What was left out is said first, so it survives when the problems list is cut too.
   const notices: Problem[] = [];
   const budget = { left: REPLY_BUDGET };
@@ -286,11 +293,12 @@ export function report(checkout: string, trusted: boolean, found: Resources) {
     name: template.name, description: clipped(template.description ?? ''), argument_hint: template.argumentHint ? clipped(template.argumentHint) : null,
     origin: template.origin, path: template.path,
   })), 'templates', budget, PROBLEM_SHARE, notices);
+  const mcp_servers = bounded(servers, 'MCP servers', budget, PROBLEM_SHARE, notices);
   const shown = [...notices, ...found.problems].map(problem => ({ path: problem.path ?? null, message: clipped(problem.message) }));
   return {
     checkout, trusted,
     instructions: found.instructions ? { path: found.instructions.path, bytes: Buffer.byteLength(found.instructions.text) } : null,
-    skills, templates,
+    skills, templates, mcp_servers,
     problems: bounded(shown, 'problems', budget, 0, []),
   };
 }

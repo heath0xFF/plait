@@ -437,6 +437,34 @@ a real Pi setup with 66 skills (29 turned off in settings) took 7–20 ms per ru
 A live model choosing and following a skill in the installed app has not been
 checked.
 
+## MCP configuration listing
+
+`runtime/test/mcp.test.ts` compares accepted servers and rejected entries with
+Pi 1.5.2's actual configuration loader: trusted project replacement, restricted
+`enabled`/`exposure`/`toolExposure` overrides, namespace clashes, provider-auth
+restrictions, and invalid transport and OAuth settings. Tests cover BOM input,
+malformed and oversized files, bounded replies, Pi's built-in MCP disable
+setting, and saved project choices under both command policies. Store reopen
+and directory-identity tests cover persistence and scope. A host protocol test
+saves a switch, reads it back, restarts the host, and verifies Pi's configuration
+was not edited.
+
+A guarded listing test supplies commands, environment placeholders, secret
+arguments, headers, URL credentials and paths, and OAuth tokens while replacing
+process and network entry points with failures. Listing calls none of them;
+serialized reports contain none of those values. OAuth tests cover normalized
+namespace/URL keys, legacy keys without migration, wrong-URL rejection, saved
+tokens, and unknown requirements for an uncontacted HTTP server.
+
+Core tests decode older hosts and unknown fields/transports and serialize the
+version 3 switch request. Desktop tests cover state wording, source details,
+and stale connection/checkout replies. `project-settings-mcp-wide` and
+`project-settings-mcp-narrow` draw the section from injected metadata;
+`project-settings-no-mcp-*` draws its absence. The headless scenes do not prove
+native pointer interaction or accessibility. No MCP server, browser sign-in,
+network connection, model tool call, or installed-app acceptance is exercised:
+this stage only lists configuration and saves project switches.
+
 ## Agent harnesses and Codex
 
 Protocol tests accept the version 4 operations and fields only with version 4,

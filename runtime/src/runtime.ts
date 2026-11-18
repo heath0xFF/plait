@@ -11,10 +11,11 @@ import type { Conversation, ConversationRetryPolicy, ConversationWatch, Cursor, 
 import { SqliteStorage } from '@earendil-works/pi-durable/storage/sqlite';
 import { openNodeSqliteDatabase } from '@earendil-works/pi-durable/storage/sqlite/node';
 import { fail, failure, queuedView, summaryView, THINKING_LEVELS, validate, version, view } from './protocol.ts';
-import type { ApprovalMode, HarnessId, ModelChoice, Protocol, QueueMode, Snapshot, InputRecord, ThinkingLevel } from './protocol.ts';
+import type { ApprovalMode, HarnessId, ModelChoice, Protocol, QueueMode, Request, Snapshot, InputRecord, ThinkingLevel } from './protocol.ts';
 import { Store } from './store.ts';
 import { checkout, dirtyPaths, fileAction, identities, acquireCheckout, rootIdentity, checkRoot, pathKey } from './safety.ts';
 import { registry } from './tools.ts';
+import { mcpPolicy, setMcpEnabled } from './mcp/policy.ts';
 import { discover, expandInput, report, skillsPrompt } from './skills.ts';
 import type { ToolState } from './tools.ts';
 import { MAX_TURNS, update } from './transcript.ts';
@@ -232,12 +233,7 @@ export class Runtime {
         return { thread: session.snapshot };
       }
       case 'command_policy': case 'set_command_policy': return commandPolicyOperation(this.store, request);
-      case 'agent_resources': {
-        // The same discovery a run in this checkout would make, under its current policy.
-        const root = await checkout(String(request.checkout));
-        const trusted = commandPolicy(this.store, root, await rootIdentity(root)) === 'trusted';
-        return report(root, trusted, await this.resources(root, trusted, true));
-      }
+      case 'agent_resources': case 'set_mcp_server': return this.agentResources(request);
       case 'rename_thread': {
         const snapshot = this.snapshot(String(request.thread_id));
         const title = customTitle(String(request.title));
@@ -367,6 +363,21 @@ export class Runtime {
     });
   }
   registry(state: ToolState) { return registry(state); }
+  /** Settings reads and switch replies share discovery and the same metadata-only report. */
+  async agentResources(request: Request) {
+    const root = await checkout(String(request.checkout));
+    const identity = await rootIdentity(root);
+    const trusted = commandPolicy(this.store, root, identity) === 'trusted';
+    const found = await this.resources(root, trusted, true);
+    if (request.op === 'set_mcp_server') {
+      const server = found.mcpServers?.find(server => server.name === request.name);
+      if (!server) fail('not_found', 'This MCP server is no longer configured. Refresh the list.');
+      if (!server.can_enable) fail('permission_denied', 'Fix the MCP configuration or enable MCP in Pi settings first.');
+      setMcpEnabled(this.store, root, identity, server.name, request.enabled === true);
+    }
+    return report(root, trusted, found, mcpPolicy(this.store, root, identity, found.mcpServers ?? []));
+  }
+
   /** The person's Pi setup; a test runtime overrides it to stay independent of the machine. */
   resources(checkout: string, trusted: boolean, describe = false) { return discover(checkout, trusted, { protect: [this.directory], describe }); }
   async syncInputs(session: Session, all = false) {
