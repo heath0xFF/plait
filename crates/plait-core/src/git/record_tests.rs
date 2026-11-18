@@ -726,6 +726,7 @@ fn a_sha256_repository_has_its_own_store() {
                 .arg(&path)
                 .args(args)
                 .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .envs(crate::git::tests::NO_MAINTENANCE)
                 .status()
                 .unwrap()
                 .success()

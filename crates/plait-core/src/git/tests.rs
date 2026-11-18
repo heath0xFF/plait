@@ -4,6 +4,19 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+/// Git starts detached maintenance after a commit or a push. It briefly holds
+/// a lock under `.git/objects`, which a before-and-after comparison of a
+/// repository can catch. Fixtures turn it off, as the recorder's own commands do.
+pub(super) const NO_MAINTENANCE: [(&str, &str); 7] = [
+    ("GIT_CONFIG_COUNT", "3"),
+    ("GIT_CONFIG_KEY_0", "maintenance.auto"),
+    ("GIT_CONFIG_VALUE_0", "false"),
+    ("GIT_CONFIG_KEY_1", "gc.auto"),
+    ("GIT_CONFIG_VALUE_1", "0"),
+    ("GIT_CONFIG_KEY_2", "receive.autoGC"),
+    ("GIT_CONFIG_VALUE_2", "false"),
+];
+
 pub(super) struct Repo(pub(super) PathBuf);
 impl Repo {
     pub(super) fn new() -> Self {
@@ -32,6 +45,7 @@ impl Repo {
             .args(args)
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .envs(NO_MAINTENANCE)
             .output()
             .unwrap();
         assert!(
@@ -529,6 +543,7 @@ impl Repo {
             .args(args)
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .envs(NO_MAINTENANCE)
             .output()
             .unwrap();
         assert!(
@@ -1582,6 +1597,7 @@ impl Repo {
             .args(["commit", "-q", "--allow-empty", "-m", "fixture"])
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .envs(NO_MAINTENANCE)
             .env("GIT_COMMITTER_DATE", format!("@{time} +0000"))
             .output()
             .unwrap();

@@ -139,6 +139,19 @@ impl Drop for Scratch {
     }
 }
 
+/// Git starts detached maintenance after a commit or a push. It briefly holds
+/// a lock under `.git/objects`, which a before-and-after comparison of a
+/// repository can catch. Fixtures turn it off, as the recorder's own commands do.
+const NO_MAINTENANCE: [(&str, &str); 7] = [
+    ("GIT_CONFIG_COUNT", "3"),
+    ("GIT_CONFIG_KEY_0", "maintenance.auto"),
+    ("GIT_CONFIG_VALUE_0", "false"),
+    ("GIT_CONFIG_KEY_1", "gc.auto"),
+    ("GIT_CONFIG_VALUE_1", "0"),
+    ("GIT_CONFIG_KEY_2", "receive.autoGC"),
+    ("GIT_CONFIG_VALUE_2", "false"),
+];
+
 fn git(root: &Path, args: &[&str]) {
     let status = Command::new("git")
         .arg("-C")
@@ -146,6 +159,7 @@ fn git(root: &Path, args: &[&str]) {
         .args(args)
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
+        .envs(NO_MAINTENANCE)
         .status()
         .unwrap();
     assert!(status.success());

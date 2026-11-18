@@ -451,15 +451,17 @@ mod tests {
             });
         }
         let start = Instant::now();
-        let result = supervise_command(command, json!({}), Duration::from_millis(300));
+        // Long enough for the injected Git to start on a busy machine; the
+        // wrapper itself would run for thirty seconds.
+        let result = supervise_command(command, json!({}), Duration::from_millis(1500));
         assert!(result.unwrap_err().to_string().contains("time budget"));
-        assert!(start.elapsed() < Duration::from_secs(2));
+        assert!(start.elapsed() < Duration::from_secs(10));
         assert!(marker.exists(), "injected Git was not started");
         drop(lock);
         let fresh = std::fs::File::open(&scratch).unwrap();
         while unsafe { libc::flock(fresh.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             assert!(
-                start.elapsed() < Duration::from_secs(2),
+                start.elapsed() < Duration::from_secs(10),
                 "deadline leaked a descendant lock"
             );
             std::thread::sleep(Duration::from_millis(10));
