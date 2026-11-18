@@ -732,3 +732,40 @@ test('bounded text inputs reject oversize whitespace padding and trim team_name'
   assert.equal(bound.ok, true);
   assert.equal(bound.result.binding.team_name, 'Plait Core');
 });
+
+test('getIssuesPage fetches a 50-issue cached page in one SQLite query without N+1 selects', async t => {
+  const h = await setupHarness(t);
+  const issues = Array.from({ length: 50 }, (_, i) => ({
+    id: `issue-q-${i}`,
+    identifier: `PLA-${500 + i}`,
+    title: `Cached issue ${i}`,
+    url: `https://linear.app/acme/issue/PLA-${500 + i}`,
+    priority: 2,
+    updated_at: '2026-11-18T12:00:00.000Z',
+    team_id: 'team-pla',
+    state: { id: 'state-todo', name: 'Todo', type: 'unstarted' },
+    assignee: null,
+    labels: [],
+  }));
+  h.runtime.store.linear.saveIssuesPage('batch-page-key', 'team-pla', issues, true, 'next-1', h.now);
+
+  let issueSelects = 0;
+  const origPrepare = h.runtime.store.db.prepare.bind(h.runtime.store.db);
+  h.runtime.store.db.prepare = ((sql: string) => {
+    const stmt = origPrepare(sql);
+    if (sql.includes('linear_cache_issues')) {
+      const origGet = stmt.get.bind(stmt);
+      const origAll = stmt.all.bind(stmt);
+      stmt.get = (...args: unknown[]) => { issueSelects++; return origGet(...args as []); };
+      stmt.all = (...args: unknown[]) => { issueSelects++; return origAll(...args as []); };
+    }
+    return stmt;
+  }) as typeof h.runtime.store.db.prepare;
+
+  const loaded = h.runtime.store.linear.getIssuesPage('batch-page-key', h.now + 1000);
+  assert.notEqual(loaded, null);
+  assert.equal(loaded!.issues.length, 50);
+  assert.equal(loaded!.issues[0].id, 'issue-q-0');
+  assert.equal(loaded!.issues[49].id, 'issue-q-49');
+  assert.equal(issueSelects, 1, `expected 1 batched query for 50 issues, got ${issueSelects}`);
+});

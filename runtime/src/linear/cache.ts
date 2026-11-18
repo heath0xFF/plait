@@ -208,14 +208,23 @@ export class LinearCache {
     ).get(cacheKey);
     if (!page) return null;
     const teamId = String(page.team_id);
-    const ids = JSON.parse(String(page.issue_ids)) as string[];
-    const select = this.db.prepare('SELECT payload FROM linear_cache_issues WHERE team_id=? AND issue_id=?');
+    const idsJson = String(page.issue_ids);
+    const ids = JSON.parse(idsJson) as string[];
     const issues: LinearIssueSummary[] = [];
-    for (const issueId of ids) {
-      const row = select.get(teamId, issueId);
-      // If any issue in the cached page was evicted by the per-team cap, do not serve a holey page.
-      if (!row) return null;
-      issues.push(JSON.parse(String(row.payload)) as LinearIssueSummary);
+    if (ids.length > 0) {
+      const rows = this.db.prepare(
+        'SELECT issue_id, payload FROM linear_cache_issues WHERE team_id=? AND issue_id IN (SELECT value FROM json_each(?))',
+      ).all(teamId, idsJson);
+      const byId = new Map<string, LinearIssueSummary>();
+      for (const row of rows) {
+        byId.set(String(row.issue_id), JSON.parse(String(row.payload)) as LinearIssueSummary);
+      }
+      for (const issueId of ids) {
+        const issue = byId.get(issueId);
+        // If any issue in the cached page was evicted by the per-team cap, do not serve a holey page.
+        if (!issue) return null;
+        issues.push(issue);
+      }
     }
     this.db.prepare('UPDATE linear_cache_pages SET accessed_at=?, touched_seq=? WHERE cache_key=?').run(now, ++this.touchSeq, cacheKey);
     return {
