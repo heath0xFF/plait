@@ -1346,8 +1346,24 @@ is submitted; the desktop then sends `create_thread` and submits that message to
 the created thread. An unconfirmed creation keeps its request ID: the workspace
 shows a retry that reuses that ID, and a new request is not sent while it is
 pending. A model is recorded as recently used only after the host confirms the
-thread. `New Thread in Worktree` (`ui/worktree.rs`) creates the worktree first
-and sends `create_thread` immediately once the worktree exists.
+thread. `New Thread in Worktree` (`ui/worktree.rs`) sends the additive
+`create_worktree_thread` operation with a captured base and parent identity.
+The host reserves one UUID and durably binds the selected harness/model before
+creating files. `runtime/src/worktrees.ts` owns operation receipts, startup
+reconciliation and thread admission; `plait-host worktree` writes private synced
+journals and invokes the core's lease-protected Git worktree implementation.
+A nested supervisor reclaims checkout hooks and filters before returning to the
+outer worker that holds the leases. No cache or dirty-file copying occurs.
+
+The window polls only its explicitly pending operation off the UI thread.
+Completion checks the originating tab, selection and connection; a background
+thread appears in the sidebar without taking focus. Reconnection lists durable
+operations to recover grouping after a lost reply or closed window. Legacy
+navigation entries are imported grouping records, with no deletion authority.
+Neither tab-row nor sidebar rendering performs filesystem, Git or host work.
+Removal is explicit and host-authorized by the saved inode, common-directory
+identity and journal, with fresh checks under exclusive checkout leases.
+See [the worktree contract](HOST.md#host-owned-worktrees) for refusals and recovery.
 
 The app records root-view construction time, peak construction time,
 selection-handler-to-render time, and startup-to-first-render time. View →

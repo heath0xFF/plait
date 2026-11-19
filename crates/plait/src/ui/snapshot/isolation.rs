@@ -60,6 +60,43 @@ pub(super) fn walk(
         plait.state.repository.write_mut().note = Some((CHECKOUT_BUSY.into(), true));
     });
     harness.capture(&format!("isolation-wait-{suffix}"));
+
+    let mut creation = Harness::new(repository, output, width, height);
+    creation.connect(repository, false);
+    creation.update(|plait, _, _| {
+        plait.worktree_busy = true;
+        plait.notice = Some("Creating worktree… You can keep working in another tab.".into());
+    });
+    creation.capture(&format!("isolation-create-worktree-{suffix}"));
+    creation.update(|plait, _, _| {
+        plait.worktree_busy = false;
+        plait.notice = Some("Worktree creation was interrupted. Existing files and branch were preserved; inspect them before making a new request.".into());
+    });
+    creation.capture(&format!("isolation-create-failed-{suffix}"));
+    creation.update(|plait, _, cx| {
+        let path = repository.with_extension("worktrees").join("123456781234");
+        plait.preferences.value.navigation.remember_worktree(
+            path.clone(),
+            repository.into(),
+            "plait/123456781234".into(),
+        );
+        plait
+            .host
+            .connection
+            .threads
+            .push(plait_core::host::ThreadSummary {
+                id: "isolated-background".into(),
+                checkout: path,
+                model: plait.host.connection.threads[0].model.clone(),
+                title: Some("New worktree thread".into()),
+                harness: Some(plait_core::host::harness::HarnessId::Codex),
+                ..Default::default()
+            });
+        plait.rebuild_projects(cx);
+        plait.notice =
+            Some("Worktree thread created in the background. Open it from the sidebar.".into());
+    });
+    creation.capture(&format!("isolation-created-in-background-{suffix}"));
 }
 
 /// Holding a host writer lease on the open checkout must never block desktop

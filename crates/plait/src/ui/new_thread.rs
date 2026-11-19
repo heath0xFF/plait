@@ -670,30 +670,6 @@ impl Plait {
         self.draft.approval = mode;
         cx.notify();
     }
-
-    /// Start a thread at once in Pi with `choice`. A worktree thread has
-    /// nothing to draft: the worktree is made for it, so it is created at once.
-    pub(super) fn create_now(
-        &mut self,
-        choice: ModelChoice,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.host.creation.pending_create.is_some() {
-            return self.retry_create(window, cx);
-        }
-        if !self.usable_in(HarnessId::Pi, &choice) {
-            return;
-        }
-        self.choose_new_harness(HarnessId::Pi, &choice, None);
-        self.host.creation.new_model = Some(choice);
-        self.new_thread_open = true;
-        self.draft.open = false;
-        self.settings_open = false;
-        self.workspace.tab = Workspace::Conversation;
-        self.create_host_thread(window, cx);
-        cx.notify();
-    }
 }
 
 /// The level in `levels` closest to `wanted`, the lower one on a tie, as the

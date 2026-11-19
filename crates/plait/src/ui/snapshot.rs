@@ -54,6 +54,7 @@ mod tabs;
 mod turn_review;
 mod undo;
 mod ways_out;
+mod worktrees;
 
 const THREAD: &str = "thr_5791c2e4";
 
@@ -1597,70 +1598,6 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
                 .contains("Sample refusal.")
         );
         assert!(plait.draft.open && plait.draft.composer.is_some());
-    });
-    drop(harness);
-    std::fs::remove_dir_all(scratch).unwrap();
-}
-
-#[core::prelude::v1::test]
-fn a_worktree_thread_is_created_in_a_new_worktree_listed_under_its_project() {
-    if !isolated("a_worktree_thread_is_created_in_a_new_worktree_listed_under_its_project") {
-        return;
-    }
-    let scratch = std::env::temp_dir().join(format!("plait-worktree-ui-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&scratch);
-    let repository = fixture_repository(&scratch);
-    let mut harness = Harness::new(&repository, None, 900., 600.);
-    harness.connect(&repository, false);
-    harness.update(|plait, window, cx| {
-        plait
-            .host
-            .connection
-            .status
-            .as_mut()
-            .unwrap()
-            .protocol_version = 3;
-        plait.new_worktree_thread(window, cx);
-        assert!(plait.worktree_busy);
-        assert!(plait.creation_bar(cx).is_some(), "preparing is shown");
-    });
-    let deadline = Instant::now() + Duration::from_secs(20);
-    let checkout = loop {
-        harness.settle();
-        let done = harness
-            .window
-            .update(&mut harness.cx, |plait, _, _| {
-                (!plait.worktree_busy && plait.host.creation.pending_create.is_some())
-                    .then(|| plait.host.creation.checkout.clone())
-            })
-            .expect("window update");
-        if let Some(checkout) = done {
-            break checkout;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the worktree thread was not requested"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    };
-    let main = repository.canonicalize().unwrap();
-    assert_ne!(checkout, main);
-    assert!(checkout.join(".git").is_file(), "a linked worktree");
-    harness.update(|plait, _, _| {
-        let tree = plait
-            .preferences
-            .value
-            .navigation
-            .worktree(&checkout)
-            .unwrap();
-        assert_eq!(tree.main, main);
-        assert!(tree.branch.starts_with("plait/"));
-        assert_eq!(
-            plait.active_project().checkout,
-            main,
-            "listed under its project"
-        );
-        assert_eq!(plait.notice, None);
     });
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();

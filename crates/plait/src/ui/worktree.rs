@@ -1,60 +1,124 @@
-//! Optional per-thread worktrees: start a thread in a fresh checkout of the
-//! current project, and remove that checkout when its work is done.
-
+//! Worktree effects belong to the host; the window only starts and observes them.
 use super::Plait;
 use gpui::*;
-use plait_core::git;
-use std::path::PathBuf;
+use plait_core::{
+    host::{
+        self, Client, ThreadSummary,
+        worktree::{self, Operation, Request, Stage},
+    },
+    host_state::request_id,
+};
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
+#[derive(Clone)]
+pub(super) struct Pending {
+    request: Request,
+    selection: u64,
+    tab: Option<plait_core::tabs::TabId>,
+    connection: u64,
+    host: plait_core::tabs::HostKey,
+}
 impl Plait {
-    /// Create a worktree of the current project on a new branch, then start a
-    /// thread there with the default model. The worktree's threads list under
-    /// the project, and Changes follows them into the worktree.
     pub(super) fn new_worktree_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_overlay(true, window, cx);
         if self.worktree_busy {
             return;
         }
-        // An unconfirmed creation is retried where it was asked for.
-        if self.host.creation.creating || self.host.creation.pending_create.is_some() {
-            return self.retry_create(window, cx);
+        if let Some(mut pending) = self.worktree_pending.clone() {
+            if pending.host != self.tabs.host {
+                self.notice = Some(
+                    "Reconnect to the original host before retrying this worktree request.".into(),
+                );
+                return cx.notify();
+            }
+            pending.connection = self.host.connection.epoch;
+            return self.send_worktree(pending, window, cx);
         }
-        if !self.host.connection.connected || self.host.protocol() < 3 {
+        if !self.host.connection.connected {
             self.notice = Some("Connect to the host to start a thread in a worktree.".into());
             return cx.notify();
         }
-        let choice = self
-            .host
-            .connection
-            .status
-            .as_ref()
-            .and_then(|status| status.default_model.clone())
-            .filter(|choice| self.host.available(Some(choice)));
-        let Some(choice) = choice else {
-            self.notice =
-                Some("Choose a default model in Settings to start threads in a worktree.".into());
+        // Respect the selected draft, or the actual configured default. Never
+        // fall back to Pi just because a chosen harness is unavailable.
+        let harness = if self.draft_visible() {
+            self.draft
+                .harness
+                .unwrap_or(self.preferences.value.default_harness)
+        } else {
+            self.preferences.value.default_harness
+        };
+        let choice = if self.draft_visible() {
+            self.draft
+                .model
+                .clone()
+                .or_else(|| self.default_model_for(harness))
+        } else {
+            self.default_model_for(harness)
+        };
+        let Some(choice) = choice.filter(|choice| self.usable_in(harness, choice)) else {
+            self.notice = Some(format!(
+                "Choose an available {} model before creating a worktree.",
+                harness.label()
+            ));
             return cx.notify();
         };
-        let main = self.active_project().checkout.clone();
+        let mode = if self.draft_visible() {
+            self.draft_mode()
+        } else {
+            self.harness_row(harness)
+                .and_then(|row| row.default_mode.clone())
+        };
+        let thinking = if self.draft_visible() {
+            self.draft_thinking()
+        } else {
+            Some(self.preferences.value.default_thinking())
+        };
+        let approval = if self.draft_visible() {
+            self.draft_approval()
+        } else {
+            self.default_approval()
+        };
+        let root = self.host.creation.checkout.clone();
+        let selection = self.host.thread.watch_epoch;
+        let tab = self.tabs.model.active();
+        let connection = self.host.connection.epoch;
         self.worktree_busy = true;
-        self.notice = None;
+        self.notice = Some("Creating a worktree from the selected commit…".into());
         cx.notify();
-        let task = cx
-            .background_executor()
-            .spawn(async move { git::add_worktree(&main).map(|tree| (main, tree)) });
+        let task = cx.background_executor().spawn(async move {
+            let client = Client::from_environment()?;
+            worktree::info(&client, root)
+        });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
             let _ = this.update_in(cx, |this, window, cx| {
                 this.worktree_busy = false;
+                if this.host.connection.epoch != connection {
+                    return;
+                }
                 match result {
-                    Ok((main, tree)) => {
-                        let mut value = this.preferences.value.clone();
-                        value
-                            .navigation
-                            .remember_worktree(tree.path.clone(), main, tree.branch);
-                        this.persist_navigation(value, cx);
-                        this.change_checkout(tree.path, window, cx);
-                        this.create_now(choice, window, cx);
+                    Ok(info) => {
+                        let pending = Pending {
+                            request: Request::CreateWorktreeThread {
+                                request_id: request_id(),
+                                parent: Box::new(info.parent),
+                                harness,
+                                provider: choice.provider,
+                                model_id: choice.model_id,
+                                thinking,
+                                mode,
+                                approval,
+                            },
+                            selection,
+                            tab,
+                            connection,
+                            host: this.tabs.host.clone(),
+                        };
+                        this.worktree_pending = Some(pending.clone());
+                        this.send_worktree(pending, window, cx);
                     }
                     Err(error) => {
                         this.notice = Some(format!("Worktree not created. {error}"));
@@ -65,9 +129,77 @@ impl Plait {
         })
         .detach();
     }
-
-    /// Ask, then remove a Plait worktree. Git refuses one with uncommitted
-    /// work; the branch stays, and so do the threads that ran there.
+    fn send_worktree(&mut self, pending: Pending, window: &mut Window, cx: &mut Context<Self>) {
+        self.worktree_busy = true;
+        self.notice = Some("Creating worktree… You can keep working in another tab.".into());
+        cx.notify();
+        let request = pending.request.clone();
+        let task = cx.background_executor().spawn(async move {
+            let client = Client::from_environment()?;
+            let operation = await_operation(&client, &request)?;
+            let summary = if operation.state == Stage::Ready {
+                let reply: host::ThreadReply = client.request(&host::Request::Watch {
+                    thread_id: operation.thread_id.clone(),
+                    protocol_version: Some(host::PROTOCOL_VERSION),
+                })?;
+                Some(ThreadSummary::from(&reply.thread))
+            } else {
+                None
+            };
+            Ok::<_, host::Error>((operation, summary))
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.worktree_busy = false;
+                if this.host.connection.epoch != pending.connection { return; }
+                match result {
+                    Ok((operation, summary)) => {
+                        this.worktree_pending = None;
+                        this.remember_worktree_operation(&operation, cx);
+                        if let Some(summary) = summary {
+                            let id = summary.id.clone();
+                            let _ = plait_core::navigation::merge_threads(&mut this.host.connection.threads, vec![summary]);
+                            this.rebuild_projects(cx);
+                            if completion_visible(pending.selection, this.host.thread.watch_epoch, pending.tab, this.tabs.model.active()) {
+                                this.notice = None; this.open_created_thread(id, window, cx);
+                            } else { this.notice = Some("Worktree thread created in the background. Open it from the sidebar.".into()); }
+                        } else { this.notice = Some(operation.error.map(|error| error.message).unwrap_or_else(|| "Worktree creation needs inspection. Existing files and branch were preserved.".into())); }
+                    }
+                    Err(error) => { this.notice = Some(format!("{error} Creation is unconfirmed. Use New Thread in Worktree again to retry the same request.")); }
+                }
+                cx.notify();
+            });
+        }).detach();
+    }
+    fn remember_worktree_operation(&mut self, operation: &Operation, cx: &mut Context<Self>) {
+        let mut preferences = self.preferences.value.clone();
+        preferences.navigation.remember_host_worktree(operation);
+        self.persist_navigation(preferences, cx);
+    }
+    /// Reconcile receipts after a closed window or a lost acknowledgement.
+    pub(super) fn refresh_host_worktrees(&mut self, cx: &mut Context<Self>) {
+        let epoch = self.host.connection.epoch;
+        let task = cx
+            .background_executor()
+            .spawn(async move { worktree::list(&Client::from_environment()?) });
+        cx.spawn(async move |this, cx| {
+            if let Ok(operations) = task.await {
+                let _ = this.update(cx, |this, cx| {
+                    if this.host.connection.epoch != epoch {
+                        return;
+                    }
+                    let mut preferences = this.preferences.value.clone();
+                    for operation in operations {
+                        preferences.navigation.remember_host_worktree(&operation);
+                    }
+                    this.persist_navigation(preferences, cx);
+                    this.rebuild_projects(cx);
+                });
+            }
+        })
+        .detach();
+    }
     pub(super) fn remove_worktree(
         &mut self,
         path: PathBuf,
@@ -75,24 +207,18 @@ impl Plait {
         cx: &mut Context<Self>,
     ) {
         self.navigation.menu = None;
-        let Some(tree) = self.preferences.value.navigation.worktree(&path).cloned() else {
-            return;
-        };
         if self.worktree_busy {
             return;
         }
-        let working = self
-            .host
-            .connection
-            .threads
-            .iter()
-            .any(|thread| thread.checkout == path && thread.status.busy());
-        if working {
-            self.navigation.error = Some("Stop the thread working in this worktree first.".into());
+        let Some(tree) = self.preferences.value.navigation.worktree(&path).cloned() else {
+            return;
+        };
+        let (Some(creation_id), Some(identity)) = (tree.creation_id, tree.identity) else {
+            self.navigation.error = Some("This is an imported worktree. Remove it with your Git tools; Plait has no host ownership record.".into());
             return cx.notify();
-        }
+        };
         let detail = format!(
-            "This deletes {}. The branch {} and its commits stay. Git refuses if the worktree has uncommitted changes.",
+            "Delete {}? Branch {} and the thread history stay. Uncommitted and ignored files always block removal. Choose Keep local commits only to explicitly allow unpushed or unknown publication status.",
             path.display(),
             tree.branch
         );
@@ -101,39 +227,117 @@ impl Plait {
             "Remove this worktree?",
             Some(&detail),
             &[
-                PromptButton::Other("Remove".into()),
+                PromptButton::Other("Remove if pushed".into()),
+                PromptButton::Other("Keep local commits only".into()),
                 PromptButton::Cancel("Cancel".into()),
             ],
             cx,
         );
+        let epoch = self.host.connection.epoch;
         cx.spawn_in(window, async move |this, cx| {
-            if answer.await != Ok(0) {
-                return;
-            }
-            let main = tree.main.clone();
-            let target = path.clone();
+            let allow_unpushed = match answer.await {
+                Ok(0) => false,
+                Ok(1) => true,
+                _ => return,
+            };
+            let request = Request::RemoveWorktree {
+                request_id: request_id(),
+                creation_id,
+                identity,
+                allow_unpushed,
+            };
             let Ok(task) = this.update(cx, |this, cx| {
                 this.worktree_busy = true;
                 cx.notify();
                 cx.background_executor()
-                    .spawn(async move { git::remove_worktree(&main, &target) })
+                    .spawn(async move { await_operation(&Client::from_environment()?, &request) })
             }) else {
                 return;
             };
             let result = task.await;
-            let _ = this.update_in(cx, |this, window, cx| {
+            let _ = this.update_in(cx, |this, _, cx| {
                 this.worktree_busy = false;
+                if this.host.connection.epoch != epoch {
+                    return;
+                }
                 match result {
-                    // Its folder is gone; show the project it came from.
-                    Ok(()) if this.host.creation.checkout == path => {
-                        this.change_checkout(tree.main, window, cx)
+                    Ok(operation) => {
+                        this.remember_worktree_operation(&operation, cx);
+                        this.navigation.available.remove(&path);
+                        this.navigation.error = operation.error.map(|error| error.message);
+                        if operation.state == Stage::Removed {
+                            this.navigation.available.insert(path, false);
+                            this.notice = Some(
+                                "Worktree removed. Its branch and thread history remain.".into(),
+                            );
+                        }
                     }
-                    Ok(()) => this.navigation.available.clear(),
-                    Err(error) => this.navigation.error = Some(error),
+                    Err(error) => {
+                        this.navigation.error = Some(format!(
+                            "{error} Refresh worktrees to recover the removal result."
+                        ))
+                    }
                 }
                 cx.notify();
             });
         })
         .detach();
+    }
+}
+fn completion_visible<T: PartialEq>(
+    selection: u64,
+    current: u64,
+    tab: Option<T>,
+    active: Option<T>,
+) -> bool {
+    selection == current && tab.is_some() && tab == active
+}
+fn await_operation(client: &Client, request: &Request) -> Result<Operation, host::Error> {
+    let expected = match request {
+        Request::CreateWorktreeThread { request_id, .. }
+        | Request::RemoveWorktree { request_id, .. } => request_id.clone(),
+        _ => return Err(host::Error::Protocol("Invalid worktree mutation.".into())),
+    };
+    let mut operation = worktree::operation(client, request)?;
+    let deadline = Instant::now() + Duration::from_secs(165);
+    while matches!(operation.state, Stage::Preparing | Stage::Removing) {
+        if Instant::now() >= deadline {
+            return Err(host::Error::Protocol(
+                "Worktree is still preparing on the host.".into(),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        operation = worktree::operation(
+            client,
+            &Request::WorktreeStatus {
+                request_id: expected.clone(),
+            },
+        )?;
+    }
+    if let Request::CreateWorktreeThread {
+        request_id, parent, ..
+    } = request
+        && (operation.request_id != *request_id
+            || operation
+                .worktree
+                .as_ref()
+                .is_some_and(|tree| tree.parent != **parent))
+    {
+        return Err(host::Error::Protocol(
+            "Host returned a different worktree operation.".into(),
+        ));
+    }
+    Ok(operation)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[core::prelude::v1::test]
+    fn completion_after_switch_or_close_never_steals_focus() {
+        assert!(completion_visible(7, 7, Some(1), Some(1)));
+        assert!(!completion_visible(7, 8, Some(1), Some(1)));
+        assert!(!completion_visible(7, 7, Some(1), Some(2)));
+        assert!(!completion_visible(7, 7, Some(1), None));
+        assert!(!completion_visible::<u32>(7, 7, None, None));
     }
 }

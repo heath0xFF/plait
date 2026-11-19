@@ -36,6 +36,9 @@ pub struct WorktreeOf {
     /// The repository checkout the worktree was created from.
     pub main: PathBuf,
     pub branch: String,
+    /// Absent for older desktop-created worktrees: grouping, never deletion authority.
+    pub creation_id: Option<String>,
+    pub identity: Option<crate::git::worktree::Identity>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,8 +71,31 @@ impl Preferences {
     }
 
     pub fn remember_worktree(&mut self, path: PathBuf, main: PathBuf, branch: String) {
-        self.worktrees.insert(path, WorktreeOf { main, branch });
+        self.worktrees.insert(
+            path,
+            WorktreeOf {
+                main,
+                branch,
+                creation_id: None,
+                identity: None,
+            },
+        );
         self.normalize();
+    }
+
+    pub fn remember_host_worktree(&mut self, operation: &crate::host::worktree::Operation) {
+        if let Some(tree) = &operation.worktree {
+            self.worktrees.insert(
+                tree.path.clone(),
+                WorktreeOf {
+                    main: tree.parent.main.clone(),
+                    branch: tree.branch.clone(),
+                    creation_id: Some(operation.request_id.clone()),
+                    identity: tree.identity.clone(),
+                },
+            );
+            self.normalize();
+        }
     }
 
     /// Opening a worktree opens the project it belongs to.
@@ -605,5 +631,24 @@ mod tests {
         assert_eq!(age(Some(120_000), 60_000), "now");
         assert_eq!(age(Some(0), 60_000 * 61), "1h");
         assert_eq!(age(None, 0), "");
+    }
+}
+
+#[cfg(test)]
+mod imported_worktrees {
+    use super::*;
+    #[test]
+    fn old_desktop_worktrees_are_imported_without_deletion_authority() {
+        let old = r#"{"worktrees":{"/repo.worktrees/old":{"main":"/repo","branch":"plait/old"}}}"#;
+        let preferences: Preferences = serde_json::from_str(old).unwrap();
+        let tree = preferences
+            .worktree(Path::new("/repo.worktrees/old"))
+            .unwrap();
+        assert!(tree.creation_id.is_none());
+        assert!(tree.identity.is_none());
+        assert_eq!(
+            preferences.project_of(Path::new("/repo.worktrees/old")),
+            Path::new("/repo")
+        );
     }
 }

@@ -71,6 +71,7 @@ impl Plait {
     }
 
     pub(super) fn watch_all_threads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_host_worktrees(cx);
         self.navigation.watch = None;
         self.navigation.generation += 1;
         let generation = self.navigation.generation;

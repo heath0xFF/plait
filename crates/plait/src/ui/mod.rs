@@ -159,6 +159,7 @@ pub struct Plait {
     draft: new_thread::Draft,
     /// A worktree is being created or removed.
     worktree_busy: bool,
+    worktree_pending: Option<worktree::Pending>,
     approval_keys: live_conversation::ApprovalKeys,
     /// The command palette or model picker, above the workspace.
     overlay: Option<commands::Overlay>,
@@ -224,6 +225,7 @@ impl Plait {
             new_thread_open: false,
             draft: Default::default(),
             worktree_busy: false,
+            worktree_pending: None,
             approval_keys: Default::default(),
             overlay: None,
             panels: Default::default(),

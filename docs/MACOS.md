@@ -661,8 +661,29 @@ another thread sets it aside with its text, which Cmd-N brings back; Escape or
 **Discard** clears it. Draft text and image references are saved per checkout
 in the desktop recovery journal across restarts. Cmd-Shift-N opens it with the
 model list open. A thread with no title
-yet reads **New thread**. Cmd-Option-N still creates a worktree thread at once,
-since its worktree is made for it. Cmd-Option-1 to Cmd-Option-9
+yet reads **New thread**. **New Thread in Worktree** (Cmd-Option-N) asks the
+host to create a cold checkout and a thread at once, with the draft's selected
+harness/model/permissions, or the configured defaults when no draft is open.
+It uses the captured committed base, leaving dirty files and build output in
+the original checkout. The branch is `plait/` plus twelve UUID hex digits,
+extended if needed, under `<main-repository>.worktrees/` even when started from
+a linked worktree. An unavailable chosen harness is refused, never replaced.
+
+You can change tabs while creation finishes; completion appears in the sidebar
+without taking focus. An unconfirmed request is retried with Cmd-Option-N using
+its original identity. Closing the window leaves accepted creation on the host;
+reopening recovers its thread and grouping. A failed checkout reports what
+happened and preserves existing files and branches for inspection.
+
+**Remove worktree** asks first. **Remove if pushed** requires a known remote
+upstream containing the current commit, as of the last fetch. **Keep local
+commits only** explicitly permits unpushed or unknown publication status while
+keeping the branch. Both refuse active work, changed directory identity,
+uncommitted files, ignored files and unfinished Git operations. Old worktrees
+created by the desktop remain grouped as imported records and must be removed
+with your Git tools. There is no automatic cleanup or force removal.
+
+Cmd-Option-1 to Cmd-Option-9
 count threads in sidebar order; Settings can change this to machines or
 projects. Cmd-B hides or shows the sidebar on the left; Cmd-L hides or shows the
 Git inspector on the right, and that choice is remembered. On a window too narrow
