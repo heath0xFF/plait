@@ -10,10 +10,11 @@ export function issueReference(reference: string): { identifier: string; workspa
   if (URL.canParse(value)) {
     const url = new URL(value);
     const parts = url.pathname.split('/');
+    const identifier = parts[3]?.toUpperCase() ?? '';
     if (url.protocol === 'https:' && url.hostname === 'linear.app' && !url.port && !url.username && !url.password
         && parts.length >= 4 && parts.length <= 6 && parts[1] && parts[2] === 'issue'
-        && IDENTIFIER.test(parts[3]) && (parts.length < 6 || parts[5] === '')) {
-      return { identifier: parts[3], workspaceKey: parts[1] };
+        && IDENTIFIER.test(identifier) && (parts.length < 6 || (parts[4] !== '' && parts[5] === ''))) {
+      return { identifier, workspaceKey: parts[1] };
     }
   }
   fail('invalid_request', 'reference must be an issue identifier or an https Linear issue URL.');

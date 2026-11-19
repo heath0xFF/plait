@@ -947,3 +947,28 @@ test('write invalidation marks cached aliases stale while preserving cached_at a
   assert.equal(offline.result.cached_at, initialAt);
   assert.equal(offline.result.cache_age_seconds, 15);
 });
+
+test('issue URL resolution accepts lowercase identifiers and rejects empty slug double slashes', async t => {
+  const h = await setupHarness(t);
+  const root = await makeRepo(h.dir, 'case-url-repo');
+  await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+  await h.call({ op: 'linear_bind_project', checkout: root, team_id: 'team-pla' });
+
+  for (const reference of [
+    'https://linear.app/acme/issue/pla-142',
+    '  https://linear.app/acme/issue/pla-142/fix-retry  ',
+  ]) {
+    const resolved = await h.call({ op: 'linear_resolve_issue', checkout: root, reference, refresh: true });
+    assert.equal(resolved.ok, true, JSON.stringify(resolved));
+    assert.equal(resolved.result.issue.id, 'issue-142');
+    assert.equal(resolved.result.issue.identifier, 'PLA-142');
+  }
+
+  const doubleSlash = await h.call({
+    op: 'linear_resolve_issue',
+    checkout: root,
+    reference: 'https://linear.app/acme/issue/PLA-142//',
+  });
+  assert.equal(doubleSlash.ok, false);
+  assert.equal(doubleSlash.error.code, 'invalid_request');
+});
