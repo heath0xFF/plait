@@ -431,19 +431,63 @@ pub fn open_lock_file(lease_dir: &File, name: &str) -> Result<(File, DirIdentity
     }
     let c_name =
         CString::new(name).map_err(|_| LeaseError::unsafe_store("Invalid lock file name."))?;
-    let flags = libc::O_RDWR | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC;
-    let mode: libc::c_uint = 0o600;
-    let fd = unsafe { libc::openat(lease_dir.as_raw_fd(), c_name.as_ptr(), flags, mode) };
-    if fd < 0 {
-        return Err(LeaseError::unsafe_store(format!(
-            "Cannot open lease lock file: {}",
-            io::Error::last_os_error()
-        )));
-    }
+    let fd = match open_or_create_at(lease_dir.as_raw_fd(), &c_name, 0o600) {
+        Ok(fd) => fd,
+        Err(None) => {
+            return Err(LeaseError::io(
+                "Cannot open lease lock file: it kept changing while it was opened.",
+            ));
+        }
+        Err(Some(error)) => {
+            return Err(LeaseError::unsafe_store(format!(
+                "Cannot open lease lock file: {error}"
+            )));
+        }
+    };
     // SAFETY: `openat` returned a newly owned descriptor.
     let file = unsafe { File::from_raw_fd(fd) };
     let identity = verify_lock_metadata(&file)?;
     Ok((file, identity))
+}
+
+/// Opens `name` in `dir` without following a symlink, creating it with `mode`
+/// only when it is absent. Several processes may do this at once.
+///
+/// A plain `O_CREAT` open is not safe for that on macOS: when two callers
+/// create one new name together, the slower can fail with ENOENT. So this
+/// opens an existing file first and creates with `O_EXCL`, which never follows
+/// a symlink either; a name that another caller creates or removes between
+/// the two steps is tried again. `Err(None)` means it kept changing.
+fn open_or_create_at(dir: i32, name: &CStr, mode: libc::c_uint) -> Result<i32, Option<io::Error>> {
+    const ATTEMPTS: usize = 16;
+    let flags = libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    for _ in 0..ATTEMPTS {
+        let fd = unsafe { libc::openat(dir, name.as_ptr(), flags) };
+        if fd >= 0 {
+            return Ok(fd);
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::ENOENT) {
+            return Err(Some(error));
+        }
+        let fd = unsafe {
+            libc::openat(
+                dir,
+                name.as_ptr(),
+                flags | libc::O_CREAT | libc::O_EXCL,
+                mode,
+            )
+        };
+        if fd >= 0 {
+            return Ok(fd);
+        }
+        let error = io::Error::last_os_error();
+        // EEXIST: another caller created it first. ENOENT: the same macOS race.
+        if !matches!(error.raw_os_error(), Some(libc::EEXIST | libc::ENOENT)) {
+            return Err(Some(error));
+        }
+    }
+    Err(None)
 }
 
 /// Verify that an open lock descriptor is an owned, private, single-link regular file.
@@ -836,8 +880,11 @@ mod tests {
     use super::*;
     use std::{
         os::unix::fs::{PermissionsExt, symlink},
-        process::Command,
-        sync::atomic::{AtomicU64, Ordering},
+        process::{Command, Stdio},
+        sync::{
+            Arc, Barrier,
+            atomic::{AtomicU64, Ordering},
+        },
     };
 
     struct Scratch(PathBuf);
@@ -1401,5 +1448,140 @@ mod tests {
         );
         drop(acquired);
         releaser.join().unwrap();
+    }
+
+    /// A checkout whose `.git` directory lets the lease layer find its common
+    /// directory without starting Git, so many rounds stay fast.
+    fn plain_checkout(root: &Path) {
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    }
+
+    /// One caller of a crowd: even callers read, odd ones write, and every one
+    /// also takes the shared metadata lock, so each kind of lock file is
+    /// created by whichever caller gets there first. A writer may be refused
+    /// as busy; nothing else may fail.
+    fn take_leases_at_once(leases: &Path, root: &Path, index: usize) -> Result<(), LeaseError> {
+        let class = if index.is_multiple_of(2) {
+            LeaseClass::Reader
+        } else {
+            LeaseClass::Writer
+        };
+        match acquire_git_checkout_in(leases, root, None, class, Some(Duration::from_secs(10))) {
+            Ok(lease) => {
+                drop(lease);
+                Ok(())
+            }
+            Err(error)
+                if class == LeaseClass::Writer && error.kind == LeaseErrorKind::CheckoutBusy =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Racing creators must not widen the directory or any lock file.
+    fn assert_private_lease_store(leases: &Path) {
+        let meta = fs::symlink_metadata(leases).unwrap();
+        assert!(meta.is_dir());
+        assert_eq!(meta.mode() & 0o777, 0o700);
+        let mut files = 0;
+        for entry in fs::read_dir(leases).unwrap() {
+            let meta = fs::symlink_metadata(entry.unwrap().path()).unwrap();
+            assert!(meta.is_file());
+            assert_eq!(meta.nlink(), 1);
+            assert_eq!(meta.mode() & 0o777, 0o600);
+            files += 1;
+        }
+        assert!(files >= 2, "checkout and common lock files");
+    }
+
+    /// The lease directory is new the first time a build runs. On macOS, two
+    /// `O_CREAT` opens of one new name at once can fail the slower one with
+    /// ENOENT, so this runs many fresh rounds.
+    #[test]
+    fn threads_sharing_a_fresh_lease_directory_are_all_admitted() {
+        for round in 0..25 {
+            let scratch = Scratch::new("first-use");
+            let leases = scratch.0.join("fresh/leases");
+            let root = scratch.0.join("repo");
+            plain_checkout(&root);
+            let start = Arc::new(Barrier::new(8));
+            let callers: Vec<_> = (0..8)
+                .map(|index| {
+                    let (leases, root, start) = (leases.clone(), root.clone(), start.clone());
+                    thread::spawn(move || {
+                        start.wait();
+                        take_leases_at_once(&leases, &root, index)
+                    })
+                })
+                .collect();
+            for caller in callers {
+                if let Err(error) = caller.join().unwrap() {
+                    panic!("round {round}: {error:?}");
+                }
+            }
+            assert_private_lease_store(&leases);
+        }
+    }
+
+    const FIRST_USE_CHILD: &str = "PLAIT_LEASE_FIRST_USE";
+
+    /// The same crowd as separate processes: this test binary, run again for
+    /// this test alone, is each child.
+    #[test]
+    fn processes_sharing_a_fresh_lease_directory_are_all_admitted() {
+        const NAME: &str =
+            "lease::tests::processes_sharing_a_fresh_lease_directory_are_all_admitted";
+        if let Some(scratch) = std::env::var_os(FIRST_USE_CHILD) {
+            return first_use_child(Path::new(&scratch));
+        }
+        for round in 0..12 {
+            let scratch = Scratch::new("first-use-processes");
+            plain_checkout(&scratch.0.join("repo"));
+            let children: Vec<_> = (0..6)
+                .map(|index| {
+                    Command::new(std::env::current_exe().unwrap())
+                        .args(["--exact", NAME, "--test-threads=1"])
+                        .env(FIRST_USE_CHILD, &scratch.0)
+                        .env("PLAIT_LEASE_FIRST_USE_INDEX", index.to_string())
+                        .stdout(Stdio::piped())
+                        .stderr(Stdio::piped())
+                        .spawn()
+                        .unwrap()
+                })
+                .collect();
+            // Release the children together, once every one has started.
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while (0..6).any(|index| !scratch.0.join(format!("ready-{index}")).exists()) {
+                assert!(Instant::now() < deadline, "children did not start");
+                thread::sleep(Duration::from_millis(2));
+            }
+            fs::write(scratch.0.join("go"), "").unwrap();
+            for child in children {
+                let output = child.wait_with_output().unwrap();
+                assert!(
+                    output.status.success(),
+                    "round {round}: {}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            assert_private_lease_store(&scratch.0.join("fresh/leases"));
+        }
+    }
+
+    fn first_use_child(scratch: &Path) {
+        let index: usize = std::env::var("PLAIT_LEASE_FIRST_USE_INDEX")
+            .unwrap()
+            .parse()
+            .unwrap();
+        fs::write(scratch.join(format!("ready-{index}")), "").unwrap();
+        // Spin rather than sleep so the children leave the gate together.
+        while fs::symlink_metadata(scratch.join("go")).is_err() {
+            std::hint::spin_loop();
+        }
+        take_leases_at_once(&scratch.join("fresh/leases"), &scratch.join("repo"), index).unwrap();
     }
 }

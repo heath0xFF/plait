@@ -1488,7 +1488,9 @@ never converted in place:
    `TMPDIR`. Runs take it shared. Desktop Git writes, turn undo and redo, and
    worktree removal take it exclusive. Creating a worktree takes it shared on
    the checkout it starts from, so it can proceed beside a run there. Lock
-   files are never removed: a holder may still use one.
+   files are never removed: a holder may still use one. A missing lock file
+   is created with `O_EXCL` after an open finds none, so callers that first
+   use a new lease directory together all get their leases.
 2. **Checkout writer lock**: `flock(LOCK_EX)` on the canonical root directory
    itself, as hosts did before the lifecycle lock, so an older host is still
    excluded. Runs, turn undo and redo, desktop Git writes and worktree removal

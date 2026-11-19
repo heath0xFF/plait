@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdir, writeFile, readFile, rm, symlink, link, chmod, stat, rename } from 'node:fs/promises';
+import { mkdir, writeFile, readFile, rm, symlink, link, chmod, stat, rename, lstat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { test } from 'node:test';
@@ -341,4 +341,75 @@ test('a live undo is not reported as a host that ended before confirming cleanup
   await crashed.close();
   try { assert.equal((await cleanupHelper('read', root)).cleanup?.token, 'crashed-undo'); }
   finally { await cleanupHelper('resolve', root, 'crashed-undo'); }
+});
+
+/** Racing creators must not widen the lease directory or any lock file. */
+async function assertPrivateLeases(directory: string) {
+  assert.equal((await lstat(directory)).mode & 0o777, 0o700);
+  const names = await readdir(directory);
+  assert(names.length >= 2, 'lifecycle and cleanup lock files');
+  for (const name of names) {
+    const meta = await lstat(join(directory, name));
+    assert(meta.isFile(), name); assert.equal(meta.nlink, 1, name); assert.equal(meta.mode & 0o777, 0o600, name);
+  }
+}
+/** Even callers read and odd ones write; a writer may be refused as busy, and nothing else may fail. */
+const unexpected = (results: PromiseSettledResult<unknown>[]) => results.flatMap((result, index) =>
+  result.status === 'rejected' && !(index % 2 && (result.reason as { code?: string }).code === 'busy')
+    ? [`${(result.reason as { code?: string }).code}: ${(result.reason as Error).message}`] : []);
+
+// The lease directory is new the first time a build runs. On macOS, two
+// O_CREAT opens of one new name at once through a directory descriptor, as
+// the host helper opens lock files, can fail the slower with ENOENT.
+test('leases taken at once in a fresh lease directory are all admitted', async t => {
+  const { base } = await setup(t);
+  const saved = process.env.PLAIT_LEASE_DIR;
+  t.after(() => { process.env.PLAIT_LEASE_DIR = saved; });
+  for (let round = 0; round < 20; round++) {
+    const leases = join(base, `fresh-${round}`, 'leases');
+    process.env.PLAIT_LEASE_DIR = leases;
+    const root = join(base, `repo-${round}`); await mkdir(root);
+    const taken = await Promise.allSettled(Array.from({ length: 8 }, (_, index) => acquireCheckout(root, index % 2 ? 'writer' : 'reader')));
+    for (const result of taken) if (result.status === 'fulfilled') await result.value.close();
+    assert.deepEqual(unexpected(taken), [], `round ${round}`);
+    await assertPrivateLeases(leases);
+  }
+});
+
+test('leases taken at once from separate runtimes in a fresh lease directory are all admitted', async t => {
+  const { base } = await setup(t);
+  const safety = new URL('../src/safety.ts', import.meta.url).href;
+  // Each child waits at a gate so all of them open the new files together.
+  const child = `import { writeFileSync, existsSync } from 'node:fs';
+const { acquireCheckout } = await import(${JSON.stringify(safety)});
+const [root, gate, ready, mode] = process.argv.slice(1);
+writeFileSync(ready, '');
+while (!existsSync(gate));
+try { await (await acquireCheckout(root, mode)).close(); } catch (error) { process.stdout.write(JSON.stringify({ code: error.code, message: error.message })); }`;
+  for (let round = 0; round < 8; round++) {
+    const leases = join(base, `fresh-${round}`, 'leases');
+    const root = join(base, `repo-${round}`); await mkdir(root);
+    const gate = join(base, `gate-${round}`);
+    const runs = Array.from({ length: 6 }, (_, index) => {
+      const ready = join(base, `ready-${round}-${index}`);
+      const run = spawn(process.execPath, ['--input-type=module', '-e', child, root, gate, ready, index % 2 ? 'writer' : 'reader'],
+        { env: { ...process.env, PLAIT_LEASE_DIR: leases }, stdio: ['ignore', 'pipe', 'inherit'] });
+      let out = ''; run.stdout!.setEncoding('utf8').on('data', chunk => { out += chunk; });
+      const done = new Promise<void>((resolve, reject) => run.once('close', code => {
+        if (code !== 0) return reject(new Error(`runtime ${index} exited ${code}`));
+        if (!out) return resolve();
+        const failure = JSON.parse(out) as { code: string; message: string };
+        reject(Object.assign(new Error(failure.message), { code: failure.code }));
+      }));
+      return { ready, done };
+    });
+    t.after(() => writeFile(gate, '').catch(() => {}));
+    for (let waited = 0; (await Promise.all(runs.map(run => stat(run.ready).then(() => true, () => false)))).includes(false); waited++) {
+      assert(waited < 3000, 'runtimes did not start');
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    await writeFile(gate, '');
+    assert.deepEqual(unexpected(await Promise.allSettled(runs.map(run => run.done))), [], `round ${round}`);
+    await assertPrivateLeases(leases);
+  }
 });
