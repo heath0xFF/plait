@@ -1,3 +1,4 @@
+import { Worktrees, type Create as WorktreeCreate } from './worktrees.ts';
 import type { ImageData } from './images.ts';
 import { TurnReview } from './turn-review.ts';
 import { LinearService } from './linear/service.ts';
@@ -77,6 +78,7 @@ export class Runtime {
   records: Records;
   turnReview: TurnReview;
   linear: LinearService;
+  worktrees: Worktrees;
   sessions = new Map<string, Session>();
   active = new Map<string, string>();
   models: Models;
@@ -120,6 +122,19 @@ export class Runtime {
     this.records.start();
     this.codex = new CodexHarness(this.store);
     this.claude = new ClaudeHarness(this.store, { sdk: sdkDirectory(directory), cwd: directory });
+    this.worktrees = new Worktrees(this.store, directory, (request, id) => this.prepareWorktreeThread(request, id), () => this.changed('#'), root => this.active.has(root) || this.records.busy(root));
+  }
+  /** Validate the selected harness before reserving filesystem effects. */
+  private async prepareWorktreeThread(request: WorktreeCreate, id: string): Promise<Snapshot> {
+    const { harness, mode, thinking } = request;
+    const choice = { provider: request.provider, model_id: request.model_id };
+    if (harness !== providerHarness(choice.provider)) fail('invalid_request', 'Choose a model from the harness that runs the thread.');
+    const levels = harness === 'pi' ? (this.model(choice), undefined) : await this.levels(harness, choice.model_id);
+    if (mode !== undefined) this.checkMode(harness, mode);
+    const snapshot: Snapshot = { id, checkout: request.parent.root, model: choice, status: 'idle', messages: [], live_text: '', tools: [], pending_approval: null, error: null, truncated: false, approval_mode: request.approval };
+    if (harness !== 'pi') snapshot.harness = { id: harness, version: null, mode: mode ?? (harness === 'codex' ? this.codex : this.claude).defaultMode(), reported: null };
+    if (thinking !== undefined) snapshot.thinking_level = levels ? nearest(levels, thinking) : clampThinkingLevel(this.models.getModel(choice.provider, choice.model_id)!, thinking);
+    return snapshot;
   }
   /** Every harness, Pi first. */
   private async harnesses(fresh?: HarnessId, protocol: Protocol = 4) {
@@ -171,6 +186,7 @@ export class Runtime {
     if (this.providers?.handles(input)) return this.providers.handle(input);
     if (this.turnReview.handles(input)) return this.turnReview.handle(input);
     if (this.linear.handles(input)) return this.linear.handle(input);
+    if (this.worktrees.handles(input)) return this.worktrees.handle(input);
     const request = validate(input);
     const protocol = version(request);
     const result = await this.dispatch(request, protocol);
@@ -812,6 +828,7 @@ export class Runtime {
     }
     await this.providers?.close();
     await this.codex.close();
+    await this.worktrees.close();
     await this.records.close();
     this.store.close();
   }

@@ -119,16 +119,17 @@ each; older files load with the defaults. Base16 scheme files are read from a
 themes folder beside the desktop preferences, and a few MIT-licensed schemes ship
 with their license. Nothing changes in the host or the protocol.
 
-**Agreed for M2.5 worktrees:** a thread may start in its own worktree, never by
-default. The desktop runs `git worktree add` from HEAD on a new `plait/<name>`
-branch, in a `<repository>.worktrees/` folder beside the repository, and starts
-the thread with that folder as its checkout. The host treats the worktree as
-any other checkout: its own lease, run limit, and sandboxed command policy.
-Sandboxed commands there may read the main repository's Git directory, and
-still cannot write it. Its threads list under the project it came from.
-Removal asks first and uses `git worktree remove`, which refuses uncommitted
-work; the branch and its commits stay. Merging the branch back is left to the
-person's own tools.
+**Built for optional worktrees (Stage 7):** the desktop requests one durable
+host-owned worktree thread, with the chosen harness and model. Its branch is
+`plait/<first-12-UUID-hex-digits>` (extended on collision), from an explicit
+captured commit, under `<main-repository>.worktrees/`. New worktrees start cold.
+The host retains creation receipts through retries, disconnection and restart.
+Imported desktop associations group threads but cannot authorize removal.
+Manual removal preserves branches/history, requires the recorded identity and
+fresh lease-protected preservation checks, and never forces removal. Work
+returns by commit, push and pull request; no integration command is added.
+The per-project automatic choice and busy-checkout queue remain later stages.
+
 **Agreed for M4 file viewer:** open any file in a checkout read-only, with
 line numbers and the same syntax highlighting as the conversation, from a
 quick-open picker and from paths the desktop already shows (changed files,
@@ -536,7 +537,7 @@ in a busy checkout is still refused. Not yet excluded: a Codex or Claude Code
 process that keeps running after its run has ended (Stage 6b).
 
 **Still planned:** other tab content kinds, harness stop/cleanup quiescence and
-quarantine (Stage 6b), host-owned worktree creation (Stage 7), busy-checkout
+quarantine (Stage 6b), busy-checkout
 admission and independent multi-checkout capacity (Stage 8), a durable checkout
 queue (Stage 9), enforced Pi read-in-place (Stage 10), copy-on-write artifact
 seeding (Stage 11), and worktree storage accounting and cleanup (Stage 12).
@@ -564,8 +565,8 @@ and a separate 4 MiB resident submission cache are not supported capacity
 promises. At a limit, the last good journal remains intact; required saves
 refuse submission or closing instead of discarding current work.
 
-- **Agreed proposed host capabilities (for the concurrency stages).** Use a
-  protocol revision after 6 with explicit capability flags
+- **Agreed proposed host capabilities (for the concurrency stages).** Use additive operations that omit `protocol_version` where existing reply
+  shapes are unchanged, with explicit capability flags
   (`worktree_threads_v1`, `checkout_queue_v1`, `execution_class_v1`,
   `worktree_storage_v1`, and per-harness `shared_reader`), preserving
   backward compatibility with older hosts and single-writer checkout behavior
@@ -700,3 +701,22 @@ makes on its own, what it writes into the agent's configuration, and what
 keeps running after quit. Plait means to keep the first three at nothing. The
 host is meant to keep running, so its memory after quit is reported, not
 hidden.
+
+### Host-owned worktree contract (Stage 7)
+
+The host owns explicit worktree creation and removal. A creation request fixes
+its parent directory identity, common Git directory identity, base commit and
+harness/model/permissions before any checkout is made. Its durable request ID
+allocates one thread UUID; the branch is `plait/` plus the first twelve UUID hex
+digits, extended on a name collision. The checkout lives beside the main
+repository in `<repository>.worktrees/`, including when requested from a linked
+worktree. It starts cold, with no build artifacts or dirty files copied.
+
+Creation, status, listing and removal use additive operations, leaving protocol
+versions 1–6 unchanged. Older hosts explicitly refuse the new operations.
+Desktop worktree associations remain imported presentation metadata and never
+grant deletion authority. Removal is manual, preserves branches and history,
+and refuses changed identities, active leases, uncommitted or unknown ignored
+files. Unpushed or unknown publication status requires an explicit preservation
+exception. No force removal, branch deletion, integration verb or automatic
+cleanup is added. Busy-checkout choices and queue admission remain Stage 8/9.

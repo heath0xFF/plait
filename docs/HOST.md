@@ -2299,3 +2299,84 @@ exists. Unknown request fields are refused; no protocol version is added.
 Desktop tabs use this identity to validate saved tabs. An older host may
 refuse the operation; session tabs still work, and durable restore waits for
 a verified identity from turn review once a thread exists.
+
+## Host-owned worktrees
+
+These additive operations omit `protocol_version`, like recorded turn review
+and Linear. Versions 1–6 retain their request, summary and snapshot shapes.
+No version bump is needed: the explicit `worktree_threads_v1` capability is
+returned only by `worktree_info`. Older hosts reject these operation names;
+the desktop reports that host-owned worktrees need a newer host. Unknown
+fields, including `protocol_version`, and unknown lifecycle states are refused.
+
+- `worktree_info {checkout}` returns `{schema:1,worktree_threads_v1:true,parent}`.
+  `parent` contains canonical `root`, `main`, `common`, their `identity`,
+  `main_identity`, `common_identity` objects (`dev` and `ino` as decimal strings),
+  and `base`, a full 40- or 64-digit commit OID. An unborn repository is refused.
+  The first registered Git worktree identifies the main root; linked worktrees
+  therefore create siblings beside the main repository, not nested projects.
+- `create_worktree_thread {request_id,parent,harness,provider,model_id,approval}`
+  optionally takes `thinking` and `mode`. Harness is `pi`, `codex` or `claude`;
+  provider/model and mode must belong to that harness and be available before
+  admission. Approval is `ask` or `auto`; Pi uses it for the thread, while the
+  other harnesses retain their own mode. The parent command policy is captured
+  for the new checkout. No run or model request is started by this operation.
+- `worktree_status {request_id}` returns the creation or removal receipt.
+  `list_worktrees {}` returns `{schema:1,operations:[...]}`, newest first,
+  bounded to 256 operations and 750,000 bytes. These are recorded lifecycle facts, not live
+  dirty-file or publication scans; removal always makes fresh checks.
+- `remove_worktree {request_id,creation_id,identity,allow_unpushed}` requires a
+  recorded host-owned checkout and explicit confirmation. `allow_unpushed:false`
+  refuses a missing/local upstream or commits absent from its known remote
+  tracking ref. This reflects the last fetch, not a live remote claim.
+  `allow_unpushed:true` explicitly accepts keeping those commits only on the
+  retained local branch. Neither value permits deleting uncommitted or ignored
+  files. There is no force flag, branch deletion or automatic cleanup.
+
+Creation/removal return `{schema:1,operation}` promptly. An operation includes
+`request_id`, allocated `thread_id`, `state` (`preparing`, `ready`, `failed`,
+`removing`, `removed`), nullable `worktree` and nullable typed `error`. The
+worktree record contains `thread_id`, the immutable `parent`, `path`, `branch`,
+nullable `identity`, `stage` (`reserved`, `creating`, `ready`, `failed`,
+`removing`, `removed`) and nullable diagnostic `error`. Removal status retains
+the original creation ID inside this record; its separate request ID selects
+the immutable removal receipt. Failed removal leaves the creation available
+and returns its refusal. Repeating a request with different fields is refused.
+
+IDs are 1–128 ASCII letters, digits, underscores or hyphens. Paths must be
+absolute UTF-8, at most 4096 bytes, without control characters or dot components.
+Identity values are unsigned 64-bit decimals. Model/provider fields are at most
+256 bytes; modes are 1–32 lowercase letters/underscores. Requests are at most
+65,000 bytes. Nested parent and identity objects reject unknown fields. Core
+reply parsers validate schema, UUID, derived branch/path, identities and lengths.
+
+The host records the request, UUID and selected thread settings in additive
+`worktree_operations`/`worktree_removals` SQLite tables before starting effects.
+Private `worktrees/<thread-UUID>.json` journals are owner-only, no-follow,
+size-bounded files replaced atomically and synced. Branch names start with
+`plait/<first-12-UUID-hex-digits>` and extend by four digits on collision up to
+the full UUID. Existing branches, paths and symlinks are never reused. The root
+is `<main-repository>.worktrees/<suffix>`; no artifacts or dirty files are copied.
+
+Creation holds the parent's shared lifecycle lease and the common Git metadata
+lease. Removal holds exclusive lifecycle and writer leases on the recorded
+checkout, followed by common metadata exclusion. Parent/common identities,
+worktree membership and branch are rechecked under those leases. Removal also
+refuses queued work, record recovery, uncommitted/untracked/ignored content and
+unfinished merge/rebase/sequencer state. Desktop busy summaries grant no
+permission. Both helper and Git supervisors use lifetime pipes and bounded
+process groups; checkout hooks and filters have a 120-second limit and are
+reclaimed before the outer worker releases its leases.
+
+A lost reply is recovered by status or the identical request, with the same
+UUID and base. Host restart resumes admitted creation. A verified complete,
+clean checkout at its recorded base can be bound to its saved thread after a
+crash; hooks are never replayed against an existing checkout. A partial or
+ambiguous creation is reported as failed, retaining its files and branch for
+inspection rather than guessing ownership or deleting unknown work. A crash
+between directory reservation and identity persistence likewise refuses reuse.
+A removal interrupted after Git completed is reconciled only when its recorded
+parent is available and Git no longer registers the missing checkout; a missing
+volume alone is not success. Branches and thread history remain after removal.
+Legacy desktop worktree associations remain imported presentation metadata and
+never authorize deletion. External programs do not participate in these leases.
