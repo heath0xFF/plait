@@ -2611,3 +2611,7 @@ uses the pinned 0.3.326 SDK's `claude_code` preset with `append` and
 `snapshot:false`, refreshing metadata on resume while retaining its normal
 settings sources and project instructions. These instructions describe policy;
 leases, harness permissions and containment enforce it.
+
+The saved admission binds the checkout directory identity. The host rechecks it
+after model discovery, before saving a thread, so replacement at the same path
+fails explicitly instead of redirecting the draft.

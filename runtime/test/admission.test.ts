@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createModels } from '@earendil-works/pi-ai/models';
-import { fauxProvider, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux';
+import { fauxProvider, fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux';
 import { Runtime } from '../src/runtime.ts';
 import { validateAdmission, type Admission } from '../src/admission.ts';
 import { RunCapacity, resourceFailure, configuredCapacity } from '../src/run-capacity.ts';
@@ -64,7 +64,7 @@ test('twenty independent checkouts run, including nine and twenty admissions; on
 });
 for(const harness of ['pi','codex','claude'] as const) test(`busy choice, authorized automatic worktree, cold HEAD and exact ${harness} policy`,async t=>{
   const contexts:string[]=[];
-  const h=harness==='pi'?await pi(t,Array.from({length:2},()=>context=>{contexts.push(JSON.stringify(context.messages));return fauxAssistantMessage('done');})):await (harness==='codex'?codex(t):claude(t));
+  const h=harness==='pi'?await pi(t,[context=>{contexts.push(JSON.stringify(context.messages));return fauxAssistantMessage([fauxToolCall('write',{path:'pi-owned.txt',content:'isolated'},{id:'write'})],{stopReason:'toolUse'});}, fauxAssistantMessage('done'), context=>{contexts.push(JSON.stringify(context.messages));return fauxAssistantMessage('done');}]):await (harness==='codex'?codex(t,'turn',true):claude(t));
   await chmod(h.store,0o700);await commit(h.root);await writeFile(join(h.root,'source.txt'),'dirty');await writeFile(join(h.root,'untracked.txt'),'keep');
   const identity=await rootIdentity(h.root);setCommandPolicy(h.runtime.store,h.root,identity,'sandboxed');
   const lease=await acquireCheckout(h.root);
@@ -84,7 +84,7 @@ for(const harness of ['pi','codex','claude'] as const) test(`busy choice, author
     await h.runtime.reply(start(h.root,'automatic',harness));const automatic=await admitted(h.runtime,'automatic');assert.ok(automatic.worktree);assert.notEqual(automatic.thread_id,ready.thread_id);
   } finally {await lease.close();}
   const target=ready!.checkout;const id=ready!.thread_id!; const snapshot=h.runtime.snapshot(id);
-  assert.equal(snapshot.checkout,target);assert.equal(snapshot.harness?.id??'pi',harness);
+  assert.equal(snapshot.checkout,target);assert.equal(snapshot.harness?.id??'pi',harness);assert.equal(snapshot.approval_mode,'auto');
   assert.equal(commandPolicy(h.runtime.store,target,await rootIdentity(target)),'sandboxed');
   assert.equal(await readFile(join(target,'source.txt'),'utf8'),'committed\n');await assert.rejects(readFile(join(target,'untracked.txt')),{code:'ENOENT'});
   for(let i=0;i<2;i++) {
@@ -92,12 +92,19 @@ for(const harness of ['pi','codex','claude'] as const) test(`busy choice, author
     if(harness==='codex') {await until(()=>h.runtime.snapshot(id).pending_approval!==null); const approval=h.runtime.snapshot(id).pending_approval!;await h.runtime.reply({protocol_version:6,op:'approve',thread_id:id,approval_id:approval.id,allow:true});}
     await until(()=>!h.runtime.sessions.has(id));assert.equal(h.runtime.snapshot(id).status,'idle',JSON.stringify(h.runtime.snapshot(id).error));
   }
-  if(harness==='pi') {assert.match(contexts[0],/Plait run context/);assert.ok(contexts[0].includes(target));assert.match(contexts[0],/writer/);}
+  if(harness==='pi') {assert.equal(contexts.length,2); for(const context of contexts) {assert.match(context,/Plait run context/);assert.ok(context.includes(target));} assert.equal(await readFile(join(target,'pi-owned.txt'),'utf8'),'isolated'); await assert.rejects(readFile(join(h.root,'pi-owned.txt')),{code:'ENOENT'});assert.match(contexts[0],/Plait run context/);assert.ok(contexts[0].includes(target));assert.match(contexts[0],/writer/);}
   if(harness==='codex') {
+    assert.equal(await readFile(join(target,'codex-run0.txt'),'utf8'),'turn-1\n'); await assert.rejects(readFile(join(h.root,'codex-run0.txt')),{code:'ENOENT'});
     const frames=(await readFile(join(h.store,'frames.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
     for(const method of ['thread/start','thread/resume']) {const frame=frames.find(f=>f.method===method);assert.equal(frame.params.cwd,target);assert.match(frame.params.developerInstructions,/Plait run context/);assert.equal(frame.params.sandbox,'workspace-write');}
   }
-  if(harness==='claude') { const log=await readFile(join(h.store,'claude-images.jsonl'),'utf8');assert.ok(log.includes(target));assert.match(log,/append-system-prompt|Plait run context/); }
+  if(harness==='claude') {
+    const rows=(await readFile(join(h.store,'claude-images.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+    const starts=rows.flatMap(row=>row.stdin?[JSON.parse(row.stdin)]:[]).filter(frame=>frame.request?.subtype==='initialize' && typeof frame.request.appendSystemPrompt==='string');assert.equal(starts.length,2);
+    for(const frame of starts) {assert.match(frame.request.appendSystemPrompt,/Plait run context/);assert.ok(frame.request.appendSystemPrompt.includes(target));assert.equal(frame.request.systemPromptSnapshot,false);}
+    const used=rows.filter(row=>row.observed==='unasked');assert.equal(used.length,2);for(const row of used) assert.equal(row.mode,'auto');
+    const runs=rows.filter(row=>row.argv?.includes('stream-json') && row.argv.some((arg:string)=>arg==='--permission-mode=auto'));assert.equal(runs.length,2); const created=runs[0].argv.find((arg:string)=>arg.startsWith('--session-id=')).slice('--session-id='.length);assert.ok(runs[1].argv.includes(`--resume=${created}`));assert.equal(await readFile(join(target,'claude-1.txt'),'utf8'),'turn 1\n');await assert.rejects(readFile(join(h.root,'claude-1.txt')),{code:'ENOENT'});
+  }
   assert.equal(await readFile(join(h.root,'untracked.txt'),'utf8'),'keep');
 });
 test('preparation cancellation starts no harness and releases the checkout',async t=>{
@@ -165,4 +172,20 @@ test('project authorization survives restart but never follows a replaced reposi
   await rename(h.root,h.root+'-original');await mkdir(h.root);await exec('/usr/bin/git',['init','-q',h.root]);await commit(h.root);
   const replacement:any=await next.runtime.reply({op:'admission_info',checkout:h.root});assert.equal(replacement.result.auto_worktree,false);
   assert.equal((await next.runtime.reply({op:'set_project_isolation',checkout:h.root,identity:info.result.project_identity,auto_worktree:true})).error?.code,'permission_denied');
+});
+
+
+test('a checkout replaced during model discovery cannot receive an admitted thread',async t=>{
+  const {rename}=await import('node:fs/promises');const h=await codex(t);await commit(h.root);
+  const model=h.runtime.codex.model.bind(h.runtime.codex);
+  h.runtime.codex.model=async id=>{
+    const result=await model(id);
+    await rename(h.root,h.root+'-original');await mkdir(h.root);await exec('/usr/bin/git',['init','-q',h.root]);
+    return result;
+  };
+  assert.equal((await h.runtime.reply(start(h.root,'replaced-during-discovery','codex'))).ok,true);
+  let result:Admission|undefined;
+  await until(async()=>{const reply:any=await h.runtime.reply({op:'admission_status',request_id:'replaced-during-discovery'});assert.equal(reply.ok,true);result=reply.result.admission;return result!.state!=='preparing';});
+  assert.equal(result!.state,'failed');assert.equal(result!.error?.code,'permission_denied');assert.match(result!.error!.message,/identity changed/);
+  assert.equal(h.runtime.store.list(h.root).length,0);assert.equal(await h.turns(),0);
 });

@@ -162,7 +162,8 @@ async function handle(frame: Frame) {
       const turnId = `turn-${++turns}`;
       // Stands for the work a turn does in the checkout; steering joins a turn and writes nothing.
       // Named for the message, as a later run may start a new app-server whose turns count from 1 again.
-      if (process.env.FAKE_CODEX_WRITE) writeFileSync(join(process.env.FAKE_CODEX_WRITE, `codex-${params.clientUserMessageId ?? turnId}.txt`), `${turnId}\n`);
+      const writeRoot = process.env.FAKE_CODEX_WRITE_CWD ? params.cwd : process.env.FAKE_CODEX_WRITE;
+      if (writeRoot) writeFileSync(join(writeRoot, `codex-${params.clientUserMessageId ?? turnId}.txt`), `${turnId}\n`);
       if (scenario === 'exit-on-turn') process.exit(3);
       policy = params.approvalPolicy ?? policy;
       active = { id: turnId, interrupted: false };

@@ -22,7 +22,7 @@ import type { ApprovalMode, HarnessId, ModelChoice, Protocol, QueueMode, Request
 import { Store } from './store.ts';
 import { Records } from './records.ts';
 import { checkout, dirtyPaths, fileAction, identities, acquireCheckout, rootIdentity, checkRoot, pathKey } from './safety.ts';
-import type { LeaseHandle } from './safety.ts';
+import type { FileIdentity, LeaseHandle } from './safety.ts';
 import { registry } from './tools.ts';
 import { executionEntry, mcpPolicy, setMcpEnabled } from './mcp/policy.ts';
 import { McpRun, eligible, fingerprint, nameKey } from './mcp/tools.ts';
@@ -130,7 +130,7 @@ export class Runtime {
     this.codex = new CodexHarness(this.store);
     this.claude = new ClaudeHarness(this.store, { sdk: sdkDirectory(directory), cwd: directory });
     this.worktrees = new Worktrees(this.store, directory, (request, id) => this.prepareWorktreeThread(request, id), () => this.changed('#'), root => this.active.has(root) || this.records.busy(root));
-    this.admissions = new Admissions(this.store, this.worktrees, this.capacity, input => this.handle(input), root => this.active.has(root) || this.records.busy(root));
+    this.admissions = new Admissions(this.store, this.worktrees, this.capacity, (input, identity) => this.handle(input, identity), root => this.active.has(root) || this.records.busy(root));
   }
   /** Validate the selected harness before reserving filesystem effects. */
   private async prepareWorktreeThread(request: WorktreeCreate, id: string): Promise<Snapshot> {
@@ -248,7 +248,7 @@ export class Runtime {
   private imageData(thread: string, request: string): ImageData[] {
     return this.store.images.data(thread, this.store.images.forRequest(thread, request));
   }
-  async handle(input: unknown): Promise<unknown> {
+  async handle(input: unknown, expectedCheckout?: FileIdentity): Promise<unknown> {
     if (this.providers?.handles(input)) return this.providers.handle(input);
     if (handlesCleanup(input)) return this.checkoutCleanup(input);
     if (this.turnReview.handles(input)) return this.turnReview.handle(input);
@@ -257,12 +257,12 @@ export class Runtime {
     if (handlesAdmission(input)) return this.admissions.handle(input);
     const request = validate(input);
     const protocol = version(request);
-    const result = await this.dispatch(request, protocol);
+    const result = await this.dispatch(request, protocol, expectedCheckout);
     // Every snapshot leaves through the negotiated wire shape.
     if (result && typeof result === 'object' && 'thread' in result) return { ...result, thread: view({ ...(result.thread as Snapshot), image_input: this.imageInput(result.thread as Snapshot), records_revision: this.records.revision((result.thread as Snapshot).id) }, protocol) };
     return result;
   }
-  private async dispatch(request: ReturnType<typeof validate>, protocol: Protocol): Promise<unknown> {
+  private async dispatch(request: ReturnType<typeof validate>, protocol: Protocol, expectedCheckout?: FileIdentity): Promise<unknown> {
     switch (request.op) {
       case 'status': return { protocol_version: protocol, default_model: this.store.defaultModel(), models: this.catalog(protocol) };
       case 'set_default_model': {
@@ -282,6 +282,7 @@ export class Runtime {
       }
       case 'create_thread': {
         const root = await checkout(String(request.checkout));
+        if (expectedCheckout) await checkRoot(root, expectedCheckout);
         const choice = { provider: String(request.provider), model_id: String(request.model_id) };
         const requested = request.thinking as ThinkingLevel | undefined;
         const harness = (request.harness ?? 'pi') as HarnessId;
@@ -301,7 +302,10 @@ export class Runtime {
           snapshot.thinking_level = levels ? nearest(levels, requested) : clampThinkingLevel(this.models.getModel(choice.provider, choice.model_id)!, requested);
         }
         const result = { thread: snapshot };
-        this.store.admit('create', String(request.request_id), input, result, snapshot, await rootIdentity(root));
+        const identity = await rootIdentity(root);
+        // Admission captured the directory before model discovery could yield.
+        if (expectedCheckout && (identity.dev !== expectedCheckout.dev || identity.ino !== expectedCheckout.ino)) fail('permission_denied', 'Checkout identity changed. Refresh before starting a thread.');
+        this.store.admit('create', String(request.request_id), input, result, snapshot, identity);
         this.changed('#');
         return result;
       }

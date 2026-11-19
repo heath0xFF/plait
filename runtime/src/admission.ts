@@ -51,10 +51,10 @@ export class Admissions {
   private capacity: RunCapacity;
   private store: Store;
   private worktrees: Worktrees;
-  private createHere: (input: Record<string, unknown>) => Promise<unknown>;
+  private createHere: (input: Record<string, unknown>, identity: FileIdentity) => Promise<unknown>;
   private busy: (root: string) => boolean;
   constructor(store: Store, worktrees: Worktrees, capacity: RunCapacity,
-    createHere: (input: Record<string, unknown>) => Promise<unknown>, busy: (root: string) => boolean) {
+    createHere: (input: Record<string, unknown>, identity: FileIdentity) => Promise<unknown>, busy: (root: string) => boolean) {
     this.capacity = capacity; this.store = store; this.worktrees = worktrees; this.createHere = createHere; this.busy = busy;
     store.db.exec('CREATE TABLE IF NOT EXISTS thread_admissions(request_id TEXT PRIMARY KEY,input TEXT NOT NULL,plan TEXT NOT NULL,result TEXT NOT NULL)');
     for (const row of store.db.prepare('SELECT request_id,result FROM thread_admissions').all()) {
@@ -93,6 +93,8 @@ export class Admissions {
       try { const lease = await acquireCheckout(root); await lease.close(); }
       catch (error) { if (error instanceof HostError && error.code === 'busy') busy = true; else throw error; }
     }
+    await checkRoot(root, identity);
+    if (parent && (parent.root !== root || canonical(parent.identity) !== canonical(identity))) fail('permission_denied', 'Checkout identity changed. Refresh before starting a thread.');
     const project = parent?.main ?? root; const project_identity = parent?.main_identity ?? identity;
     return { schema: 1, worktree_at_start_v1: true, linked_continuation_v1: true, queue: false, strict_reader: false,
       checkout: root, identity, project, project_identity, busy, auto_worktree: this.store.setting(policyKey(project, project_identity)) === 'worktree', parent, refusal };
@@ -153,7 +155,7 @@ export class Admissions {
       } else {
         await checkRoot(plan.input.checkout, plan.identity);
         const { checkout, harness, provider, model_id, mode, thinking } = plan.input;
-        const reply = await this.createHere({ op: 'create_thread', protocol_version: 6, request_id: plan.here_id, checkout, harness, provider, model_id, ...(mode === undefined ? {} : { mode }), ...(thinking === undefined ? {} : { thinking }) }) as { thread: Snapshot };
+        const reply = await this.createHere({ op: 'create_thread', protocol_version: 6, request_id: plan.here_id, checkout, harness, provider, model_id, ...(mode === undefined ? {} : { mode }), ...(thinking === undefined ? {} : { thinking }) }, plan.identity) as { thread: Snapshot };
         result.thread_id = reply.thread.id; result.checkout = reply.thread.checkout; result.state = 'ready';
       }
     } catch (error) { result.state = 'failed'; result.error = resourceFailure(error) ?? failure(error); }

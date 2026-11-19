@@ -35,7 +35,7 @@ export function pairs(db: DatabaseSync): Pair[] {
 export const models = () => { const models = createModels(); models.setProvider(fauxProvider().provider); return models; };
 
 /** A runtime whose Codex is the fake, writing a file in the checkout as each turn starts. */
-export async function codex(t: Context, scenario = 'turn') {
+export async function codex(t: Context, scenario = 'turn', writeCwd = false) {
   const { root, base } = await setup(t);
   const store = join(base, 'store');
   await mkdir(store, { recursive: true });
@@ -43,7 +43,7 @@ export async function codex(t: Context, scenario = 'turn') {
   const open = () => {
     const runtime = new Runtime(store, models(), new Set(['faux']));
     runtime.codex = new CodexHarness(runtime.store, {
-      environment: async () => codexEnv({ FAKE_CODEX_SCENARIO: scenario, FAKE_CODEX_LOG: log, FAKE_CODEX_WRITE: root }),
+      environment: async () => codexEnv({ FAKE_CODEX_SCENARIO: scenario, FAKE_CODEX_LOG: log, ...(writeCwd ? { FAKE_CODEX_WRITE_CWD: '1' } : { FAKE_CODEX_WRITE: root }) }),
       find: async () => ({ state: 'ready', path: FAKE_CODEX, version: '0.169.0', message: 'ready' }),
       start: (path, env) => AppServer.start(path, { env, requestTimeoutMs: 10_000 }),
       idleMs: 50,
