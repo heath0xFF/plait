@@ -1156,7 +1156,7 @@ are not loaded are never read for a search.
 
 Conversation events use GPUI's variable-height `list`. The conversation is
 drawn as a log of turns: a request heads its turn at a ring on the turn line.
-Requests use a neutral panel and a visible You label; replies use an Assistant
+Requests use a neutral panel and a visible You label; replies use a Plait
 label and stay open beside the line, as do tool calls. The request projection
 in `plait_core::markdown::Message::request` (`markdown/request.rs`) separates
 quoted context on the background executor without interpreting the rest of the

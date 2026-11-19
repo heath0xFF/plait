@@ -273,7 +273,7 @@ impl Plait {
         );
         let label = format!(
             "{} message: {}",
-            if user { "Your" } else { "Assistant" },
+            if user { "Your" } else { "Plait" },
             message.text
         );
         column()
@@ -292,7 +292,7 @@ impl Plait {
                     .w_full()
                     .justify_between()
                     .gap_2()
-                    .child(message_author(if user { "You" } else { "Assistant" }))
+                    .child(message_author(if user { "You" } else { "Plait" }))
                     .child(copy.h(px(AUTHOR_LINE))),
             )
             .child(body)
@@ -485,11 +485,11 @@ impl Plait {
         column()
             .id("live-stream")
             .role(Role::Group)
-            .aria_label(format!("Assistant is writing: {text}"))
+            .aria_label(format!("Plait is writing: {text}"))
             .w_full()
             .min_w_0()
             .gap_1()
-            .child(message_author("Assistant"))
+            .child(message_author("Plait"))
             .child(body)
             .into_any_element()
     }

@@ -517,7 +517,7 @@ a change, and failures after writes begin can be partial. Read the explicit
 ## Reading messages
 
 Your messages have a **You** label and a neutral background panel. Model
-replies have an **Assistant** label and stay on the open conversation surface,
+replies have a **Plait** label and stay on the open conversation surface,
 including while they stream. Both use regular-weight body text. The rings,
 turn lines, closing nodes, and run controls remain beside the conversation.
 

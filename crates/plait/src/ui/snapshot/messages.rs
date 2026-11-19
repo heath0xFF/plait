@@ -194,7 +194,7 @@ fn copy_message_cross_label_selection_and_image_only_requests() {
         );
     });
 
-    // Dragging across the panel and the Assistant label skips visible labels.
+    // Dragging across the panel and the Plait label skips visible labels.
     let answer_end = caret(&mut harness, "answer", 0, "I’ll keep th".len());
     harness.pointer(PlatformInput::MouseDown(MouseDownEvent {
         button: MouseButton::Left,

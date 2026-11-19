@@ -187,7 +187,7 @@ class Acceptance:
                 self.press('Close find')
         self.field('Message to agent', '')
         self.key('cmd+r')
-        self.ax('find', '--prefix', f'Assistant message: {ANSWER}', '--role', 'AXGroup')
+        self.ax('find', '--prefix', f'Plait message: {ANSWER}', '--role', 'AXGroup')
 
     def record(self, name, fn, native=True):
         self.current = name
@@ -285,7 +285,7 @@ class Acceptance:
         self.ax('front')
         self.ax('place', '1380', '860')
         self.find('Message to agent', 'field')
-        self.ax('find', '--prefix', f'Assistant message: {ANSWER}')
+        self.ax('find', '--prefix', f'Plait message: {ANSWER}')
         self.ready = True
         return f'PID {self.app.pid}; {result.stdout.strip().replace(chr(10), "; ")}'
 
@@ -580,7 +580,7 @@ class Acceptance:
     def selection(self):
         self.pointer()
         self.tab('Conversation')
-        return self.ax('select-text', '--prefix', f'Assistant message: {ANSWER}', '--text', ANSWER)
+        return self.ax('select-text', '--prefix', f'Plait message: {ANSWER}', '--text', ANSWER)
 
     def approval(self, allow):
         self.fixture.new_thread()
@@ -604,9 +604,9 @@ class Acceptance:
         error_start = len(self.fixture.replay.errors)
         self.fixture.replay.add({'text': text, 'chunk': 12, 'delay': .15})
         self.fixture.submit('Stream the scripted response slowly.')
-        growth = self.ax('growth', '--prefix', 'Assistant is writing:', '--timeout', '15', timeout=20)
+        growth = self.ax('growth', '--prefix', 'Plait is writing:', '--timeout', '15', timeout=20)
         self.fixture.idle()
-        self.ax('find', '--prefix', 'Assistant message: Scripted streaming acceptance.')
+        self.ax('find', '--prefix', 'Plait message: Scripted streaming acceptance.')
         errors = self.fixture.replay.errors[error_start:]
         require(not errors, f'replay errors: {errors}')
         return f'{growth}; final reply appeared (no smoothness or latency claim)'

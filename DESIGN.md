@@ -60,7 +60,7 @@ conversation keeps a readable minimum width.
   panel, left-aligned, with regular-weight body text. Quoted context has a
   one-point neutral rule and muted text inside that panel; the outer `>`
   marks are not drawn. Other request syntax stays literal. Replies carry a
-  visible Assistant label, including while streaming, and stay open on the
+  visible Plait label, including while streaming, and stay open on the
   conversation surface. Reasoning and tool calls stay compact beside the line.
   Each finished recorded run closes at a filled node, including one with no answer. Its record is drawn there: the
   step count and the files the host recorded changing, including
