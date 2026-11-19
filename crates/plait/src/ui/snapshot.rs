@@ -45,6 +45,7 @@ use std::{
 mod a11y;
 mod branches;
 mod find;
+mod isolation;
 mod mcp;
 mod messages;
 mod settings_modal;
@@ -2294,6 +2295,7 @@ fn walk(output: Option<&Path>) {
         });
         harness.capture(&format!("no-sidebar-{suffix}"));
         ownership_scenes(&repository, output, suffix, width, height);
+        isolation::walk(&repository, output, suffix, width, height);
     }
     let _ = std::fs::remove_dir_all(&scratch);
 }
