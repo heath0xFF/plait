@@ -513,8 +513,15 @@ func application(_ pid: pid_t) -> AXUIElement {
     return app
 }
 
+/// The runner reaps the app only when it next polls, so a crashed app stays a
+/// zombie that `kill(pid, 0)` still accepts. Treat a zombie as exited.
 func processAlive(_ pid: pid_t) -> Bool {
-    kill(pid, 0) == 0
+    guard kill(pid, 0) == 0 else { return false }
+    var info = kinfo_proc()
+    var size = MemoryLayout<kinfo_proc>.stride
+    var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+    guard sysctl(&name, 4, &info, &size, nil, 0) == 0, size > 0 else { return true }
+    return info.kp_proc.p_stat != SZOMB
 }
 
 /// The development copy's document window: the standard window, else the first.
@@ -902,6 +909,16 @@ func selfTest() {
     growing.observePresent(at: 0.5, length: 30, role: "AXGroup", frame: "0 0 100 20")
     growing.observePresent(at: 0.65, length: 42, role: "AXGroup", frame: "0 0 100 20")
     check(growing.grew && growing.lengths == [30, 42], "two distinct lengths satisfy growth")
+    check(processAlive(getpid()), "own process is alive")
+    // An exited child that nobody has reaped yet, as the app is before the runner polls.
+    var child: pid_t = 0
+    if posix_spawn(&child, "/usr/bin/true", nil, nil, [strdup("true"), nil], nil) == 0 {
+        let deadline = Date().addingTimeInterval(5)
+        while processAlive(child) && Date() < deadline { usleep(20_000) }
+        check(kill(child, 0) == 0 && !processAlive(child), "unreaped exited child counts as exited")
+        var status: Int32 = 0
+        waitpid(child, &status, 0)
+    } else { check(false, "spawn /usr/bin/true for the exit test") }
     if failures > 0 { exit(1) }
     print("axdrive self-test passed")
 }
