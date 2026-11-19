@@ -331,7 +331,14 @@ impl Plait {
             .snapshot()
             .ready()
             .map_or_else(|| key.1.clone(), |snapshot| snapshot.root.clone());
+        let checkout_generation = self.host.creation.generation;
+        let expected = self.state.checkout_key().cloned();
         let task = cx.background_executor().spawn(async move {
+            if let Some(expected) = &expected {
+                expected
+                    .verify()
+                    .map_err(plait_core::host::Error::Protocol)?;
+            }
             let canonical = std::fs::canonicalize(&checkout)?;
             let request = match change {
                 Some((name, enabled, definition)) => {
@@ -351,6 +358,9 @@ impl Plait {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
+                if this.host.creation.generation != checkout_generation {
+                    return;
+                }
                 if !this.accept_agent(&key, revision, result) {
                     return;
                 }

@@ -1449,6 +1449,7 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
         choice: choice(),
         harness: HarnessId::Pi,
         selection_epoch: 0,
+        checkout: Some(repository.clone()),
     };
     let reply = |id: &str| -> Result<ThreadReply, Error> {
         Ok(ThreadReply {
@@ -2254,6 +2255,7 @@ fn walk(output: Option<&Path>) {
             plait.diagnostics = true;
         });
         harness.capture(&format!("no-sidebar-{suffix}"));
+        ownership_scenes(&repository, output, suffix, width, height);
     }
     let _ = std::fs::remove_dir_all(&scratch);
 }
@@ -5064,15 +5066,11 @@ fn project_switching_keeps_each_draft_and_rejects_the_old_watch() {
         assert_eq!(plait.host.creation.checkout, other);
         assert_eq!(plait.state.repository.path(), other);
         assert!(!plait.host.accepts_watch(old_epoch, old_watch, THREAD));
-        assert!(!plait.host.connection.saving);
-        assert!(
-            plait
-                .host
-                .connection
-                .save_message
-                .as_deref()
-                .unwrap()
-                .contains("not confirmed")
+        assert_eq!(plait.host.connection.epoch, old_epoch);
+        assert!(plait.host.connection.saving);
+        assert_eq!(
+            plait.host.connection.save_message.as_deref(),
+            Some("Saving default model…")
         );
         plait
             .workspace
@@ -6391,6 +6389,198 @@ fn thread_workspace_preserves_selection_and_reconnect_resets() {
         plait.workspace.reset_for_reconnect();
         assert!(plait.workspace.history.error.is_none());
         assert_eq!(plait.workspace.turn_review.generation, before_reconnect + 1);
+    });
+    drop(harness);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+fn ownership_scenes(
+    repository: &Path,
+    output: Option<&Path>,
+    suffix: &str,
+    width: f32,
+    height: f32,
+) {
+    let mut harness = Harness::new(repository, output, width, height);
+    harness.connect(repository, false);
+    harness.update(|plait, window, cx| {
+        let stale = plait
+            .host
+            .thread
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .clone();
+        let stamp = plait.host.read_stamp();
+        plait.host.select(Some("second-thread".into()));
+        let mut current = stale.clone();
+        current.id = "second-thread".into();
+        current.title = Some("Current thread".into());
+        current.live_text.clear();
+        current.messages[0].text =
+            "Keep this thread in view while an earlier reply arrives.".into();
+        assert!(plait.host.apply_snapshot(
+            plait.host.connection.epoch,
+            plait.host.thread.watch_epoch,
+            current
+        ));
+        assert!(
+            !plait
+                .host
+                .apply_snapshot(stamp.connection, stamp.selection, stale)
+        );
+        plait.conversation_changed(window, cx);
+    });
+    harness.capture(&format!("tabs-stale-reply-{suffix}"));
+    harness.update(|plait, _, _| {
+        let key = plait.state.checkout_key().unwrap().clone();
+        plait.host.bind_checkout("second-thread", &key).unwrap();
+        let mut replaced = key;
+        replaced.inode += 1;
+        plait.notice = plait.host.bind_checkout("second-thread", &replaced).err();
+        assert_eq!(plait.notice.as_deref(), Some("Checkout identity changed."));
+    });
+    harness.capture(&format!("tabs-checkout-identity-error-{suffix}"));
+}
+
+#[core::prelude::v1::test]
+fn commit_acknowledgements_never_clear_another_thread_or_newer_draft() {
+    if !isolated("commit_acknowledgements_never_clear_another_thread_or_newer_draft") {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("plait-commit-owner-{}", std::process::id()));
+    let repository = fixture_repository(&root);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.update(|plait, _, cx| {
+        let owner = plait.state.checkout_id();
+        plait
+            .workspace
+            .commit_message
+            .update(cx, |field, cx| field.set_text("Original", cx));
+        let thread = plait.host.read_stamp().thread;
+        let revision = plait.workspace.commit_message.read(cx).revision();
+        plait.commit_sends.insert(
+            owner,
+            super::commit_panel::CommitAttempt {
+                thread: thread.clone(),
+                revision,
+                message: "Original".into(),
+            },
+        );
+        plait.host.select(Some("b".into()));
+        plait.state.repository.write_mut().committed = Some("oid".into());
+        plait.after_git_write(owner, cx);
+        assert_eq!(plait.workspace.commit_message.read(cx).text(), "Original");
+        plait.host.select(Some(THREAD.into()));
+        plait.commit_sends.insert(
+            owner,
+            super::commit_panel::CommitAttempt {
+                thread,
+                revision,
+                message: "Original".into(),
+            },
+        );
+        plait.workspace.commit_message.update(cx, |field, cx| {
+            field.set_text("Edited", cx);
+            field.set_text("Original", cx);
+        });
+        plait.state.repository.write_mut().committed = Some("oid".into());
+        plait.after_git_write(owner, cx);
+        assert_eq!(plait.workspace.commit_message.read(cx).text(), "Original");
+    });
+    drop(harness);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn file_reads_cannot_follow_the_same_name_into_another_checkout() {
+    if !isolated("file_reads_cannot_follow_the_same_name_into_another_checkout") {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("plait-file-owner-{}", std::process::id()));
+    let a = fixture_repository(&root.join("a"));
+    let b = fixture_repository(&root.join("b"));
+    std::fs::write(a.join("same.txt"), "From A\n").unwrap();
+    std::fs::write(b.join("same.txt"), "From B\n").unwrap();
+    let mut harness = Harness::new(&a, None, 900., 600.);
+    harness.connect(&a, false);
+    harness.update(|plait, window, cx| {
+        plait.open_file("same.txt".into(), None, cx);
+        plait.change_checkout(b.clone(), window, cx);
+        assert!(plait.workspace.file_viewer.path.is_none());
+        assert!(plait.workspace.file_viewer.opened.is_none());
+    });
+    harness.update(|plait, _, cx| {
+        assert!(plait.workspace.file_viewer.opened.is_none());
+        plait.open_file("same.txt".into(), None, cx);
+    });
+    harness.update(|plait, _, _| {
+        let opened = plait.workspace.file_viewer.opened.as_ref().unwrap();
+        assert_eq!(
+            plait.workspace.file_viewer.path,
+            Some(PathBuf::from("same.txt"))
+        );
+        assert_eq!(plait.workspace.file_viewer.root, b);
+        assert!(format!("{:?}", opened.contents).contains("From B"));
+    });
+    harness.update(|plait, window, cx| {
+        plait.open_file("src/review.rs".into(), None, cx);
+        plait.change_checkout(a.clone(), window, cx);
+        plait.change_checkout(b.clone(), window, cx);
+    });
+    harness.update(|plait, _, _| {
+        assert!(plait.workspace.file_viewer.opened.is_none());
+        assert!(plait.workspace.file_viewer.path.is_none());
+    });
+    drop(harness);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn policy_reply_cannot_return_to_an_earlier_checkout_lifetime() {
+    if !isolated("policy_reply_cannot_return_to_an_earlier_checkout_lifetime") {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("plait-policy-owner-{}", std::process::id()));
+    let a = fixture_repository(&root.join("a"));
+    let b = fixture_repository(&root.join("b"));
+    let mut harness = Harness::new(&a, None, 900., 600.);
+    harness.connect(&a, false);
+    let (release, released) = std::sync::mpsc::channel();
+    let host = undo::Host::start(move |request| {
+        assert_eq!(request["op"], "command_policy");
+        released.recv_timeout(Duration::from_secs(5)).unwrap();
+        Some(serde_json::json!({"checkout":request["checkout"], "policy":"trusted"}))
+    });
+    harness.update(|plait, window, cx| {
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 6;
+        let key = (plait.host.connection.epoch, a.clone());
+        plait.policy.key = Some(key.clone());
+        plait.request_policy(None, cx);
+        plait.change_checkout(b.clone(), window, cx);
+        plait.change_checkout(a.clone(), window, cx);
+        plait.policy.key = Some(key);
+        plait.policy.value = Some(plait_core::host::policy::CommandPolicy::Sandboxed);
+        release.send(()).unwrap();
+    });
+    undo::wait(&mut harness, |_| !host.requests.lock().unwrap().is_empty());
+    drop(host);
+    std::thread::sleep(Duration::from_millis(60));
+    harness.settle();
+    harness.update(|plait, _, _| {
+        assert_eq!(
+            plait.policy.value,
+            Some(plait_core::host::policy::CommandPolicy::Sandboxed)
+        );
+        assert!(plait.policy.note.is_none());
     });
     drop(harness);
     std::fs::remove_dir_all(root).unwrap();

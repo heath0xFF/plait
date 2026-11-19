@@ -1,3 +1,6 @@
+mod registry;
+pub use registry::{CheckoutId, CheckoutRegistry, RepositoryJob, RepositoryReply};
+
 pub use crate::{
     checkout_state::{CheckoutRepositoryData, CommitLogData},
     thread_view::{ChangesViewState, DiffKey, HistoryViewState, ThreadRepositoryView},
@@ -117,6 +120,7 @@ pub struct RepositoryState {
     pub data: CheckoutRepositoryData,
     /// Selected-thread Git view state: selected changed file/diff and commit/patch.
     pub view: ThreadRepositoryView,
+    pub(crate) view_generation: u64,
 }
 
 /// The one write that may be queued or running, and how the last one went.
@@ -146,9 +150,32 @@ impl RepositoryState {
         let mut state = Self {
             data: CheckoutRepositoryData::new(path),
             view: ThreadRepositoryView::default(),
+            view_generation: 0,
         };
         state.refresh();
         state
+    }
+
+    /// Retire a view's outstanding replies without invalidating shared data.
+    pub fn invalidate_view(&mut self) {
+        self.view_generation += 1;
+        self.data.write.reselect = None;
+        // Retiring a reply must not leave the current slot loading forever.
+        if matches!(self.view.changes.diff, Load::Loading)
+            && let Some(key) = self.view.changes.selected.clone()
+        {
+            self.show(key.file, key.mode);
+        }
+        if matches!(self.view.history.patch, Load::Loading) {
+            self.view.history.queued_show = self.view.history.selected.clone();
+        }
+    }
+
+    fn reset_view(&mut self) {
+        let wanted = self.view.history.wanted;
+        self.view = ThreadRepositoryView::default();
+        self.view.history.wanted = wanted;
+        self.invalidate_view();
     }
 
     pub fn path(&self) -> &Path {
@@ -201,6 +228,7 @@ impl RepositoryState {
 
     /// Switch checkouts. Nothing from the previous one carries over.
     pub fn open(&mut self, path: PathBuf) {
+        self.view.changes = ChangesViewState::default();
         self.data.path = path;
         self.data.root = None;
         // A list of the previous checkout's branches must not land.
@@ -228,6 +256,9 @@ impl RepositoryState {
     /// Reread status and diffs only. Staging changes the index, not history,
     /// so it keeps the commit list and its open patch.
     fn refresh_status(&mut self) {
+        self.view.changes.restore = self
+            .selected_change()
+            .or_else(|| self.view.changes.restore.take());
         self.data.epoch += 1;
         self.data.snapshot = Load::Loading;
         self.data.staged = 0;
@@ -291,7 +322,11 @@ impl RepositoryState {
         if file >= snapshot.changes.len() {
             return;
         }
-        let key = DiffKey { file, mode };
+        let key = DiffKey {
+            file,
+            path: snapshot.changes[file].path.clone(),
+            mode,
+        };
         self.view.changes.selected = Some(key.clone());
         if let Some(diff) = self.data.cache.get(&key).cloned() {
             self.view.changes.diff = Load::Ready(diff);
@@ -334,7 +369,11 @@ impl RepositoryState {
         } else {
             DiffMode::Staged
         };
-        let key = DiffKey { file, mode };
+        let key = DiffKey {
+            file,
+            path: change.path.clone(),
+            mode,
+        };
         if !self.data.cache.contains(&key) {
             self.data.prefetch = Some(Job::Diff {
                 epoch: self.data.epoch,
@@ -392,8 +431,7 @@ impl RepositoryState {
     /// The selected file's path and view, if one is selected.
     fn selected_change(&self) -> Option<(PathBuf, DiffMode)> {
         let key = self.view.changes.selected.as_ref()?;
-        let change = self.data.snapshot.ready()?.changes.get(key.file)?;
-        Some((change.path.clone(), key.mode))
+        Some((key.path.clone(), key.mode))
     }
 
     fn write_job(&mut self) -> Option<Job> {
@@ -529,7 +567,14 @@ impl RepositoryState {
                                 DiffMode::Staged
                             }
                         });
-                        let again = self.data.write.reselect.take().and_then(|(path, mode)| {
+                        let remembered = self
+                            .data
+                            .write
+                            .reselect
+                            .take()
+                            .or_else(|| self.view.changes.restore.take());
+                        let had_selection = remembered.is_some();
+                        let again = remembered.and_then(|(path, mode)| {
                             let file = snapshot.changes.iter().position(|c| c.path == path)?;
                             let change = &snapshot.changes[file];
                             // After staging, the file may only have a staged side left.
@@ -547,7 +592,7 @@ impl RepositoryState {
                         self.data.snapshot = Load::Ready(snapshot);
                         if let Some((file, mode)) = again {
                             self.select(file, mode);
-                        } else if let Some(mode) = mode {
+                        } else if !had_selection && let Some(mode) = mode {
                             self.select(0, mode);
                         }
                     }
@@ -672,6 +717,7 @@ pub struct AppState {
     pub collapsed_projects: HashSet<usize>,
     pub collapsed_machines: HashSet<(usize, usize)>,
     pub repository: RepositoryState,
+    checkouts: CheckoutRegistry,
 }
 
 /// The project's name is the checkout's folder name, or the whole path for `/`.
@@ -697,6 +743,7 @@ impl AppState {
             collapsed_projects: HashSet::new(),
             collapsed_machines: HashSet::new(),
             repository: RepositoryState::new(path),
+            checkouts: CheckoutRegistry::default(),
         }
     }
 }
@@ -707,7 +754,7 @@ mod tests {
     use crate::model::Change;
     use std::time::Duration;
 
-    trait CloneForTest {
+    pub(super) trait CloneForTest {
         fn clone_for_test(&self) -> Snapshot;
     }
 
@@ -724,7 +771,7 @@ mod tests {
         }
     }
 
-    fn snapshot() -> Arc<Snapshot> {
+    pub(super) fn snapshot() -> Arc<Snapshot> {
         Arc::new(Snapshot {
             root: "/repo".into(),
             branch: "main".into(),
@@ -746,6 +793,38 @@ mod tests {
             ],
             elapsed: Duration::ZERO,
         })
+    }
+
+    #[test]
+    fn selected_paths_survive_reorder_but_not_rename_or_deletion() {
+        let mut state = RepositoryState::new("/repo".into());
+        let job = state.next_job().unwrap();
+        state.complete(job, Reply::Status(Ok(snapshot())));
+        state.select(1, DiffMode::Unstaged);
+        state.refresh();
+        let job = state.next_job().unwrap();
+        let mut reordered = snapshot().clone_for_test();
+        reordered.changes.reverse();
+        state.complete(job, Reply::Status(Ok(Arc::new(reordered))));
+        assert_eq!(
+            state.view.changes.selected.as_ref().unwrap().path,
+            PathBuf::from("b")
+        );
+        assert_eq!(state.view.changes.selected.as_ref().unwrap().file, 0);
+        state.refresh();
+        let job = state.next_job().unwrap();
+        let mut renamed = snapshot().clone_for_test();
+        renamed.changes[1].original = Some("b".into());
+        renamed.changes[1].path = "renamed".into();
+        state.complete(job, Reply::Status(Ok(Arc::new(renamed))));
+        assert!(state.view.changes.selected.is_none());
+        state.select(0, DiffMode::Staged);
+        state.refresh();
+        let job = state.next_job().unwrap();
+        let mut deleted = snapshot().clone_for_test();
+        deleted.changes.remove(0);
+        state.complete(job, Reply::Status(Ok(Arc::new(deleted))));
+        assert!(state.view.changes.selected.is_none());
     }
 
     #[test]
@@ -940,6 +1019,7 @@ mod tests {
             s.selected_diff(),
             Some(&DiffKey {
                 file: 1,
+                path: "b".into(),
                 mode: DiffMode::Staged
             })
         );

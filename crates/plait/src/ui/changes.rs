@@ -28,6 +28,8 @@ pub(super) fn diff_limit_notice(recorded: bool) -> (&'static str, &'static str) 
 /// while the same file and side are shown; another file ignores it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LinePick {
+    pub checkout: plait_core::state::CheckoutId,
+    pub epoch: u64,
     pub path: std::path::PathBuf,
     pub mode: DiffMode,
     pub anchor: usize,
@@ -76,6 +78,8 @@ fn stage_verb(change: &Change, stage: bool) -> &'static str {
 
 /// Where a diff's hunks stage to, captured once per frame for visible rows.
 pub(super) struct HunkTarget {
+    checkout: plait_core::state::CheckoutId,
+    epoch: u64,
     path: std::path::PathBuf,
     mode: DiffMode,
     busy: bool,
@@ -88,6 +92,8 @@ fn hunk_button(
     header: &str,
     cx: &mut Context<Plait>,
 ) -> Stateful<Div> {
+    let owner = target.checkout;
+    let epoch = target.epoch;
     let stage = target.mode == DiffMode::Unstaged;
     let op = WriteOp::Hunk {
         path: target.path.clone(),
@@ -104,7 +110,11 @@ fn hunk_button(
     .font_family(".SystemUIFont")
     .text_size(px(11.))
     .disabled(target.busy)
-    .on_activate(cx, move |this, _, cx| this.git_write(op.clone(), cx))
+    .on_activate(cx, move |this, _, cx| {
+        if this.state.checkout_id() == owner && this.state.repository.epoch() == epoch {
+            this.git_write(op.clone(), cx);
+        }
+    })
 }
 
 /// Beside Stage hunk on unstaged hunks; asks before anything is lost.
@@ -114,6 +124,8 @@ fn discard_hunk_button(
     header: &str,
     cx: &mut Context<Plait>,
 ) -> Stateful<Div> {
+    let owner = target.checkout;
+    let epoch = target.epoch;
     let op = WriteOp::Discard {
         path: target.path.clone(),
         untracked: false,
@@ -129,6 +141,9 @@ fn discard_hunk_button(
         .text_size(px(11.))
         .disabled(target.busy)
         .on_activate(cx, move |this, window, cx| {
+            if this.state.checkout_id() != owner || this.state.repository.epoch() != epoch {
+                return;
+            }
             this.confirm_discard(
                 op.clone(),
                 format!("Discard this hunk in {name}?"),
@@ -602,7 +617,11 @@ impl Plait {
         let repo = &self.state.repository;
         let key = repo.selected_diff()?;
         let change = repo.snapshot().ready()?.changes.get(key.file)?;
-        (change.path == pick.path && key.mode == pick.mode && pick.range().end() < &lines)
+        (pick.checkout == self.state.checkout_id()
+            && pick.epoch == repo.epoch()
+            && change.path == pick.path
+            && key.mode == pick.mode
+            && pick.range().end() < &lines)
             .then(|| pick.clone())
     }
 
@@ -629,6 +648,8 @@ impl Plait {
             Some(pick) if extend => Some(LinePick { end: index, ..pick }),
             Some(pick) if pick.anchor == index && pick.end == index => None,
             _ => Some(LinePick {
+                checkout: self.state.checkout_id(),
+                epoch: repo.epoch(),
                 path: change.path.clone(),
                 mode: key.mode,
                 anchor: index,
@@ -724,6 +745,8 @@ impl Plait {
         let change = repo.snapshot().ready()?.changes.get(key.file)?;
         let whole = change.index == b'?' || change.original.is_some() || change.conflicted();
         (!whole).then(|| HunkTarget {
+            checkout: self.state.checkout_id(),
+            epoch: self.state.repository.epoch(),
             path: change.path.clone(),
             mode: key.mode,
             busy: repo.write().busy(),

@@ -470,6 +470,9 @@ pub fn run() -> Vec<Row> {
         plait.workspace.tab = Workspace::Changes;
         plait.state.repository.view.changes.diff = Load::Ready(big_diff(20_000));
         plait.state.repository.view.changes.selected = Some(DiffKey {
+            path: plait.state.repository.snapshot().ready().unwrap().changes[0]
+                .path
+                .clone(),
             file: 0,
             mode: DiffMode::Unstaged,
         });
@@ -632,6 +635,27 @@ pub fn run() -> Vec<Row> {
         "d6 thread switch, first frame after install only",
         firsts,
         renders,
+    ));
+
+    rows.push(harness.switching(
+        "d7 rapid A>B>A selection, reject delayed reads (no host I/O)",
+        30,
+        |h, round| {
+            h.update(|plait, _, _| {
+                let stale = plait.host.read_stamp();
+                plait.host.select(Some(
+                    if round.is_multiple_of(2) {
+                        THREAD
+                    } else {
+                        "thr_0c44a9d1"
+                    }
+                    .into(),
+                ));
+                plait.state.repository.invalidate_view();
+                assert!(!plait.host.accepts_read(&stale));
+            });
+            install(h, round);
+        },
     ));
 
     drop(harness);

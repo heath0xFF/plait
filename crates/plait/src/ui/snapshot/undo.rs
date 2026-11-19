@@ -790,3 +790,42 @@ fn a_blocked_earlier_run_remeasures_its_row() {
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+#[core::prelude::v1::test]
+fn undo_ack_survives_selection() {
+    if !isolated("undo::undo_ack_survives_selection") {
+        return;
+    }
+    let (scratch, _, mut harness) = setup("undo-owner");
+    let host = Host::start(|request| {
+        assert_eq!(request["op"], "undo_turn");
+        std::thread::sleep(Duration::from_millis(25));
+        Some(reply("blocked", "last"))
+    });
+    harness.update(|p, w, c| {
+        p.undo_run("last", false, w, c);
+        p.host.select(Some("other".into()));
+        p.workspace.turn_records = Default::default();
+    });
+    wait(&mut harness, |p| {
+        p.host
+            .undo
+            .get(&p.host.thread_key(THREAD))
+            .is_some_and(|operation| !operation.sending)
+    });
+    harness.update(|p, _, c| {
+        assert!(p.workspace.turn_records.blocked.is_none());
+        assert!(p.workspace.turn_records.pending.is_none());
+        assert!(p.host.undo.get(&p.host.thread_key("other")).is_none());
+        p.host.select(Some(THREAD.into()));
+        p.restore_undo_operation();
+        assert!(p.workspace.turn_records.blocked.is_some());
+        p.cancel_undo_panel(c);
+        p.restore_undo_operation();
+        assert!(p.workspace.turn_records.blocked.is_none());
+    });
+    assert_eq!(host.requests.lock().unwrap().len(), 1);
+    drop(host);
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}

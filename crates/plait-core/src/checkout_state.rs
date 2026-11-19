@@ -15,6 +15,8 @@ use std::{path::PathBuf, sync::Arc};
 /// and any unconfirmed creation request waiting for acknowledgement or retry.
 pub struct CheckoutCreationState {
     pub checkout: PathBuf,
+    /// Changes on checkout selection, independently of the host connection.
+    pub generation: u64,
     pub new_model: Option<ModelChoice>,
     pub pending_create: Option<(String, ModelChoice)>,
     /// The starting thinking level fixed when `pending_create` was made, so a
@@ -27,6 +29,7 @@ impl CheckoutCreationState {
     pub fn new(checkout: PathBuf) -> Self {
         Self {
             checkout,
+            generation: 0,
             new_model: None,
             pending_create: None,
             pending_thinking: None,

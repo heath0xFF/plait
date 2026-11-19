@@ -1780,3 +1780,34 @@ image-heavy fixtures need allocation and resident/footprint deltas through
 activation, parking, switching, and closure, alongside wire-frame sizes.
 Those measurements and native input, accessibility, and GPU presentation are
 not established by these headless baselines.
+
+### Thread-workspace ownership checks
+
+The ownership refactor retains one selected workspace and the existing window
+controls. With test-only fixture paths, Git dates, read durations, diagnostics,
+and stream-reveal prefixes pinned, two baseline renders are byte-identical.
+All 467 existing scenes also match that baseline after each ownership stage.
+Four added wide/narrow scenes cover stale-thread replies and checkout identity
+errors. No README images were regenerated.
+
+The final full development check passed: 706 Rust tests and 447 runtime tests,
+workspace formatting and Clippy, the headless dependency boundary, runtime
+TypeScript checks, pure acceptance self-tests, and the release build. Linux
+Clippy for `plait-core` and `plait-host`, including all targets with warnings
+denied, also passed. Eight existing Rust tests remain ignored by the normal run.
+
+New coverage exercises delayed reads across A→B→A, inactive Git write outcomes,
+checkout aliases and replaced directory identities, stable path selection after
+status reorder/rename/deletion, commit draft revisions, original undo request
+owners, and file/policy replies after checkout changes. Native input,
+accessibility, GPU presentation, real provider runs, restart workspace recovery,
+and per-thread retained-memory budgets were not verified by this refactor.
+
+Two final 90-frame runs measured idle home at 0.33 / 0.33 ms, small
+conversation at 0.56 / 0.55 ms, heavy conversation scrolling at 2.31 / 2.26 ms,
+and uncached Git reads including their wait at 22.47 / 21.81 ms. The original
+baseline pairs were 0.32 / 0.32, 0.55 / 0.55, 2.20 / 2.19, and 20.15 / 19.70 ms
+respectively. Repeats on the shared machine showed broad load-dependent spikes;
+these numbers do not establish the final performance gate. A quiet comparison
+against the baseline, including uncached Git reads, remains required before
+release. GPU submission is excluded from every frame measurement here.

@@ -17,6 +17,7 @@ pub(super) struct Created {
     pub(super) harness: host::harness::HarnessId,
     /// The selection when it was sent; a direct creation opens only if it is unchanged.
     pub(super) selection_epoch: u64,
+    pub(super) checkout: Option<std::path::PathBuf>,
 }
 
 pub(super) struct WatchLease {
@@ -45,6 +46,16 @@ impl Plait {
         + 'static,
     ) {
         let epoch = self.host.connection.epoch;
+        let identity = self.host.identity.clone();
+        let acknowledgement = matches!(
+            request,
+            Request::Submit { .. } | Request::CreateThread { .. }
+        );
+        let expected = if let Request::Submit { thread_id, .. } = &request {
+            self.host.expected_checkout(thread_id).cloned()
+        } else {
+            None
+        };
         let persist = matches!(request, Request::Submit { .. }) && self.session.required;
         if persist {
             self.capture_session(cx);
@@ -85,6 +96,9 @@ impl Plait {
                 {
                     *checkout = std::fs::canonicalize(&*checkout)?;
                 }
+                if let Some(expected) = &expected {
+                    expected.verify().map_err(host::Error::Protocol)?;
+                }
                 let client = Client::from_environment()?;
                 if let Some((thread, images)) = uploads {
                     client.upload_images(&thread, &images)?;
@@ -101,7 +115,9 @@ impl Plait {
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                if this.host.connection.epoch != epoch {
+                if this.host.identity != identity
+                    || (!acknowledgement && this.host.connection.epoch != epoch)
+                {
                     return;
                 }
                 complete(this, result, window, cx);
@@ -206,6 +222,11 @@ impl Plait {
         window.focus(&self.focus, cx);
         self.workspace.reset_for_thread_selection();
         self.host.select(Some(id.clone()));
+        self.state.repository.invalidate_view();
+        self.workspace.thread_files.reset();
+        self.workspace.file_viewer.retire_read();
+        self.workspace.line_pick = None;
+        self.bind_selected_checkout();
         self.settings_open = false;
         self.new_thread_open = false;
         // Leaving a new-thread draft keeps its text for the next New Thread.
@@ -507,6 +528,7 @@ impl Plait {
         self.host.creation.creating = true;
         self.host.connection.error = None;
         let selection_epoch = self.host.thread.watch_epoch;
+        let checkout = self.state.checkout_key().map(|key| key.root.clone());
         let request = Request::create_thread(
             self.host.creation.checkout.clone(),
             &choice,
@@ -526,6 +548,7 @@ impl Plait {
                     choice,
                     harness,
                     selection_epoch,
+                    checkout,
                 };
                 this.finish_create(created, result, window, cx)
             },
@@ -548,6 +571,7 @@ impl Plait {
             choice,
             harness,
             selection_epoch,
+            checkout,
         } = created;
         // Only the creation still pending; the host answers each request once.
         if self.host.creation.pending_create.as_ref().map(|(id, _)| id) != Some(&request_id) {
@@ -557,7 +581,7 @@ impl Plait {
         let drafted = self.draft_sent(&request_id);
         match result {
             Ok(reply)
-                if reply.thread.model == choice
+                if checkout.as_ref().is_none_or(|checkout| reply.thread.checkout == *checkout) && reply.thread.model == choice
                     && super::harnesses::harness_of(&reply.thread) == harness =>
             {
                 self.host.creation.pending_create = None;
@@ -578,7 +602,7 @@ impl Plait {
                 self.load_threads(window, cx);
             }
             Ok(_) => {
-                self.host.connection.error = Some("Host returned a different model or harness. Creation is unconfirmed; reconnect before retrying.".into())
+                self.host.connection.error = Some("Host returned a different checkout, model, or harness. Creation is unconfirmed; reconnect before retrying.".into())
             }
             Err(error) => {
                 if matches!(error, host::Error::Rejected(_)) {
@@ -826,6 +850,9 @@ impl Plait {
     }
 
     pub(super) fn can_submit(&self) -> bool {
+        if !self.checkout_matches_thread() {
+            return false;
+        }
         self.session.ready()
             && self.navigation.available.get(&self.host.creation.checkout) != Some(&false)
             && self.host.connection.connected
@@ -843,6 +870,7 @@ impl Plait {
     }
 
     pub(super) fn sync_composer(&mut self, cx: &mut Context<Self>) {
+        self.bind_selected_checkout();
         self.sync_thread_harness();
         self.sync_draft_composer(cx);
         let Some(id) = self.host.thread.selected.as_ref() else {

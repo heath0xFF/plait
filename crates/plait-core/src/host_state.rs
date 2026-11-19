@@ -7,6 +7,7 @@ use std::{
 use crate::{
     checkout_state::CheckoutCreationState,
     host::{ApprovalMode, ModelChoice, QueueMode, Request, Snapshot, Status, ThreadSummary},
+    ownership::{CheckoutKey, HostKey, ReadStamp, ThreadKey},
     thread_view::SelectedThreadState,
 };
 use std::{path::PathBuf, sync::Arc};
@@ -67,6 +68,8 @@ impl HostConnection {
 }
 
 pub struct HostState {
+    pub identity: Option<HostKey>,
+    expected_checkouts: HashMap<ThreadKey, CheckoutKey>,
     /// Host connection, cross-checkout thread catalog, and default-model settings.
     pub connection: HostConnection,
     /// Active checkout path and per-checkout thread-creation state.
@@ -75,16 +78,80 @@ pub struct HostState {
     pub thread: SelectedThreadState,
     /// Per-thread submission ledger, independent of which thread is selected.
     pub submissions: Submissions,
+    pub undo: crate::operations::UndoLedger,
 }
 
 impl HostState {
     pub fn new(checkout: PathBuf) -> Self {
         Self {
+            identity: HostKey::local(),
+            expected_checkouts: HashMap::new(),
             connection: HostConnection::default(),
             creation: CheckoutCreationState::new(checkout),
             thread: SelectedThreadState::default(),
             submissions: Submissions::default(),
+            undo: Default::default(),
         }
+    }
+
+    pub fn thread_key(&self, id: &str) -> ThreadKey {
+        ThreadKey {
+            host: self.identity.clone(),
+            id: id.to_owned(),
+        }
+    }
+
+    pub fn read_stamp(&self) -> ReadStamp {
+        ReadStamp {
+            connection: self.connection.epoch,
+            selection: self.thread.watch_epoch,
+            checkout: self.creation.generation,
+            thread: self.thread.selected.as_ref().map(|id| self.thread_key(id)),
+        }
+    }
+
+    pub fn accepts_read(&self, stamp: &ReadStamp) -> bool {
+        self.read_stamp() == *stamp
+    }
+
+    pub fn bind_checkout(&mut self, id: &str, key: &CheckoutKey) -> Result<(), String> {
+        let owner = self.thread_key(id);
+        if let Some(expected) = self.expected_checkouts.get(&owner) {
+            if expected != key {
+                return Err("Checkout identity changed.".into());
+            }
+        } else {
+            self.expected_checkouts.insert(owner, key.clone());
+        }
+        Ok(())
+    }
+
+    pub fn expected_checkout(&self, id: &str) -> Option<&CheckoutKey> {
+        self.expected_checkouts.get(&self.thread_key(id))
+    }
+
+    /// Checkout navigation does not replace a live cross-checkout connection.
+    pub fn change_checkout(&mut self, path: PathBuf) -> Result<bool, String> {
+        if self.creation.creating || self.creation.pending_create.is_some() {
+            return Err("Resolve the pending thread creation before changing checkout.".into());
+        }
+        let generation = self.creation.generation + 1;
+        let live = self.protocol() >= 3 && self.connection.connected;
+        if live {
+            self.creation.checkout = path;
+            self.select(None);
+            self.thread.submitting = false;
+        } else {
+            self.submissions.disconnected();
+            self.connection = HostConnection {
+                epoch: self.connection.epoch,
+                ..Default::default()
+            };
+            self.creation = CheckoutCreationState::new(path);
+            self.thread = SelectedThreadState::default();
+        }
+        self.creation.generation = generation;
+        Ok(live)
     }
 
     pub fn reconnect(&mut self) -> u64 {
@@ -470,6 +537,48 @@ mod tests {
             "pending_approval":null, "error":null, "truncated":false
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn checkout_navigation_retires_reads_but_keeps_host_acknowledgements() {
+        let mut state = HostState::new("/repo".into());
+        let mut connected = status(None, vec![]);
+        connected.protocol_version = 6;
+        state.apply_status(0, connected);
+        state.select(Some("a".into()));
+        let read = state.read_stamp();
+        let pending = state
+            .submissions
+            .begin("a", "original input".into())
+            .unwrap();
+        state.submissions.start_send("a", &pending.request_id);
+        state.change_checkout("/other".into()).unwrap();
+        state.select(Some("b".into()));
+        assert_eq!(state.connection.epoch, 0);
+        assert!(state.submissions.is_sending(&pending.request_id));
+        assert!(
+            state
+                .submissions
+                .confirm("a", &pending.request_id)
+                .is_some()
+        );
+        assert!(state.submissions.accepted("b").is_empty());
+        assert!(!state.accepts_read(&read));
+        state.change_checkout("/repo".into()).unwrap();
+        state.select(Some("a".into()));
+        assert!(!state.accepts_read(&read));
+        assert!(!state.apply_snapshot(read.connection, read.selection, snapshot("a")));
+        let key = CheckoutKey {
+            host: None,
+            root: "/repo".into(),
+            device: 1,
+            inode: 2,
+        };
+        state.bind_checkout("a", &key).unwrap();
+        let mut replaced = key.clone();
+        replaced.inode += 1;
+        assert!(state.bind_checkout("a", &replaced).is_err());
+        assert_eq!(state.expected_checkout("a"), Some(&key));
     }
 
     #[test]

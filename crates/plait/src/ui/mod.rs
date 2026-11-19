@@ -124,6 +124,8 @@ pub struct Plait {
     navigation: navigation::Navigation,
     /// Presentation state for the single selected thread workspace.
     workspace: thread_workspace::ThreadWorkspace,
+    commit_sends:
+        std::collections::HashMap<plait_core::state::CheckoutId, commit_panel::CommitAttempt>,
     /// A settings page covers the workspace; `settings_page` says which.
     settings_open: bool,
     settings_page: settings::SettingsPage,
@@ -192,6 +194,7 @@ impl Plait {
             host,
             navigation: navigation::Navigation::new(cx),
             workspace: thread_workspace::ThreadWorkspace::new(commit_message),
+            commit_sends: Default::default(),
             settings_open: false,
             settings_page: Default::default(),
             settings_tab: Default::default(),
@@ -262,7 +265,7 @@ impl Plait {
     }
 
     fn pump(&mut self, cx: &mut Context<Self>) {
-        let Some(job) = self.state.repository.next_job() else {
+        let Some(job) = self.state.next_repository_job() else {
             return;
         };
         let task = cx.background_executor().spawn(async move {
@@ -272,9 +275,17 @@ impl Plait {
         cx.spawn(async move |this, cx| {
             let (job, reply) = task.await;
             let _ = this.update(cx, |this, cx| {
-                let status = matches!(job, plait_core::state::Job::Status { .. });
-                let write = matches!(job, plait_core::state::Job::Write { .. });
-                this.state.repository.complete(job, reply);
+                let status = matches!(job.job, plait_core::state::Job::Status { .. });
+                let write = matches!(job.job, plait_core::state::Job::Write { .. });
+                let owner = job.owner;
+                let active = this.state.complete_repository_job(job, reply);
+                if write {
+                    this.after_git_write(owner, cx);
+                }
+                if !active {
+                    this.pump(cx);
+                    return;
+                }
                 if write {
                     this.refresh_turn_review(cx);
                 }
@@ -283,8 +294,8 @@ impl Plait {
                     this.thread_files_status(cx);
                     this.check_file(cx);
                 }
-                this.after_git_write(cx);
                 this.normalize_checkout(cx);
+                this.bind_selected_checkout();
                 this.deliver_files(cx);
                 this.deliver_quick_open(cx);
                 this.deliver_branches(cx);
@@ -293,6 +304,31 @@ impl Plait {
             });
         })
         .detach();
+    }
+
+    fn bind_selected_checkout(&mut self) -> bool {
+        let Some(id) = self.host.thread.selected.clone() else {
+            return true;
+        };
+        let Some(key) = self.state.checkout_key() else {
+            return false;
+        };
+        match self.host.bind_checkout(&id, key) {
+            Ok(()) => true,
+            Err(error) => {
+                self.notice = Some(error);
+                false
+            }
+        }
+    }
+
+    fn checkout_matches_thread(&self) -> bool {
+        let Some(id) = self.host.thread.selected.as_deref() else {
+            return true;
+        };
+        self.state
+            .checkout_key()
+            .is_some_and(|key| self.host.expected_checkout(id) == Some(key))
     }
 
     /// Move to the next or previous host thread, wrapping. With no selection,

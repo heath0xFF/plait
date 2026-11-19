@@ -87,6 +87,9 @@ host/watch.rs           cancellable reader and bounded async snapshot delivery
 host_state.rs           scoped host connection, selected-thread state, and submission ledger
 checkout_state.rs       checkout-scoped creation state and shared repository data/caches
 thread_view.rs          presentation-independent thread view enum and Git view selection
+ownership.rs            host/thread/checkout identities and read lifetimes
+operations.rs           thread-owned undo acknowledgements and uncertain retries
+state/registry.rs       checkout routing, root verification, and inactive write outcomes
 transcript.rs           stable row identity and incremental list-change plans
 history.rs              stored/live merging, text parts, memory limits, run wording
 history/records.rs      complete record pages, run membership and closing-line projection
@@ -423,7 +426,7 @@ Plain core state separates ownership while preserving one selected thread slot:
   default-model settings (`HostConnection`), checkout-scoped new-thread
   creation (`CheckoutCreationState` in `checkout_state.rs`), selected-thread
   read/control state (`SelectedThreadState` in `thread_view.rs`), and the
-  per-thread submission ledger (`Submissions`).
+  per-thread submission ledger (`Submissions`) and undo ledger (`UndoLedger`).
 - **`RepositoryState`** (`state.rs`) separates shared checkout repository data,
   caches, writes, and background job queues (`CheckoutRepositoryData` in
   `checkout_state.rs`) from the selected workspace's Git view selection
@@ -657,6 +660,50 @@ run in the background. Successful Git status results normalize a selected
 subdirectory or symlink to its checkout root. Switching projects preserves
 per-thread composers and pending request IDs, changes the repository epoch, and
 cancels only the selected snapshot subscription. It never sends Stop.
+
+
+### Checkout owners and asynchronous results
+
+The desktop still presents one thread workspace. `CheckoutRegistry` routes Git
+jobs by a captured `CheckoutId`, independently of the selected workspace. A
+verified `CheckoutKey` contains the local host endpoint, canonical root, device,
+and inode. Filesystem verification runs on the background executor before and
+after repository work. An alias of a known root rejoins its existing writer;
+a replaced directory is an identity error. This is desktop routing, not a
+cross-process writer lease or a claim that external programs cannot edit files.
+
+Leaving a checkout drops its snapshots, file lists, diff caches, history pages,
+and read demand. Its identity, queued/running mutation, and last write outcome
+remain available to the initiating owner. No inactive repository read or
+prefetch is scheduled. The selected Git view is separate from that data; status
+refresh restores a selected path and layer, rather than a status-list position.
+A removed or renamed selected path is cleared. Line selections also require the
+same checkout and repository epoch.
+
+| Result | Required owner and freshness checks |
+| --- | --- |
+| Snapshot, history, projected transcript | Host connection, selected thread, watch lifetime, and source/projection revision |
+| Record and recorded-review reads | Thread and checkout, connection/watch lifetime, record ID, repository epoch, request generation and source revision as applicable |
+| File contents and file stamp | Connection, thread/watch and checkout lifetime, viewer generation, verified root, relative path, device/inode/size/modification time |
+| Git status, files, branches, history and diffs | Captured checkout owner and directory identity, repository/history/request epoch; diff and commit-patch presentation also requires its view lifetime |
+| Policy and agent settings | Captured checkout and connection, checkout lifetime, form/request generation; a reply for another checkout is rejected |
+| Submit/create acknowledgements | Original host, request ID and payload owner; creation also validates checkout, model and harness; selection does not discard the acknowledgement |
+| Git write acknowledgements | Original checkout writer; commit field clearing additionally requires the initiating thread and unchanged text revision |
+| Undo acknowledgements | Original host/thread and request ID; outcome is stored before consulting selected presentation, and refresh targets the original checkout |
+
+For the cross-checkout host protocol, changing checkout advances a checkout
+lifetime without replacing the connection generation or interrupting a pending
+host settings save. Returning A→B→A does not revive A's earlier read. File view
+contents are cleared when changing checkout. Existing same-checkout selection
+resets remain in place; this is not retained workspace or tab behavior.
+
+The protocol does not expose a persistent host UUID, so the desktop currently
+uses its local host-store endpoint as `HostKey`. Directory bindings live for the
+desktop session; restart identity recovery and durable undo-operation recovery
+are not added here. Submission recovery continues using its existing journal.
+Tests inject delayed and misowned replies, directory replacement, aliases, and
+same-name files in separate checkouts. Headless scenes and frame measurements
+do not verify native GPU presentation, accessibility, or real provider runs.
 
 A completion, failure, interruption, stop, or approval change marks an unseen
 thread until it is opened. Observations and unread markers persist in desktop
@@ -1103,7 +1150,7 @@ or the recovery journal; this is not a claim to erase every allocator or OS copy
 The host remains the credential owner. No sign-in URL opens without a click.
 
 `ui/settings_policy.rs` reads the canonical checkout's policy on connection or
-checkout change. A response must match that checkout and its host epoch. Until
+checkout change. A response must match that checkout, its lifetime, and its host epoch. Until
 it arrives the UI says the policy is unknown, never promises a sandbox. A trusted
 change needs explicit confirmation; the host's response determines the shown value.
 

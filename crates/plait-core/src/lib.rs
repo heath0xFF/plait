@@ -18,6 +18,8 @@ pub mod local_socket;
 pub mod machine;
 pub mod markdown;
 pub mod model;
+pub mod operations;
+pub mod ownership;
 pub mod patch;
 pub mod preferences;
 pub mod recent;

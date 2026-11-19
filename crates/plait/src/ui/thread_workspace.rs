@@ -46,9 +46,6 @@ pub(super) struct ThreadWorkspace {
     pub(super) commit_scroll: UniformListScrollHandle,
     /// The commit message in Changes. Kept across view switches until it commits.
     pub(super) commit_message: Entity<text_field::TextField>,
-    /// The message the running commit was sent with. The field clears after
-    /// the commit only if it still holds this, so later typing survives.
-    pub(super) commit_sent: Option<String>,
     pub(super) tab: Workspace,
     pub(super) file_viewer: file_view::FileViewer,
     pub(super) conversation_find: conversation_find::ConversationFind,
@@ -79,7 +76,6 @@ impl ThreadWorkspace {
             history_scroll: UniformListScrollHandle::new(),
             commit_scroll: UniformListScrollHandle::new(),
             commit_message,
-            commit_sent: None,
             tab: Workspace::Conversation,
             file_viewer: Default::default(),
             conversation_find: Default::default(),

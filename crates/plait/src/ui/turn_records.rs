@@ -18,13 +18,7 @@ pub(super) struct Stamp {
     pub(super) revision: Option<u64>,
     pub(super) generation: u64,
 }
-#[derive(Clone, Debug)]
-pub(super) struct Attempt {
-    run: String,
-    target: String,
-    request: String,
-    leave_changed: bool,
-}
+pub(super) use plait_core::operations::UndoAttempt as Attempt;
 pub(super) struct Blocked {
     run: String,
     reply: UndoTurnReply,
@@ -147,6 +141,7 @@ impl Plait {
                 ..Default::default()
             };
         }
+        self.restore_undo_operation();
         if self.host.protocol() < 5 {
             return;
         }
@@ -337,64 +332,124 @@ impl Plait {
         let Some(stamp) = self.record_stamp() else {
             return;
         };
+        let owner = self.host.thread_key(&stamp.thread);
+        let checkout = self.state.checkout_id();
+        let expected = self.host.expected_checkout(&stamp.thread).cloned();
+        let coverage = self
+            .workspace
+            .turn_records
+            .lines
+            .runs
+            .get(&attempt.run)
+            .map(|line| line.not_covered.clone())
+            .unwrap_or_default();
+        if !self
+            .host
+            .undo
+            .begin(owner.clone(), checkout, attempt.clone(), coverage)
+        {
+            return;
+        }
         let request = Request::undo_turn(
             stamp.thread.clone(),
             attempt.target.clone(),
             attempt.request.clone(),
             attempt.leave_changed,
         );
-        self.workspace.turn_records.blocked = None;
-        self.workspace.turn_records.note = None;
-        self.workspace.turn_records.pending = Some(attempt.clone());
+        self.restore_undo_operation();
         self.remeasure_undo_panel(&attempt.run);
-        let task = cx
-            .background_executor()
-            .spawn(async move { Client::from_environment()?.request::<UndoTurnReply>(&request) });
+        let task = cx.background_executor().spawn(async move {
+            let expected = expected.ok_or_else(|| {
+                host::Error::Protocol("Checkout identity is not verified.".into())
+            })?;
+            expected.verify().map_err(|message| {
+                host::Error::Rejected(host::HostError {
+                    code: "checkout_identity_changed".into(),
+                    message,
+                })
+            })?;
+            Client::from_environment()?.request::<UndoTurnReply>(&request)
+        });
         cx.spawn_in(window, async move |this, cx| {
-            let reply = task.await;
+            let result = task.await.map_err(|error| match error {
+                host::Error::Rejected(error) => plait_core::operations::UndoFailure {
+                    code: Some(error.code),
+                    message: error.message,
+                },
+                error => plait_core::operations::UndoFailure {
+                    code: None,
+                    message: error.to_string(),
+                },
+            });
+            let changed = !matches!(&result, Ok(reply) if reply.state == UndoState::Blocked)
+                && !matches!(&result, Err(error) if error.code.is_none());
             let _ = this.update_in(cx, |this, window, cx| {
-                // The operation itself changes records_revision. Guard identity,
-                // not that revision, so its own watch update cannot hide success.
-                if !this.host.accepts_watch(stamp.epoch, stamp.watch, &stamp.thread)
-                    || this.workspace.turn_records.pending.as_ref().is_none_or(|p| p.request != attempt.request)
-                { return; }
-                this.workspace.turn_records.pending = None;
-                match reply {
-                    Ok(reply) if reply.state == UndoState::Blocked => {
-                        let coverage = this.workspace.turn_records.lines.runs.get(&attempt.run)
-                            .map(|line| line.not_covered.as_slice()).unwrap_or_default();
-                        this.workspace.turn_records.blocked = Some(Blocked::new(attempt.run.clone(), reply, coverage));
-                    }
-                    Ok(_) => {
-                        this.workspace.turn_records.retry = None;
-                        this.fetch_turn_records(window, cx);
-                        this.state.repository.refresh();
-                        this.pump(cx);
-                    }
-                    Err(host::Error::Rejected(error)) => {
-                        let label = match error.code.as_str() { "busy" => "Wait", "undo_no_effect" => "Retry", "undo_incomplete" => "Incomplete", _ => "Unavailable" };
-                        let detail = if error.code == "undo_incomplete" {
-                            "Undo was interrupted; some files may have changed. Inspect Changes before another undo.".into()
-                        } else { error.message };
-                        this.workspace.turn_records.note = Some((attempt.run.clone(), label, detail));
-                        this.fetch_turn_records(window, cx);
-                        this.state.repository.refresh();
-                        this.pump(cx);
-                    }
-                    Err(error) => {
-                        // An explicit Retry repeats the identical ID and flags.
-                        this.workspace.turn_records.retry = Some(attempt.clone());
-                        this.workspace.turn_records.note = Some((attempt.run.clone(), "Retry", format!("The reply was not received. Retry checks the same operation without applying it twice. {error}")));
-                    }
+                if this.host.identity != owner.host
+                    || !this.host.undo.finish(&owner, &attempt.request, result)
+                {
+                    return;
+                }
+                if changed {
+                    this.state.invalidate_checkout(checkout);
+                    this.pump(cx);
+                }
+                if this.host.read_stamp().thread.as_ref() != Some(&owner) {
+                    return;
+                }
+                this.restore_undo_operation();
+                if changed {
+                    this.fetch_turn_records(window, cx);
                 }
                 this.remeasure_undo_panel(&attempt.run);
                 cx.notify();
             });
-        }).detach();
+        })
+        .detach();
         cx.notify();
     }
+
+    pub(super) fn restore_undo_operation(&mut self) {
+        let Some(owner) = self.host.read_stamp().thread else {
+            return;
+        };
+        let Some(operation) = self.host.undo.get(&owner).cloned() else {
+            return;
+        };
+        let state = &mut self.workspace.turn_records;
+        state.pending = operation.sending.then(|| operation.attempt.clone());
+        state.retry = None;
+        state.blocked = None;
+        state.note = None;
+        match operation.result {
+            Some(Ok(reply)) if reply.state == UndoState::Blocked => {
+                state.blocked = Some(Blocked::new(
+                    operation.attempt.run,
+                    reply,
+                    &operation.coverage,
+                ));
+            }
+            Some(Err(error)) => {
+                let (label, detail) = match error.code.as_deref() {
+                    None => {
+                        state.retry = Some(operation.attempt.clone());
+                        ("Retry", format!("The reply was not received. Retry checks the same operation without applying it twice. {}", error.message))
+                    }
+                    Some("undo_incomplete") => ("Incomplete", "Undo was interrupted; some files may have changed. Inspect Changes before another undo.".into()),
+                    Some("busy") => ("Wait", error.message),
+                    Some("undo_no_effect") => ("Retry", error.message),
+                    Some(_) => ("Unavailable", error.message),
+                };
+                state.note = Some((operation.attempt.run, label, detail));
+            }
+            _ => {}
+        }
+    }
+
     pub(super) fn cancel_undo_panel(&mut self, cx: &mut Context<Self>) {
         if let Some(blocked) = self.workspace.turn_records.blocked.take() {
+            if let Some(owner) = self.host.read_stamp().thread {
+                self.host.undo.dismiss(&owner);
+            }
             self.remeasure_undo_panel(&blocked.run);
         }
         cx.notify();

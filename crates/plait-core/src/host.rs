@@ -820,7 +820,7 @@ pub enum RecordChange {
     Deleted,
     Mode,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UndoTurnReply {
     pub state: UndoState,
@@ -831,7 +831,7 @@ pub struct UndoTurnReply {
     pub record_id: String,
     pub after_restart: bool,
 }
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum UndoState {
     Undone,
@@ -876,6 +876,24 @@ fn decode<T: DeserializeOwned>(line: &[u8]) -> Result<T, Error> {
             "Inconsistent host reply; no action was confirmed.".into(),
         )),
     }
+}
+
+fn validate_created_checkout(line: &[u8], expected: &std::path::Path) -> Result<(), Error> {
+    #[derive(Deserialize)]
+    struct Created {
+        thread: Checkout,
+    }
+    #[derive(Deserialize)]
+    struct Checkout {
+        checkout: PathBuf,
+    }
+    let reply: Created = decode(line)?;
+    if reply.thread.checkout != expected {
+        return Err(Error::Protocol(
+            "Host returned another checkout's thread.".into(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -944,7 +962,11 @@ impl Client {
 
     fn exchange<T: DeserializeOwned>(&self, request: &Request) -> Result<T, Error> {
         let mut frames = self.connect(request)?;
-        decode(&frames.next(Some(Instant::now() + Duration::from_secs(15)))?)
+        let line = frames.next(Some(Instant::now() + Duration::from_secs(15)))?;
+        if let Request::CreateThread { checkout, .. } = request {
+            validate_created_checkout(&line, checkout)?;
+        }
+        decode(&line)
     }
 
     pub fn watch(&self, thread_id: String, protocol: u32) -> Result<Watch, Error> {
@@ -1141,6 +1163,13 @@ impl Watch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn creation_reply_requires_the_requested_checkout() {
+        let line = br#"{"ok":true,"result":{"thread":{"checkout":"/a"}}}"#;
+        assert!(validate_created_checkout(line, std::path::Path::new("/a")).is_ok());
+        assert!(validate_created_checkout(line, std::path::Path::new("/b")).is_err());
+    }
 
     #[test]
     fn client_round_trip_checks_socket_ownership_and_permissions() {

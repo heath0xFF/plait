@@ -42,6 +42,20 @@ pub(super) struct FileViewer {
     pub reveal: Option<usize>,
 }
 
+impl FileViewer {
+    pub(super) fn clear_checkout(&mut self) {
+        *self = Self {
+            generation: self.generation + 1,
+            ..Default::default()
+        };
+    }
+
+    pub(super) fn retire_read(&mut self) {
+        self.generation += 1;
+        self.loading = false;
+    }
+}
+
 /// What a find bar searches. Both share one bar, its keys, and its counts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FindIn {
@@ -92,6 +106,8 @@ impl Plait {
     }
 
     fn read_file(&mut self, reload: bool, cx: &mut Context<Self>) {
+        let owner = self.host.read_stamp();
+        let expected = self.state.checkout_key().cloned();
         let viewer = &mut self.workspace.file_viewer;
         let Some(path) = viewer.path.clone() else {
             return;
@@ -100,12 +116,22 @@ impl Plait {
         viewer.loading = !reload;
         let generation = viewer.generation;
         let root = viewer.root.clone();
-        let task = cx
-            .background_executor()
-            .spawn(async move { file_view::read(&root, &path) });
+        let task = cx.background_executor().spawn(async move {
+            let expected = expected.ok_or("Checkout identity is not verified.")?;
+            expected.verify()?;
+            if root != expected.root {
+                return Err("Checkout identity changed.".into());
+            }
+            let opened = file_view::read(&root, &path)?;
+            expected.verify()?;
+            Ok(opened)
+        });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
+                if !this.host.accepts_read(&owner) {
+                    return;
+                }
                 let viewer = &mut this.workspace.file_viewer;
                 if viewer.generation != generation {
                     return;
@@ -143,7 +169,18 @@ impl Plait {
 
     /// Reread the open file if its size or time changed. Cheap: one stat.
     pub(super) fn check_file(&mut self, cx: &mut Context<Self>) {
+        let owner = self.host.read_stamp();
+        let expected = self.state.checkout_key().cloned();
         let viewer = &self.workspace.file_viewer;
+        if self.workspace.tab == Workspace::Files
+            && viewer.path.is_some()
+            && viewer.opened.is_none()
+            && viewer.error.is_none()
+            && !viewer.loading
+        {
+            self.read_file(false, cx);
+            return;
+        }
         let (Some(path), Some(opened)) = (viewer.path.clone(), viewer.opened.clone()) else {
             return;
         };
@@ -152,13 +189,17 @@ impl Plait {
         }
         let root = viewer.root.clone();
         let generation = viewer.generation;
-        let task = cx
-            .background_executor()
-            .spawn(async move { file_view::stamp(&root, &path) });
+        let task = cx.background_executor().spawn(async move {
+            expected
+                .ok_or("Checkout identity is not verified.")?
+                .verify()?;
+            file_view::stamp(&root, &path)
+        });
         cx.spawn(async move |this, cx| {
             let stamp = task.await;
             let _ = this.update(cx, |this, cx| {
-                if this.workspace.file_viewer.generation == generation
+                if this.host.accepts_read(&owner)
+                    && this.workspace.file_viewer.generation == generation
                     && stamp.as_ref().ok() != Some(&opened.stamp)
                 {
                     this.read_file(true, cx);

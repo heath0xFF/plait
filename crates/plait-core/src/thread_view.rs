@@ -9,7 +9,7 @@ use crate::{
     model::{Diff, DiffMode},
     state::Load,
 };
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 /// The four workspace views a thread can display.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -27,6 +27,7 @@ pub enum ThreadView {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DiffKey {
     pub file: usize,
+    pub path: PathBuf,
     pub mode: DiffMode,
 }
 
@@ -35,6 +36,7 @@ pub struct DiffKey {
 pub struct ChangesViewState {
     pub selected: Option<DiffKey>,
     pub diff: Load<Arc<Diff>>,
+    pub(crate) restore: Option<(PathBuf, DiffMode)>,
     /// Set while stepping through files, with the direction. A click is
     /// random access, so it reads nothing ahead that it might wait behind.
     pub(crate) ahead: Option<bool>,

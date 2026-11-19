@@ -4,7 +4,6 @@ use super::{Plait, composer::Composer};
 use gpui::*;
 use plait_core::{
     host::{MessageRole, ThreadSummary},
-    host_state::HostState,
     session::{self, Draft, Journal, Session, Thread},
 };
 use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -49,7 +48,7 @@ impl Plait {
         self.session.loading = true;
         self.session.note = Some("Restoring saved workspace…".into());
         self.sync_composer(cx);
-        let epoch = self.host.connection.epoch;
+        let checkout_generation = self.host.creation.generation;
         let task = cx.background_executor().spawn(async move {
             let (directory, host) = session::locations()?;
             let (journal, data) = Journal::open(&directory, host)?;
@@ -98,7 +97,7 @@ impl Plait {
                             this.restore_composer(id, composer, cx);
                         }
                         // A folder chosen while disk state loaded wins over the saved folder.
-                        if this.host.connection.epoch == epoch {
+                        if this.host.creation.generation == checkout_generation {
                             this.change_checkout(path, window, cx);
                             this.session.restore_thread = selected;
                         }
@@ -183,25 +182,19 @@ impl Plait {
         let mut preferences = self.preferences.value.clone();
         preferences.navigation.open(&path);
         self.persist_navigation(preferences, cx);
-        self.host.submissions.disconnected();
-        let epoch = self.host.connection.epoch + 1;
-        let submissions = std::mem::take(&mut self.host.submissions);
-        let live = self.host.protocol() >= 3 && self.host.connection.connected;
-        if live {
-            self.host.creation.checkout = path.clone();
-            self.host.connection.epoch = epoch;
-            self.host.select(None);
-            self.host.thread.submitting = false;
-            if self.host.connection.saving {
-                self.host.connection.saving = false;
-                self.host.connection.save_message =
-                    Some("Save not confirmed. Reconnect to reload the saved default.".into());
+        let live = match self.host.change_checkout(path.clone()) {
+            Ok(live) => live,
+            Err(error) => {
+                self.notice = Some(error);
+                cx.notify();
+                return;
             }
-        } else {
-            self.host = HostState::new(path.clone());
-            self.host.connection.epoch = epoch;
-        }
-        self.host.submissions = submissions;
+        };
+        self.workspace.file_viewer.clear_checkout();
+        self.workspace.line_pick = None;
+        self.workspace.thread_files.reset();
+        self.policy = Default::default();
+        self.forget_agent();
         self.workspace.reset_for_checkout_change();
         self.session.restore_thread = None;
         self.navigation.managing = None;
@@ -213,7 +206,7 @@ impl Plait {
             self.open_draft(window, cx);
         }
         self.notice = None;
-        self.state.repository.open(path);
+        self.state.open_checkout(path);
         self.rebuild_projects(cx);
         if !live {
             self.reconnect_host(window, cx);

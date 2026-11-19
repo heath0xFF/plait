@@ -489,6 +489,10 @@ impl TextField {
         self.line.text()
     }
 
+    pub(super) fn revision(&self) -> u64 {
+        self.line.revision
+    }
+
     /// An input method is mid-composition; Enter belongs to it, not to the parent.
     pub fn is_composing(&self) -> bool {
         self.line.is_composing()

@@ -10,6 +10,7 @@ use std::{
     hash::{Hash, Hasher},
     io::Read,
     ops::Range,
+    os::unix::fs::MetadataExt,
     path::Path,
     time::SystemTime,
 };
@@ -27,6 +28,8 @@ pub const LINE_CLIP: usize = 2000;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stamp {
     pub len: u64,
+    pub device: u64,
+    pub inode: u64,
     pub modified: Option<SystemTime>,
 }
 
@@ -72,6 +75,8 @@ pub fn stamp(root: &Path, relative: &Path) -> Result<Stamp, String> {
     let metadata = file.metadata().map_err(|e| e.to_string())?;
     Ok(Stamp {
         len: metadata.len(),
+        device: metadata.dev(),
+        inode: metadata.ino(),
         modified: metadata.modified().ok(),
     })
 }
@@ -82,6 +87,8 @@ pub fn read(root: &Path, relative: &Path) -> Result<Opened, String> {
     let metadata = file.metadata().map_err(|e| e.to_string())?;
     let stamp = Stamp {
         len: metadata.len(),
+        device: metadata.dev(),
+        inode: metadata.ino(),
         modified: metadata.modified().ok(),
     };
     let too_large = Opened {
@@ -98,6 +105,9 @@ pub fn read(root: &Path, relative: &Path) -> Result<Opened, String> {
     // It grew past the limit between the size check and the read.
     if bytes.len() as u64 > READ_LIMIT {
         return Ok(too_large);
+    }
+    if self::stamp(root, relative)? != stamp {
+        return Err("File changed while it was being read. Open it again.".into());
     }
     let len = bytes.len() as u64;
     let contents = if bytes[..bytes.len().min(SNIFF)].contains(&0) {

@@ -12,6 +12,12 @@ use plait_core::{
 };
 use std::path::PathBuf;
 
+pub(super) struct CommitAttempt {
+    pub(super) thread: Option<plait_core::ownership::ThreadKey>,
+    pub(super) revision: u64,
+    pub(super) message: String,
+}
+
 /// What sending commits to the remote means for this branch right now.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct Sync {
@@ -96,7 +102,21 @@ pub(super) fn change_paths(change: &Change) -> Vec<PathBuf> {
 impl Plait {
     /// Ask for a write and start it if nothing else is running.
     pub(super) fn git_write(&mut self, op: WriteOp, cx: &mut Context<Self>) {
-        if self.state.repository.request_write(op) {
+        if !self.checkout_matches_thread() {
+            self.notice = Some("Checkout identity is not verified.".into());
+            cx.notify();
+            return;
+        }
+        self.git_write_for(self.state.checkout_id(), op, cx);
+    }
+
+    pub(super) fn git_write_for(
+        &mut self,
+        owner: plait_core::state::CheckoutId,
+        op: WriteOp,
+        cx: &mut Context<Self>,
+    ) {
+        if self.state.request_write_for(owner, op) {
             self.pump(cx);
         }
         cx.notify();
@@ -165,19 +185,37 @@ impl Plait {
             return;
         }
         let message = self.commit_message_text(cx);
-        self.workspace.commit_sent = Some(message.clone());
+        self.commit_sends.insert(
+            self.state.checkout_id(),
+            CommitAttempt {
+                thread: self.host.read_stamp().thread,
+                revision: self.workspace.commit_message.read(cx).revision(),
+                message: message.clone(),
+            },
+        );
         self.git_write(WriteOp::Commit { message }, cx);
     }
 
     /// Clear the message once its commit lands, never on a failure, and not
     /// if it was edited while the commit ran.
-    pub(super) fn after_git_write(&mut self, cx: &mut Context<Self>) {
-        if self.state.repository.write().busy() {
+    pub(super) fn after_git_write(
+        &mut self,
+        owner: plait_core::state::CheckoutId,
+        cx: &mut Context<Self>,
+    ) {
+        let committed = self
+            .state
+            .write_for(owner)
+            .and_then(|write| write.committed.take())
+            .is_some();
+        let Some(sent) = self.commit_sends.remove(&owner) else {
             return;
-        }
-        let sent = self.workspace.commit_sent.take();
-        if self.state.repository.write_mut().committed.take().is_some()
-            && sent.is_some_and(|sent| sent == self.commit_message_text(cx))
+        };
+        if committed
+            && owner == self.state.checkout_id()
+            && sent.thread == self.host.read_stamp().thread
+            && sent.revision == self.workspace.commit_message.read(cx).revision()
+            && sent.message == self.commit_message_text(cx)
         {
             self.workspace
                 .commit_message
@@ -193,6 +231,7 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let owner = self.state.checkout_id();
         let answer = window.prompt(
             PromptLevel::Warning,
             &title,
@@ -205,7 +244,7 @@ impl Plait {
         );
         cx.spawn_in(window, async move |this, cx| {
             if answer.await == Ok(0) {
-                let _ = this.update(cx, |this, cx| this.git_write(op, cx));
+                let _ = this.update(cx, |this, cx| this.git_write_for(owner, op, cx));
             }
         })
         .detach();

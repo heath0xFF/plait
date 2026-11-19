@@ -583,6 +583,9 @@ fn current_selects_a_present_layer() {
         }];
         set_changes(p, changes);
         p.state.repository.view.changes.selected = Some(DiffKey {
+            path: p.state.repository.snapshot().ready().unwrap().changes[0]
+                .path
+                .clone(),
             file: 0,
             mode: DiffMode::Unstaged,
         });
