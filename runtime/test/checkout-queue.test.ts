@@ -155,3 +155,14 @@ test('Resume releases checkout waiters, never another thread held follow-ups',as
  assert.equal(h.runtime.store.waiters.get(b,'b-follow')!.state,'held');assert.equal(h.runtime.snapshot(b).queued!.length,1);
  await h.runtime.handle({op:'cancel_queued',protocol_version:6,thread_id:b,request_id:'b-follow'});
 });
+test('a summary page reads each checkout line once, not once per thread',async t=>{
+ const h=await fixture(t),lease=await acquireCheckout(h.root);const ids:string[]=[];
+ for(let i=0;i<40;i++)ids.push(await thread(h.runtime,h.root,`t${i}`));for(let i=0;i<5;i++)await h.runtime.handle(queue(ids[i],`q${i}`));
+ const waiters=h.runtime.store.waiters,line=waiters.line.bind(waiters);let reads=0;waiters.line=(checkout:string)=>{reads++;return line(checkout);};
+ try{
+ const page:any=await h.runtime.handle({op:'list_threads_queue',limit:200,archived:true});
+ assert.equal(reads,1);assert.equal(page.threads.length,40);
+ assert.deepEqual(ids.slice(0,5).map(id=>page.threads.find((s:any)=>s.id===id).checkout_queue.position),[1,2,3,4,5]);
+ assert.equal(page.threads.filter((s:any)=>s.checkout_queue).length,5);
+ }finally{waiters.line=line;for(let i=0;i<5;i++)await h.runtime.handle({op:'cancel_checkout_wait',thread_id:ids[i],request_id:`q${i}`});await lease.close();}
+});

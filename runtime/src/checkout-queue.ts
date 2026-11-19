@@ -81,9 +81,18 @@ export class CheckoutQueue {
   /** A held follow-up keeps its own thread's next-send rule; another thread's Resume does not release it. */
   resume(checkout: string) { this.store.db.prepare("UPDATE checkout_waiters SET state='waiting' WHERE checkout=? AND kind='checkout' AND state='held'").run(checkout); }
   resumeThread(thread: string) { this.store.db.prepare("UPDATE checkout_waiters SET state='waiting' WHERE thread=? AND kind='follow_up' AND state='held'").run(thread); }
-  summary(thread: string, checkout: string): QueueSummary | null {
-    const line = this.line(checkout); const at = line.findIndex(waiter => waiter.thread_id === thread && waiter.kind === 'checkout');
+  summary(thread: string, checkout: string, line = this.line(checkout)): QueueSummary | null {
+    const at = line.findIndex(waiter => waiter.thread_id === thread && waiter.kind === 'checkout');
     if (at < 0) return null;
     return { request_id: line[at].request_id, state: line[at].state as 'waiting' | 'held', position: at + 1, count: line.filter(waiter => waiter.thread_id === thread && waiter.kind === 'checkout').length };
+  }
+  /** A summary page reads each checkout's line once: the stream repeats this on every change. */
+  summaries<T extends { id: string; checkout: string }>(threads: T[]): (T & { checkout_queue: QueueSummary | null })[] {
+    const lines = new Map<string, Waiter[]>();
+    return threads.map(thread => {
+      let line = lines.get(thread.checkout);
+      if (!line) { line = this.line(thread.checkout); lines.set(thread.checkout, line); }
+      return { ...thread, checkout_queue: this.summary(thread.id, thread.checkout, line) };
+    });
   }
 }

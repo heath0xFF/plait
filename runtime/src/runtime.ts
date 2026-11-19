@@ -705,7 +705,7 @@ export class Runtime {
     if (request.op === 'checkout_queue_info') return { schema: 1, checkout_queue_v1: true, limit: CHECKOUT_QUEUE_LIMIT, payload_bytes: CHECKOUT_QUEUE_BYTES };
     if (request.op === 'list_threads_queue' || request.op === 'watch_threads_queue') {
       const page = await this.dispatch(validate({ ...request, op: request.op.replace('_queue',''), protocol_version: 6 }), 6) as { threads: import('./protocol.ts').Summary[] };
-      return { ...page, threads: page.threads.map(thread => ({ ...thread, checkout_queue: this.store.waiters.summary(thread.id,thread.checkout) })) };
+      return { ...page, threads: this.store.waiters.summaries(page.threads) };
     }
     const id = String(request.thread_id); const snapshot = this.snapshot(id);
     if (request.op === 'submit_checkout') return this.gate(`queue:${id}`, async () => {
