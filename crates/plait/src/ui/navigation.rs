@@ -347,7 +347,12 @@ impl Plait {
             self.navigation.cached_rows.insert(id, (key, view.clone()));
             view
         };
-        view.cached(StyleRefinement::default().w_full().h(px(ROW_HEIGHT)))
+        // Not `cached`: a view reused from the last frame contributes no
+        // accessibility nodes, so every thread row would vanish from them.
+        div()
+            .w_full()
+            .h(px(ROW_HEIGHT))
+            .child(view)
             .into_any_element()
     }
 

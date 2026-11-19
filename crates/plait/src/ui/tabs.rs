@@ -497,11 +497,15 @@ impl Plait {
         if redraw {
             strip.update(cx, |_, cx| cx.notify());
         }
-        let strip = strip.cached(
-            StyleRefinement::default()
-                .h_full()
-                .w(px(layout.visible.len() as f32 * layout.tab_width)),
-        );
+        // Not `cached`: a view reused from the last frame contributes no
+        // accessibility nodes, so the tabs would vanish from them.
+        // It may shrink like the fixed-size view it replaces, so the row lays
+        // out exactly as it did.
+        let strip = div()
+            .h_full()
+            .w(px(layout.visible.len() as f32 * layout.tab_width))
+            .min_w_0()
+            .child(strip);
         let bar = self
             .window_drag(row(), cx)
             .id("window-tab-bar")
