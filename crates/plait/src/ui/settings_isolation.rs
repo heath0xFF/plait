@@ -102,6 +102,11 @@ impl Plait {
                 .tooltip(move |_,cx| cx.new(|_| TextTooltip(tip.into())).into())
                 .when(enabled,|el| el.on_activate(cx,move |this,_,cx| this.request_isolation_setting(Some(value),cx))));
         }
+        let control = if current.is_some() {
+            control.into_any_element()
+        } else {
+            tag("Unavailable", colors().muted).into_any_element()
+        };
         settings::section("New threads")
             .child(settings::setting("When this project is busy", "Applies only to new threads in this project. Worktrees start from HEAD; cleanup is manual.", control))
             .when(self.admission.settings_busy, |el| el.child(tag("Loading isolation setting…",colors().muted)))

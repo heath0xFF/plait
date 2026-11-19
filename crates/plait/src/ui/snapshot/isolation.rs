@@ -127,26 +127,60 @@ pub(super) fn walk(
     many.connect(repository, false);
     super::tabs::install(&mut many, 20);
     many.update(|plait, _, cx| {
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 6;
+        plait.tabs.model = plait_core::tabs::WindowTabs::new(crate::ui::tabs::fresh_window_id());
+        let mut first = None;
         for (i, thread) in plait.host.connection.threads.iter_mut().enumerate() {
-            thread.checkout = repository
-                .with_extension("worktrees")
-                .join(format!("run-{i}"));
+            if i > 0 {
+                thread.checkout = repository
+                    .with_extension("worktrees")
+                    .join(format!("run-{i}"));
+            }
             thread.status = ThreadStatus::Running;
             thread.pending_approval = Some(false);
-            plait.preferences.value.navigation.remember_worktree(
-                thread.checkout.clone(),
-                repository.into(),
-                format!("plait/run-{i}"),
-            );
+            if i > 0 {
+                plait.preferences.value.navigation.remember_worktree(
+                    thread.checkout.clone(),
+                    repository.into(),
+                    format!("plait/run-{i}"),
+                );
+            }
+            let tab = plait
+                .tabs
+                .model
+                .open(
+                    plait_core::tabs::ThreadTarget::Existing {
+                        id: thread.id.clone(),
+                        checkout: plait_core::tabs::CheckoutKey {
+                            host: plait.tabs.host.clone(),
+                            root: thread.checkout.clone(),
+                            directory: None,
+                        },
+                    },
+                    Some(plait.host.connection.epoch),
+                )
+                .unwrap();
+            first.get_or_insert(tab);
         }
+        plait.tabs.model.activate(first.unwrap()).unwrap();
         plait.refresh_tab_rows();
         plait.rebuild_projects(cx);
     });
     many.capture(&format!("isolation-twenty-running-{suffix}"));
-    many.update(|plait, _, _| {
-        if let Some(snapshot) = plait.host.thread.snapshot.as_mut() {
-            std::sync::Arc::make_mut(snapshot).status = ThreadStatus::Running;
+    many.change_snapshot(|snapshot| {
+        snapshot.live_text.clear();
+        snapshot.live_reasoning.clear();
+        for tool in &mut snapshot.tools {
+            tool.status = plait_core::host::ToolStatus::Done;
         }
+    });
+    many.update(|plait, _, _| {
         plait.admission.preparing = Some((
             super::THREAD.into(),
             Some(plait_core::host::admission::Phase::ResourceWait),

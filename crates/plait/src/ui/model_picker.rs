@@ -465,6 +465,20 @@ impl Plait {
                     .into_any_element(),
             );
         }
+        if self.admission.choice {
+            if self.draft_visible() {
+                return None;
+            }
+            return Some(
+                bar()
+                    .child("Project busy. Choose where the new thread starts.")
+                    .child(
+                        button("admission-return", "Choose checkout")
+                            .on_activate(cx, |this, window, cx| this.open_draft(window, cx)),
+                    )
+                    .into_any_element(),
+            );
+        }
         // The draft says how its own creation stands, under its composer.
         if self.draft_visible() && self.draft_pending() {
             return None;

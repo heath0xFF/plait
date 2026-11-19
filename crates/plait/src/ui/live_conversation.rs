@@ -1104,7 +1104,10 @@ Tone::Filled,
                 div().into_any_element()
             });
         if let Some(snapshot) = &snapshot {
-            let state = history::run_state(snapshot, self.workspace.history.now);
+            let state = self
+                .preparation_label()
+                .map(|label| (label.to_owned(), false))
+                .or_else(|| history::run_state(snapshot, self.workspace.history.now));
             // The turn line runs from the rows to the state's node. It is
             // broken while the rows on screen stop short of the latest turn:
             // scrolled back from the newest row, or reading older history.

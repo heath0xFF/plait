@@ -109,6 +109,10 @@ fn choice_flow() {
     harness.update(|p, w, cx| {
         assert!(p.isolation_choice(cx).is_some());
         assert!(p.draft.sending.is_some());
+        assert!(p.creation_bar(cx).is_none());
+        p.draft.open = false;
+        assert!(p.creation_bar(cx).is_some());
+        p.draft.open = true;
         p.accept_isolation(w, cx);
     });
     wait(&mut harness, |p| !p.host.creation.creating);

@@ -1150,8 +1150,10 @@ a writer, **Project busy** offers **Own worktree** and **Wait**. Own worktree
 creates a new branch and checkout from HEAD, then sends the draft there using
 its chosen harness, model and permissions. Uncommitted files and build outputs
 are not copied. Wait is disabled and marked not yet available; nothing is queued.
-Cancel keeps the draft. A failed or unanswered creation keeps the request for
-safe retry. Completing it never selects a tab the person has moved away from.
+Cancel keeps the draft. An unanswered creation keeps the request for safe retry;
+a refused creation keeps the draft. Completing it never selects a tab the person
+has moved away from. While a first-message creation remains unresolved, the
+window keeps its checkout fixed; other threads in that checkout remain available.
 
 Project settings → New threads → **When this project is busy** defaults to
 **Ask** (each time). **Own worktree** authorizes automatic worktrees for new

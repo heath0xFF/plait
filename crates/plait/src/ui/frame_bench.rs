@@ -452,8 +452,10 @@ pub fn run() -> Vec<Row> {
                     .enumerate()
                     .map(|(index, thread)| {
                         let mut thread = thread.clone();
-                        thread.updated_at = Some(round as u64 + 1);
-                        thread.status = if index < 5 {
+                        thread.updated_at =
+                            Some(thread.updated_at.unwrap_or_default().saturating_add(1));
+                        thread.pending_approval = Some(false);
+                        thread.status = if (index + round) % 20 < 5 {
                             ThreadStatus::Running
                         } else {
                             ThreadStatus::Idle

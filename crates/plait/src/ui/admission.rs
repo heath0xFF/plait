@@ -117,6 +117,18 @@ impl Plait {
         })
         .detach();
     }
+    pub(super) fn preparation_label(&self) -> Option<&'static str> {
+        let snapshot = self.host.thread.snapshot.as_ref()?;
+        let (id, phase) = self.admission.preparing.as_ref()?;
+        if id != &snapshot.id || !snapshot.status.busy() {
+            return None;
+        }
+        match phase {
+            Some(admission::Phase::Preparing) => Some("Preparing checkout…"),
+            Some(admission::Phase::ResourceWait) => Some("Waiting for preparation…"),
+            _ => None,
+        }
+    }
     pub(super) fn admission_context(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let selected = self.host.thread.selected.as_ref()?;
         let mut content = column().gap_1();
@@ -141,10 +153,10 @@ impl Plait {
         {
             let label = match phase {
                 admission::Phase::Preparing => {
-                    Some("Preparing checkout… The harness has not started.")
+                    Some("Preparing checkout… The agent turn has not started.")
                 }
                 admission::Phase::ResourceWait => Some(
-                    "Waiting for this filesystem's preparation scan. The harness has not started; Stop cancels preparation.",
+                    "Waiting for this filesystem's preparation scan. The agent turn has not started; Stop cancels preparation.",
                 ),
                 admission::Phase::Running => None,
             };
@@ -364,8 +376,20 @@ impl Plait {
                         if let Some(source) = this.admission.source.clone() {
                             this.admission.origin = Some((reply.thread.id.clone(), Some(source)));
                         }
+                        let policy = match &this.admission.pending {
+                            Some(Request::CreateAdmittedThread { harness: host::harness::HarnessId::Pi, source_thread_id: Some(_), approval, .. }) => Some(*approval),
+                            _ => None,
+                        };
+                        let id=reply.thread.id.clone();
                         this.admission.pending = None; this.admission.source = None;
                         this.finish_create(created, Ok(reply), window, cx);
+                        if let Some(policy)=policy {
+                            if !this.workspace.composers.contains_key(&id) {
+                                let composer=cx.new(|cx| super::composer::Composer::new(window,cx));
+                                this.attach_composer(id.clone(),composer,window,cx);
+                            }
+                            this.set_thread_approval(id,Some(policy),cx);
+                        }
                     }
                     Ok((Some(receipt), None)) => {
                         let error = receipt.error.map(host::Error::Rejected).unwrap_or_else(|| host::Error::Protocol("Creation is still preparing. Retry with the same request.".into()));
@@ -410,11 +434,11 @@ impl Plait {
         }
         Some(column().w_full().max_w(px(CONTENT_WIDTH)).mx_auto().gap_2().p_3()
             .child(div().text_size(px(13.)).child("Project busy"))
-            .child(div().text_size(px(12.)).text_color(rgb(colors().muted)).child("Start from HEAD in a new worktree. Uncommitted files and build output are not copied. The original thread and draft stay where they are."))
+            .child(div().text_size(px(12.)).text_color(rgb(colors().muted)).child("Start from HEAD in a new worktree. Uncommitted files and build output are not copied. The busy thread stays in its checkout. Your message starts the new thread."))
             .child(row().gap_2()
-                .child(button("isolation-worktree", "Own worktree").aria_description("Create a separate branch and checkout from HEAD, then send this draft there.").on_activate(cx, |this, window, cx| this.accept_isolation(window,cx)))
-                .child(button("isolation-wait", "Wait").disabled(true).aria_description("Not yet available. No run is queued."))
-                .child(button("isolation-cancel", "Cancel").on_activate(cx, |this,_,cx| this.cancel_isolation(cx))))
+                .child(button("isolation-worktree", "Own worktree").tooltip(|_,cx| cx.new(|_| super::thread_controls::TextTooltip("Create a separate branch and checkout from HEAD, then send this draft there.".into())).into()).aria_description("Create a separate branch and checkout from HEAD, then send this draft there.").on_activate(cx, |this, window, cx| this.accept_isolation(window,cx)))
+                .child(button("isolation-wait", "Wait").disabled(true).tooltip(|_,cx| cx.new(|_| super::thread_controls::TextTooltip("Not yet available. No run is queued.".into())).into()).aria_description("Not yet available. No run is queued."))
+                .child(button("isolation-cancel", "Cancel").tooltip(|_,cx| cx.new(|_| super::thread_controls::TextTooltip("Keep this draft without starting a thread.".into())).into()).on_activate(cx, |this,_,cx| this.cancel_isolation(cx))))
             .child(div().text_size(px(11.)).text_color(rgb(colors().muted)).child("Wait is not yet available. Nothing is queued."))
             .into_any_element())
     }
