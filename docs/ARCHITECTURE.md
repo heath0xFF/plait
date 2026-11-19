@@ -606,7 +606,10 @@ lifecycle lock (exclusive for a write or removal, shared on the parent for
 adding a worktree), the checkout directory's writer lock, and, for writes to
 shared refs, configuration or the worktree list, the common-directory lock,
 in that order. The root and common directory come from the root's `.git`
-entry, so a lease starts no process. `RepositoryJob` passes the checkout's
+entry, so a lease starts no process. The two worktree commands lend the
+lease to their Git process (`CheckoutLease::lend_to`), so it outlives a
+crash of the desktop until Git exits; other writes do not lend it, since Git
+can pass it on to long-lived helpers. `RepositoryJob` passes the checkout's
 verified identity, which the lease checks under the lock. Turn undo takes the
 same exclusive lease in the runtime, and `plait-host undo` accepts it only if it
 is already exclusive; a run takes the writer class. The hardened Git functions

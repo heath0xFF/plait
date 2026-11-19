@@ -1506,8 +1506,14 @@ letter case on a case-insensitive volume, and subdirectories all resolve to the
 same root directory, so they share one lease.
 
 A lease is held by the runtime and by the helpers and command guardians it
-starts with the descriptors. When all of them have exited, by a crash
-included, the kernel releases it. Harness processes do not hold it: the Codex
+starts with the descriptors; a helper's own Git processes inherit them. In the
+desktop, `git worktree add` and `git worktree remove` hold the lease too
+(`CheckoutLease::lend_to`), because they start no long-lived helpers; other
+desktop Git writes do not, because a commit's detached maintenance or a
+credential-cache daemon would inherit it, so if the desktop dies during one of
+those its Git process can outlive the lease. When every holder has exited, by
+a crash included, the kernel releases the lease, and a holder dropping it
+normally releases it for all of them. Harness processes do not hold it: the Codex
 app-server, Claude Code and anything they start run without the descriptors, so
 if one keeps running after its run has ended (a Stop whose interrupt times out,
 or the runtime killed), the checkout is free while it may still write. A Pi
