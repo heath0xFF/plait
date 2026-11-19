@@ -856,11 +856,12 @@ the default. Both shortcuts can be changed in Settings → Keyboard.
 
 The 40-point top row holds the native window buttons, sidebar toggle, thread,
 draft and Worktrees tabs, and New tab control. It stays visible with the sidebar
-hidden. Drag the empty right end to move the window; double-clicking it follows
-the system's title-bar preference. The 36-point second row holds the active
-thread's
-project, branch, four views, and inspector toggle. An empty workspace has no
-second row.
+hidden. While the sidebar is open, the first tab starts at the sidebar's right
+edge, so the tabs sit above the content they switch. Drag empty bar space on
+either side of the tabs to move the window; double-clicking it follows the
+system's title-bar preference. The 36-point second row holds the active
+thread's project, branch, four views, and inspector toggle. An empty workspace
+has no second row.
 Tab order, the tab in front, and each view's bookmark are saved separately in
 `~/Library/Application Support/Plait/tabs.json`. Saving is debounced; closing
 normally waits for it. Launch waits for verified host and checkout identities
