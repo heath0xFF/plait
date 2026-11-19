@@ -147,7 +147,7 @@ pub(crate) fn write_with_common_wait(
         common,
     )
     .map_err(String::from)?;
-    write_unlocked(lease.root(), op)
+    crate::lease::git_cleanup::with_lease(&lease, || write_unlocked(lease.root(), op))
 }
 
 fn write_unlocked(root: &Path, op: &WriteOp) -> Result<WriteOutcome> {
@@ -312,7 +312,13 @@ fn save(root: &Path, path: &Path) -> Result<Option<Backup>> {
     }
     let mut command = write_command(root);
     command.args(["hash-object", "-w", "--no-filters", "--stdin"]);
-    let raw = run(&mut command, Some(bytes), STATUS_LIMIT, STAGE_TIMEOUT)?;
+    let raw = run_write(
+        &mut command,
+        Some(bytes),
+        STATUS_LIMIT,
+        STAGE_TIMEOUT,
+        "git hash-object",
+    )?;
     let blob = String::from_utf8_lossy(&raw.out.bytes).trim().to_owned();
     if !raw.status.success() || !is_object_id(&blob) {
         return Err(failure_text(&raw));
@@ -353,7 +359,13 @@ fn restore(root: &Path, backup: &Backup) -> Result<WriteOutcome> {
 fn git_path(root: &Path, args: &[&str], path: &Path) -> Result<()> {
     let mut command = write_command(root);
     command.args(args).arg("--").arg(path);
-    let raw = run(&mut command, None, STATUS_LIMIT, STAGE_TIMEOUT)?;
+    let raw = run_write(
+        &mut command,
+        None,
+        STATUS_LIMIT,
+        STAGE_TIMEOUT,
+        &format!("git {}", args[0]),
+    )?;
     if raw.status.success() {
         Ok(())
     } else {
@@ -485,7 +497,13 @@ fn pull(root: &Path) -> Result<WriteOutcome> {
     }
     let mut command = write_command(root);
     command.args(["merge", "--ff-only", "-q", "@{upstream}"]);
-    let raw = run(&mut command, None, STATUS_LIMIT, NETWORK_TIMEOUT)?;
+    let raw = run_write(
+        &mut command,
+        None,
+        STATUS_LIMIT,
+        NETWORK_TIMEOUT,
+        "git merge --ff-only",
+    )?;
     if !raw.status.success() {
         let text = failure_text(&raw);
         return Err(if text.contains("would be overwritten") {
@@ -558,7 +576,13 @@ fn remote_git(root: &Path, args: &[&str]) -> Result<()> {
     if let Some(helper) = gh_helper() {
         command.args(["-c", helper]);
     }
-    let raw = run(command.args(args), None, STATUS_LIMIT, NETWORK_TIMEOUT)?;
+    let raw = run_write(
+        command.args(args),
+        None,
+        STATUS_LIMIT,
+        NETWORK_TIMEOUT,
+        &format!("git {}", args[0]),
+    )?;
     if raw.status.success() {
         return Ok(());
     }
@@ -794,7 +818,7 @@ pub(super) fn git_holding(
 ) -> Result<()> {
     let mut command = write_command(root);
     lease.lend_to(&mut command);
-    finish(command, args, None, timeout)
+    crate::lease::git_cleanup::with_lease(lease, || finish(command, args, None, timeout))
 }
 
 fn finish(
@@ -804,17 +828,43 @@ fn finish(
     timeout: Duration,
 ) -> Result<()> {
     // A stopped write can leave Git's lock behind; say how to recover.
-    let raw = run(command.args(args), input, STATUS_LIMIT, timeout).map_err(|error| {
-        if error.contains("was stopped") {
-            format!("{error} If .git/index.lock remains, remove it once no Git process is running.")
-        } else {
-            error
-        }
-    })?;
+    let label = format!(
+        "git {}",
+        args.iter()
+            .take(if args.first() == Some(&"worktree") {
+                2
+            } else {
+                1
+            })
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    let raw =
+        run_write(command.args(args), input, STATUS_LIMIT, timeout, &label).map_err(|error| {
+            if error.contains("was stopped") {
+                format!(
+                    "{error} If .git/index.lock remains, remove it once no Git process is running."
+                )
+            } else {
+                error
+            }
+        })?;
     if raw.status.success() {
         return Ok(());
     }
     Err(failure_text(&raw))
+}
+
+fn run_write(
+    command: &mut Command,
+    input: Option<Vec<u8>>,
+    limit: usize,
+    timeout: Duration,
+    label: &str,
+) -> Result<super::Raw> {
+    let recording = crate::lease::git_cleanup::prepare(command, label)?;
+    super::run_recorded(command, input, limit, timeout, recording)
 }
 
 /// A user-facing reason: Git's stderr plus any stdout, so hook output shows.

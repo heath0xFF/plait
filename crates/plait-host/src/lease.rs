@@ -4,7 +4,7 @@ use plait_core::lease::{
     open_lease_dir, open_lock_file, open_verified_dir, prepare_checkout_lock, prepare_common_lock,
     try_flock_fd, verify_dir_still,
 };
-use plait_core::lease::{acquire_for_cleanup, cleanup};
+use plait_core::lease::{acquire_for_cleanup, cleanup, git_cleanup};
 use serde_json::json;
 use std::{
     fs::File,
@@ -84,6 +84,10 @@ pub fn acquire(args: Vec<String>) -> io::Result<()> {
     let (_expected_file, expected_lock_id) = open_lock_file(&lease_dir_fd, &expected_name)
         .map_err(|error| io::Error::other(error.to_string()))?;
     verify_inherited_lock_fd(3, expected_lock_id)?;
+    if mode != "common" {
+        git_cleanup::require_clear(id)
+            .map_err(|error| io::Error::other(format!("cleanup_uncertain: {error}")))?;
+    }
 
     match mode {
         "reader" => {
@@ -213,6 +217,7 @@ pub fn cleanup_operation(args: Vec<String>) -> io::Result<()> {
         "begin" | "mark" => {
             let token = token.ok_or_else(|| io::Error::other("cleanup token missing"))?;
             let next = cleanup::Cleanup {
+                process: None,
                 token: token.into(),
                 reason: reason
                     .ok_or_else(|| io::Error::other("cleanup reason missing"))?
@@ -223,16 +228,20 @@ pub fn cleanup_operation(args: Vec<String>) -> io::Result<()> {
         }
         "finish" | "resolve" => {
             let token = token.ok_or_else(|| io::Error::other("cleanup token missing"))?;
-            cleanup::replace(id, Some(token), None).map_err(io::Error::other)?;
+            if action == "resolve" && token.starts_with("git-") {
+                git_cleanup::resolve(id, token).map_err(io::Error::other)?;
+            } else {
+                cleanup::replace(id, Some(token), None).map_err(io::Error::other)?;
+            }
         }
+        "stop" => git_cleanup::stop(
+            id,
+            token.ok_or_else(|| io::Error::other("cleanup token missing"))?,
+        )
+        .map_err(io::Error::other)?,
         _ => return Err(io::Error::other("unknown cleanup operation")),
     }
-    let state = if action == "read" {
-        cleanup::unconfirmed(id)
-    } else {
-        cleanup::state(id)
-    }
-    .map_err(io::Error::other)?;
+    let state = cleanup::unconfirmed(id).map_err(io::Error::other)?;
     serde_json::to_writer(
         io::stdout(),
         &json!({"checkout": canonical, "cleanup": state}),
@@ -258,7 +267,7 @@ fn acquire_legacy() -> io::Result<()> {
         dev: stat.st_dev as u64,
         ino: stat.st_ino as u64,
     };
-    if let Err(error) = cleanup::require_clear(id) {
+    if let Err(error) = cleanup::require_clear(id).and_then(|()| git_cleanup::require_clear(id)) {
         unsafe {
             libc::flock(3, libc::LOCK_UN);
         }

@@ -11,8 +11,18 @@ pub const RESTART_REASON: &str = "The host ended before it confirmed this run's 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Cleanup {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process: Option<CleanupProcess>,
     pub token: String,
     pub reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CleanupProcess {
+    pub group: i32,
+    pub command: String,
+    pub can_stop: bool,
 }
 
 impl Cleanup {
@@ -33,10 +43,6 @@ fn locked_file(lease_dir: &Path, id: DirIdentity) -> Result<File, LeaseError> {
     if !flock_fd_wait(file.as_raw_fd(), libc::LOCK_EX, Duration::from_secs(2))? {
         return Err(LeaseError::io("Cleanup state is being saved. Try again."));
     }
-    // Persist a newly created marker's directory entry before any run starts.
-    directory
-        .sync_all()
-        .map_err(|e| LeaseError::io(e.to_string()))?;
     Ok(file)
 }
 
@@ -57,13 +63,15 @@ fn read(file: &mut File) -> Result<Option<Cleanup>, LeaseError> {
     // A torn save is uncertainty too. Its digest lets a person acknowledge that
     // exact damaged state without letting an old confirmation clear a new run.
     Ok(Some(Cleanup {
+        process: None,
         token: format!("{:x}", Sha256::digest(&bytes)),
         reason: "The host could not read its saved cleanup confirmation.".into(),
     }))
 }
 
 fn valid(value: &Cleanup) -> bool {
-    !value.token.is_empty()
+    value.process.is_none()
+        && !value.token.is_empty()
         && value.token.len() <= 128
         && value
             .token
@@ -101,6 +109,9 @@ pub fn require_clear_for_reader(dir: &Path, id: DirIdentity) -> Result<(), Lease
 
 /// A live run's crash marker is not an unconfirmed stop, even in another store.
 pub fn unconfirmed(id: DirIdentity) -> Result<Option<Cleanup>, LeaseError> {
+    if let Some(state) = super::git_cleanup::unconfirmed(id)? {
+        return Ok(Some(state));
+    }
     unconfirmed_in(&default_lease_dir()?, id)
 }
 
@@ -153,6 +164,11 @@ fn replace_in(
         return Err(LeaseError::io("Invalid cleanup state."));
     }
     let mut file = locked_file(dir, id)?;
+    // Only run-marker mutations need power-loss durability, never lease reads.
+    open_lease_dir(dir)?
+        .1
+        .sync_all()
+        .map_err(|e| LeaseError::io(e.to_string()))?;
     if read(&mut file)?.as_ref().map(|value| value.token.as_str()) != expected {
         return Err(LeaseError::io(
             "Cleanup state changed. Refresh before confirming.",
@@ -190,6 +206,7 @@ mod tests {
         let run = acquire_checkout_in(&dir, &root, None, LeaseClass::Writer).unwrap();
         let id = run.identity();
         let marker = Cleanup {
+            process: None,
             token: "run-one".into(),
             reason: RESTART_REASON.into(),
         };
@@ -217,6 +234,7 @@ mod tests {
             id,
             None,
             Some(&Cleanup {
+                process: None,
                 token: "run-two".into(),
                 reason: "A helper did not confirm exit.".into(),
             }),
@@ -255,6 +273,7 @@ mod tests {
             id,
             None,
             Some(&Cleanup {
+                process: None,
                 token: "uncertain-command".into(),
                 reason: "The command group did not stop.".into(),
             }),

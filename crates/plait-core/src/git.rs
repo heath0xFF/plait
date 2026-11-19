@@ -184,6 +184,16 @@ fn run(
     limit: usize,
     timeout: Duration,
 ) -> Result<Raw> {
+    run_recorded(command, input, limit, timeout, None)
+}
+
+fn run_recorded(
+    command: &mut Command,
+    input: Option<Vec<u8>>,
+    limit: usize,
+    timeout: Duration,
+    recording: Option<crate::lease::git_cleanup::Running>,
+) -> Result<Raw> {
     #[cfg(test)]
     SPAWNED.with(|count| count.set(count.get() + 1));
     let stdin = if input.is_some() {
@@ -204,7 +214,12 @@ fn run(
             0
         })
         .spawn()
-        .map_err(|e| format!("Cannot start Git: {e}"))?;
+        .map_err(|e| {
+            if let Some(recording) = &recording {
+                let _ = recording.finish(true);
+            }
+            format!("Cannot start Git: {e}")
+        })?;
     let stdout = child.stdout.take().ok_or("Git stdout is unavailable")?;
     let stderr = child.stderr.take().ok_or("Git stderr is unavailable")?;
     let feed = child.stdin.take().zip(input).map(|(mut pipe, bytes)| {
@@ -238,6 +253,9 @@ fn run(
             ))
         }
     };
+    if let Some(recording) = &recording {
+        recording.finish(status.as_ref().is_ok_and(|status| status.code().is_some()))?;
+    }
     let status = status?;
     // A writer still blocked on a full pipe ends once Git's pipes close; it is
     // never waited on, so a stray descendant cannot hold this thread.

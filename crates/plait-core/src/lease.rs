@@ -37,6 +37,8 @@ use std::{
 };
 
 pub mod cleanup;
+pub mod git_cleanup;
+mod process;
 
 /// User-facing refusal when an active run, reader, or another Plait write holds a checkout.
 pub const CHECKOUT_BUSY: &str = "This checkout is in use by an active run or another Plait write. Wait until it finishes, then try again.";
@@ -565,7 +567,10 @@ pub(crate) fn acquire_checkout_in(
     expected: Option<DirIdentity>,
     class: LeaseClass,
 ) -> Result<CheckoutLease, LeaseError> {
-    let lease = acquire_for_cleanup_in(lease_dir, root, expected, class)?;
+    let lease = git_cleanup::check_lease(
+        root,
+        acquire_for_cleanup_in(lease_dir, root, expected, class),
+    )?;
     if class == LeaseClass::Reader {
         cleanup::require_clear_for_reader(lease_dir, lease.identity)?;
     } else {

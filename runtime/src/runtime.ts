@@ -141,18 +141,23 @@ export class Runtime {
   private async checkoutCleanup(input: unknown) {
     const request = validateCleanup(input);
     const root = await checkout(request.checkout);
+    if (request.op === 'stop_checkout_cleanup') {
+      const reply = await cleanupHelper('stop', root, request.token);
+      if (reply.cleanup === null) this.cleanupResolved(root);
+      return reply;
+    }
     if (request.op === 'resolve_checkout_cleanup') {
       if (this.active.has(root)) fail('busy', 'This checkout still has a run finishing. Wait for it to stop.');
       const reply = await cleanupHelper('resolve', root, request.token);
-      this.cleanupResolved(root);
+      if (reply.cleanup === null) this.cleanupResolved(root);
       return reply;
     }
     const reply = await cleanupHelper('read', root);
-    // A live run's crash marker is not a cleanup failure.
-    return this.active.has(root) ? { ...reply, cleanup: null } : reply;
+    if (reply.cleanup === null && this.store.db.prepare('SELECT id FROM threads WHERE checkout=?').all(root).some(row => this.store.get(String(row.id)).error?.code === 'cleanup_uncertain')) this.cleanupResolved(root);
+    return reply;
   }
   private cleanupResolved(root: string) {
-    this.records.recoverCheckout(root);
+    if (!this.active.has(root)) this.records.recoverCheckout(root);
     for (const row of this.store.db.prepare('SELECT id FROM threads WHERE checkout=?').all(root)) {
       const snapshot = this.store.get(String(row.id));
       if (snapshot.error?.code === 'cleanup_uncertain') {

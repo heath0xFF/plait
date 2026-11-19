@@ -4,7 +4,7 @@ import { isAbsolute } from 'node:path';
 import { fail, HostError } from './protocol.ts';
 import type { LeaseHandle } from './safety.ts';
 
-export type CleanupState = { token: string; reason: string };
+export type CleanupState = { token: string; reason: string; process?: { group: number; command: string; can_stop: boolean } };
 export type CleanupReply = { checkout: string; cleanup: CleanupState | null };
 export const RESTART_REASON = "The host ended before it confirmed this run's cleanup.";
 export const NEVER = new Promise<void>(() => {});
@@ -75,7 +75,7 @@ export function guardianProof(child: ChildProcess): Promise<void> {
   });
 }
 
-export function cleanupHelper(action: 'read' | 'begin' | 'mark' | 'finish' | 'resolve', root: string,
+export function cleanupHelper(action: 'read' | 'begin' | 'mark' | 'finish' | 'resolve' | 'stop', root: string,
   token?: string, reason?: string, lease?: LeaseHandle): Promise<CleanupReply> {
   const executable = process.env.PLAIT_HOST_EXE;
   if (!executable) fail('internal', 'Host cleanup helper is not configured.');
@@ -101,7 +101,7 @@ export function cleanupHelper(action: 'read' | 'begin' | 'mark' | 'finish' | 're
 export async function resolveProvedCleanup(proof: CleanupProof, root: string, token: string): Promise<boolean> {
   await proof.proved();
   for (;;) {
-    try { await cleanupHelper('resolve', root, token); return true; }
+    try { return (await cleanupHelper('resolve', root, token)).cleanup === null; }
     catch {
       if ((await cleanupHelper('read', root)).cleanup?.token !== token) return false;
       // The guardian may still hold the lease briefly after sending its receipt.
@@ -111,17 +111,19 @@ export async function resolveProvedCleanup(proof: CleanupProof, root: string, to
 }
 
 export function handlesCleanup(input: unknown) {
-  return !!input && typeof input === 'object' && ['checkout_cleanup', 'resolve_checkout_cleanup'].includes(String((input as { op?: unknown }).op));
+  return !!input && typeof input === 'object' && ['checkout_cleanup', 'resolve_checkout_cleanup', 'stop_checkout_cleanup'].includes(String((input as { op?: unknown }).op));
 }
 export function validateCleanup(input: unknown): { op: string; checkout: string; token?: string } {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail('invalid_request', 'Invalid cleanup request.');
   const request = input as Record<string, unknown>;
   const resolve = request.op === 'resolve_checkout_cleanup';
-  const fields = resolve ? ['op', 'checkout', 'token', 'confirm_stopped'] : ['op', 'checkout'];
+  const stop = request.op === 'stop_checkout_cleanup';
+  const confirmation = stop ? 'confirm_stop' : 'confirm_stopped';
+  const fields = resolve || stop ? ['op', 'checkout', 'token', confirmation] : ['op', 'checkout'];
   if (!handlesCleanup(request) || Object.keys(request).some(key => !fields.includes(key))
       || typeof request.checkout !== 'string' || !isAbsolute(request.checkout) || request.checkout.length > 4096
       || /[\u0000-\u001f\u007f]/u.test(request.checkout)
-      || resolve && (request.confirm_stopped !== true || typeof request.token !== 'string' || !/^[A-Za-z0-9-]{1,128}$/.test(request.token))) {
+      || (resolve || stop) && (request[confirmation] !== true || typeof request.token !== 'string' || !/^[A-Za-z0-9-]{1,128}$/.test(request.token))) {
     fail('invalid_request', 'Invalid cleanup request. Confirm the processes stopped and use the current cleanup token.');
   }
   return request as { op: string; checkout: string; token?: string };

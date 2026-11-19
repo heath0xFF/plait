@@ -298,7 +298,10 @@ test('cleanup markers survive lease loss, cover aliases, and reject stale resolu
 test('cleanup requests require exact fields and explicit confirmation', async () => {
   const { validateCleanup } = await import('../src/cleanup.ts');
   assert.deepEqual(validateCleanup({ op: 'checkout_cleanup', checkout: '/repo' }), { op: 'checkout_cleanup', checkout: '/repo' });
+  assert.equal(validateCleanup({ op: 'stop_checkout_cleanup', checkout: '/repo', token: 'git-abc', confirm_stop: true }).op, 'stop_checkout_cleanup');
   for (const bad of [
+    { op: 'stop_checkout_cleanup', checkout: '/repo', token: 'git-abc', confirm_stop: false },
+    { op: 'stop_checkout_cleanup', checkout: '/repo', token: 'git-abc', confirm_stopped: true },
     { op: 'checkout_cleanup', checkout: 'relative' },
     { op: 'checkout_cleanup', checkout: '/repo', extra: true },
     { op: 'resolve_checkout_cleanup', checkout: '/repo', token: 'run' },

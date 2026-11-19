@@ -41,7 +41,7 @@ impl Plait {
         }
         self.request_cleanup(None, cx);
     }
-    fn request_cleanup(&mut self, confirm: Option<String>, cx: &mut Context<Self>) {
+    fn request_cleanup(&mut self, confirm: Option<(String, bool)>, cx: &mut Context<Self>) {
         if !self.host.connection.connected || self.cleanup.busy {
             return;
         }
@@ -58,7 +58,9 @@ impl Plait {
             let value = host::cleanup::read(
                 &host::Client::from_environment()?,
                 &identity,
-                confirm.as_deref(),
+                confirm
+                    .as_ref()
+                    .map(|(token, stop)| (token.as_str(), *stop)),
             )?;
             Ok::<_, host::Error>((identity, value))
         });
@@ -102,10 +104,24 @@ impl Plait {
         }
         let state = self.cleanup.value.as_ref()?;
         let token = state.token.clone();
+        let stop = state
+            .process
+            .as_ref()
+            .is_some_and(|process| process.can_stop);
+        let action = if stop {
+            format!(
+                "Stop {} and its child processes in this checkout (process group {}).",
+                state.process.as_ref().unwrap().command,
+                state.process.as_ref().unwrap().group
+            )
+        } else {
+            "Check for commands, servers, or builds still using this folder. Confirm only after they have stopped.".into()
+        };
         let tip = format!(
-            "{}\nCheckout: {}\nCheck for commands, servers, or builds still using this folder. Confirm only after they have stopped.{}",
+            "{}\nCheckout: {}\n{}{}",
             state.reason,
             self.host.creation.checkout.display(),
+            action,
             self.cleanup
                 .note
                 .as_ref()
@@ -116,7 +132,11 @@ impl Plait {
             button(
                 "checkout-cleanup",
                 if self.cleanup.confirm {
-                    "Confirm stopped"
+                    if stop {
+                        "Stop processes"
+                    } else {
+                        "Confirm stopped"
+                    }
                 } else {
                     "Stop unconfirmed"
                 },
@@ -127,7 +147,7 @@ impl Plait {
             .tooltip(move |_, cx| cx.new(|_| TextTooltip(tip.clone())).into())
             .on_activate(cx, move |this, _, cx| {
                 if this.cleanup.confirm {
-                    this.request_cleanup(Some(token.clone()), cx);
+                    this.request_cleanup(Some((token.clone(), stop)), cx);
                 } else {
                     this.cleanup.confirm = true;
                     cx.notify();

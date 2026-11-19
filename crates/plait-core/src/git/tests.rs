@@ -2168,7 +2168,7 @@ fn a_killed_worktree_removal_keeps_the_lease_until_git_exits() {
         acquire_checkout(&tree.path, None, LeaseClass::Exclusive)
             .unwrap_err()
             .kind,
-        LeaseErrorKind::CheckoutBusy
+        LeaseErrorKind::CleanupUncertain
     );
     assert_eq!(
         acquire_common_metadata(&repo.0, Duration::ZERO)
