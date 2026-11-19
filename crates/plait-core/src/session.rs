@@ -4,8 +4,10 @@
 //! snapshot; disk writes are serialized so an older save cannot replace newer work.
 
 mod blobs;
+mod drafts;
 use crate::host::ModelChoice;
 use crate::host_state::PendingSubmit;
+pub use drafts::{DraftCreation, DraftSettings, DraftTab};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -64,6 +66,9 @@ pub struct Thread {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Session {
+    /// Independent drafts. Legacy fields below remain readable by schema-1 builds.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub draft_tabs: BTreeMap<String, DraftTab>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_draft: Option<(PathBuf, Draft)>,
     /// Drafts set aside in other checkouts; the current one retains the older journal field.
@@ -102,6 +107,7 @@ impl Session {
     pub fn empty(host_store: PathBuf) -> Self {
         Self {
             schema_version: 1,
+            draft_tabs: BTreeMap::new(),
             new_draft: None,
             new_drafts: BTreeMap::new(),
             host_store,
@@ -138,23 +144,35 @@ impl Session {
         self.new_drafts.remove(checkout);
     }
     pub fn image_ids(&self) -> impl Iterator<Item = &str> {
-        self.new_draft
-            .iter()
-            .flat_map(|(_, draft)| &draft.images)
-            .chain(self.new_drafts.values().flat_map(|draft| &draft.images))
-            .chain(self.threads.values().flat_map(|thread| {
-                thread.draft.images.iter().chain(
-                    thread
-                        .pending
+        self.draft_tabs
+            .values()
+            .flat_map(|tab| {
+                tab.draft.images.iter().chain(
+                    tab.creation
                         .iter()
-                        .chain(&thread.pending_submissions)
-                        .flat_map(|pending| &pending.images),
+                        .flat_map(|creation| &creation.message.images),
                 )
-            }))
+            })
+            .chain(
+                self.new_draft
+                    .iter()
+                    .flat_map(|(_, draft)| &draft.images)
+                    .chain(self.new_drafts.values().flat_map(|draft| &draft.images))
+                    .chain(self.threads.values().flat_map(|thread| {
+                        thread.draft.images.iter().chain(
+                            thread
+                                .pending
+                                .iter()
+                                .chain(&thread.pending_submissions)
+                                .flat_map(|pending| &pending.images),
+                        )
+                    })),
+            )
             .map(|image| image.id.as_str())
     }
 
     fn validate(&self) -> Result<(), String> {
+        self.validate_draft_tabs()?;
         if self.schema_version != 1 {
             return Err("Saved workspace uses an unsupported version. Update Plait; the file was not changed.".into());
         }
