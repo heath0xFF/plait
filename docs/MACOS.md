@@ -882,7 +882,11 @@ If it remains, check for commands, servers, or builds still using that folder
 and stop them. Click **Stop unconfirmed**, then **Confirm stopped** only when
 you have checked. This acknowledges the uncertainty; it does not kill a process
 or bypass a still-held checkout lease. A host restart during a run can require
-this check. Interrupted work is never replayed, and queued inputs remain held.
+this check. If a Git command survived the desktop and Plait can still verify
+its identity, the second choice is **Stop processes**. Hover it to see the Git
+command, its process group, and the checkout. Plait stops only that verified
+group and keeps the checkout blocked if its exit remains unconfirmed; when
+identity cannot be proved, it offers **Confirm stopped** and sends no signal. Interrupted work is never replayed, and queued inputs remain held.
 Trusted commands and external harnesses may deliberately detach a process that
 Plait cannot see; the [host guide](HOST.md#cleanup-confirmation-and-quarantine)
 describes that boundary.

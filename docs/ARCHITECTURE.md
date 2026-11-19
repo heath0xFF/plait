@@ -629,7 +629,15 @@ an interrupt timeout without killing a shared server. Late proof clears the
 marker; unavailable proof requires explicit confirmation. External detached
 writers remain outside the normal-group guarantee.
 
-The additive cleanup read/resolve contract is in [HOST](HOST.md#cleanup-confirmation-and-quarantine).
+`lease/git_cleanup.rs` records desktop Git children separately from run markers,
+including worktree children that hold lent leases. A fixed-size pre-exec write
+records owner/group birth identities without another process or an fsync. Git's
+normal exit clears it; an orphan or unconfirmed exit is checked at admission and
+by cleanup reads. Kernel identity checks gate the explicit group-stop action,
+which can run while that group still owns the lent lease. Read-only Git queries
+remain outside this recording path.
+
+The additive cleanup read/resolve/stop contract is in [HOST](HOST.md#cleanup-confirmation-and-quarantine).
 `ui/cleanup.rs` fetches it on the background executor with checkout identity,
 connection and generation guards. Only an unconfirmed checkout gets a header
 control, with its explanation in hover text; it refreshes while uncertainty is

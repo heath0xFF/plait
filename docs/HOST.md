@@ -932,7 +932,7 @@ defaulted to `sandboxed`.
 {"op":"set_command_policy","checkout":"/absolute/checkout","policy":"trusted"}
 ```
 
-Both return `{"checkout":"/canonical/checkout","policy":"sandboxed"}`, with the
+All return `{"checkout":"/canonical/checkout","policy":"sandboxed"}`, with the
 policy now in force for that checkout. `checkout` is an absolute path inside a
 Git working tree and is resolved to its canonical root, as in `list_threads`.
 `policy` is `sandboxed` or `trusted`; anything else is `invalid_request`. Both
@@ -1509,17 +1509,19 @@ same root directory, so they share one lease.
 A lease is held by the runtime and by the helpers and command guardians it
 starts with the descriptors; a helper's own Git processes inherit them. In the
 desktop, `git worktree add` and `git worktree remove` hold the lease too
-(`CheckoutLease::lend_to`), because they start no long-lived helpers; other
-desktop Git writes do not, because a commit's detached maintenance or a
-credential-cache daemon would inherit it, so if the desktop dies during one of
-those its Git process can outlive the lease. When every holder has exited, by
-a crash included, the kernel releases the lease, and a holder dropping it
-normally releases it for all of them. Harness processes do not hold it: the Codex
-app-server, Claude Code and anything they start run without the descriptors, so
-a durable cleanup marker retains exclusion when their turn or process cleanup
+(`CheckoutLease::lend_to`). Other desktop Git writes do not lend their lock to
+hooks or credential helpers that can detach. Instead, every writing Git child
+records its owner and process-group birth identity before executing Git. A
+surviving child after a desktop crash therefore remains excluded by its saved
+cleanup record. When every descriptor holder exits, the kernel releases its
+OS locks; the cleanup records are checked separately before admission.
+
+Harness processes do not hold lease descriptors: Codex's shared app-server,
+Claude Code, and their descendants cannot retain those OS locks themselves.
+The run's durable marker bridges that gap when their turn or process cleanup
 cannot be confirmed, including after runtime death. A Pi command or external
-harness that deliberately detaches from its process group remains the
-explicit limit described in the cleanup contract below.
+harness that deliberately detaches a writer remains the explicit limit
+in the cleanup contract below.
 
 All shipped runs are writers: one active run per checkout and eight active
 checkouts per host, as before. No reader run ships; the reader class exists in
@@ -1581,13 +1583,17 @@ completion and a clean Stop need no additional action.
 | Codex | A terminal notification confirms the turn ended; the shared app-server can remain for other checkouts | Interrupt is requested; after 10 seconds without a terminal notification the checkout is blocked, without killing another checkout's shared server | App-server exit kills and checks its normal process group before satisfying cleanup | Marker blocks the checkout; no attempt is made to identify an old server by a reused PID |
 | Claude Code | Session is closed; actual child exit and normal process-group absence are observed through the pinned SDK's spawn hook | Interrupt is requested; after 10 seconds the session closes; a close without observed exit remains blocked | Normal group is killed and checked after process exit | Marker blocks the checkout; an SDK close from the old host is not evidence |
 | Checkout record and undo helpers | The supervisor verifies its worker group disappeared | The bounded deadline kills the group; an absent receipt remains uncertain | Worker lifetime EOF kills its group; known-group absence supplies proof | In-flight run/undo markers block new mutations; recovery does not replay an undo |
+| Desktop Git writes | A normal Git exit acknowledges completion and clears its child record | A timed-out or signalled writer retains its record until the group is observed absent | No new run or desktop write starts beside a surviving recorded group | A desktop crash leaves the child record; a later host checks the recorded group, without relying on the old desktop's locks |
+| Lent worktree Git child | Normal completion clears its child record and the caller releases its lease | Same group evidence; inherited locks also retain exclusion | A child can keep its lent lease after the lender dies; its recorded group is shown | The stop action can reach a verified recorded group without acquiring the checkout lease it holds |
 
 The precise boundary is cooperating Plait processes and the normal process
 groups it supervises. Codex's shared-server protocol provides a terminal
 acknowledgement for each turn, not a per-turn descendant inventory. Trusted
 commands and external harnesses can deliberately detach writers into another
 process group; Plait cannot prove those exited. Such writers remain an explicit
-limit, as do unrelated editors and commands. Sandboxed command descendants
+limit, as do unrelated editors and commands. A normal acknowledged Git exit
+also retains the existing limit for hooks and credential helpers that detach
+on purpose; this stage does not supervise those as independent jobs. Sandboxed command descendants
 retain Seatbelt restrictions even after detaching: they cannot write the
 checkout, although Plait does not claim they all exited. This is not a general
 process container. Tests use scripted harnesses and processes; they do not
@@ -1616,20 +1622,47 @@ After a quarantine is resolved, any missing after record is marked
 `after_restart`, since its observation includes the uncertain interval. Held
 inputs are not automatically replayed by a confirmation.
 
+Desktop Git uses a separate fixed-size crash record beside the locks, so a
+worktree command on a parent can coexist with that parent's run marker. The
+record contains the owner and child PID, their kernel birth identities, the
+boot identity where needed, and a short Git command label. The child writes it
+before exec, closing the spawn/record crash gap. This adds no subprocess or
+fsync: one small write starts the record and one truncate clears an acknowledged
+completion. Git reads do not create child records. Power-loss durability is
+required for run markers, not for these process-crash records.
+
+A live desktop's record is hidden. After owner death or uncertain termination,
+cleanup reads and admission checks clear it automatically only when the
+recorded group is absent (or the machine has rebooted). A changed leader birth
+identity never authorizes a signal. The optional `process` field gives the
+recorded `group`, `command`, and `can_stop` value. When `can_stop` is true, the
+same control offers **Stop processes**. Its action rechecks the token, boot,
+owner and leader identity, sends SIGTERM to that group, and waits up to two
+seconds for absence. If the same leader still exists, it sends SIGKILL and
+checks for another two seconds. Losing identity stops further signals; a
+remaining group stays blocked, with no timeout-based clearance. If identity
+cannot be proved, the control offers **Confirm stopped** instead and sends
+nothing. The checkout's existing identity check also refuses a removed or
+replaced folder; this is not a general process-management interface.
+
 These owner-authenticated operations are additive and omit `protocol_version`:
 
 ```json
 {"op":"checkout_cleanup","checkout":"/absolute/checkout"}
 {"op":"resolve_checkout_cleanup","checkout":"/absolute/checkout","token":"TOKEN_FROM_READ","confirm_stopped":true}
+{"op":"stop_checkout_cleanup","checkout":"/absolute/checkout","token":"GIT_TOKEN_FROM_READ","confirm_stop":true}
 ```
 
-Both return `{"checkout":"/canonical/checkout","cleanup":null}` when clear,
-or `cleanup: {"token":"...","reason":"..."}` when unconfirmed. A live run's
+All return `{"checkout":"/canonical/checkout","cleanup":null}` when clear,
+or `cleanup: {"token":"...","reason":"..."}` when unconfirmed, with the optional
+`process: {"group":123,"command":"git commit","can_stop":true}` for a Git record. A live run's
 crash marker is hidden while its runtime liveness lock is held, including when
 read from another host store; an uncertain marker stays visible.
 Unknown fields, relative paths, invalid tokens, and missing or false
-`confirm_stopped` are refused. Resolution acquires the exclusive checkout lease
-and compares the token before clearing. A quarantined admission returns
+`confirm_stopped` or `confirm_stop` are refused. Resolution acquires the exclusive checkout lease
+and compares the token before clearing. Stopping a recorded Git group uses its
+private record lock instead, since the group may hold the checkout lease.
+A quarantined admission returns
 `cleanup_uncertain` with the specific reason; the desktop shows **Stop
 unconfirmed**, then **Confirm stopped** when the person chooses that control.
 

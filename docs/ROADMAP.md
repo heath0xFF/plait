@@ -534,14 +534,17 @@ note (staging and committing used to go ahead with a warning; branch controls
 were already locked), and a message sent during such a write is refused as
 busy. No control or Git verb was added, and a second run
 in a busy checkout is still refused. Not yet excluded: a Codex or Claude Code
-process that keeps running after its run has ended (Stage 6b).
+process that keeps running after its run has ended was left for Stage 6b below.
 
 **Built for concurrency foundation (Stage 6b — cleanup confirmation):**
 run and undo admission persist inode-keyed cleanup markers; unconfirmed cleanup
 blocks both runs and desktop Git changes across host restarts and stores.
 Command/MCP/record guardians verify normal-group absence, Claude cleanup waits
 for actual process exit, and a Codex interrupt timeout retains exclusion until
-a terminal acknowledgement or verified server exit. Late evidence clears the
+a terminal acknowledgement or verified server exit. Desktop Git writers and
+lent worktree children keep separate crash records; orphaned groups block new
+work, and a verified group can be stopped explicitly. Recording adds no helper
+process or fsync to a Git write. Late evidence clears the
 state automatically; otherwise the person uses **Stop unconfirmed** → **Confirm
 stopped** after checking remaining processes. Deliberately detached writers in
 trusted and external-harness runs remain an explicit limitation. Clean runs
