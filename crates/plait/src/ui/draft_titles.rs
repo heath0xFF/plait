@@ -6,22 +6,39 @@ use plait_core::tabs::{
     row::{TabMetadata, TabState},
 };
 
-fn first_line(text: &str) -> &str {
-    let text = text.trim_start();
-    for (count, (end, ch)) in text.char_indices().enumerate() {
+/// Characters a title keeps.
+const KEPT: usize = 120;
+
+/// The first nonblank line, with each run of whitespace shown as one space,
+/// as a sent thread's title shows it.
+fn first_line(text: &str) -> String {
+    let mut line = String::new();
+    let (mut kept, mut gap) = (0, false);
+    for ch in text.trim_start().chars() {
         if ch == '\n' {
-            return text[..end].trim_end();
+            break;
         }
-        if count == 120 {
-            return text[..end].trim_end();
+        if ch.is_whitespace() {
+            gap = true;
+            continue;
         }
+        if kept + usize::from(gap) >= KEPT {
+            break;
+        }
+        if gap {
+            line.push(' ');
+            kept += 1;
+            gap = false;
+        }
+        line.push(ch);
+        kept += 1;
     }
-    text.trim_end()
+    line
 }
 
 fn title(text: &str) -> String {
     let line = first_line(text);
-    plait_core::display_text::escape(if line.is_empty() { UNTITLED } else { line })
+    plait_core::display_text::escape(if line.is_empty() { UNTITLED } else { &line })
 }
 
 fn rename(row: &mut TabMetadata, title: &str) {
@@ -139,5 +156,21 @@ mod tests {
         assert_eq!(title(&pasted), "🦀".repeat(120));
         assert_eq!(title(&format!("{} end", "a".repeat(119))), "a".repeat(119));
         assert_eq!(title("Spoof\u{202e}"), "Spoof\\u202e");
+    }
+
+    #[core::prelude::v1::test]
+    fn titles_show_each_run_of_whitespace_as_one_space() {
+        assert_eq!(
+            title("Tab\there\t\tand   spaces \r\nnext"),
+            "Tab here and spaces"
+        );
+        assert_eq!(
+            title(&format!("{} {}", "a".repeat(119), "b")),
+            "a".repeat(119)
+        );
+        assert_eq!(
+            title(&format!("{}  {}", "a".repeat(118), "bc")),
+            format!("{} b", "a".repeat(118))
+        );
     }
 }
