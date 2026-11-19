@@ -855,7 +855,7 @@ def pure_tests(driver):
     # No AX calls, application launch, clipboard access, or key/pointer events.
     command([driver, 'self-test'])
     command([sys.executable, '-m', 'unittest', 'discover', '-s', ROOT / 'scripts/acceptance', '-p', 'test_*.py'])
-    print('PASS self-test: Swift selectors/keys/Unicode/gaps and Python isolation/reporting/geometry/SSE tests; no UI accessed')
+    print('PASS self-test: Swift selectors/keys/Unicode/tab-row geometry and Python isolation/reporting/geometry/SSE tests; no UI accessed')
 
 
 def main():

@@ -175,29 +175,7 @@ func typingUnits(_ text: String) -> [[UniChar]] {
     text.map { Array(String($0).utf16) }
 }
 
-// MARK: - Finding a free part of the window bar (pure, covered by self-test)
-
-/// The middle of the widest stretch of [from, to] no element covers, if it is
-/// at least `minimum` wide.
-func widestGap(occupied: [(CGFloat, CGFloat)], from: CGFloat, to: CGFloat, minimum: CGFloat) -> CGFloat? {
-    let spans = occupied
-        .map { (max($0.0, from), min($0.1, to)) }
-        .filter { $0.0 < $0.1 }
-        .sorted { $0.0 < $1.0 }
-    var best: (CGFloat, CGFloat)?
-    var cursor = from
-    for span in spans {
-        if span.0 > cursor, best == nil || span.0 - cursor > best!.1 - best!.0 {
-            best = (cursor, span.0)
-        }
-        cursor = max(cursor, span.1)
-    }
-    if to > cursor, best == nil || to - cursor > best!.1 - best!.0 {
-        best = (cursor, to)
-    }
-    guard let best, best.1 - best.0 >= minimum else { return nil }
-    return (best.0 + best.1) / 2
-}
+// MARK: - Finding the tab row's empty right end (pure, covered by self-test)
 
 struct BarElement: Equatable {
     let role: String
@@ -821,10 +799,6 @@ func selfTest() {
     check((try? parseCombo("cmd+")) == nil, "a combo needs a key")
     check((try? parseCombo("cmd+a+b")) == nil, "one key only")
     check(typingUnits("aé🙂").map(\.count) == [1, 1, 2], "one event per character, surrogate pairs kept")
-    check(widestGap(occupied: [(0, 10), (40, 50)], from: 0, to: 100, minimum: 10) == 75, "widest gap at the end")
-    check(widestGap(occupied: [(0, 10), (60, 100)], from: 0, to: 100, minimum: 10) == 35, "widest gap between")
-    check(widestGap(occupied: [(0, 95)], from: 0, to: 100, minimum: 10) == nil, "too narrow")
-    check(widestGap(occupied: [(5, 20), (10, 30)], from: 0, to: 40, minimum: 4) == 35, "overlaps merge")
     let done = Selector(roles: expandRoles("control"), exact: "Done")
     check(done.matches(role: "AXButton", names: ["Done"]), "Done settings button matches")
     check(!done.matches(role: "AXStaticText", names: ["Done"]), "Done thread status is not a button")
@@ -1023,7 +997,7 @@ commands with a PID:
   tab-states, tab-bar-end, find, frame, absent, count, press, select,
   wait-selected, focus, focused, selected, value, set-value --text T,
   growth, key COMBO, type --text T [--delay S], fullscreen on|off,
-  minimized on|off|get, hit X Y, bar-gap FROM TO,
+  minimized on|off|get, hit X Y,
   drag X1 Y1 X2 Y2, double-click X Y, select-text --text T
 selector: --role R --name N --prefix P --contains C --regex E --nth N --timeout S
 """
@@ -1265,25 +1239,6 @@ func run(_ arguments: [String]) throws {
         let (node, _) = read(element, depth: 0)
         say("owner \(owner) \(node.role) \(node.name.prefix(80))")
         if expandRoles("control,field").contains(node.role) { exit(1) }
-    case "bar-gap":
-        // A point on the 40-point bar that no element covers.
-        guard rest.count == 2 else { die(usage, 2) }
-        let window = requireWindow(pid)
-        guard let rect = frame(of: window) else { die("window has no frame") }
-        let band = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: 40)
-        var occupied = walk(window).compactMap { node -> (CGFloat, CGFloat)? in
-            guard let box = node.frame, box.height <= 46, box.intersects(band),
-                  expandRoles("control,field,text,AXSplitter,AXTabGroup").contains(node.role) else { return nil }
-            return (box.minX - 6, box.maxX + 6)
-        }
-        for name in [kAXCloseButtonAttribute, kAXMinimizeButtonAttribute, kAXZoomButtonAttribute] {
-            if let button = attribute(window, name), CFGetTypeID(button) == AXUIElementGetTypeID(),
-               let box = frame(of: button as! AXUIElement) { occupied.append((box.minX - 6, box.maxX + 6)) }
-        }
-        guard let x = widestGap(occupied: occupied, from: number(rest[0]), to: number(rest[1]), minimum: 24) else {
-            die("no free stretch of the bar between \(rest[0]) and \(rest[1])")
-        }
-        say("\(fmt(x)) \(fmt(rect.minY + 20))")
     case "drag":
         guard rest.count == 4 else { die(usage, 2) }
         let from = CGPoint(x: number(rest[0]), y: number(rest[1]))
