@@ -6546,6 +6546,32 @@ fn file_reads_cannot_follow_the_same_name_into_another_checkout() {
 }
 
 #[core::prelude::v1::test]
+fn file_read_lands_after_a_host_reconnect() {
+    if !isolated("file_read_lands_after_a_host_reconnect") {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("plait-file-reconnect-{}", std::process::id()));
+    let repository = fixture_repository(&root);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    // A local file read does not depend on the host connection it overlapped.
+    harness.update(|plait, _, cx| {
+        plait.open_file("src/review.rs".into(), None, cx);
+        plait.host.reconnect();
+        // The status reply is not modeled; only the new connection epoch matters.
+        plait.host.connection.connecting = false;
+        plait.host.connection.connected = true;
+    });
+    harness.update(|plait, _, _| {
+        let viewer = &plait.workspace.file_viewer;
+        assert!(!viewer.loading, "the read must not stay loading");
+        assert!(viewer.opened.is_some(), "the file must be shown");
+    });
+    drop(harness);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[core::prelude::v1::test]
 fn policy_reply_cannot_return_to_an_earlier_checkout_lifetime() {
     if !isolated("policy_reply_cannot_return_to_an_earlier_checkout_lifetime") {
         return;

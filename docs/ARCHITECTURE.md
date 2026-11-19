@@ -777,7 +777,7 @@ same checkout and repository epoch.
 | --- | --- |
 | Snapshot, history, projected transcript | Host connection, selected thread, watch lifetime, and source/projection revision |
 | Record and recorded-review reads | Thread and checkout, connection/watch lifetime, record ID, repository epoch, request generation and source revision as applicable |
-| File contents and file stamp | Connection, thread/watch and checkout lifetime, viewer generation, verified root, relative path, device/inode/size/modification time |
+| File contents and file stamp | Thread and checkout lifetime (not the host connection: the read is local), viewer generation, verified root, relative path, device/inode/size/modification time |
 | Git status, files, branches, history and diffs | Captured checkout owner and directory identity, repository/history/request epoch; diff and commit-patch presentation also requires its view lifetime |
 | Policy and agent settings | Captured checkout and connection, checkout lifetime, form/request generation; a reply for another checkout is rejected |
 | Submit/create acknowledgements | Original host, request ID and payload owner; creation also validates checkout, model and harness; selection does not discard the acknowledgement |

@@ -56,6 +56,15 @@ impl FileViewer {
     }
 }
 
+/// A file is local: a host reconnect must not strand its read. Selecting a
+/// thread or changing checkout also retires the viewer's generation.
+fn same_file_owner(
+    owner: &plait_core::ownership::ReadStamp,
+    now: &plait_core::ownership::ReadStamp,
+) -> bool {
+    owner.checkout == now.checkout && owner.thread == now.thread
+}
+
 /// What a find bar searches. Both share one bar, its keys, and its counts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FindIn {
@@ -129,7 +138,7 @@ impl Plait {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                if !this.host.accepts_read(&owner) {
+                if !same_file_owner(&owner, &this.host.read_stamp()) {
                     return;
                 }
                 let viewer = &mut this.workspace.file_viewer;
@@ -198,7 +207,7 @@ impl Plait {
         cx.spawn(async move |this, cx| {
             let stamp = task.await;
             let _ = this.update(cx, |this, cx| {
-                if this.host.accepts_read(&owner)
+                if same_file_owner(&owner, &this.host.read_stamp())
                     && this.workspace.file_viewer.generation == generation
                     && stamp.as_ref().ok() != Some(&opened.stamp)
                 {
