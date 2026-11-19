@@ -41,8 +41,8 @@ pub struct RestoreContext<'a> {
     pub host: &'a HostKey,
     pub threads: &'a [ThreadSummary],
     pub checkouts: &'a [CheckoutKey],
-    /// Only nonempty drafts the desktop already knows are recoverable. No journal
-    /// is read by this module; an empty list simply omits unsent draft tabs.
+    /// Drafts the desktop already knows are recoverable, including empty open
+    /// drafts. No journal is read here; an empty list omits unsent draft tabs.
     pub drafts: &'a [ThreadTarget],
     pub connection: Option<u64>,
 }
@@ -65,7 +65,7 @@ impl RestoreContext<'_> {
 /// Encoding failure preserves the last good file; the UI must not replace it.
 /// Every open thread is saved: a catalog that is loading, partial or stale must
 /// not erase tabs, and `decode` validates on restore. Only drafts the caller
-/// knows are recoverable are kept, so empty drafts are omitted.
+/// knows are recoverable are kept, including saved empty drafts.
 pub fn encode(window: &WindowTabs, context: &RestoreContext<'_>) -> Result<Vec<u8>, TabError> {
     encode_document(&capture(window, context))
 }
