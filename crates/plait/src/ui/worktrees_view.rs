@@ -646,10 +646,8 @@ impl Plait {
                 {
                     facts.push(format!("{n} not pushed"));
                 }
-                if self.worktrees.graph.lanes[i].merged {
-                    facts.push("Merged".into());
-                } else if self.worktrees.graph.lanes[i].detached {
-                    facts.push("Fork unknown".into());
+                if let Some(label) = presentation::ancestry_label(&self.worktrees.graph.lanes[i]) {
+                    facts.push(label.into());
                 }
                 presentation::head_label(
                     &self.worktrees.titles[i],

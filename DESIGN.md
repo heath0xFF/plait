@@ -53,7 +53,8 @@ conversation keeps a readable minimum width.
   primary text and their state words use the same color as thread tabs.
   Virtualized 28-point rows carry those labels and right-aligned sizes.
   Merged heads rejoin; unavailable or rewritten bases say Fork unknown, distinct
-  from a Git Detached head. A fresh worktree is not labelled Merged. Connectors
+  from a Git Detached head. Fresh worktrees and heads reset behind their starting
+  commit say No new commits, not Merged. Connectors
   turn through six-point rounded corners. Lines begin and end at node centres,
   including shared-head stubs. Selection adds a neutral fill and strengthens
   the whole lane to foreground; hover strengthens it more quietly.

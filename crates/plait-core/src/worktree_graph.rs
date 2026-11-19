@@ -7,6 +7,7 @@ pub struct Lane {
     pub base: Option<usize>,
     pub parent: Option<usize>,
     pub merged: bool,
+    pub no_new_commits: bool,
     pub detached: bool,
 }
 #[derive(Clone, Debug)]
@@ -57,6 +58,10 @@ pub fn layout(checkouts: &[Checkout], commits: Vec<GraphCommit>, more: bool) -> 
         .iter()
         .map(|c| ancestors(c.head.as_deref(), &index, &commits))
         .collect();
+    let before: Vec<_> = checkouts
+        .iter()
+        .map(|c| ancestors(c.base.as_deref(), &index, &commits))
+        .collect();
     let mut lanes = Vec::new();
     for (n, checkout) in checkouts.iter().enumerate() {
         let head = checkout.head.as_deref().and_then(|s| index.get(s).copied());
@@ -68,17 +73,20 @@ pub fn layout(checkouts: &[Checkout], commits: Vec<GraphCommit>, more: bool) -> 
                 .find(|(i, seen)| *i != n && seen.contains(&b))
                 .map(|(i, _)| i)
         });
+        let no_new_commits = n > 0 && head.is_some_and(|h| before[n].contains(&h));
         lanes.push(Lane {
             head,
             base,
             parent,
             merged: n > 0
-                && checkout.head != checkout.base
+                && !no_new_commits
+                && base.is_some_and(|b| reach[n].contains(&b))
                 && head.is_some_and(|h| reach[0].contains(&h)),
+            no_new_commits,
             detached: n > 0
                 && (base.is_none()
                     || parent.is_none()
-                    || !base.is_some_and(|b| reach[n].contains(&b))),
+                    || (!no_new_commits && !base.is_some_and(|b| reach[n].contains(&b)))),
         });
     }
     // Keep one trunk commit below the oldest known fork; a cap is labelled separately.
@@ -115,11 +123,10 @@ pub fn layout(checkouts: &[Checkout], commits: Vec<GraphCommit>, more: bool) -> 
     let segments: Vec<_> = checkouts
         .iter()
         .enumerate()
-        .map(|(n, c)| {
-            let before = ancestors(c.base.as_deref(), &index, &commits);
+        .map(|(n, _)| {
             let mut chain = HashSet::new();
             let mut next = lanes[n].head;
-            while let Some(i) = next.filter(|i| !before.contains(i)) {
+            while let Some(i) = next.filter(|i| !before[n].contains(i)) {
                 if !chain.insert(i) {
                     break;
                 }
@@ -545,5 +552,32 @@ mod tests {
         assert!(limited.more);
         assert!(limited.lanes[1].detached);
         assert!(!limited.lanes[1].merged);
+    }
+
+    #[test]
+    fn a_head_at_or_before_its_base_has_no_new_commits() {
+        for head in [2, 3] {
+            let graph = layout(
+                &[checkout(5, None), checkout(head, Some(3))],
+                vec![
+                    commit(5, &[4]),
+                    commit(4, &[3]),
+                    commit(3, &[2]),
+                    commit(2, &[]),
+                ],
+                false,
+            );
+            assert!(graph.lanes[1].no_new_commits);
+            assert!(!graph.lanes[1].merged);
+            assert!(!graph.lanes[1].detached);
+        }
+        let unknown = layout(
+            &[checkout(5, None), checkout(3, Some(99))],
+            vec![commit(5, &[3]), commit(3, &[])],
+            true,
+        );
+        assert!(!unknown.lanes[1].no_new_commits);
+        assert!(!unknown.lanes[1].merged);
+        assert!(unknown.lanes[1].detached);
     }
 }

@@ -305,7 +305,10 @@ impl Plait {
         } else if busy {
             "This worktree still has active, queued, or recovering work.".into()
         } else if self.worktrees.removal.pending.is_some() && !self.removal_here() {
-            "Another project's removal is unconfirmed. Refresh its Worktrees tab first.".into()
+            format!(
+                "Another project's removal is unconfirmed. {}",
+                worktree_removal::RECOVERY_HINT
+            )
         } else if self.worktrees.removal.pending.is_some() {
             self.worktrees
                 .removal

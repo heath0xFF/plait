@@ -2,6 +2,18 @@
 use super::{Graph, Item};
 use std::{collections::HashMap, ops::Range};
 
+pub(super) fn ancestry_label(lane: &plait_core::worktree_graph::Lane) -> Option<&'static str> {
+    if lane.no_new_commits {
+        Some("No new commits")
+    } else if lane.merged {
+        Some("Merged")
+    } else if lane.detached {
+        Some("Fork unknown")
+    } else {
+        None
+    }
+}
+
 pub(super) struct LabelStyle {
     pub title: Range<usize>,
     pub state: Range<usize>,
@@ -286,6 +298,33 @@ mod tests {
             preservation_label(&facts),
             "0 changed · 2 not pushed · 0 kept only here"
         );
+    }
+
+    #[test]
+    fn a_reset_or_fresh_lane_says_no_new_commits_instead_of_merged() {
+        let mut lane = plait_core::worktree_graph::Lane {
+            head: Some(2),
+            base: Some(1),
+            parent: Some(0),
+            merged: false,
+            detached: false,
+            no_new_commits: true,
+        };
+        for head in [Some(1), Some(2)] {
+            lane.head = head;
+            let label = ancestry_label(&lane).unwrap();
+            assert_eq!(label, "No new commits");
+            assert_eq!(
+                head_label("Thread", "Ready", "topic", &[label.into()]).0,
+                "Thread  Ready · topic · No new commits"
+            );
+        }
+        lane.no_new_commits = false;
+        lane.merged = true;
+        assert_eq!(ancestry_label(&lane), Some("Merged"));
+        lane.merged = false;
+        lane.detached = true;
+        assert_eq!(ancestry_label(&lane), Some("Fork unknown"));
     }
 
     #[test]

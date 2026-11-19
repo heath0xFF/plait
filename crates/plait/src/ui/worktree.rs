@@ -259,10 +259,10 @@ impl Plait {
             if pending.path == path {
                 self.finish_worktree_removal(cx);
             } else {
-                self.navigation.error = Some(
-                    "Another worktree's removal is unconfirmed. Refresh its Worktrees tab first."
-                        .into(),
-                );
+                self.navigation.error = Some(format!(
+                    "Another worktree's removal is unconfirmed. {}",
+                    worktree_removal::RECOVERY_HINT
+                ));
                 cx.notify();
             }
             return;
@@ -328,9 +328,10 @@ impl Plait {
     }
     pub(super) fn finish_worktree_removal(&mut self, cx: &mut Context<Self>) {
         if self.worktree_busy {
-            self.worktrees.removal.message = Some(
-                "Another worktree operation is in progress. Refresh to retry this removal.".into(),
-            );
+            self.worktrees.removal.message = Some(format!(
+                "Another worktree operation is in progress. {}",
+                worktree_removal::RECOVERY_HINT
+            ));
             return cx.notify();
         }
         let Some(attempt) = self.worktrees.removal.pending.clone() else {

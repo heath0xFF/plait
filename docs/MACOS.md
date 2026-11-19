@@ -387,8 +387,9 @@ Tab order, selected lane and lane sorting return after restart.
 The graph shows the main checkout's current branch as a trunk and each worktree
 as a lane. Commit rows show hash, subject and age. Head labels show the owning
 thread and its tab state, branch, preservation facts and size. **Merged** means
-the head is reachable from the trunk and differs from its starting commit;
-a fresh worktree is not labelled Merged. **Fork unknown** means the recorded fork
+the head is reachable from the trunk and contains commits beyond its starting
+commit. **No new commits** means the head equals or predates that starting commit,
+as when a worktree is fresh or reset onto an older commit. **Fork unknown** means the recorded fork
 cannot be connected in the available history; **Detached** instead describes
 a checkout without a Git branch. Hollow nodes count uncommitted
 changes. History is capped at 300 commits; a clipped graph says **Older commits
@@ -407,7 +408,8 @@ the host permits are offered. **Keep local commits only** explicitly accepts
 unpushed or unknown publication status, and is offered only when that status
 is what blocks removal; other safety checks still apply.
 The view then reports the result. A later refusal is preserved;
-a lost reply says unconfirmed and **Refresh** recovers the same request.
+a lost reply says unconfirmed. Use **Remove worktree** again on that checkout,
+or open its project's **Worktrees** tab and choose **Refresh**, to recover the same request.
 Branches, thread history and private build caches remain. Removed records retain
 cache accounting and say **Removed**. Nothing is removed automatically.
 

@@ -5,6 +5,8 @@ use crate::{
 };
 use std::path::PathBuf;
 
+pub const RECOVERY_HINT: &str = "Use Remove worktree again on that checkout, or open its project's Worktrees tab and choose Refresh.";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Choice {
     RemoveIfPushed,
@@ -206,7 +208,7 @@ impl Removal {
                     |error| error.message,
                 )
             }
-            Err(error) => format!("{error} Removal is unconfirmed. Refresh to recover its result."),
+            Err(error) => format!("{error} Removal is unconfirmed. {RECOVERY_HINT}"),
         });
         true
     }
@@ -260,7 +262,12 @@ mod tests {
         let attempt = removal.answer(Some(Choice::RemoveIfPushed)).unwrap();
         assert!(removal.finish(&attempt, Err("Connection lost.".into())));
         assert_eq!(removal.pending.as_ref(), Some(&attempt));
-        assert!(removal.message.as_ref().unwrap().contains("unconfirmed"));
+        assert_eq!(
+            removal.message.as_deref(),
+            Some(
+                "Connection lost. Removal is unconfirmed. Use Remove worktree again on that checkout, or open its project's Worktrees tab and choose Refresh."
+            )
+        );
         assert!(removal.finish(
             &attempt,
             Ok(Operation {
