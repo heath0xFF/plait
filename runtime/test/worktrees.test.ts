@@ -3,7 +3,7 @@ import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { validateWorktree, type Operation } from '../src/worktrees.ts';
-import { acquireCheckout } from '../src/safety.ts';
+import { acquireCheckout, acquireCommonMetadata } from '../src/safety.ts';
 import { codex, claude } from './support/record-runtime.ts';
 import { exec } from './support/safety.ts';
 
@@ -136,4 +136,47 @@ test('worktree supervisor reclaims a background checkout hook before acknowledgi
   const ready = await done(h.runtime, 'hook'); assert.equal(ready.state, 'ready', JSON.stringify(ready));
   await new Promise(resolve => setTimeout(resolve, 1200));
   await assert.rejects(readFile(later), { code: 'ENOENT' });
+});
+
+test('killed worktree worker leaves checkout and common leases with Git descendants', { timeout: 30_000 }, async t => {
+  const { spawn } = await import('node:child_process');
+  const { binary, childPids, until } = await import('./support/host.ts');
+  const h = await codex(t); await chmod(h.store, 0o700); await commit(h.root);
+  const marker = join(h.store, 'hook-started');
+  const hook = join(h.root, '.git', 'hooks', 'post-checkout');
+  await writeFile(hook, `#!/bin/sh\nprintf started > '${marker}'\nsleep 20\n`); await chmod(hook, 0o755);
+  const info: any = await h.runtime.reply({ op: 'worktree_info', checkout: h.root });
+  const id = '12345678-1234-4abc-8abc-123456789abc';
+  const helper = spawn(binary, ['worktree'], { stdio: ['pipe', 'ignore', 'ignore'] });
+  helper.stdin!.end(JSON.stringify({ action: 'create', store: h.store, thread_id: id, parent: info.result.parent }));
+  let gitGroup: number | undefined;
+  try {
+    await until(() => readFile(marker, 'utf8'), value => value === 'started');
+    const [worker] = await childPids(helper.pid!);
+    const [supervisor] = await childPids(worker);
+    [gitGroup] = await childPids(supervisor);
+    assert.ok(gitGroup, 'nested Git worker has its own process group');
+    // Freeze every Git descendant so its lifetime-pipe cleanup cannot hide an early unlock.
+    process.kill(-gitGroup, 'SIGSTOP');
+    process.kill(worker, 'SIGKILL');
+    await until(async () => helper.exitCode !== null || helper.signalCode !== null, Boolean);
+    const journal = JSON.parse(await readFile(join(h.store, 'worktrees', `${id}.json`), 'utf8'));
+    await assert.rejects(async () => {
+      const lease = await acquireCheckout(journal.path); await lease.close();
+    }, /in use|busy/);
+    await assert.rejects(async () => {
+      const lease = await acquireCommonMetadata(h.root, 0); await lease.close();
+    }, /busy|metadata/);
+    process.kill(-gitGroup, 'SIGCONT');
+    await until(async () => {
+      const lease = await acquireCheckout(journal.path);
+      await lease.close();
+      const common = await acquireCommonMetadata(h.root, 0);
+      await common.close();
+      return true;
+    }, Boolean);
+  } finally {
+    if (gitGroup) { try { process.kill(-gitGroup, 'SIGKILL'); } catch { /* Already reaped. */ } }
+    if (helper.exitCode === null && helper.signalCode === null) helper.kill('SIGKILL');
+  }
 });
