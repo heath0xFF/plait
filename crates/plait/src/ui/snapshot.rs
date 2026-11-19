@@ -1059,6 +1059,73 @@ fn approval_shortcuts_act_only_when_the_buttons_would() {
     std::fs::remove_dir_all(scratch).unwrap();
 }
 
+/// AppKit sends a key without Command through text input, and every repeat
+/// comes back with `is_held` false. Its key-up does arrive, so only a release
+/// lets the key answer again.
+#[core::prelude::v1::test]
+fn a_rebound_key_without_command_answers_once_while_held() {
+    if !isolated("a_rebound_key_without_command_answers_once_while_held") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-held-plain-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, true);
+    harness.update(|plait, _, cx| {
+        let keymap = &mut plait.preferences.value.keymap;
+        keymap.insert("approval.allow_once".into(), "alt-pagedown".into());
+        super::actions::install(cx, keymap);
+        let shortcuts = super::actions::shortcuts();
+        let allow = shortcuts
+            .iter()
+            .find(|s| s.actions.iter().any(|a| a.id == "approval.allow_once"))
+            .unwrap();
+        let key = Keystroke::parse("alt-pagedown").unwrap();
+        let editing = super::actions::editing_keys(cx);
+        assert_eq!(super::actions::refusal(allow, &[key], editing), None);
+    });
+    let key_up = || {
+        PlatformInput::KeyUp(KeyUpEvent {
+            keystroke: Keystroke::parse("alt-pagedown").unwrap(),
+        })
+    };
+    assert!(harness.answers("alt-pagedown", "a1"), "a press answers");
+    harness.new_approval("a2");
+    assert!(
+        !harness.press("alt-pagedown", "a2"),
+        "a repeat arrives fresh and must not answer"
+    );
+    harness.pointer(key_up());
+    assert!(
+        harness.press("alt-pagedown", "a2"),
+        "after a release it answers"
+    );
+
+    // Held from before the approval arrived.
+    harness.pointer(key_up());
+    harness.change_snapshot(|snapshot| snapshot.pending_approval = None);
+    harness.update(|plait, _, _| plait.host.connection.error = None);
+    assert!(!harness.press("alt-pagedown", "a3"), "no approval waits");
+    harness.change_snapshot(|snapshot| {
+        let mut approval = thread_snapshot(Path::new("/"), true)
+            .pending_approval
+            .unwrap();
+        approval.id = "a3".into();
+        snapshot.pending_approval = Some(approval);
+    });
+    assert!(
+        !harness.press("alt-pagedown", "a3"),
+        "the held key stays spent"
+    );
+    // Command shortcuts still need no release between presses.
+    harness.new_approval("a4");
+    assert!(harness.answers("cmd-alt-.", "a4"));
+    harness.new_approval("a5");
+    assert!(harness.press("cmd-alt-.", "a5"));
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
 #[core::prelude::v1::test]
 fn desktop_recovery_does_not_rebind_saved_work_or_clear_a_newer_revision() {
     if !isolated("desktop_recovery_does_not_rebind_saved_work_or_clear_a_newer_revision") {

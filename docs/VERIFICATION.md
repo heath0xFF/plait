@@ -363,7 +363,9 @@ recorded here:
 The repeated `turn-undo-redo-shortcut` failure came from the desktop's shared
 shortcut repeat guard: it latched Cmd-Option-U until a key-up or modifier change,
 so a second fresh press without those events was discarded even with Redo ready.
-The guard now uses the key-down event's platform repeat flag; the same action,
+The guard now uses the key-down event's platform repeat flag. A key rebound to
+a shortcut without Command still waits for its release, because macOS reports
+its repeats as new presses but does deliver its key-up. The same action,
 record target, refusal messages and host operation serve both presses. A headless
 regression reproduces the stuck Redo before the fix and checks consecutive presses,
 held keys and mixed control/shortcut use. The unchanged item should pass on the

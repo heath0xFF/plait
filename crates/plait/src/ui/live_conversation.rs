@@ -11,7 +11,27 @@ use std::time::Instant;
 pub(super) struct ApprovalKeys {
     from_key: bool,
     action: Option<Box<dyn Action>>,
+    /// The last key pressed without Command that has not come up yet.
+    unreleased: Option<Keystroke>,
+    /// Whether this key event presses `unreleased` again.
+    repeat: bool,
     interceptor: Option<Subscription>,
+}
+
+impl ApprovalKeys {
+    /// AppKit sends a key without Command through text input, which reports
+    /// each repeat as a new press. Its key-up does arrive, so such a key
+    /// repeats until it comes up. Command withholds key-up, and there the
+    /// key-down's own repeat flag is reliable.
+    fn pressed(&mut self, keystroke: &Keystroke) {
+        self.from_key = true;
+        self.action = None;
+        self.repeat = self
+            .unreleased
+            .as_ref()
+            .is_some_and(|held| held.key == keystroke.key && held.modifiers == keystroke.modifiers);
+        self.unreleased = (!keystroke.modifiers.platform).then(|| keystroke.clone());
+    }
 }
 
 /// Smooth reveal of the streaming reply and reasoning. Advanced once per
@@ -818,14 +838,11 @@ impl Plait {
     pub(super) fn watch_approval_keys(&mut self, window: &Window, cx: &mut Context<Self>) {
         let entity = cx.weak_entity();
         let window_id = window.window_handle().window_id();
-        self.approval_keys.interceptor = Some(cx.intercept_keystrokes(move |_, window, cx| {
+        self.approval_keys.interceptor = Some(cx.intercept_keystrokes(move |event, window, cx| {
             if window.window_handle().window_id() != window_id {
                 return;
             }
-            let _ = entity.update(cx, |this, _| {
-                this.approval_keys.from_key = true;
-                this.approval_keys.action = None;
-            });
+            let _ = entity.update(cx, |this, _| this.approval_keys.pressed(&event.keystroke));
             // Clear before the accepted action is redispatched; menu actions need no key event.
             let entity = entity.clone();
             cx.defer(move |cx| {
@@ -855,12 +872,17 @@ impl Plait {
         .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
             if let Some(action) = this.approval_keys.action.take() {
                 cx.stop_propagation();
-                // Command shortcuts need not deliver key-up or modifier changes.
-                // Use the platform repeat flag, not a latch waiting for release.
-                if !event.is_held {
+                if !event.is_held && !this.approval_keys.repeat {
                     window.dispatch_action(action, cx);
                 }
             }
+        }))
+        // Capture, so no control below can keep a release from rearming.
+        .capture_key_up(cx.listener(|this, _: &KeyUpEvent, _, _| {
+            this.approval_keys.unreleased = None;
+        }))
+        .on_modifiers_changed(cx.listener(|this, _: &ModifiersChangedEvent, _, _| {
+            this.approval_keys.unreleased = None;
         }))
     }
 
