@@ -9,7 +9,16 @@ use std::{
     time::Duration,
 };
 
+/// The checkout's usual file modes. The host's private umask protects its
+/// store, but a worktree is the person's checkout: owner-only files would
+/// break shared trees and build contexts. Journals set their modes explicitly.
+const CHECKOUT_UMASK: libc::mode_t = 0o022;
+
 pub fn run() -> io::Result<()> {
+    // SAFETY: umask only changes this process and what it starts.
+    unsafe {
+        libc::umask(CHECKOUT_UMASK);
+    }
     super::record::supervise("worktree-worker", Duration::from_secs(150))
 }
 pub fn worker(input: Value) -> io::Result<()> {

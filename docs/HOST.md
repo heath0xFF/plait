@@ -2357,6 +2357,8 @@ size-bounded files replaced atomically and synced. Branch names start with
 `plait/<first-12-UUID-hex-digits>` and extend by four digits on collision up to
 the full UUID. Existing branches, paths and symlinks are never reused. The root
 is `<main-repository>.worktrees/<suffix>`; no artifacts or dirty files are copied.
+Git writes the checkout under the usual `022` umask, not the host's owner-only
+one, so its files get the modes an ordinary checkout would have.
 
 Creation holds the parent's shared lifecycle lease and the common Git metadata
 lease to reserve the destination. It then releases metadata exclusion, takes

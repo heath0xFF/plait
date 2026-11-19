@@ -1086,3 +1086,54 @@ fn host_tests_keep_lock_files_out_of_the_account_lease_directory() {
         PathBuf::from(std::env::var_os("HOME").unwrap()).join(".local/share/plait-leases");
     assert!(!account.join(checkout_lock_name(id)).exists());
 }
+
+/// The host runs under a private umask for its store. A worktree is the
+/// person's checkout, so its files must get ordinary modes, not owner-only.
+#[test]
+fn worktree_checkout_gets_ordinary_modes_under_the_private_host_umask() {
+    use std::os::unix::{fs::PermissionsExt, process::CommandExt};
+    let base = Scratch::new();
+    let root = repository(&base.0);
+    let store = base.0.join("store");
+    fs::create_dir(&store).unwrap();
+    fs::set_permissions(&store, fs::Permissions::from_mode(0o700)).unwrap();
+    let private = |request: &Value| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_plait-host"));
+        command
+            .arg("worktree")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        // SAFETY: umask is async-signal-safe and changes only the child.
+        unsafe {
+            command.pre_exec(|| {
+                libc::umask(0o077);
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(request.to_string().as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        let reply: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert!(reply["error"].is_null(), "{reply}");
+        reply["value"].clone()
+    };
+    let parent = private(&json!({"action":"parent","root":root}));
+    let id = "12345678-1234-4abc-8abc-123456789abc";
+    let tree = private(&json!({"action":"create","store":store,"thread_id":id,"parent":parent}));
+    assert_eq!(tree["stage"], "ready", "{tree}");
+    let path = PathBuf::from(tree["path"].as_str().unwrap());
+    let mode = |path: &Path| fs::symlink_metadata(path).unwrap().mode() & 0o777;
+    assert_eq!(mode(&path.join("notes.txt")), 0o644);
+    assert_eq!(mode(&path), 0o755);
+    assert_eq!(mode(path.parent().unwrap()), 0o755);
+    // Journals keep their own private modes.
+    assert_eq!(mode(&store.join("worktrees")), 0o700);
+    assert_eq!(mode(&store.join(format!("worktrees/{id}.json"))), 0o600);
+    git(&root, &["worktree", "remove", path.to_str().unwrap()]);
+}
