@@ -3,7 +3,7 @@
 // (`STORE/records`) and never into the person's repository; this file decides
 // when, keeps the list in `host.sqlite`, exposes version 5 views and undo,
 // and prunes what has expired.
-import { CleanupProof, RESTART_REASON, cleanupHelper, guardianProof } from './cleanup.ts';
+import { CleanupProof, RESTART_REASON, cleanupHelper, guardianProof, resolveProvedCleanup } from './cleanup.ts';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -250,8 +250,10 @@ export class Records {
       const lease = await acquireCheckout(snapshot.checkout, 'exclusive');
       const before = randomUUID(), id = randomUUID();
       lease.cleanup = new CleanupProof();
-      await cleanupHelper('begin', snapshot.checkout, id, RESTART_REASON, lease);
+      let marked = false;
       try {
+        await cleanupHelper('begin', snapshot.checkout, id, RESTART_REASON, lease);
+        marked = true;
         this.transaction(() => {
           this.insert(before, thread, requestId, 'before', snapshot.checkout);
           this.insert(id, thread, requestId, 'undo', snapshot.checkout, before);
@@ -286,12 +288,8 @@ export class Records {
         try {
           await lease.cleanup.wait();
           const reason = lease.cleanup.reason();
-          await cleanupHelper(reason ? 'mark' : 'finish', snapshot.checkout, id, reason, lease);
-          if (reason) void lease.cleanup.proved().then(async () => {
-            // The helper's exit may trail its receipt by a few milliseconds.
-            await new Promise(resolve => setTimeout(resolve, 100));
-            if (!this.closing) await cleanupHelper('resolve', snapshot.checkout, id);
-          }).catch(() => {});
+          if (marked) await cleanupHelper(reason ? 'mark' : 'finish', snapshot.checkout, id, reason, lease);
+          if (reason) void resolveProvedCleanup(lease.cleanup, snapshot.checkout, id).catch(() => {});
         } finally { await lease.close(); await rm(this.undoPath(id).replace(/\.json$/, '.paths'), { force: true }); }
       }
     });

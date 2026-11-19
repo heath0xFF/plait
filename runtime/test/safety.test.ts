@@ -312,8 +312,10 @@ test('a live run permits parent lifecycle readers but abandoned and uncertain ma
   const { root } = await setup(t);
   const writer = await acquireCheckout(root);
   await cleanupHelper('begin', root, 'live-run', RESTART_REASON, writer);
+  assert.equal((await cleanupHelper('read', root)).cleanup, null, 'a separate reader sees a live owner, not an unconfirmed stop');
   const reader = await acquireCheckout(root, 'reader'); await reader.close();
   await cleanupHelper('mark', root, 'live-run', 'The command group did not stop.', writer);
+  assert.equal((await cleanupHelper('read', root)).cleanup?.token, 'live-run');
   await assert.rejects(acquireCheckout(root, 'reader'), { code: 'cleanup_uncertain' });
   await cleanupHelper('mark', root, 'live-run', RESTART_REASON, writer);
   await writer.close();

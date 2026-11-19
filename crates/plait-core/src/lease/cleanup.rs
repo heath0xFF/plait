@@ -90,20 +90,33 @@ pub fn owner_lock_name(id: DirIdentity) -> String {
 /// a live runtime's crash marker may coexist with that operation, never an
 /// uncertain cleanup marker or a marker abandoned by a crashed runtime.
 pub fn require_clear_for_reader(dir: &Path, id: DirIdentity) -> Result<(), LeaseError> {
-    if let Some(state) = state_in(dir, id)? {
-        if state.reason == RESTART_REASON {
-            let (_, directory) = open_lease_dir(dir)?;
-            let (owner, _) = open_lock_file(&directory, &owner_lock_name(id))?;
-            if !try_flock_fd(owner.as_raw_fd(), libc::LOCK_EX)? {
-                return Ok(());
-            }
-        }
+    if let Some(state) = unconfirmed_in(dir, id)? {
         return Err(LeaseError::new(
             LeaseErrorKind::CleanupUncertain,
             state.message(),
         ));
     }
     Ok(())
+}
+
+/// A live run's crash marker is not an unconfirmed stop, even in another store.
+pub fn unconfirmed(id: DirIdentity) -> Result<Option<Cleanup>, LeaseError> {
+    unconfirmed_in(&default_lease_dir()?, id)
+}
+
+fn unconfirmed_in(dir: &Path, id: DirIdentity) -> Result<Option<Cleanup>, LeaseError> {
+    let state = state_in(dir, id)?;
+    if state
+        .as_ref()
+        .is_some_and(|state| state.reason == RESTART_REASON)
+    {
+        let (_, directory) = open_lease_dir(dir)?;
+        let (owner, _) = open_lock_file(&directory, &owner_lock_name(id))?;
+        if !try_flock_fd(owner.as_raw_fd(), libc::LOCK_EX)? {
+            return Ok(None);
+        }
+    }
+    Ok(state)
 }
 
 pub fn require_clear(id: DirIdentity) -> Result<(), LeaseError> {
@@ -214,6 +227,72 @@ mod tests {
         drop((next, other));
         fs::remove_dir_all(base).unwrap();
     }
+    #[test]
+    fn quarantine_refuses_desktop_git_changes_with_reason_and_resolution_restores_them() {
+        use crate::git::{WriteOp, write};
+        let base = std::env::temp_dir().join(format!(
+            "plait-quarantined-git-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let root = base.join("repo");
+        let other = base.join("other");
+        for checkout in [&root, &other] {
+            fs::create_dir_all(checkout).unwrap();
+            assert!(
+                std::process::Command::new("git")
+                    .args(["init", "-q"])
+                    .arg(checkout)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            fs::write(checkout.join("a.txt"), "change").unwrap();
+        }
+        let lease = acquire_checkout(&root, None, LeaseClass::Writer).unwrap();
+        let id = lease.identity();
+        replace(
+            id,
+            None,
+            Some(&Cleanup {
+                token: "uncertain-command".into(),
+                reason: "The command group did not stop.".into(),
+            }),
+        )
+        .unwrap();
+        drop(lease);
+        let refused: Vec<_> = [
+            WriteOp::StageAll,
+            WriteOp::Commit {
+                message: "blocked".into(),
+            },
+            WriteOp::CreateBranch("blocked".into()),
+            WriteOp::Discard {
+                path: "a.txt".into(),
+                untracked: true,
+                hunk: None,
+            },
+        ]
+        .iter()
+        .map(|op| write(&root, op))
+        .collect();
+        let unrelated = write(&other, &WriteOp::StageAll);
+        let recovery = acquire_for_cleanup(&root).unwrap();
+        replace(id, Some("uncertain-command"), None).unwrap();
+        drop(recovery);
+        let resolved = write(&root, &WriteOp::StageAll);
+        fs::remove_dir_all(base).unwrap();
+        for result in refused {
+            let error = result.unwrap_err().to_string();
+            assert!(
+                error.contains("Stop unconfirmed") && error.contains("command group did not stop"),
+                "{error}"
+            );
+        }
+        assert!(unrelated.is_ok());
+        assert!(resolved.is_ok());
+    }
+
     #[test]
     fn torn_cleanup_state_fails_closed_and_can_be_confirmed() {
         let base = std::env::temp_dir().join(format!(

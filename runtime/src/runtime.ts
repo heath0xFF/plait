@@ -1,5 +1,5 @@
 import { Worktrees, type Create as WorktreeCreate } from './worktrees.ts';
-import { CleanupProof, NEVER, RESTART_REASON, cleanupHelper, handlesCleanup, validateCleanup } from './cleanup.ts';
+import { CleanupProof, NEVER, RESTART_REASON, cleanupHelper, resolveProvedCleanup, handlesCleanup, validateCleanup } from './cleanup.ts';
 import type { ImageData } from './images.ts';
 import { TurnReview } from './turn-review.ts';
 import { LinearService } from './linear/service.ts';
@@ -187,18 +187,8 @@ export class Runtime {
     snapshot.error = { code: 'cleanup_uncertain', message: `Stop unconfirmed. ${reason} New runs and Git changes are blocked until cleanup is confirmed.` };
     // The durable marker retains exclusion after the OS descriptors close, even
     // across host stores or a crash. Late proof can clear only this run's token.
-    void proof.proved().then(async () => {
-      if (this.closing) return;
-      for (;;) {
-        if (this.closing) return;
-        try { await cleanupHelper('resolve', snapshot.checkout, cleanupToken); break; }
-        catch {
-          const current = await cleanupHelper('read', snapshot.checkout);
-          if (current.cleanup?.token !== cleanupToken) return;
-          await new Promise<void>(resolve => setTimeout(resolve, 100).unref());
-        }
-      }
-      if (!this.closing) this.cleanupResolved(snapshot.checkout);
+    void resolveProvedCleanup(proof, snapshot.checkout, cleanupToken).then(resolved => {
+      if (resolved && !this.closing) this.cleanupResolved(snapshot.checkout);
     }).catch(() => {});
   }
   /** Every harness, Pi first. */
@@ -609,6 +599,7 @@ export class Runtime {
     let accepted = false;
     let lease: LeaseHandle | undefined;
     let authorization: RunAuthorization | undefined;
+    let admitted: Session | undefined;
     try {
       await checkRoot(snapshot.checkout, this.store.rootIdentity(id));
       // Recovery owns this host's lease until its record finishes. Accept now;
@@ -622,6 +613,7 @@ export class Runtime {
         snapshot, baseline: [], protected: [], rootIdentity: this.store.rootIdentity(id), buildCache: { store: this.directory, thread: id }, owned: new Map(), inputs: [], requestId,
         authorization, approvals, mcpApproval: approvals, lease, save, outputs: this.store.outputs, record: image => this.store.record(id, image), steered: new Map(),
       };
+      admitted = session;
       await this.beginCleanup(session);
       // Read once here: the run keeps this policy, and a later change waits for the next run.
       session.commandPolicy = commandPolicy(this.store, snapshot.checkout, session.rootIdentity);
@@ -637,10 +629,12 @@ export class Runtime {
     } finally {
       if (!accepted) {
         authorization?.revoke();
-        const session = this.sessions.get(id);
-        if (session?.cleanupToken && lease) await cleanupHelper('finish', snapshot.checkout, session.cleanupToken, undefined, lease);
-        if (authorization) this.sessions.delete(id);
-        await lease?.close(); this.active.delete(snapshot.checkout);
+        try {
+          if (admitted?.cleanupToken && lease) await cleanupHelper('finish', snapshot.checkout, admitted.cleanupToken, undefined, lease);
+        } finally {
+          if (authorization) this.sessions.delete(id);
+          try { await lease?.close(); } finally { this.active.delete(snapshot.checkout); }
+        }
       }
     }
   }

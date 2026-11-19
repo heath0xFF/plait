@@ -199,7 +199,7 @@ export async function acquireCheckout(root: string, mode: LeaseClass = 'writer')
       const stdio: ('ignore' | 'pipe' | number)[] = writer
         ? ['ignore', 'ignore', 'pipe', lifecycle.fd, writer.fd, owner?.fd ?? 'ignore']
         : ['ignore', 'ignore', 'pipe', lifecycle.fd];
-      const child = spawn(process.env.PLAIT_HOST_EXE!, ['lock-fd', mode, canonical], { stdio });
+      const child = spawn(process.env.PLAIT_HOST_EXE!, ['lock-fd', mode, canonical, ...(owner ? ['owner'] : [])], { stdio });
       let err = '';
       child.stderr!.setEncoding('utf8').on('data', chunk => { err = (err + chunk).slice(-4096); });
       child.once('error', reject);

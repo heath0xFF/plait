@@ -1,8 +1,10 @@
 use std::{
     io::{self, Read},
     os::unix::process::CommandExt,
-    process::{Command, Stdio},
+    process::{Command, ExitStatus, Stdio},
+    sync::mpsc,
     thread,
+    time::Duration,
 };
 
 pub fn run(args: Vec<String>) -> io::Result<()> {
@@ -61,6 +63,11 @@ pub(crate) fn guard(
     };
     let group = child.id() as i32;
     cleanup_receipt(&format!("group:{group}\n"));
+    let (send, receive) = mpsc::channel();
+    let exit = send.clone();
+    thread::spawn(move || {
+        let _ = exit.send(CommandExit::Exited(child.wait()));
+    });
     // A pipe is a lifetime lease: even SIGKILL of Node closes it and stops tools.
     thread::spawn(move || {
         loop {
@@ -73,12 +80,13 @@ pub(crate) fn guard(
                     unsafe {
                         libc::kill(-group, libc::SIGKILL);
                     }
+                    let _ = send.send(CommandExit::Cancelled);
                     break;
                 }
             }
         }
     });
-    let status = child.wait()?;
+    let status = wait_command(receive, Duration::from_secs(2))?;
     // Shells may exit while background children still hold the output pipes.
     unsafe {
         libc::kill(-group, libc::SIGKILL);
@@ -92,6 +100,26 @@ pub(crate) fn guard(
         Err(io::Error::other(format!(
             "{label} command failed or stopped: {status}"
         )))
+    }
+}
+
+enum CommandExit {
+    Exited(io::Result<ExitStatus>),
+    Cancelled,
+}
+
+fn wait_command(receive: mpsc::Receiver<CommandExit>, grace: Duration) -> io::Result<ExitStatus> {
+    let failure = || io::Error::other("Command process exit could not be confirmed.");
+    let event = receive.recv().map_err(|_| failure())?;
+    let event = if matches!(event, CommandExit::Cancelled) {
+        // An unkillable child must not keep its guardian and UI waiting forever.
+        receive.recv_timeout(grace).map_err(|_| failure())?
+    } else {
+        event
+    };
+    match event {
+        CommandExit::Exited(status) => status,
+        CommandExit::Cancelled => Err(failure()),
     }
 }
 
@@ -192,6 +220,12 @@ fn private_environment(command: &mut Command) -> io::Result<()> {
 #[cfg(test)]
 mod cleanup_tests {
     use super::*;
+    #[test]
+    fn a_stop_without_child_exit_is_bounded_and_never_claims_cleanup() {
+        let (send, receive) = mpsc::channel();
+        send.send(CommandExit::Cancelled).unwrap();
+        assert!(wait_command(receive, Duration::from_millis(1)).is_err());
+    }
     #[test]
     fn a_live_group_is_not_proof_and_a_reaped_group_is() {
         let mut child = Command::new("/bin/sh")

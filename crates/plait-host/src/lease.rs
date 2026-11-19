@@ -48,6 +48,7 @@ pub fn prepare(args: Vec<String>) -> io::Result<()> {
 /// With no arguments, preserves the legacy single-fd writer lock on fd 3.
 /// With `<reader|writer|exclusive|common> <canonical_path> [timeout_ms]`,
 /// verifies every inherited descriptor and acquires locks in strict Level 1 -> Level 2 order.
+/// A writer may pass `owner` as its third argument to lock runtime-only fd 5.
 pub fn acquire(args: Vec<String>) -> io::Result<()> {
     if args.is_empty() {
         return acquire_legacy();
@@ -59,8 +60,10 @@ pub fn acquire(args: Vec<String>) -> io::Result<()> {
     }
     let mode = args[0].as_str();
     let target = Path::new(&args[1]);
+    let owner_fd = mode == "writer" && args.get(2).is_some_and(|arg| arg == "owner");
     let timeout_ms = args
         .get(2)
+        .filter(|_| !owner_fd)
         .map(|raw| {
             raw.parse::<u64>()
                 .map_err(|_| io::Error::other("invalid lease timeout"))
@@ -152,7 +155,7 @@ pub fn acquire(args: Vec<String>) -> io::Result<()> {
         }
         return Err(io::Error::other(format!("cleanup_uncertain: {error}")));
     }
-    if mode == "writer" && fstat_fd(5).is_ok() {
+    if owner_fd {
         let (_, owner_id) = open_lock_file(&lease_dir_fd, &cleanup::owner_lock_name(id))
             .map_err(io::Error::other)?;
         verify_inherited_lock_fd(5, owner_id)?;
@@ -224,7 +227,12 @@ pub fn cleanup_operation(args: Vec<String>) -> io::Result<()> {
         }
         _ => return Err(io::Error::other("unknown cleanup operation")),
     }
-    let state = cleanup::state(id).map_err(io::Error::other)?;
+    let state = if action == "read" {
+        cleanup::unconfirmed(id)
+    } else {
+        cleanup::state(id)
+    }
+    .map_err(io::Error::other)?;
     serde_json::to_writer(
         io::stdout(),
         &json!({"checkout": canonical, "cleanup": state}),
@@ -244,6 +252,17 @@ fn acquire_legacy() -> io::Result<()> {
     }
     if !try_flock_fd(3, libc::LOCK_EX).map_err(|e| io::Error::other(e.to_string()))? {
         return Err(io::Error::other("checkout already has a writer"));
+    }
+    #[allow(clippy::unnecessary_cast)]
+    let id = DirIdentity {
+        dev: stat.st_dev as u64,
+        ino: stat.st_ino as u64,
+    };
+    if let Err(error) = cleanup::require_clear(id) {
+        unsafe {
+            libc::flock(3, libc::LOCK_UN);
+        }
+        return Err(io::Error::other(format!("cleanup_uncertain: {error}")));
     }
     Ok(())
 }

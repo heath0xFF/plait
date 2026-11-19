@@ -266,3 +266,15 @@ for (const phase of ['before', 'after'] as const) test(`Stop during the ${phase}
   if (phase === 'before') assert.ok(!(await h.frames()).some(frame => frame.method === 'turn/start'));
   const lease = await acquireCheckout(h.root, 'exclusive'); await lease.close();
 });
+
+
+test('an acknowledged Codex turn refusal releases the checkout without quarantine', async t => {
+  const { acquireCheckout } = await import('../src/safety.ts');
+  const h = await host(t, 'start-refused');
+  const thread = await h.create();
+  await h.call({ op: 'submit', thread_id: thread.id, request_id: 'refused', text: 'Go', approval: 'auto' });
+  const failed = await h.idle(thread.id);
+  assert.equal(failed.error?.code, 'runtime_error');
+  const lease = await acquireCheckout(h.root, 'exclusive');
+  await lease.close();
+});

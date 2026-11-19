@@ -96,6 +96,20 @@ export function cleanupHelper(action: 'read' | 'begin' | 'mark' | 'finish' | 're
   });
 }
 
+
+/** Late proof can outlive the runtime store, but may clear only its own marker. */
+export async function resolveProvedCleanup(proof: CleanupProof, root: string, token: string): Promise<boolean> {
+  await proof.proved();
+  for (;;) {
+    try { await cleanupHelper('resolve', root, token); return true; }
+    catch {
+      if ((await cleanupHelper('read', root)).cleanup?.token !== token) return false;
+      // The guardian may still hold the lease briefly after sending its receipt.
+      await new Promise<void>(resolve => setTimeout(resolve, 100).unref());
+    }
+  }
+}
+
 export function handlesCleanup(input: unknown) {
   return !!input && typeof input === 'object' && ['checkout_cleanup', 'resolve_checkout_cleanup'].includes(String((input as { op?: unknown }).op));
 }

@@ -158,6 +158,7 @@ async function handle(frame: Frame) {
     case 'thread/resume':
       return params.threadId === threadId ? reply(id, threadResponse(params)) : failRequest(id, `no rollout found for thread id ${params.threadId}`);
     case 'turn/start': {
+      if (scenario === 'start-refused') return failRequest(id, 'Turn cannot start.');
       const turnId = `turn-${++turns}`;
       // Stands for the work a turn does in the checkout; steering joins a turn and writes nothing.
       // Named for the message, as a later run may start a new app-server whose turns count from 1 again.

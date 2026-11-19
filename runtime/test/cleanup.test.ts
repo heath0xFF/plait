@@ -51,3 +51,26 @@ test('a helper close without a private receipt retains uncertainty; late proof c
   await proof.wait(1);
   assert.ok(proof.reason());
 });
+
+
+test('Claude close without exit stays uncertain until the actual spawned session stops', async t => {
+  const { ClaudeSession } = await import('../src/claude/session.ts');
+  const proof = new CleanupProof();
+  const controller = new AbortController();
+  let child: ChildProcess | undefined;
+  t.after(() => { child?.kill('SIGKILL'); });
+  const query = (({ options }: Parameters<import('../src/claude/sdk.ts').QueryFunction>[0]) => {
+    child = options!.spawnClaudeCodeProcess!({ command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'],
+      env: process.env, signal: controller.signal }) as ChildProcess;
+    return { initializationResult: async () => ({}), close() {} };
+  }) as unknown as import('../src/claude/sdk.ts').QueryFunction;
+  const session = new ClaudeSession({ query, path: process.execPath, env: process.env, cwd: process.cwd(),
+    mode: 'default', canUseTool: async () => ({ behavior: 'deny', message: 'Unused' }), cleanup: proof });
+  await new Promise<void>(resolve => child!.once('spawn', resolve));
+  session.close();
+  await proof.wait(1);
+  assert.match(proof.reason()!, /Claude Code/);
+  controller.abort();
+  await proof.proved();
+  assert.equal(proof.reason(), undefined);
+});

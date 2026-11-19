@@ -1575,7 +1575,7 @@ completion and a clean Stop need no additional action.
 | Path | Ordinary finish | Stop or timeout | Harness/helper crash | Host restart mid-run |
 | --- | --- | --- | --- | --- |
 | Pi model and file tools | Pi closes; an admitted atomic file helper exits; recording finishes | Authorization is revoked; Pi closes; any admitted atomic edit finishes before release | A closed helper has no writer descendants; failed cleanup remains blocked | Durable marker blocks the checkout; no effect is replayed |
-| Pi trusted command | Guardian kills the shell's remaining group, waits for absence, and acknowledges | EOF on the lifetime pipe triggers group kill; the 15-minute deadline uses the same path | Known group is checked after guardian exit; missing or unverifiable group information remains blocked | Guardian normally kills the group on Node death, but a new host cannot recover its private receipt; confirmation is required |
+| Pi trusted command | Guardian kills the shell's remaining group, waits for absence, and acknowledges | EOF on the lifetime pipe triggers group kill; the 15-minute deadline uses the same path; a child still alive after the exit grace leaves cleanup unconfirmed | Known group is checked after guardian exit; missing or unverifiable group information remains blocked | Guardian normally kills the group on Node death, but a new host cannot recover its private receipt; confirmation is required |
 | Pi sandboxed command | Same group verification; descendants remain unable to write the checkout even if detached | Same lifetime/deadline path | Same verification; containment does not turn a missing receipt into an exit claim | Same durable exclusion; sandbox policy still restricts surviving descendants |
 | Pi stdio MCP | Guardian checks the server group when its run closes | Revocation closes the lifetime pipe; group is killed and checked | Missing confirmation blocks the checkout | Durable marker survives; external HTTP service effects are not local process-exit proof |
 | Codex | A terminal notification confirms the turn ended; the shared app-server can remain for other checkouts | Interrupt is requested; after 10 seconds without a terminal notification the checkout is blocked, without killing another checkout's shared server | App-server exit kills and checks its normal process group before satisfying cleanup | Marker blocks the checkout; no attempt is made to identify an old server by a reused PID |
@@ -1598,8 +1598,11 @@ by the checkout directory's device and inode, beside the shared lease files.
 Every new run and desktop Git mutation checks that marker under its OS lease.
 A clean run removes it only after cleanup and the after record. An uncertain
 run updates its reason, releases its OS handles, and retains exclusion through
-the durable marker (quarantine). A host/store restart cannot erase it. Other
-checkouts continue normally. Use current Plait versions for all cooperating
+the durable marker (quarantine). A host/store restart cannot erase it. A separate runtime-owned liveness
+lock permits the existing parent lifecycle reader during a live run. Helpers
+never inherit that lock, so its loss makes an abandoned crash marker block
+readers as well; an uncertain marker always blocks them. Other checkouts
+continue normally. Use current Plait versions for all cooperating
 hosts and desktops; older versions do not understand these markers.
 
 A late terminal acknowledgement, observed session exit, or proof that the
@@ -1622,7 +1625,8 @@ These owner-authenticated operations are additive and omit `protocol_version`:
 
 Both return `{"checkout":"/canonical/checkout","cleanup":null}` when clear,
 or `cleanup: {"token":"...","reason":"..."}` when unconfirmed. A live run's
-crash marker is hidden by its owning runtime until it becomes uncertain.
+crash marker is hidden while its runtime liveness lock is held, including when
+read from another host store; an uncertain marker stays visible.
 Unknown fields, relative paths, invalid tokens, and missing or false
 `confirm_stopped` are refused. Resolution acquires the exclusive checkout lease
 and compares the token before clearing. A quarantined admission returns

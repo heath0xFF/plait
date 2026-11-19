@@ -12,6 +12,7 @@ import type { ConversationView } from '@earendil-works/pi-durable';
 import { approvalFor, approvalReply, declineUnsupported } from './approval.ts';
 import type { CodexEntries } from './entries.ts';
 import { NOTIFICATIONS } from './protocol.ts';
+import { CodexRpcError } from './server.ts';
 import type {
   FileChangeItem, ItemNotification, ThreadResumeParams, ThreadStartParams,
   ThreadStartResponse, TurnInterruptParams, TurnStartParams, TurnStartResponse, TurnSteerParams, UserInput,
@@ -126,7 +127,11 @@ export class CodexRun {
     };
     this.startedRequest = true;
     this.context.cleanup?.track(Promise.race([this.confirmed, lease.server.cleanup]), 'Codex did not confirm its turn ended and its app-server has not exited.');
-    const { turn } = await lease.server.request<TurnStartResponse>('turn/start', params);
+    const { turn } = await lease.server.request<TurnStartResponse>('turn/start', params).catch(error => {
+      // A refusal acknowledges that no turn started; a lost reply cannot.
+      if (error instanceof CodexRpcError) this.confirm?.();
+      throw error;
+    });
     this.turn = turn.id;
     // The reply can come before Codex announces the turn; the transcript needs to know it either way.
     this.notify(NOTIFICATIONS.turnStarted, { threadId: this.thread, turn });

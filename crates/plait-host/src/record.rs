@@ -77,7 +77,7 @@ fn supervise_command(mut command: Command, value: Value, budget: Duration) -> io
         .and_then(|()| lifetime.write_all(b"\n"));
     if let Err(error) = written {
         kill_group(child.id());
-        let _ = child.wait();
+        let _ = wait_worker(child, Duration::ZERO);
         return Err(error);
     }
     let status = wait_worker(child, budget)?;
