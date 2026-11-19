@@ -2464,9 +2464,12 @@ fields, including `protocol_version`, and unknown lifecycle states are refused.
   entries; ignored directories are counted as Git reports them. Publication
   uses the known remote-tracking ref. Exclusive counts commits reachable only
   from worktree-local refs or reflogs. These are the same checks removal uses,
-  supplemented by identity, ownership, lease, operation and admission refusals.
-  A null refusal requires all counts known and zero and a verified owned
-  checkout; removal still rechecks under its leases. External checkouts have
+  supplemented by identity, ownership, cleanup-state, operation and admission
+  refusals. A null refusal requires all counts known and zero and a verified
+  owned checkout. The operation takes no checkout lease, because a run takes
+  its own without waiting and would be refused beside it; a run held by
+  another host process is therefore not seen here. Removal rechecks everything
+  under its leases and refuses then. External checkouts have
   no creation authority. Missing folders remain rows; removed records keep
   branch/history/cache attribution with no deletion action. The result is
   bounded to 256 rows and 750,000 bytes; reading creation records is bounded

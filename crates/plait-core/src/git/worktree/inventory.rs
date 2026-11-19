@@ -229,12 +229,163 @@ fn removal_identity(record: &ManagedWorktree) -> Result<()> {
         .identity
         .as_ref()
         .ok_or("Worktree has no recorded directory identity.")?;
-    let _lease = crate::lease::acquire_git_checkout(
-        &record.path,
-        Some(expected.lease()?),
-        crate::lease::LeaseClass::Exclusive,
-        Some(Duration::ZERO),
-    )
-    .map_err(String::from)?;
+    // A preview takes no lease: runs take theirs without waiting, so even a
+    // brief hold here refuses one. Removal rechecks everything under its own.
+    let id = expected.lease()?;
+    crate::lease::git_cleanup::require_clear(id).map_err(String::from)?;
+    crate::lease::cleanup::require_clear(id).map_err(String::from)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::tests::Repo;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    const ID: &str = "12345678-1234-4abc-8abc-123456789abc";
+    fn git_in(root: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    fn commit(root: &Path, name: &str) {
+        fs::write(root.join(name), "work\n").unwrap();
+        git_in(root, &["add", name]);
+        git_in(
+            root,
+            &[
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-qm",
+                name,
+            ],
+        );
+    }
+    fn repository() -> (Repo, ManagedWorktree) {
+        let mut repo = Repo::new();
+        repo.0 = repo.0.canonicalize().unwrap();
+        fs::write(repo.0.join("file"), "committed\n").unwrap();
+        fs::write(repo.0.join(".gitignore"), "*.log\n").unwrap();
+        repo.git(&["add", "."]);
+        repo.git(&["commit", "-qm", "initial"]);
+        let tree =
+            create_managed_worktree(&worktree_parent(&repo.0).unwrap(), ID, None, |_| Ok(()))
+                .unwrap();
+        (repo, tree)
+    }
+    fn clean(tree: &ManagedWorktree) {
+        if let Ok(base) = worktree_base(&tree.parent.main) {
+            let _ = fs::remove_dir_all(base);
+        }
+    }
+    /// Runs take their writer lease without waiting; a preview must never be the
+    /// reason one is refused.
+    #[test]
+    fn inventory_never_refuses_a_run_starting_beside_it() {
+        let (repo, tree) = repository();
+        let stop = Arc::new(AtomicBool::new(false));
+        let (path, done) = (tree.path.clone(), stop.clone());
+        let runner = std::thread::spawn(move || {
+            let mut refused = Vec::new();
+            while !done.load(Ordering::Relaxed) {
+                match crate::lease::acquire_checkout(&path, None, crate::lease::LeaseClass::Writer)
+                {
+                    Ok(lease) => drop(lease),
+                    Err(error) => refused.push(error.message),
+                }
+            }
+            refused
+        });
+        for _ in 0..8 {
+            let rows = inventory(&repo.0, std::slice::from_ref(&tree)).unwrap();
+            assert_eq!(rows.len(), 2);
+        }
+        stop.store(true, Ordering::Relaxed);
+        let refused = runner.join().unwrap();
+        assert!(
+            refused.is_empty(),
+            "runs refused beside a preview: {refused:?}"
+        );
+        clean(&tree);
+    }
+    /// The preview's answer and removal's answer come from one function. Feed
+    /// both the same work and require the same decision and the same words.
+    #[test]
+    fn preview_and_removal_agree_on_every_kind_of_work() {
+        type Setup<'a> = &'a dyn Fn(&ManagedWorktree);
+        let cases: &[(&str, Setup)] = &[
+            ("no upstream", &|_| {}),
+            ("published", &|_| {}),
+            ("untracked", &|t| {
+                fs::write(t.path.join("new"), "x").unwrap()
+            }),
+            ("ignored", &|t| {
+                fs::write(t.path.join("out.log"), "x").unwrap()
+            }),
+            ("staged", &|t| {
+                fs::write(t.path.join("file"), "staged\n").unwrap();
+                git_in(&t.path, &["add", "file"]);
+            }),
+            ("assume-unchanged", &|t| {
+                git_in(&t.path, &["update-index", "--assume-unchanged", "file"]);
+                fs::write(t.path.join("file"), "only copy\n").unwrap();
+            }),
+            ("skip-worktree", &|t| {
+                git_in(&t.path, &["update-index", "--skip-worktree", "file"]);
+                fs::write(t.path.join("file"), "only copy\n").unwrap();
+            }),
+            ("worktree ref", &|t| {
+                commit(&t.path, "kept");
+                git_in(&t.path, &["update-ref", "refs/worktree/keep", "HEAD"]);
+                git_in(&t.path, &["reset", "-q", "--hard", "HEAD~1"]);
+                git_in(&t.path, &["reflog", "expire", "--expire=now", "--all"]);
+            }),
+            ("reflog only", &|t| {
+                git_in(&t.path, &["checkout", "-q", "--detach"]);
+                commit(&t.path, "detached");
+                git_in(&t.path, &["checkout", "-q", &t.branch]);
+            }),
+            ("unpushed", &|t| commit(&t.path, "ahead")),
+        ];
+        for (name, setup) in cases {
+            let (repo, tree) = repository();
+            if *name != "no upstream" {
+                repo.git(&["remote", "add", "origin", "/nonexistent"]);
+                let remote = format!("refs/remotes/origin/{}", tree.branch);
+                git_in(&repo.0, &["update-ref", &remote, "HEAD"]);
+                let upstream = format!("--set-upstream-to=origin/{}", tree.branch);
+                git_in(&tree.path, &["branch", &upstream]);
+            }
+            setup(&tree);
+            let preview = inventory(&repo.0, std::slice::from_ref(&tree)).unwrap()[1]
+                .preservation
+                .refusal
+                .clone();
+            let identity = tree.identity.clone().unwrap();
+            let removal = remove_managed_worktree(tree.clone(), &identity, false, |_| Ok(()));
+            match (&preview, &removal) {
+                (None, Ok(removed)) => assert_eq!(removed.stage, ManagedStage::Removed),
+                (Some(preview), Err(removal)) => assert_eq!(preview, removal, "{name}"),
+                _ => panic!("{name}: preview {preview:?}, removal {removal:?}"),
+            }
+            assert_eq!(preview.is_none(), *name == "published", "{name}");
+            clean(&tree);
+        }
+    }
 }
