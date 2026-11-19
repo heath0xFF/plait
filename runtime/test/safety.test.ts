@@ -427,7 +427,9 @@ test('a lock file that cannot be opened fails the lease with its reason and hold
     if (code !== 'busy') assert.match(error.message, /Cannot open lease lock file/);
     return true;
   };
-  // A directory where a record's lock file belongs cannot be opened.
+  // A directory where a record's lock file belongs cannot be opened. An earlier
+  // test's removed folder can have had this folder's inode, and so left this name.
+  await rm(record, { force: true });
   await mkdir(record);
   try {
     for (const mode of ['writer', 'exclusive', 'reader'] as const) await assert.rejects(acquireCheckout(root, mode), unopenable('permission_denied'));
