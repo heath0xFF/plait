@@ -202,3 +202,58 @@ fn graph_accessibility_is_unique_stable_and_has_no_thread_view_bar() {
         assert!(p.worktrees.items.is_empty());
     });
 }
+/// Handlers belong to the last drawn frame. A size reply that re-sorts the
+/// lanes before the next frame must not turn Remove into another worktree's.
+#[core::prelude::v1::test]
+fn remove_asks_for_the_worktree_that_was_drawn() {
+    if !isolated("worktrees_view::remove_asks_for_the_worktree_that_was_drawn") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-worktree-drawn-{}", std::process::id()));
+    let repo = fixture_repository(&scratch);
+    let mut h = Harness::new(&repo, None, 1380., 860.);
+    h.connect(&repo, false);
+    install(&mut h, 4);
+    h.update(|p, window, cx| {
+        let row = &mut p.worktrees.rows[1];
+        row.preservation.refusal = None;
+        row.preservation.unpushed = Some(0);
+        p.worktrees.selected = 1;
+        // What the drawn Remove button holds.
+        let drawn = p.worktrees.rows[1].path.clone();
+        let identity = p.worktrees.rows[1].identity.clone();
+        // A measurement reply re-sorts by size before the next frame.
+        p.worktrees.sizes[3] = Some(Ok(Size {
+            source: 9_000_000_000,
+            build: 0,
+            incomplete: false,
+            entries: 1,
+        }));
+        p.sort_worktree_lanes(true, cx);
+        assert_ne!(p.worktrees.rows[1].path, drawn);
+        p.ask_remove_view_worktree(&drawn, identity.as_ref(), window, cx);
+        let asked = p.worktrees.removal.asking.take().map(|a| a.path);
+        assert_eq!(
+            asked,
+            Some(drawn.clone()),
+            "Remove asked about another worktree"
+        );
+        // A row that is no longer the one shown, or a replaced folder, asks nothing.
+        let other = (1..4).find(|&i| i != p.worktrees.selected).unwrap();
+        let (path, id) = (
+            p.worktrees.rows[other].path.clone(),
+            p.worktrees.rows[other].identity.clone(),
+        );
+        p.worktrees.rows[other].preservation.refusal = None;
+        p.ask_remove_view_worktree(&path, id.as_ref(), window, cx);
+        assert!(p.worktrees.removal.asking.is_none());
+        let replaced = plait_core::git::worktree::Identity {
+            dev: "1".into(),
+            ino: "999".into(),
+        };
+        p.ask_remove_view_worktree(&drawn, Some(&replaced), window, cx);
+        assert!(p.worktrees.removal.asking.is_none());
+    });
+    drop(h);
+    let _ = std::fs::remove_dir_all(scratch);
+}

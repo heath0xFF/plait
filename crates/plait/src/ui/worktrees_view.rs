@@ -501,7 +501,7 @@ impl Plait {
         })
         .detach();
     }
-    fn sort_worktree_lanes(&mut self, size: bool, cx: &mut Context<Self>) {
+    pub(super) fn sort_worktree_lanes(&mut self, size: bool, cx: &mut Context<Self>) {
         self.worktrees.sort_size = size;
         let selected = self
             .worktrees
@@ -543,11 +543,23 @@ impl Plait {
         self.save_worktrees_bookmark(cx);
         cx.notify();
     }
-    fn ask_remove_view_worktree(&mut self, n: usize, window: &mut Window, cx: &mut Context<Self>) {
+    /// `path` and `identity` are the row drawn with the button. Input reaches the
+    /// last drawn frame, and a size reply can re-sort rows before the next one,
+    /// so an index would name whichever worktree moved into that place.
+    pub(super) fn ask_remove_view_worktree(
+        &mut self,
+        path: &std::path::Path,
+        identity: Option<&plait_core::git::worktree::Identity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let n = self.worktrees.selected;
         let Some(tree) = self.worktrees.rows.get(n) else {
             return;
         };
-        if tree.main
+        if tree.path != path
+            || tree.identity.as_ref() != identity
+            || tree.main
             || tree.preservation.refusal.is_some()
             || self.worktree_busy
             || !self.host.connection.connected
