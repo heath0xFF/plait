@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import type { ChildProcess } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { acquireCheckout } from '../src/safety.ts';
@@ -56,13 +57,31 @@ test('a permissive fixture policy cannot bypass dirty paths, path checks, or com
   await assert.rejects(readFile(join(f.repo, '.git', 'automation.txt')), { code: 'ENOENT' });
 });
 
+/**
+ * Starts a second host on its own short store. macOS limits a socket path to
+ * 104 bytes, and a store nested in the first host's temporary folder can exceed
+ * it; the host's stderr is kept so a failed start says why.
+ */
+async function secondHost(t: { after: (fn: () => Promise<void>) => void }, own: (child: ChildProcess) => void) {
+  const store = await realpath(await mkdtemp('/tmp/plait-store-'));
+  t.after(async () => { await rm(store, { recursive: true, force: true }); });
+  const child = spawn(binary, ['run', '--store', store, '--runtime', fixture], {
+    stdio: ['ignore', 'ignore', 'pipe'],
+    env: { ...process.env, PLAIT_TEST_SCENARIO: 'answer' },
+  });
+  own(child);
+  let stderr = ''; child.stderr!.on('data', chunk => { stderr = (stderr + chunk.toString()).slice(-8192); });
+  try { await until(async () => (await request(store, { op: 'status' })).ok, ok => ok); }
+  catch (error) { throw new Error(`Second host did not start: ${(error as Error).message}\n${stderr}`); }
+  return store;
+}
+
 test('two host stores contend on one inode and its alias while an unrelated checkout progresses', { timeout: 30000 }, async t => {
   process.env.PLAIT_HOST_EXE ??= binary;
   const f = await setup(t, 'edit');
-  const secondStore = join(f.base, 'store-two');
+  const secondStore = await secondHost(t, f.own);
   const alias = join(f.base, 'repo-alias');
   const unrelated = join(f.base, 'unrelated');
-  await mkdir(secondStore, { mode: 0o700 });
   await symlink(f.repo, alias);
   await mkdir(unrelated);
   await exec('/usr/bin/git', ['init', '-q', unrelated]);
@@ -70,12 +89,6 @@ test('two host stores contend on one inode and its alias while an unrelated chec
   await exec('/usr/bin/git', ['-C', unrelated, 'add', '.']);
   await exec('/usr/bin/git', ['-C', unrelated, '-c', 'user.name=Test', '-c', 'user.email=test@invalid', 'commit', '-qm', 'init']);
 
-  const secondHost = spawn(binary, ['run', '--store', secondStore, '--runtime', fixture], {
-    stdio: ['ignore', 'ignore', 'ignore'],
-    env: { ...process.env, PLAIT_TEST_SCENARIO: 'answer' },
-  });
-  f.own(secondHost);
-  await until(async () => (await request(secondStore, { op: 'status' })).ok, ok => ok);
 
   // Store 1 starts an active run on f.repo (paused awaiting approval, holding writer + lifecycle leases).
   const t1 = await f.create('create-s1');
@@ -107,14 +120,7 @@ test('two host stores contend on one inode and its alias while an unrelated chec
 test('a host crash releases checkout leases so another store can immediately acquire the checkout', { timeout: 30000 }, async t => {
   process.env.PLAIT_HOST_EXE ??= binary;
   const f = await setup(t, 'edit');
-  const secondStore = join(f.base, 'store-after-crash');
-  await mkdir(secondStore, { mode: 0o700 });
-  const secondHost = spawn(binary, ['run', '--store', secondStore, '--runtime', fixture], {
-    stdio: ['ignore', 'ignore', 'ignore'],
-    env: { ...process.env, PLAIT_TEST_SCENARIO: 'answer' },
-  });
-  f.own(secondHost);
-  await until(async () => (await request(secondStore, { op: 'status' })).ok, ok => ok);
+  const secondStore = await secondHost(t, f.own);
 
   const t1 = await f.create('create-crash-1');
   assert.equal((await f.submit(t1.id, 'submit-crash-1')).ok, true);
