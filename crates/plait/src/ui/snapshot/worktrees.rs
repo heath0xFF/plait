@@ -190,3 +190,53 @@ fn stale_worktree_request_is_retried_only_from_its_checkout() {
     harness.settle();
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+#[core::prelude::v1::test]
+fn worktree_controls_say_when_busy_or_when_the_reply_is_stale() {
+    if !isolated("worktrees::worktree_controls_say_when_busy_or_when_the_reply_is_stale") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-worktree-busy-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.update(|plait, window, cx| {
+        plait.worktree_busy = true;
+        plait.new_worktree_thread(window, cx);
+        assert!(
+            plait
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("still being created or removed")
+        );
+        plait.worktree_busy = false;
+        plait.inject_harnesses(Some(claude_harnesses("ready", None)));
+        plait.new_worktree_thread(window, cx);
+        assert!(plait.worktree_busy, "{:?}", plait.notice);
+        // The connection changes before the (failing, socket-less) reply lands.
+        plait.host.connection.epoch += 1;
+    });
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while harness
+        .window
+        .update(&mut harness.cx, |plait, _, _| plait.worktree_busy)
+        .unwrap()
+    {
+        assert!(Instant::now() < deadline, "worktree reply timed out");
+        harness.settle();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    harness.update(|plait, _, _| {
+        assert!(
+            plait
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("connection changed"),
+            "{:?}",
+            plait.notice
+        );
+    });
+    std::fs::remove_dir_all(scratch).unwrap();
+}

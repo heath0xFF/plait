@@ -36,11 +36,14 @@ impl Pending {
         }
     }
 }
+const BUSY: &str =
+    "Another worktree is still being created or removed. Try again when it finishes.";
 impl Plait {
     pub(super) fn new_worktree_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_overlay(true, window, cx);
         if self.worktree_busy {
-            return;
+            self.notice = Some(BUSY.into());
+            return cx.notify();
         }
         if let Some(mut pending) = self.worktree_pending.clone() {
             if pending.host != self.tabs.host {
@@ -118,7 +121,8 @@ impl Plait {
             let _ = this.update_in(cx, |this, window, cx| {
                 this.worktree_busy = false;
                 if this.host.connection.epoch != connection {
-                    return;
+                    this.notice = Some("The host connection changed before the worktree was requested. Nothing was created; try again.".into());
+                    return cx.notify();
                 }
                 match result {
                     Ok(info) => {
@@ -185,7 +189,8 @@ impl Plait {
             let _ = this.update_in(cx, |this, window, cx| {
                 this.worktree_busy = false;
                 if this.host.connection.epoch != pending.connection {
-                    return;
+                    this.notice = Some("The host connection changed before the worktree reply arrived. Creation is unconfirmed; use New Thread in Worktree again to confirm it.".into());
+                    return cx.notify();
                 }
                 match result {
                     Ok((operation, summary)) => {
@@ -242,7 +247,8 @@ impl Plait {
     ) {
         self.navigation.menu = None;
         if self.worktree_busy {
-            return;
+            self.navigation.error = Some(BUSY.into());
+            return cx.notify();
         }
         let Some(tree) = self.preferences.value.navigation.worktree(&path).cloned() else {
             return;
