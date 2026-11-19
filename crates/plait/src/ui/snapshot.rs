@@ -5573,7 +5573,7 @@ fn the_window_bar_moves_the_window_only_from_empty_space() {
     assert!(arms(&mut harness, 40.), "the rail's empty strip");
     assert!(
         arms(&mut harness, rail - 2.),
-        "the bar is above the rail resize handle"
+        "the empty bar before the first tab, above the rail resize handle"
     );
     assert!(arms(&mut harness, rail + 400.), "the header's empty middle");
     // A control in the bar keeps its click: this one hides the rail.

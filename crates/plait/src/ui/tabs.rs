@@ -10,6 +10,29 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+/// Room the traffic lights take at the bar's left, and the inset that is left
+/// in full screen, where macOS hides them.
+const LIGHTS_INSET: f32 = 84.;
+const FULLSCREEN_INSET: f32 = 8.;
+/// The sidebar toggle and the space after it.
+const TOGGLE_WIDTH: f32 = 32.;
+/// The `+` button and the space before it.
+const NEW_TAB_WIDTH: f32 = 32.;
+/// The least empty bar kept at the right so the window can always be moved.
+const DRAG_MIN: f32 = 48.;
+
+/// Where the first tab starts. The lights and the toggle always fit before
+/// it; an open sidebar pushes it to the sidebar's edge so tabs sit over the
+/// content they switch, not over the thread list.
+fn strip_start(fullscreen: bool, sidebar: Option<f32>) -> f32 {
+    let lead = if fullscreen {
+        FULLSCREEN_INSET
+    } else {
+        LIGHTS_INSET
+    } + TOGGLE_WIDTH;
+    sidebar.map_or(lead, |width| width.max(lead))
+}
+
 static WINDOW_IDS: AtomicU64 = AtomicU64::new(1);
 pub(super) fn fresh_window_id() -> WindowId {
     WindowId(WINDOW_IDS.fetch_add(1, Ordering::Relaxed))
@@ -52,7 +75,8 @@ pub(super) struct Tabs {
     layout: Option<TabLayout>,
     /// The most urgent state among hidden tabs, for the overflow summary's accent.
     overflow_state: Option<TabState>,
-    measured: Option<(f32, bool)>,
+    /// The window width and strip start the layout was measured for.
+    measured: Option<(f32, f32)>,
     first_visible: usize,
     pub list_open: bool,
     list_cursor: Option<TabId>,
@@ -475,13 +499,29 @@ impl Plait {
     }
 
     /// Only width/metadata changes run layout; steady frames reuse its result.
+    /// Where the first tab starts in this window, as drawn now.
+    fn tab_strip_start(&self, window: &Window) -> f32 {
+        let sidebar = self
+            .sidebar
+            .then(|| self.panel_width(super::panels::Panel::Sidebar));
+        strip_start(window.is_fullscreen(), sidebar)
+    }
+
+    /// The window width and strip start that decide the tab layout.
+    fn tab_row_key(&self, window: &Window) -> (f32, f32) {
+        (
+            f32::from(window.viewport_size().width),
+            self.tab_strip_start(window),
+        )
+    }
+
     fn measure_tabs(&mut self, window: &Window) {
-        let width = f32::from(window.viewport_size().width);
-        let fullscreen = window.is_fullscreen();
-        if self.tabs.measured == Some((width, fullscreen)) {
+        let key = self.tab_row_key(window);
+        if self.tabs.measured == Some(key) {
             return;
         }
-        let available = width - if fullscreen { 8. } else { 84. } - 32. - 32. - 48.;
+        let (width, start) = key;
+        let available = width - start - NEW_TAB_WIDTH - DRAG_MIN;
         let widths = |overflow| RowWidths {
             available,
             minimum_tab: 128.,
@@ -521,18 +561,21 @@ impl Plait {
             }
         }
         self.tabs.layout = Some(layout);
-        self.tabs.measured = Some((width, fullscreen));
+        self.tabs.measured = Some(key);
     }
 
     pub(super) fn tab_row(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let key = self.tab_row_key(window);
         let redraw = self.tabs.strip_theme != colors().bg
-            || self.tabs.measured
-                != Some((
-                    f32::from(window.viewport_size().width),
-                    window.is_fullscreen(),
-                ))
+            || self.tabs.measured != Some(key)
             || self.tabs.drag.is_some();
         self.measure_tabs(window);
+        let (_, start) = key;
+        let inset = if window.is_fullscreen() {
+            FULLSCREEN_INSET
+        } else {
+            LIGHTS_INSET
+        };
         self.tabs.strip_theme = colors().bg;
         let layout = self.tabs.layout.as_ref().expect("measured tab row");
         let strip = self
@@ -564,14 +607,21 @@ impl Plait {
             .bg(rgb(colors().rail))
             .border_b_1()
             .border_color(rgb(colors().border))
-            .pl(px(if window.is_fullscreen() { 8. } else { 84. }))
+            // The lead holds the lights and the toggle; its empty rest is bar,
+            // so it moves the window like the right end does.
             .child(
-                icon_button("toggle-sidebar", "panel", "Toggle sidebar")
-                    .mr_1()
-                    .map(|el| self.covered_tab_control(el))
-                    .aria_keyshortcuts(self.shortcut_aria("view.toggle_sidebar"))
-                    .tooltip(|_, cx| tooltip("Toggle sidebar (⌘B)".into(), cx))
-                    .on_activate(cx, |this, window, cx| this.toggle_sidebar(window, cx)),
+                row()
+                    .w(px(start))
+                    .h_full()
+                    .flex_shrink_0()
+                    .pl(px(inset))
+                    .child(
+                        icon_button("toggle-sidebar", "panel", "Toggle sidebar")
+                            .map(|el| self.covered_tab_control(el))
+                            .aria_keyshortcuts(self.shortcut_aria("view.toggle_sidebar"))
+                            .tooltip(|_, cx| tooltip("Toggle sidebar (⌘B)".into(), cx))
+                            .on_activate(cx, |this, window, cx| this.toggle_sidebar(window, cx)),
+                    ),
             )
             .child(strip)
             .when(!layout.hidden.is_empty(), |bar| {
@@ -605,8 +655,9 @@ impl Plait {
                     .tooltip(|_, cx| tooltip("New thread tab (⌘T)".into(), cx))
                     .on_activate(cx, |this, window, cx| this.open_draft(window, cx)),
             )
-            .child(div().flex_1().min_w(px(48.)).h_full());
+            .child(div().flex_1().min_w(px(DRAG_MIN)).h_full());
         bar.on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+            let left = this.tab_strip_start(window);
             let Some(drag) = this.tabs.drag.as_mut() else {
                 return;
             };
@@ -619,7 +670,6 @@ impl Plait {
             }
             this.window_drag = false;
             if let Some(layout) = &this.tabs.layout {
-                let left = if window.is_fullscreen() { 40. } else { 116. };
                 let index =
                     ((f32::from(event.position.x) - left) / layout.tab_width).max(0.) as usize;
                 drag.destination = Some(
@@ -1027,6 +1077,16 @@ mod tests {
         assert_eq!(urgent(&[Working, Failed, Interrupted]), Some(Interrupted));
         assert_eq!(urgent(&[Idle, Working, Finished]), Some(Working));
         assert_eq!(urgent(&[Idle, Stopped, Finished]), None);
+    }
+
+    #[core::prelude::v1::test]
+    fn tabs_start_at_the_sidebar_edge_but_clear_the_lights() {
+        assert_eq!(strip_start(false, None), 116.);
+        assert_eq!(strip_start(true, None), 40.);
+        assert_eq!(strip_start(false, Some(280.)), 280.);
+        assert_eq!(strip_start(true, Some(280.)), 280.);
+        // A sidebar narrower than the lead never puts tabs under the toggle.
+        assert_eq!(strip_start(false, Some(100.)), 116.);
     }
 
     #[core::prelude::v1::test]

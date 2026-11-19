@@ -39,8 +39,10 @@ conversation keeps a readable minimum width.
 - **Chrome.** A 40-point top tab bar serves as the window bar, with no system
   title bar above it. The native traffic lights sit at its left, centered on it
   and 14 points in (hidden in full screen), followed by the sidebar toggle,
-  open tabs, an overflow summary when tabs exceed the bar, and `+`. Empty space
-  at the right moves the window and handles title-bar double-clicks; no window
+  open tabs, an overflow summary when tabs exceed the bar, and `+`. While the
+  sidebar is open, the first tab starts at the sidebar's right edge, so tabs
+  sit above the content they switch. Empty bar space at either side of the
+  tabs moves the window and handles title-bar double-clicks; no window
   title or permanent footer is drawn. Each tab shows a state dot, its title,
   a one-word state while active, running, needing attention, failed, stopped,
   or unread-done, and a close control on the active tab or on hover. Clicking
