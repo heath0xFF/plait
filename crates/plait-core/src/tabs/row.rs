@@ -234,7 +234,10 @@ pub fn layout(
             0.0
         })
     .max(0.0);
-    let count = if space == 0.0 {
+    // Dividing again could round an exact fit below the tab count.
+    let count = if !overflowing {
+        tabs.len()
+    } else if space == 0.0 {
         0
     } else {
         ((space / minimum).floor() as usize).max(1).min(tabs.len())
@@ -536,6 +539,31 @@ mod tests {
         assert_eq!(overflow.hidden.len(), 2);
         assert_eq!(overflow.visible.last(), Some(&tabs[9].id));
         assert_eq!(overflow.tab_width, 128.5);
+    }
+
+    #[test]
+    fn exactly_fitting_fractional_widths_show_every_tab_without_overflow() {
+        // Measured widths are fractional; `n * min` fitting must not round to n - 1.
+        let tabs = fixture();
+        for n in 1..=tabs.len() {
+            for step in 0..500 {
+                let minimum_tab = 100.0 + step as f32 * 0.037;
+                let available = n as f32 * minimum_tab;
+                let layout = layout(
+                    &tabs[..n],
+                    RowWidths {
+                        available,
+                        minimum_tab,
+                        maximum_tab: 240.0,
+                        overflow: 100.0,
+                    },
+                    0,
+                    2,
+                );
+                assert_eq!(layout.visible.len(), n, "{n} tabs at {minimum_tab}");
+                assert!(layout.hidden.is_empty() && layout.overflow_label.is_empty());
+            }
+        }
     }
 
     #[test]
