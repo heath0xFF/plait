@@ -35,6 +35,8 @@ export function queueRequest(input: unknown): Record<string, any> {
 
 export class CheckoutQueue {
   private store: Store;
+  /** Positions are in every summary, so any change to a pending row is a summary change. */
+  changed: () => void = () => {};
   constructor(store: Store) {
     this.store = store;
     store.db.exec(`CREATE TABLE IF NOT EXISTS checkout_waiters(thread TEXT NOT NULL,request TEXT NOT NULL,checkout TEXT NOT NULL,identity TEXT NOT NULL,kind TEXT NOT NULL,state TEXT NOT NULL,ordering INTEGER NOT NULL,settings TEXT NOT NULL,policy TEXT NOT NULL,approval TEXT NOT NULL,bytes INTEGER NOT NULL,error TEXT,PRIMARY KEY(thread,request));
@@ -71,16 +73,17 @@ export class CheckoutQueue {
     const identity = this.store.rootIdentity(snapshot.id);
     const order = this.store.db.prepare('SELECT rowid FROM requests WHERE scope=? AND id=?').get(snapshot.id,request)!.rowid;
     this.store.db.prepare('INSERT INTO checkout_waiters VALUES (?,?,?,?,?,?,?,?,?,?,?,NULL)').run(snapshot.id,request,snapshot.checkout,JSON.stringify(identity),kind,'waiting',Number(order),queueSettings(snapshot),commandPolicy(this.store,snapshot.checkout,identity),approval,bytes);
+    this.changed();
   }
   set(thread: string, request: string, state: WaitState, error?: Failure) {
-    this.store.db.prepare(`UPDATE checkout_waiters SET state=?,error=? WHERE thread=? AND request=? AND ${pending}`).run(state,error ? JSON.stringify(error) : null,thread,request);
+    if (this.store.db.prepare(`UPDATE checkout_waiters SET state=?,error=? WHERE thread=? AND request=? AND ${pending}`).run(state,error ? JSON.stringify(error) : null,thread,request).changes) this.changed();
   }
   /** Holds every waiting input of one checkout, as a restart does; only Resume releases it. */
-  holdCheckout(checkout: string) { this.store.db.prepare("UPDATE checkout_waiters SET state='held' WHERE checkout=? AND state='waiting'").run(checkout); }
-  hold(thread: string) { this.store.db.prepare("UPDATE checkout_waiters SET state='held' WHERE thread=? AND kind='follow_up' AND state='waiting'").run(thread); }
+  holdCheckout(checkout: string) { if (this.store.db.prepare("UPDATE checkout_waiters SET state='held' WHERE checkout=? AND state='waiting'").run(checkout).changes) this.changed(); }
+  hold(thread: string) { if (this.store.db.prepare("UPDATE checkout_waiters SET state='held' WHERE thread=? AND kind='follow_up' AND state='waiting'").run(thread).changes) this.changed(); }
   /** A held follow-up keeps its own thread's next-send rule; another thread's Resume does not release it. */
-  resume(checkout: string) { this.store.db.prepare("UPDATE checkout_waiters SET state='waiting' WHERE checkout=? AND kind='checkout' AND state='held'").run(checkout); }
-  resumeThread(thread: string) { this.store.db.prepare("UPDATE checkout_waiters SET state='waiting' WHERE thread=? AND kind='follow_up' AND state='held'").run(thread); }
+  resume(checkout: string) { if (this.store.db.prepare("UPDATE checkout_waiters SET state='waiting' WHERE checkout=? AND kind='checkout' AND state='held'").run(checkout).changes) this.changed(); }
+  resumeThread(thread: string) { if (this.store.db.prepare("UPDATE checkout_waiters SET state='waiting' WHERE thread=? AND kind='follow_up' AND state='held'").run(thread).changes) this.changed(); }
   summary(thread: string, checkout: string, line = this.line(checkout)): QueueSummary | null {
     const at = line.findIndex(waiter => waiter.thread_id === thread && waiter.kind === 'checkout');
     if (at < 0) return null;

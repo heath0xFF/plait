@@ -166,3 +166,17 @@ test('a summary page reads each checkout line once, not once per thread',async t
  assert.equal(page.threads.filter((s:any)=>s.checkout_queue).length,5);
  }finally{waiters.line=line;for(let i=0;i<5;i++)await h.runtime.handle({op:'cancel_checkout_wait',thread_id:ids[i],request_id:`q${i}`});await lease.close();}
 });
+test('cancelling a follow-up refreshes other waiters positions',async t=>{
+ const h=await fixture(t),hold=barrier();let began=false;
+ h.faux.setResponses([async()=>{began=true;await hold.waiting;return fauxAssistantMessage('held');},fauxAssistantMessage('b ran')]);
+ const a=await thread(h.runtime,h.root,'a'),b=await thread(h.runtime,h.root,'b');await run(h.runtime,a,'a-run');await until(()=>began);
+ try{
+ await h.runtime.handle({op:'submit',protocol_version:6,thread_id:a,request_id:'a-follow',text:'a-follow',when_busy:'follow_up',approval:'auto'});
+ await h.runtime.handle(queue(b,'b-wait'));assert.equal(h.runtime.store.waiters.summary(b,h.root)!.position,2);
+ let summaries=0;const stop=h.runtime.subscribe(id=>{if(id==='#')summaries++;});
+ await h.runtime.handle({op:'cancel_queued',protocol_version:6,thread_id:a,request_id:'a-follow'});stop();
+ // Thread B's summary moved from second to first; the shared stream must hear of it.
+ assert.equal(h.runtime.store.waiters.summary(b,h.root)!.position,1);assert.ok(summaries>0);
+ }finally{hold.release();}
+ await until(()=>h.runtime.active.size===0&&h.runtime.store.waiters.line(h.root).length===0);
+});
