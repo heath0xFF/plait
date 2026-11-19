@@ -1,3 +1,4 @@
+import { LinearWriteJournal } from './writes.ts';
 import type { DatabaseSync } from 'node:sqlite';
 import type { FileIdentity } from '../safety.ts';
 import {
@@ -34,6 +35,7 @@ const LINKS_PAGE_BYTE_BUDGET = 750_000;
 export class LinearCache {
   private readonly db: DatabaseSync;
   private touchSeq = 0;
+  readonly writes: LinearWriteJournal;
 
   constructor(db: DatabaseSync) {
     this.db = db;
@@ -127,6 +129,7 @@ export class LinearCache {
       )
     `).get();
     this.touchSeq = Number(maxSeq?.m ?? 0);
+    this.writes = new LinearWriteJournal(db);
   }
 
   private transaction<T>(work: () => T): T {
@@ -367,7 +370,7 @@ export class LinearCache {
     });
   }
 
-  /** Clears all cached Linear API responses and write deduplication records (and optionally project bindings). */
+  /** Clears cached responses and full write receipts, retaining permanent retry identities (and optionally project bindings). */
   clearAll(options: { clearProjects?: boolean } = {}): void {
     this.transaction(() => {
       if (options.clearProjects) {

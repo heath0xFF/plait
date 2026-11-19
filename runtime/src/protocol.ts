@@ -16,7 +16,7 @@ export const inputMessage = (input: InputRecord) => ({ id: `request-${input.requ
 
 export type ModelChoice = { provider: string; model_id: string };
 export type Status = 'idle' | 'running' | 'awaiting_approval' | 'stopped' | 'interrupted' | 'error';
-export type Failure = { code: string; message: string };
+export type Failure = { code: string; message: string; outcome?: 'not_sent' | 'rejected' | 'accepted' | 'unknown' };
 export type Approval = {
   id: string; tool_id: string; kind: 'edit' | 'command'; summary: string;
   details: string; dirty_paths: string[]; risk: string;
@@ -136,11 +136,12 @@ export const queuedView = (input: InputRecord): Queued => ({
 });
 export class HostError extends Error {
   code: string;
+  outcome?: Failure['outcome'];
   constructor(code: string, message: string) { super(message); this.code = code; }
 }
 export function fail(code: string, message: string): never { throw new HostError(code, message); }
 export function failure(error: unknown): Failure {
-  return error instanceof HostError ? { code: error.code, message: error.message }
+  return error instanceof HostError ? { code: error.code, message: error.message, ...(error.outcome ? { outcome: error.outcome } : {}) }
     : { code: 'internal', message: 'Host operation failed. No credentials or provider details are exposed.' };
 }
 const fields: Record<string, string[]> = {

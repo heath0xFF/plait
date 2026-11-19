@@ -377,3 +377,211 @@ test('linear_update_issue_state refreshes stale or missing team states before va
   assert.equal(movedNewTeam.ok, true, JSON.stringify(movedNewTeam));
   assert.equal(movedNewTeam.result.issue.state.id, 'state-new-open');
 });
+
+for (const op of ['linear_post_comment', 'linear_update_issue_state']) {
+  test(`${op}: accepted with lost reply remains unknown through every retry path`, async t => {
+    const h = await setup(t);
+    await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+    const request = { op, issue_id: 'issue-142', request_id: 'lost-reply',
+      ...(op === 'linear_post_comment' ? { body: 'Exactly once' } : { state_id: 'state-done' }) };
+    h.fake.dropNextMutationReply = true;
+    const first = await h.call(request);
+    assert.equal(first.error.code, 'linear_write_unknown');
+    assert.equal(first.error.outcome, 'unknown');
+    assert.equal((await h.call({ op: 'linear_get_write', request_id: request.request_id })).result.write.outcome, 'unknown');
+    assert.equal(h.runtime.store.linear.writes.get(request.request_id)?.payload, 'body' in request ? request.body : request.state_id);
+    const mutations = () => h.fake.requests.filter(r => r.query.startsWith('mutation')).length;
+    assert.equal(mutations(), 1);
+    // Another person changes the state after our uncertain move.
+    h.fake.issues[0].stateId = 'state-todo';
+    for (const action of [
+      async () => {},
+      () => h.restart(),
+      () => h.call({ op: 'linear_set_key', key: h.fake.readOnlyKey }),
+      async () => {
+        await h.call({ op: 'linear_sign_out' });
+        const history = await h.call({ op: 'linear_get_write', request_id: request.request_id });
+        assert.equal(history.result.write.outcome, 'unknown');
+        await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+      },
+      async () => { h.advance(365 * 24 * 60 * 60 * 1000); await h.restart(); },
+    ]) {
+      await action();
+      assert.equal((await h.call(request)).error.outcome, 'unknown');
+      assert.equal(mutations(), 1);
+      assert.equal(h.fake.issues[0].stateId, 'state-todo');
+    }
+    const changed = { ...request, ...('body' in request ? { body: 'Changed' } : { state_id: 'state-progress' }) };
+    assert.equal((await h.call(changed)).error.code, 'conflict');
+    h.fake.organization = { id: 'org-2', name: 'Other', urlKey: 'other' };
+    await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+    assert.equal((await h.call(request)).error.code, 'conflict');
+    assert.equal(mutations(), 1);
+  });
+}
+
+for (const crash of ['before-send', 'before-receipt', 'after-receipt']) {
+  test(`reopening the store after a crash ${crash} preserves the write boundary`, async t => {
+    const h = await setup(t);
+    await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+    const request = { op: 'linear_post_comment', issue_id: 'issue-142', request_id: 'crash', body: 'Crash window' };
+    const journal = h.runtime.store.linear.writes;
+    if (crash === 'before-send') {
+      journal.claim = () => { throw new Error('Simulated process death'); };
+    } else {
+      const finish = journal.finish.bind(journal);
+      journal.finish = (...args) => {
+        if (crash === 'after-receipt') finish(...args);
+        throw new Error('Simulated process death');
+      };
+    }
+    assert.equal((await h.call(request)).error.code, 'internal');
+    await h.restart();
+    const history = (await h.call({ op: 'linear_get_write', request_id: 'crash' })).result.write;
+    assert.equal(history.outcome, crash === 'before-send' ? 'not_sent' : crash === 'before-receipt' ? 'unknown' : 'accepted');
+    const retry = await h.call(request);
+    if (crash === 'before-receipt') assert.equal(retry.error.outcome, 'unknown');
+    else assert.equal(retry.result.outcome, 'accepted');
+    assert.equal(h.fake.requests.filter(r => r.query.includes('PlaitCommentCreate')).length, 1);
+    assert.equal(h.fake.issues[0].comments.length, 2);
+  });
+}
+
+test('accepted tombstones survive 501 newer writes, sign-out, key replacement and restart', async t => {
+  const h = await setup(t);
+  await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+  const request = { op: 'linear_post_comment', issue_id: 'issue-142', request_id: 'oldest', body: 'Retain this receipt' };
+  const first = await h.call(request);
+  for (let i = 0; i < 501; i++) {
+    assert.equal((await h.call({ ...request, request_id: `new-${i}` })).result.outcome, 'accepted');
+  }
+  assert.equal(h.runtime.store.linear.getWrite('oldest'), null);
+  assert.equal((await h.call(request)).result.comment_id, first.result.comment_id);
+  await h.call({ op: 'linear_set_key', key: h.fake.readOnlyKey });
+  assert.equal((await h.call(request)).result.comment_id, first.result.comment_id);
+  await h.call({ op: 'linear_sign_out' });
+  const saved = (await h.call({ op: 'linear_get_write', request_id: 'oldest' })).result.write;
+  assert.equal(saved.outcome, 'accepted');
+  assert.equal(saved.receipt.comment_id, first.result.comment_id);
+  assert.equal(saved.receipt.issue, null);
+  await h.restart();
+  await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+  assert.equal((await h.call(request)).result.comment_id, first.result.comment_id);
+  assert.equal((await h.call({ ...request, body: 'Changed' })).error.code, 'conflict');
+  assert.equal(h.fake.requests.filter(r => r.query.includes('PlaitCommentCreate')).length, 502);
+});
+
+test('rejected and not-sent writes can retry; unknown responses and ambiguous errors cannot', async t => {
+  const h = await setup(t);
+  await h.call({ op: 'linear_set_key', key: h.fake.readOnlyKey });
+  const request = { op: 'linear_post_comment', issue_id: 'issue-142', request_id: 'rejected', body: 'Later allowed' };
+  assert.equal((await h.call(request)).error.outcome, 'rejected');
+  await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+  assert.equal((await h.call(request)).result.outcome, 'accepted');
+  const move = { op: 'linear_update_issue_state', issue_id: 'issue-142', request_id: 'not-sent', state_id: 'new-state' };
+  assert.equal((await h.call(move)).error.outcome, 'not_sent');
+  h.fake.teams[0].states.push({ id: 'new-state', name: 'New', type: 'started', position: 6 });
+  assert.equal((await h.call(move)).result.outcome, 'accepted');
+  for (const [i, envelope] of [
+    {}, { data: { commentCreate: {} } },
+    { errors: [{ extensions: { code: 'INTERNAL_SERVER_ERROR' } }] },
+    { data: { commentCreate: null }, errors: [{ extensions: { code: 'FORBIDDEN' } }] },
+  ].entries()) {
+    h.fake.enqueueFault((_req, res) => { res.end(JSON.stringify(envelope)); return true; });
+    const uncertain = { ...request, request_id: `uncertain-${i}` };
+    assert.equal((await h.call(uncertain)).error.outcome, 'unknown');
+    const before = h.fake.requests.length;
+    assert.equal((await h.call(uncertain)).error.outcome, 'unknown');
+    assert.equal(h.fake.requests.length, before);
+  }
+});
+
+test('acceptance with failed selected fields or follow-up read is still accepted', async t => {
+  const h = await setup(t);
+  await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+  h.fake.enqueueFault((_req, res) => {
+    res.end(JSON.stringify({ data: { commentCreate: { success: true, comment: null } }, errors: [{ extensions: { code: 'FORBIDDEN' } }] }));
+    return true;
+  });
+  h.fake.enqueueFault((_req, res) => { res.writeHead(503); res.end(); return true; });
+  const reply = await h.call({ op: 'linear_post_comment', issue_id: 'issue-142', request_id: 'partial-accept', body: 'Accept' });
+  assert.equal(reply.result.outcome, 'accepted');
+  assert.equal(reply.result.issue, null);
+  assert.match(reply.result.comment_id, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
+  assert.equal((await h.call({ op: 'linear_get_write', request_id: 'partial-accept' })).result.write.outcome, 'accepted');
+});
+
+test('history cap fails closed and the read-only capability never makes a request', async t => {
+  const h = await setup(t);
+  const info = await h.call({ op: 'linear_info' });
+  assert.equal(info.result.features.durable_write_outcomes, true);
+  assert.equal(h.fake.requests.length, 0);
+  assert.deepEqual((await h.call({ op: 'linear_get_write', request_id: 'absent' })).result, { request_id: 'absent', write: null });
+  assert.equal((await h.call({ op: 'linear_get_write', request_id: 'bad id' })).error.code, 'invalid_request');
+  assert.equal((await h.call({ op: 'linear_info', protocol_version: 6 })).error.code, 'invalid_request');
+  await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+  h.runtime.store.db.exec(`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<10000)
+    INSERT INTO linear_write_intents(request_id,op,hash,outcome,created_at,updated_at)
+    SELECT 'filled-' || i,'linear_post_comment','hash','unknown',0,0 FROM n`);
+  const reply = await h.call({ op: 'linear_post_comment', issue_id: 'issue-142', request_id: 'over-cap', body: 'Full' });
+  assert.equal(reply.error.code, 'linear_write_history_full');
+  assert.equal(h.fake.requests.filter(r => r.query.startsWith('mutation')).length, 0);
+});
+
+test('today\'s write table migrates without replaying existing receipts', async t => {
+  const h = await setup(t);
+  await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+  const request = { op: 'linear_post_comment', issue_id: 'issue-142', request_id: 'legacy', body: 'Legacy' };
+  const first = await h.call(request);
+  h.runtime.store.db.exec('DROP TABLE linear_write_intents');
+  await h.restart();
+  const saved = (await h.call({ op: 'linear_get_write', request_id: 'legacy' })).result.write;
+  assert.equal(saved.outcome, 'accepted');
+  assert.equal(saved.workspace_id, null);
+  assert.equal((await h.call(request)).result.comment_id, first.result.comment_id);
+  assert.equal((await h.call({ ...request, body: 'Different' })).error.code, 'conflict');
+  assert.equal(h.fake.requests.filter(r => r.query.startsWith('mutation')).length, 1);
+});
+
+test('a crash after claiming but before sending remains unknown after reopen', async t => {
+  const h = await setup(t);
+  await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+  const journal = h.runtime.store.linear.writes;
+  const claim = journal.claim.bind(journal);
+  journal.claim = (...args) => { claim(...args); throw new Error('Simulated death before fetch'); };
+  const request = { op: 'linear_post_comment', issue_id: 'issue-142', request_id: 'claim-gap', body: 'Uncertain' };
+  await h.call(request);
+  await h.restart();
+  assert.equal((await h.call(request)).error.outcome, 'unknown');
+  assert.equal(h.fake.requests.filter(r => r.query.startsWith('mutation')).length, 0);
+});
+
+test('a key change in flight cannot cause another mutation or lose its eventual receipt', async t => {
+  const h = await setup(t);
+  await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+  let release!: () => void;
+  const started = new Promise<void>(resolve => {
+    h.fake.enqueueFault(async () => { resolve(); await new Promise<void>(done => { release = done; }); return false; });
+  });
+  const request = { op: 'linear_post_comment', issue_id: 'issue-142', request_id: 'key-race', body: 'Once' };
+  const pending = h.call(request);
+  await started;
+  await h.call({ op: 'linear_set_key', key: h.fake.readOnlyKey });
+  assert.equal((await h.call(request)).error.outcome, 'unknown');
+  assert.equal((await h.call({ ...request, body: 'Different' })).error.code, 'conflict');
+  release();
+  assert.equal((await pending).result.outcome, 'accepted');
+  await h.restart();
+  assert.equal((await h.call(request)).result.outcome, 'accepted');
+  assert.equal(h.fake.requests.filter(r => r.query.startsWith('mutation')).length, 1);
+});
+
+test('exact intent storage refuses credential-bearing write payloads', async t => {
+  const h = await setup(t);
+  await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+  const result = await h.call({ op: 'linear_post_comment', issue_id: 'issue-142', request_id: 'secret', body: h.fake.validKey });
+  assert.equal(result.error.code, 'invalid_request');
+  assert.equal(result.error.outcome, 'not_sent');
+  assert.equal(h.runtime.store.linear.writes.get('secret'), null);
+  assert(!JSON.stringify(result).includes(h.fake.validKey));
+});

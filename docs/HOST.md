@@ -1959,9 +1959,12 @@ local client asks over the owner-only host socket.
   sibling temporary file and synced rename. Symlinks are refused, and loosened
   permissions are restored to `0600` on read. The key is never written to
   `host.sqlite`. `linear_sign_out` deletes `linear-auth.json` and clears all
-  Linear caches, project bindings, and recent write records. Switching to a key
-  for another workspace likewise clears caches, project bindings, and recent
-  write records so data from a previous workspace is never served.
+  Linear caches, project bindings, and full write receipts; retry tombstones and
+  local thread links remain. Switching to a key
+  for another workspace likewise clears caches, project bindings, and full
+  receipts so data from a previous workspace is never served as live. Changing
+  a key in the same workspace clears caches and full receipts too, but retains
+  project bindings. Every key change retains retry tombstones.
 - **Host to desktop, never:** the API key, credential file paths, raw Linear
   HTTP bodies, or raw Linear response headers. Error messages are fixed host
   text; validation errors name the field and never repeat its value.
@@ -1977,6 +1980,8 @@ local client asks over the owner-only host socket.
 ### Operations
 
 ```json
+{"op":"linear_info"}
+{"op":"linear_get_write","request_id":"CLIENT_UUID"}
 {"op":"linear_auth_status"}
 {"op":"linear_set_key","key":"SECRET"}
 {"op":"linear_sign_out"}
@@ -1993,6 +1998,20 @@ local client asks over the owner-only host socket.
 {"op":"linear_update_issue_state","issue_id":"ISSUE_ID","state_id":"STATE_ID","request_id":"CLIENT_UUID"}
 ```
 
+- **`linear_info`** is local and read-only. Returns
+  `{"schema":1,"features":{"durable_write_outcomes":true},"write_history_limit":10000,"write_history_retention":"store_lifetime"}`.
+  Clients gate write UI on `features.durable_write_outcomes`, not a release
+  number. Older hosts reject this operation with `invalid_request`.
+- **`linear_get_write`** is local and read-only, including while signed out.
+  Takes `request_id` and returns `{"request_id":"CLIENT_UUID","write":null}`
+  if no retained record exists, otherwise `write` contains `request_id`, `op`,
+  `workspace_id`, `issue_id`, `outcome`, `receipt`, `created_at`, and `updated_at`
+  (host milliseconds). Outcomes are `not_sent`, `rejected`, `accepted`, or
+  `unknown`. `receipt` is null except for accepted writes; it has the normal
+  accepted reply fields with `issue:null` (historical, never live state).
+  No body, state payload, hash, or credential is returned. Records migrated
+  from an older host have null workspace/issue IDs. Absence is not proof that
+  an older host never wrote: previously evicted receipts cannot be recovered.
 - **`linear_auth_status`, `linear_set_key`, `linear_sign_out`** return:
   ```json
   {"signed_in":true,"status":"signed_in","workspace_id":"ORG_ID","workspace_name":"Acme","workspace_url_key":"acme","viewer_id":"USER_ID","viewer_name":"Alex"}
@@ -2047,30 +2066,75 @@ local client asks over the owner-only host socket.
 - **`linear_post_comment`** posts one comment on `issue_id` with `body` (at
   most 16 KiB UTF-8, nonempty) and caller-chosen `request_id`
   (`^[A-Za-z0-9_-]{1,128}$`). Invalidates cached entries for the issue and
-  returns `{"comment_id":"COMMENT_ID","issue":DETAIL|null,"partial":false,"warning":null}`.
-  Repeating `request_id` with identical input returns the saved result without
-  posting again (retrying only the refresh read if the initial refresh failed);
-  reusing `request_id` with different input returns `conflict`.
+  returns `{"comment_id":"COMMENT_ID","issue":DETAIL|null,"partial":false,"warning":null,"outcome":"accepted"}`.
+  Accepted retries return the saved receipt, optionally refreshing only the
+  issue read when the full receipt was evicted or its refresh failed.
+  Reusing `request_id` with a different operation, issue, exact body/state, or
+  workspace returns `conflict`. Legacy records with unknown workspace identity
+  return only their historical receipt and never trigger a mutation or read.
 - **`linear_update_issue_state`** moves `issue_id` to `state_id` with
   caller-chosen `request_id`. Before sending the mutation, the host verifies
   against team workflow states that `state_id` belongs to the issue's team
   (refreshing teams if the cache is missing, expired, or lacks the state, and
   rejecting mismatches with `invalid_request`). Invalidates cached entries for
   the issue and its team, deduplicates by `request_id` as above, and returns
-  `{"issue":DETAIL|null,"partial":false,"warning":null}`.
+  `{"issue":DETAIL|null,"partial":false,"warning":null,"outcome":"accepted"}`.
+
+### Durable write outcomes
+
+The host saves operation, issue, workspace, exact body/state, and request ID
+before attempting a mutation. It commits `unknown` immediately before sending;
+a crash even between that commit and sending remains uncertain. An explicit
+acceptance is saved before the optional refresh read, even if sign-out or a key
+change happened in flight. A failed refresh still reports accepted, with a null
+issue and fixed warning. Nothing retries writes on startup, reconnect, or timers.
+
+- `not_sent`: intent saved but the mutation has not been attempted.
+- `rejected`: an explicit refusal (HTTP 401/403/429, a classified GraphQL
+  rejection without data, or mutation `success:false`).
+- `accepted`: Linear reported success; return the saved receipt.
+- `unknown`: a sent mutation may have landed (lost reply, timeout, ambiguous
+  response, or crash before receipt persistence). Retrying returns
+  `linear_write_unknown` with `outcome:"unknown"` and **never sends again**.
+  Inspect the result in Linear; matching comment text or absence from one
+  comments page cannot settle it. This also prevents a retried state move from
+  overwriting another person's later change.
+
+Only explicit requests for `not_sent` or `rejected` records may send again.
+Write errors retain `code` and `message`, adding `outcome` once the request has
+passed validation. A conflict describes the existing request's outcome.
+Malformed requests have no recorded outcome. Full receipts remain capped at
+500, but compact accepted/rejected tombstones and uncertain intents are retained
+for the lifetime of the store across eviction, key changes, and sign-out. Exact
+payloads are released on acceptance/rejection; operation, payload digest, issue,
+workspace, request ID, and compact receipt remain. At 10,000 identities, new
+writes fail with `linear_write_history_full` and `outcome:"not_sent"`; existing
+IDs remain readable/retryable under the same rules. No time-based pruning occurs.
+
+Comments send a deterministic UUID-shaped ID derived from workspace and request
+ID (SHA-256 domain separation, UUID v4 version/variant bits) through
+`CommentCreateInput.id`. Linear's [published schema](https://github.com/linear/linear/blob/2ca00918e3ae699a0aa1a6b07330b433397cd201/packages/sdk/src/schema.graphql)
+documents this input; duplicate-ID refusal is defense in depth, unverified
+against Linear. Its `issueUpdate(id,input)` / `IssueUpdateInput` has no
+expected-state or revision condition. State updates therefore rely on the local
+non-replay rule, not remote compare-and-swap. No live API behavior is claimed.
 
 ### Caching, limits, and errors
 
 - **SQLite tables (`host.sqlite`, additive):** `linear_projects`,
   `linear_cache_meta`, `linear_cache_teams`, `linear_cache_issues`,
   `linear_cache_pages`, `linear_cache_details`, `linear_thread_links`, and
-  `linear_writes`. Existing stores gain these tables idempotently on open.
+  `linear_writes`, plus `linear_write_intents`. Existing stores gain these
+  tables idempotently on open; existing full receipts migrate to accepted
+  tombstones without inventing a workspace or issue ID.
 - **TTLs and bounds:**
   - Teams and workflow states: 15-minute TTL (50 teams, 50 states/team).
   - Issue list summaries: 3-minute page TTL; `linear_cache_issues` holds at
     most 500 rows per team; `linear_cache_pages` holds at most 100 pages (LRU).
   - Issue details (first comments page): 2-minute TTL, LRU cap of 200 issues.
-  - Recent write deduplication records: latest 500 writes.
+  - Full write receipts: latest 500 writes; permanent retry identities: 10,000
+    (new writes refused at capacity). Uncertain bodies remain bounded to 16 KiB
+    per intent; terminal tombstones omit the body.
   - All Linear requests are bounded to 65,000 bytes.
 - **Offline fallback and async guards:** When Linear cannot be reached (network
   error, timeout, HTTP 5xx, refused redirect, or oversized response), read
@@ -2084,9 +2148,12 @@ local client asks over the owner-only host socket.
   or GraphQL `RATELIMITED`, reporting the wait seconds derived from
   `Retry-After`, `X-RateLimit-Complexity-Reset`, and
   `X-RateLimit-Requests-Reset`), `linear_offline`, `invalid_request`,
-  `not_found`, `conflict`, and `internal`. HTTP 200 responses carrying GraphQL `errors`
+  `not_found`, `conflict`, `linear_write_unknown`, `linear_write_history_full`,
+  and `internal`. HTTP 200 responses carrying GraphQL `errors`
   beside usable `data` succeed with `"partial":true` and a fixed `warning`, and
-  are not cached as complete responses.
+  are not cached as complete responses. A mutation `success:true` is accepted
+  even when errors affect its selected fields; an ambiguous write response
+  remains unknown.
 
 ### Not built in this stage
 

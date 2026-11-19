@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto';
-import { fail } from '../protocol.ts';
+import { fail, HostError } from '../protocol.ts';
 import { checkout, rootIdentity } from '../safety.ts';
 import type { Store } from '../store.ts';
 import { LinearAuthStore, formatAuthStatus, validateLinearKey } from './auth.ts';
 import type { StoredLinearAuth } from './auth.ts';
 import { LinearClient } from './client.ts';
+import { LINEAR_WRITE_HISTORY_LIMIT } from './writes.ts';
+import type { WriteIntent, WriteReceipt } from './writes.ts';
 import type { LinearClientOptions } from './client.ts';
 import {
   LINEAR_LINKS_DEFAULT_LIMIT,
@@ -64,7 +66,7 @@ export class LinearService {
   private setKeySequence = 0;
   private authMutation: Promise<void> = Promise.resolve();
   private readonly querySequence = new Map<string, number>();
-  private readonly inFlightWrites = new Map<string, { op: string; hash: string; authGen: number; promise: Promise<unknown> }>();
+  private readonly inFlightWrites = new Map<string, { authGen: number; promise: Promise<unknown> }>();
 
   constructor(store: Store, storeDirectory: string, options: LinearServiceOptions = {}) {
     this.store = store;
@@ -80,6 +82,8 @@ export class LinearService {
   async handle(input: unknown): Promise<unknown> {
     const request = validateLinearRequest(input);
     switch (request.op) {
+      case 'linear_info': return { schema: 1, features: { durable_write_outcomes: true }, write_history_limit: LINEAR_WRITE_HISTORY_LIMIT, write_history_retention: 'store_lifetime' };
+      case 'linear_get_write': return this.getWriteOutcome(String(request.request_id));
       case 'linear_auth_status': return this.authStatus();
       case 'linear_set_key': return this.setKey(validateLinearKey(request.key));
       case 'linear_sign_out': return this.signOut();
@@ -116,16 +120,16 @@ export class LinearService {
         typeof request.limit === 'number' ? request.limit : LINEAR_LINKS_DEFAULT_LIMIT,
         typeof request.cursor === 'string' ? request.cursor : undefined,
       );
-      case 'linear_post_comment': return this.postComment({
+      case 'linear_post_comment': return this.withWriteOutcome(String(request.request_id), () => this.postComment({
         issueId: String(request.issue_id),
         body: String(request.body),
         requestId: String(request.request_id),
-      });
-      case 'linear_update_issue_state': return this.updateIssueState({
+      }));
+      case 'linear_update_issue_state': return this.withWriteOutcome(String(request.request_id), () => this.updateIssueState({
         issueId: String(request.issue_id),
         stateId: String(request.state_id),
         requestId: String(request.request_id),
-      });
+      }));
       default: fail('invalid_request', 'Unknown operation or field.');
     }
   }
@@ -180,7 +184,9 @@ export class LinearService {
   }
 
   private async requireAuth(): Promise<{ auth: StoredLinearAuth; authGen: number; cacheGen: number }> {
+    const authGen = this.authGeneration;
     const auth = await this.authStore.read();
+    if (this.authGeneration !== authGen) throw new LinearError('not_signed_in', 'Linear sign-in changed while the request was in flight.');
     if (!auth) throw new LinearError('not_signed_in', 'Linear is not signed in. Set an API key in Settings.');
     return { auth, authGen: this.authGeneration, cacheGen: this.cacheGeneration };
   }
@@ -499,99 +505,132 @@ export class LinearService {
     return this.store.linear.listThreadLinks(limit, cursor ? parseLinkCursor(cursor) : undefined);
   }
 
-  /**
-   * Posts one comment on a Linear issue on an explicit person action.
-   * Deduplicates by request_id so a retry after a lost reply never double-posts.
-   */
-  async postComment(params: {
-    issueId: string;
-    body: string;
-    requestId: string;
-  }): Promise<{ comment_id: string; issue: LinearIssueDetail | null; partial: boolean; warning: string | null }> {
-    const op = 'linear_post_comment';
-    const hash = writeDigest([params.issueId, params.body]);
-    return this.deduplicatedWrite(params.requestId, op, hash, async () => {
-      const { auth, authGen } = await this.requireAuth();
-      let commentId: string;
-      try {
-        ({ comment_id: commentId } = await this.client.createComment(auth.api_key, params.issueId, params.body));
-      } catch (error) {
-        this.noteError(error, authGen);
+  private async withWriteOutcome(requestId: string, work: () => Promise<WriteReceipt>): Promise<WriteReceipt> {
+    try {
+      return await work();
+    } catch (error) {
+      if (error instanceof HostError && !error.outcome) {
+        error.outcome = this.store.linear.writes.get(requestId)?.outcome ?? 'not_sent';
       }
-      // Record acceptance before refresh so a retry after a failed refresh never posts twice.
-      const provisional = { comment_id: commentId, issue: null as LinearIssueDetail | null, partial: false, warning: null as string | null };
-      if (this.authGeneration === authGen) {
-        this.cacheGeneration++;
-        this.store.linear.invalidateIssue(params.issueId);
-        this.store.linear.saveWrite(params.requestId, op, hash, provisional, this.now());
-      }
-      const refreshed = await this.refreshAfterWrite(params.issueId, authGen);
-      const reply = { comment_id: commentId, ...refreshed };
-      if (this.authGeneration === authGen) {
-        this.store.linear.saveWrite(params.requestId, op, hash, reply, this.now());
-      }
-      return reply;
-    }, async existing => {
-      const prior = existing as { comment_id: string; issue: LinearIssueDetail | null; partial: boolean; warning: string | null };
-      if (prior.issue !== null) return prior;
-      // The comment already succeeded earlier; retry only the read refresh.
-      const { authGen } = await this.requireAuth();
-      const refreshed = await this.refreshAfterWrite(params.issueId, authGen);
-      const reply = { comment_id: prior.comment_id, ...refreshed };
-      if (this.authGeneration === authGen && reply.issue !== null) {
-        this.store.linear.saveWrite(params.requestId, op, hash, reply, this.now());
-      }
-      return reply;
-    });
+      throw error;
+    }
   }
 
-  /**
-   * Moves an issue to another workflow state on an explicit person action.
-   * Verifies against the cached team states that the target state belongs to the issue's team before sending.
-   */
-  async updateIssueState(params: {
-    issueId: string;
-    stateId: string;
-    requestId: string;
-  }): Promise<{ issue: LinearIssueDetail | null; partial: boolean; warning: string | null }> {
-    const op = 'linear_update_issue_state';
-    const hash = writeDigest([params.issueId, params.stateId]);
-    return this.deduplicatedWrite(params.requestId, op, hash, async () => {
-      const { auth, authGen } = await this.requireAuth();
-      const teamId = await this.resolveIssueTeamId(params.issueId, auth.api_key, authGen);
-      const team = await this.resolveTeamForValidation(teamId, params.stateId, authGen);
-      if (!team || !team.states.some(state => state.id === params.stateId)) {
-        fail('invalid_request', 'Workflow state does not belong to this issue\'s team.');
-      }
+  getWriteOutcome(requestId: string) {
+    const saved = this.store.linear.writes.get(requestId);
+    if (!saved) return { request_id: requestId, write: null };
+    const { hash: _hash, payload: _payload, ...write } = saved;
+    // This is local history, including while signed out, never a live issue read.
+    return { request_id: requestId, write };
+  }
+
+  async postComment(params: { issueId: string; body: string; requestId: string }): Promise<WriteReceipt> {
+    return this.write(params.requestId, 'linear_post_comment', params.issueId, params.body,
+      async () => {},
+      async auth => this.client.createComment(auth.api_key, params.issueId, params.body,
+        commentUuid(auth.workspace_id, params.requestId)));
+  }
+
+  async updateIssueState(params: { issueId: string; stateId: string; requestId: string }): Promise<WriteReceipt> {
+    return this.write(params.requestId, 'linear_update_issue_state', params.issueId, params.stateId,
+      async (auth, authGen) => {
+        const teamId = await this.resolveIssueTeamId(params.issueId, auth.api_key, authGen);
+        const team = await this.resolveTeamForValidation(teamId, params.stateId, authGen);
+        if (!team || !team.states.some(state => state.id === params.stateId)) {
+          fail('invalid_request', 'Workflow state does not belong to this issue\'s team.');
+        }
+      },
+      async auth => {
+        await this.client.updateIssueState(auth.api_key, params.issueId, params.stateId);
+        return {};
+      });
+  }
+
+  private async write(
+    requestId: string, op: string, issueId: string, payload: string,
+    validate: (auth: StoredLinearAuth, authGen: number) => Promise<void>,
+    send: (auth: StoredLinearAuth) => Promise<{ comment_id?: string }>,
+  ): Promise<WriteReceipt> {
+    const { auth, authGen } = await this.requireAuth();
+    // Never persist a pasted credential as an exact mutation payload or identifier.
+    if ([requestId, issueId, payload].some(value => value.includes(auth.api_key) || value.includes(encodeURIComponent(auth.api_key)))) {
+      fail('invalid_request', 'Linear write input must not contain the API key.');
+    }
+    const hash = writeDigest([issueId, payload]);
+    const intent = this.store.linear.writes.begin({
+      request_id: requestId, op, hash, workspace_id: auth.workspace_id,
+      issue_id: issueId, payload, created_at: this.now(),
+    });
+    const inflight = this.inFlightWrites.get(requestId);
+    if (inflight?.authGen === authGen) return inflight.promise as Promise<WriteReceipt>;
+    if (intent.outcome === 'accepted') return this.acceptedReceipt(intent, authGen);
+    if (intent.outcome === 'unknown') this.unknownWrite();
+    const promise = this.executeWrite(intent, payload, auth, authGen, validate, send);
+    this.inFlightWrites.set(requestId, { authGen, promise });
+    try {
+      return await promise;
+    } finally {
+      if (this.inFlightWrites.get(requestId)?.promise === promise) this.inFlightWrites.delete(requestId);
+    }
+  }
+
+  private unknownWrite(): never {
+    const error = new HostError('linear_write_unknown', 'Linear write is unconfirmed. Check its result in Linear; this request will not be sent again.');
+    error.outcome = 'unknown';
+    throw error;
+  }
+
+  private async executeWrite(
+    intent: WriteIntent, payload: string, auth: StoredLinearAuth, authGen: number,
+    validate: (auth: StoredLinearAuth, authGen: number) => Promise<void>,
+    send: (auth: StoredLinearAuth) => Promise<{ comment_id?: string }>,
+  ): Promise<WriteReceipt> {
+    try {
+      await validate(auth, authGen);
       if (this.authGeneration !== authGen) {
         throw new LinearError('not_signed_in', 'Linear sign-in changed while the request was in flight.');
       }
-      try {
-        await this.client.updateIssueState(auth.api_key, params.issueId, params.stateId);
-      } catch (error) {
+    } catch (error) {
+      if (error instanceof HostError) error.outcome = intent.outcome;
+      this.noteError(error, authGen);
+    }
+    if (!this.store.linear.writes.claim(intent.request_id, payload, this.now())) this.unknownWrite();
+    let result: { comment_id?: string };
+    try {
+      result = await send(auth);
+    } catch (error) {
+      if (error instanceof LinearError && error.definitelyRejected) {
+        this.store.linear.writes.finish(intent.request_id, 'rejected', null, this.now());
+        error.outcome = 'rejected';
         this.noteError(error, authGen);
       }
-      const provisional = { issue: null as LinearIssueDetail | null, partial: false, warning: null as string | null };
-      if (this.authGeneration === authGen) {
-        this.cacheGeneration++;
-        this.store.linear.invalidateIssue(params.issueId, teamId);
-        this.store.linear.saveWrite(params.requestId, op, hash, provisional, this.now());
-      }
-      const reply = await this.refreshAfterWrite(params.issueId, authGen);
-      if (this.authGeneration === authGen) {
-        this.store.linear.saveWrite(params.requestId, op, hash, reply, this.now());
-      }
-      return reply;
-    }, async existing => {
-      const prior = existing as { issue: LinearIssueDetail | null; partial: boolean; warning: string | null };
-      if (prior.issue !== null) return prior;
-      const { authGen } = await this.requireAuth();
-      const reply = await this.refreshAfterWrite(params.issueId, authGen);
-      if (this.authGeneration === authGen && reply.issue !== null) {
-        this.store.linear.saveWrite(params.requestId, op, hash, reply, this.now());
-      }
-      return reply;
-    });
+      this.unknownWrite();
+    }
+    const receipt: WriteReceipt = { ...result, issue: null, partial: false, warning: null, outcome: 'accepted' };
+    // Receipt durability is independent of the credential epoch and of follow-up reads.
+    this.store.linear.writes.finish(intent.request_id, 'accepted', receipt, this.now());
+    if (this.authGeneration === authGen) {
+      this.cacheGeneration++;
+      this.store.linear.invalidateIssue(intent.issue_id!);
+    }
+    const reply: WriteReceipt = { ...receipt, ...await this.refreshAfterWrite(intent.issue_id!, authGen) };
+    if (this.authGeneration === authGen) {
+      this.store.linear.saveWrite(intent.request_id, intent.op, intent.hash, reply, this.now());
+    }
+    return reply;
+  }
+
+  private async acceptedReceipt(intent: WriteIntent, authGen: number): Promise<WriteReceipt> {
+    const full = this.store.linear.getWrite(intent.request_id)?.result as WriteReceipt | undefined;
+    const receipt = { ...(full ?? intent.receipt!), outcome: 'accepted' as const };
+    // Migrated receipts have no workspace identity; only their compact historical receipt is safe.
+    if (!intent.workspace_id || !intent.issue_id) return intent.receipt!;
+    if (receipt.issue) return receipt;
+    const reply = { ...receipt, ...await this.refreshAfterWrite(intent.issue_id, authGen) };
+    if (this.authGeneration === authGen) {
+      this.store.linear.saveWrite(intent.request_id, intent.op, intent.hash, reply, this.now());
+    }
+    return reply;
   }
 
   private async resolveIssueTeamId(issueId: string, apiKey: string, authGen: number): Promise<string> {
@@ -640,40 +679,17 @@ export class LinearService {
     }
   }
 
-  private async deduplicatedWrite<T>(
-    requestId: string,
-    op: string,
-    hash: string,
-    execute: () => Promise<T>,
-    onExisting: (result: unknown) => Promise<T>,
-  ): Promise<T> {
-    const { authGen } = await this.requireAuth();
-    const saved = this.store.linear.getWrite(requestId);
-    if (saved) {
-      if (saved.op !== op || saved.hash !== hash) {
-        fail('conflict', 'Request ID was already used for a different Linear write.');
-      }
-      return onExisting(saved.result);
-    }
-    const inflight = this.inFlightWrites.get(requestId);
-    if (inflight && inflight.authGen === authGen) {
-      if (inflight.op !== op || inflight.hash !== hash) {
-        fail('conflict', 'Request ID is already in flight for a different Linear write.');
-      }
-      return inflight.promise as Promise<T>;
-    }
-    const promise = execute();
-    this.inFlightWrites.set(requestId, { op, hash, authGen, promise });
-    try {
-      return await promise;
-    } finally {
-      if (this.inFlightWrites.get(requestId)?.promise === promise) {
-        this.inFlightWrites.delete(requestId);
-      }
-    }
-  }
 }
 
 function writeDigest(parts: unknown[]): string {
   return createHash('sha256').update(JSON.stringify(parts)).digest('hex');
+}
+
+/** Linear documents UUID v4 syntax; fix its version/variant bits on a domain-separated digest. */
+function commentUuid(workspaceId: string, requestId: string): string {
+  const bytes = createHash('sha256').update(JSON.stringify(['plait-linear-comment', workspaceId, requestId])).digest().subarray(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }

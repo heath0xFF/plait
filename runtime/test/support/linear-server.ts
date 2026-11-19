@@ -51,6 +51,7 @@ export class FakeLinearServer {
   requests: RecordedRequest[] = [];
   redirectTargetHits = 0;
   attachmentHits = 0;
+  dropNextMutationReply = false;
   private faults: FaultHandler[] = [];
   private commentSeq = 1;
 
@@ -299,8 +300,14 @@ export class FakeLinearServer {
         res.end(JSON.stringify({ data: { commentCreate: { success: false, comment: null } }, errors: [{ message: 'Entity not found', extensions: { code: 'INPUT_ERROR' } }] }));
         return;
       }
+      const commentId = typeof parsed.variables.commentId === 'string' ? parsed.variables.commentId : `cmt-new-${this.commentSeq++}`;
+      if (this.issues.some(item => item.comments.some(comment => comment.id === commentId))) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ data: { commentCreate: { success: false, comment: null } } }));
+        return;
+      }
       const comment: FakeComment = {
-        id: `cmt-new-${this.commentSeq++}`,
+        id: commentId,
         body: String(parsed.variables.body),
         createdAt: '2026-11-18T13:00:00.000Z',
         updatedAt: '2026-11-18T13:00:00.000Z',
@@ -308,6 +315,7 @@ export class FakeLinearServer {
       };
       issue.comments.push(comment);
       issue.updatedAt = comment.updatedAt;
+      if (this.dropMutationReply(res)) return;
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ data: { commentCreate: { success: true, comment: { id: comment.id } } } }));
       return;
@@ -324,6 +332,7 @@ export class FakeLinearServer {
       }
       issue.stateId = stateId;
       issue.updatedAt = '2026-11-18T14:00:00.000Z';
+      if (this.dropMutationReply(res)) return;
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ data: { issueUpdate: { success: true, issue: { id: issue.id } } } }));
       return;
@@ -331,6 +340,13 @@ export class FakeLinearServer {
 
     res.writeHead(400, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ errors: [{ message: 'Unknown query' }] }));
+  }
+
+  private dropMutationReply(res: ServerResponse): boolean {
+    if (!this.dropNextMutationReply) return false;
+    this.dropNextMutationReply = false;
+    res.destroy();
+    return true;
   }
 
   private issueSummaryNode(issue: FakeIssue) {

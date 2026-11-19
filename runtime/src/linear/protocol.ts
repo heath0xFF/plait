@@ -6,6 +6,8 @@ import type { LinearFilterPreset } from './types.ts';
 type OperationSpec = { required: readonly string[]; optional: readonly string[] };
 
 const OPERATIONS: Record<string, OperationSpec> = {
+  linear_info: { required: [], optional: [] },
+  linear_get_write: { required: ['request_id'], optional: [] },
   linear_auth_status: { required: [], optional: [] },
   linear_set_key: { required: ['key'], optional: [] },
   linear_sign_out: { required: [], optional: [] },
@@ -103,6 +105,10 @@ export function validateLinearRequest(input: unknown): LinearRequest {
   }
 
   switch (request.op) {
+    case 'linear_get_write':
+      checkId(request.request_id, 'request_id');
+      return request;
+    case 'linear_info':
     case 'linear_auth_status':
     case 'linear_sign_out':
       return request;

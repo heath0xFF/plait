@@ -63,6 +63,7 @@ const ERROR_CODES: Record<LinearErrorKind, string> = {
 /** Fixed, safe host error for Linear operations. Never includes raw response text, headers, or keys. */
 export class LinearError extends HostError {
   readonly kind: LinearErrorKind;
+  definitelyRejected = false;
   readonly retryAfterSeconds?: number;
 
   constructor(kind: LinearErrorKind, message: string, retryAfterSeconds?: number) {

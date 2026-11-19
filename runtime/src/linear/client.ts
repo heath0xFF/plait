@@ -100,8 +100,8 @@ const ISSUE_DETAIL_QUERY = `query PlaitIssueDetail($id: String!, $commentsAfter:
   }
 }`;
 
-const COMMENT_CREATE_MUTATION = `mutation PlaitCommentCreate($issueId: String!, $body: String!) {
-  commentCreate(input: { issueId: $issueId, body: $body }) {
+const COMMENT_CREATE_MUTATION = `mutation PlaitCommentCreate($issueId: String!, $body: String!, $commentId: String) {
+  commentCreate(input: { id: $commentId, issueId: $issueId, body: $body }) {
     success
     comment { id }
   }
@@ -522,17 +522,19 @@ export class LinearClient {
   }
 
   /** Posts one comment on an issue. Only called on an explicit person action. */
-  async createComment(apiKey: string, issueId: string, body: string, signal?: AbortSignal): Promise<{ comment_id: string }> {
+  async createComment(apiKey: string, issueId: string, body: string, commentId?: string, signal?: AbortSignal): Promise<{ comment_id: string }> {
     const sanitize = makeSanitizer(apiKey);
-    const response = await this.graphql(apiKey, COMMENT_CREATE_MUTATION, { issueId, body }, 'write', signal);
+    const response = await this.graphql(apiKey, COMMENT_CREATE_MUTATION, { issueId, body, commentId: commentId ?? null }, 'write', signal);
     const payload = asObject(response.data?.commentCreate);
     const comment = asObject(payload?.comment);
-    const commentId = sanitize.text(comment?.id, FIELD_LIMITS.id);
-    if (payload?.success !== true || !commentId) {
-      throw this.fallbackError(response.errors, 'write', response.headers)
-        ?? new LinearError('invalid_request', 'Linear did not accept the comment.');
+    const returnedId = sanitize.text(comment?.id, FIELD_LIMITS.id) || commentId;
+    if (payload?.success === true && returnedId) return { comment_id: returnedId };
+    if (payload?.success === false) {
+      throw rejected(this.fallbackError(response.errors, 'write', response.headers)
+        ?? new LinearError('invalid_request', 'Linear did not accept the comment.'));
     }
-    return { comment_id: commentId };
+    throw this.fallbackError(response.errors, 'write', response.headers)
+      ?? new LinearError('offline', 'Linear returned an unreadable write result.');
   }
 
   /** Moves an issue to another workflow state. Only called on an explicit person action. */
@@ -542,11 +544,13 @@ export class LinearClient {
     const payload = asObject(response.data?.issueUpdate);
     const issue = asObject(payload?.issue);
     const updatedId = sanitize.text(issue?.id, FIELD_LIMITS.id);
-    if (payload?.success !== true || !updatedId) {
-      throw this.fallbackError(response.errors, 'write', response.headers)
-        ?? new LinearError('invalid_request', 'Linear did not accept the state change.');
+    if (payload?.success === true) return { issue_id: updatedId || issueId };
+    if (payload?.success === false) {
+      throw rejected(this.fallbackError(response.errors, 'write', response.headers)
+        ?? new LinearError('invalid_request', 'Linear did not accept the state change.'));
     }
-    return { issue_id: updatedId };
+    throw this.fallbackError(response.errors, 'write', response.headers)
+      ?? new LinearError('offline', 'Linear returned an unreadable write result.');
   }
 
   private fallbackError(errors: GraphQlError[], mode: AccessMode, headers: Headers): LinearError | null {
@@ -589,17 +593,17 @@ export class LinearClient {
     if (response.status === 429) {
       await response.body?.cancel().catch(() => {});
       const seconds = parseRetryAfterSeconds(response.headers, this.now());
-      throw new LinearError('rate_limited', `Linear rate limit reached. Retry in ${seconds} seconds.`, seconds);
+      throw rejected(new LinearError('rate_limited', `Linear rate limit reached. Retry in ${seconds} seconds.`, seconds));
     }
     if (response.status === 401) {
       await response.body?.cancel().catch(() => {});
-      throw new LinearError('key_rejected', 'Linear rejected the API key. Check or replace it in Settings.');
+      throw rejected(new LinearError('key_rejected', 'Linear rejected the API key. Check or replace it in Settings.'));
     }
     if (response.status === 403) {
       await response.body?.cancel().catch(() => {});
-      throw mode === 'write'
+      throw rejected(mode === 'write'
         ? new LinearError('read_only_key', 'This Linear API key does not allow writes. Use a key with write access.')
-        : new LinearError('key_rejected', 'Linear rejected the API key. Check or replace it in Settings.');
+        : new LinearError('key_rejected', 'Linear rejected the API key. Check or replace it in Settings.'));
     }
     if (response.status >= 500 || (response.status !== 200 && response.status !== 400)) {
       await response.body?.cancel().catch(() => {});
@@ -618,11 +622,14 @@ export class LinearClient {
     const errors = asArray(envelope.errors).filter((item): item is GraphQlError => asObject(item) !== null);
     const data = asObject(envelope.data);
 
-    // Auth and rate-limit errors always take priority even on HTTP 200 with non-null data.
+    // A mutation payload may prove acceptance despite errors in its selected fields.
     if (errors.length > 0) {
       const classified = classifyGraphQlErrors(errors, mode, response.headers, this.now());
-      if (classified && classified.kind !== 'invalid_request') throw classified;
-      if (!data) throw classified ?? new LinearError('invalid_request', 'Linear rejected the request.');
+      if (mode === 'read' && classified && classified.kind !== 'invalid_request') throw classified;
+      if (!data) {
+        if (classified) throw rejected(classified);
+        throw new LinearError('invalid_request', 'Linear rejected the request.');
+      }
     }
     if (response.status === 400) {
       throw classifyGraphQlErrors(errors, mode, response.headers, this.now())
@@ -658,4 +665,9 @@ export class LinearClient {
     }
     return Buffer.concat(chunks).toString('utf8');
   }
+}
+
+function rejected(error: LinearError): LinearError {
+  error.definitelyRejected = true;
+  return error;
 }

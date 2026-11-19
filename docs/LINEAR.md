@@ -7,7 +7,7 @@
   `linear-auth.json` (mode `0600`), a hardened GraphQL client locked to
   `https://api.linear.app/graphql`, additive host operations for auth, teams,
   project binding, bounded paged issue reads and SQLite caching with offline
-  fallback, local thread-to-issue links, and two deduplicated person-initiated
+  fallback, local thread-to-issue links, and two durably recorded person-initiated
   writes (post comment and change workflow state). Nothing is visible in the
   desktop app yet.
 - **Planned next.** After thread tabs, a small desktop step adds Settings
@@ -21,6 +21,30 @@
   local loopback fake server. An opt-in manual probe (`scripts/probe-linear.mjs`)
   is provided to test the GraphQL client against a real Linear key without
   running the full desktop.
+
+## Write retry contract
+
+The host now records intent before sending either write and exposes
+`linear_info` and `linear_get_write` for capability discovery and local outcome
+lookup. Outcomes distinguish not sent, rejected, accepted, and unknown. An
+unknown write is never replayed; the person must inspect Linear. Accepted
+receipts survive full-result eviction and credential changes in permanent,
+bounded retry history. New writes stop at 10,000 identities instead of silently
+forgetting old requests. Existing saved receipts migrate on store open; already
+forgotten effects from older hosts cannot be reconstructed.
+
+Linear's [public SDK schema](https://github.com/linear/linear/blob/2ca00918e3ae699a0aa1a6b07330b433397cd201/packages/sdk/src/schema.graphql)
+describes `CommentCreateInput.id`: “The identifier in UUID v4 format. If none
+is provided, the backend will generate one.” The host supplies a deterministic
+UUID-shaped ID derived from workspace and request ID. This is additional
+protection, not a reason to replay an unknown write. That schema's
+`issueUpdate(id,input)` and `IssueUpdateInput` expose no conditional state or
+revision guard. A state move with an uncertain result is never repeated.
+
+Tests simulate dropped replies, crash windows by reopening stores, concurrent
+requests, receipt eviction, and credential changes against the loopback fake
+server. Nothing here has been tried against Linear itself, including duplicate
+comment-ID refusal or mutation response/error semantics.
 
 ## Using Linear's MCP server from an agent
 
