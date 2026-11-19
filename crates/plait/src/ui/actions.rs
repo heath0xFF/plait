@@ -213,6 +213,8 @@ pub(super) fn keystroke<'a>(action: &'a AppAction, overrides: &'a KeyOverrides) 
 pub(super) fn bind(cx: &mut App, overrides: &KeyOverrides) {
     let bindings = ACTIONS
         .iter()
+        .zip(winning_bindings(overrides))
+        .filter_map(|(action, wins)| wins.then_some(action))
         .filter_map(|action| {
             let context = action
                 .context()
@@ -223,6 +225,27 @@ pub(super) fn bind(cx: &mut App, overrides: &KeyOverrides) {
         })
         .collect::<Vec<_>>();
     cx.bind_keys(bindings);
+}
+
+/// Which actions keep their keys when a saved keymap gives two one key. GPUI
+/// ranks a binding with a context above one without, then a later binding
+/// above an earlier. Only that winner is bound: the held-key guard lets a key
+/// go on to lower bindings, so a loser would act in the winner's place.
+fn winning_bindings(overrides: &KeyOverrides) -> Vec<bool> {
+    let mut ranked = (0..ACTIONS.len()).collect::<Vec<_>>();
+    ranked.sort_by_key(|&ix| std::cmp::Reverse((ACTIONS[ix].context().is_some(), ix)));
+    let mut taken = Vec::new();
+    let mut wins = vec![false; ACTIONS.len()];
+    for ix in ranked {
+        let Some(keys) = keystroke(&ACTIONS[ix], overrides).and_then(parsed) else {
+            continue;
+        };
+        if !taken.contains(&keys) {
+            taken.push(keys);
+            wins[ix] = true;
+        }
+    }
+    wins
 }
 
 /// The menu bar: one menu per category, in table order.

@@ -1126,6 +1126,31 @@ fn a_rebound_key_without_command_answers_once_while_held() {
     std::fs::remove_dir_all(scratch).unwrap();
 }
 
+/// A saved keymap can give two actions one key: a hand edit, or a new
+/// default matching an old override. Only the binding GPUI ranks first acts.
+#[core::prelude::v1::test]
+fn a_shared_key_runs_only_the_winning_action() {
+    if !isolated("a_shared_key_runs_only_the_winning_action") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-shared-key-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, true);
+    // Next Changed File keeps its default, Option-Down.
+    harness.update(|plait, _, cx| {
+        let keymap = &mut plait.preferences.value.keymap;
+        keymap.insert("approval.allow_once".into(), "alt-down".into());
+        super::actions::install(cx, keymap);
+    });
+    assert!(
+        harness.answers("alt-down", "a1"),
+        "the later binding answers, as GPUI ranks it"
+    );
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
 #[core::prelude::v1::test]
 fn desktop_recovery_does_not_rebind_saved_work_or_clear_a_newer_revision() {
     if !isolated("desktop_recovery_does_not_rebind_saved_work_or_clear_a_newer_revision") {
