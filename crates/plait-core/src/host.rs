@@ -482,6 +482,9 @@ pub enum Request {
     ResumeCheckoutQueue {
         thread_id: String,
     },
+    CheckoutQueue {
+        thread_id: String,
+    },
     Submit {
         #[serde(skip_serializing_if = "Vec::is_empty")]
         images: Vec<String>,

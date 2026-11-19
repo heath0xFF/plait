@@ -487,6 +487,14 @@ impl Submissions {
         Some(pending)
     }
 
+    /// Threads whose accepted Wait messages may have ended without starting.
+    pub fn checkout_waits(&self) -> impl Iterator<Item = &str> {
+        self.accepted
+            .iter()
+            .filter(|(_, items)| items.iter().any(|p| p.checkout_wait))
+            .map(|(id, _)| id.as_str())
+    }
+
     pub fn forget_accepted(&mut self, thread_id: &str, request_id: &str) {
         if let Some(items) = self.accepted.get_mut(thread_id) {
             items.retain(|p| p.request_id != request_id);

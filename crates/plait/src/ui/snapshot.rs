@@ -6301,6 +6301,153 @@ fn image_queued_edit_preserves_attachments() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// A Wait message the person had accepted, with nothing else in the draft.
+fn accepted_wait(
+    harness: &mut Harness,
+    request_id: &str,
+    text: &str,
+    images: Vec<plait_core::images::ImageRef>,
+) -> PathBuf {
+    let mut checkout = PathBuf::new();
+    harness.update(|plait, _, cx| {
+        plait.admission.queue = true;
+        checkout = plait.host.connection.threads[0].checkout.clone();
+        plait.host.submissions.restore_accepted(
+            THREAD.into(),
+            plait_core::host_state::PendingSubmit {
+                checkout_wait: true,
+                text: text.into(),
+                images,
+                request_id: request_id.into(),
+                draft_revision: Some(1),
+                approval: Some(ApprovalMode::Ask),
+                when_busy: None,
+            },
+        );
+        plait.sync_composer(cx);
+    });
+    checkout
+}
+
+fn wait_for_draft(harness: &mut Harness, text: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while harness.composer(|composer, _, _| composer.saved_draft().0 != text) {
+        assert!(
+            Instant::now() < deadline,
+            "the waiting message did not come back"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[core::prelude::v1::test]
+fn cancelled_wait_returns_its_text_and_images_to_the_draft() {
+    if !isolated("cancelled_wait_returns_its_text_and_images_to_the_draft") {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("plait-wait-cancel-{}", std::process::id()));
+    let repository = fixture_repository(&root);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.fresh_composer(&repository);
+    images::install(&mut harness, 1);
+    let reference = plait_core::images::persist(include_bytes!(
+        "../../../../runtime/test/support/images/0.png"
+    ))
+    .unwrap();
+    let checkout = accepted_wait(
+        &mut harness,
+        "wait-1",
+        "Run this when the checkout frees",
+        vec![reference.clone()],
+    );
+    harness.update(|plait, _, _| {
+        plait.host.connection.threads[0].checkout_queue =
+            Some(plait_core::host::checkout_queue::Summary::new(
+                "wait-1".into(),
+                plait_core::host::checkout_queue::State::Waiting,
+                1,
+                1,
+            ));
+    });
+    let reply = serde_json::json!({"ok":true,"result":{"schema":1,"thread_id":THREAD,"checkout":checkout,
+        "waiters":[{"request_id":"wait-1","state":"cancelled","position":0,"error":null}]}});
+    let (received, release, server) = delayed_image_reply(reply);
+    harness.update(|plait, window, cx| {
+        let request = plait_core::host::Request::CancelCheckoutWait {
+            thread_id: THREAD.into(),
+            request_id: "wait-1".into(),
+        };
+        plait.change_checkout_wait(request, window, cx);
+        release.send(()).unwrap();
+    });
+    assert_eq!(
+        received.recv_timeout(Duration::from_secs(5)).unwrap()["op"],
+        "cancel_checkout_wait"
+    );
+    server.join().unwrap();
+    wait_for_draft(&mut harness, "Run this when the checkout frees");
+    harness.composer(|composer, _, _| assert_eq!(composer.saved_images(), &[reference]));
+    harness.update(|plait, _, _| {
+        assert!(plait.host.submissions.accepted(THREAD).is_empty());
+        let note = plait.workspace.thread_controls.note.clone().unwrap().1;
+        assert!(note.contains("back in the draft"), "{note}");
+    });
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn wait_that_failed_while_waiting_returns_its_text_once() {
+    if !isolated("wait_that_failed_while_waiting_returns_its_text_once") {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("plait-wait-failed-{}", std::process::id()));
+    let repository = fixture_repository(&root);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.fresh_composer(&repository);
+    let checkout = accepted_wait(
+        &mut harness,
+        "wait-failed",
+        "Refactor the parser",
+        Vec::new(),
+    );
+    accepted_wait(
+        &mut harness,
+        "wait-started",
+        "Already in the conversation",
+        Vec::new(),
+    );
+    // The summary no longer lists a waiter: the host failed one and started the other.
+    let reply = serde_json::json!({"ok":true,"result":{"schema":1,"thread_id":THREAD,"checkout":checkout,"waiters":[
+        {"request_id":"wait-failed","state":"failed","position":0,"error":{"code":"queue_settings_changed","message":"The model changed while this message waited."}},
+        {"request_id":"wait-started","state":"started","position":0,"error":null}]}});
+    let (received, release, server) = delayed_image_reply(reply);
+    harness.update(|plait, window, cx| {
+        plait.reconcile_checkout_waits(window, cx);
+        // One read per ended summary, however many updates arrive meanwhile.
+        plait.reconcile_checkout_waits(window, cx);
+        release.send(()).unwrap();
+    });
+    assert_eq!(
+        received.recv_timeout(Duration::from_secs(5)).unwrap(),
+        serde_json::json!({"op":"checkout_queue","thread_id":THREAD})
+    );
+    server.join().unwrap();
+    wait_for_draft(&mut harness, "Refactor the parser");
+    harness.update(|plait, window, cx| {
+        assert!(plait.host.submissions.accepted(THREAD).is_empty());
+        assert_eq!(plait.host.submissions.checkout_waits().count(), 0);
+        let note = plait.workspace.thread_controls.note.clone().unwrap().1;
+        assert!(
+            note.starts_with("Not run. The model changed while this message waited."),
+            "{note}"
+        );
+        // Nothing is left to read, so later summaries ask nothing.
+        plait.reconcile_checkout_waits(window, cx);
+        assert!(plait.admission.inspecting.is_empty());
+    });
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[core::prelude::v1::test]
 fn image_removed_during_restore_drops_pixels() {
     if !isolated("image_removed_during_restore_drops_pixels") {

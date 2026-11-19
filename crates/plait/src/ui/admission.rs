@@ -13,6 +13,8 @@ use std::{
 #[derive(Default)]
 pub(super) struct State {
     pub queue: bool,
+    /// Threads whose Wait receipts are being read once after their summary ended.
+    pub inspecting: std::collections::HashSet<String>,
     pub refused_busy: Option<String>,
     pub origin: Option<(String, Option<String>)>,
     pub preparing: Option<(String, Option<admission::Phase>)>,

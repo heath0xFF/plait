@@ -119,6 +119,7 @@ impl Plait {
                     this.navigation.loading = false;
                     this.host.connection.threads = all;
                     this.apply_thread_activity(true, window, cx);
+                    this.reconcile_checkout_waits(window, cx);
                     this.rebuild_projects(cx);
                     this.tabs.identity.catalog_ready = true;
                     this.verify_tab_identity(window, cx);
@@ -170,6 +171,7 @@ impl Plait {
                                 }
                                 this.worktrees_after_summaries(relabel, ended, cx);
                                 this.apply_thread_activity(false, window, cx);
+                                this.reconcile_checkout_waits(window, cx);
                                 this.rebuild_projects(cx);
                                 this.capture_session(cx);
                                 cx.notify();

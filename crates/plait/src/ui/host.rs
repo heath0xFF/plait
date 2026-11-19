@@ -331,6 +331,7 @@ impl Plait {
             let composer = cx.new(|cx| Composer::new(window, cx));
             self.restore_composer(&id, &composer, cx);
             self.attach_composer(id.clone(), composer, window, cx);
+            self.reconcile_checkout_waits(window, cx);
         }
         self.capture_session(cx);
         self.sync_composer(cx);

@@ -1210,7 +1210,11 @@ and Resume. The same summary supplies tab/sidebar state and position on hover.
 its first message binds to that draft's created thread even after navigation.
 `PendingSubmit.checkout_wait` preserves the additive operation across lost
 replies and restart, with the original request ID, revision and image references.
-It is distinct from the desktop's `queued_submissions` cache. Acceptance clears
+It is distinct from the host's checkout line. The desktop's `queued_submissions`
+cache keeps each accepted Wait message's exact text and images: when Cancel's
+receipt, or the one `checkout_queue` read made after a thread's queue summary
+ends, says it was cancelled or failed without starting, they return to the
+thread's draft. Acceptance clears
 only the sent draft revision, and closing or restoring tabs schedules no run.
 
 ### Queue and per-thread controls

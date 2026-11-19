@@ -385,8 +385,10 @@ leaves a running host's queue alone. Messages and images remain with their own
 thread or pending draft through a lost reply and an explicit retry.
 
 Changing a queued thread's model, thinking, harness permission mode or command policy makes
-that waiter fail with a reason when its turn comes. Send again with the choices
-you intend. The next message's approval choice does not change an already
+that waiter fail with a reason when its turn comes. A waiting message that is
+cancelled or fails before it starts comes back: its text and images return to the
+thread's draft when that draft is empty, or its text is copied to the clipboard
+when the draft has other text. Send it again with the choices you intend. The next message's approval choice does not change an already
 accepted message's approval. A removed or replaced checkout or an unavailable
 harness or model also cannot start it; a failed waiter does not strand the rest
 of the line. An unconfirmed cleanup blocks the whole checkout, so it holds the
