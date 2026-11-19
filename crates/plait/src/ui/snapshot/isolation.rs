@@ -60,7 +60,9 @@ pub(super) fn walk(
         plait.state.repository.write_mut().note = Some((CHECKOUT_BUSY.into(), true));
     });
     harness.capture(&format!("isolation-wait-{suffix}"));
+    harness.change_snapshot(|snapshot| snapshot.status = ThreadStatus::Stopped);
     harness.update(|plait, _, _| {
+        plait.refresh_tab_rows();
         plait.cleanup.key = Some((
             plait.host.connection.epoch,
             plait.host.creation.generation,
