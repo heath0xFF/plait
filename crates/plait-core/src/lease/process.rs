@@ -104,6 +104,16 @@ pub(super) fn boot() -> io::Result<u64> {
     Ok(0)
 }
 
+#[cfg(target_os = "linux")]
+pub(super) fn boot() -> io::Result<u64> {
+    use sha2::{Digest, Sha256};
+    // A PID and boot-relative start tick must not identify a process after reboot.
+    let id = std::fs::read("/proc/sys/kernel/random/boot_id")?;
+    Ok(u64::from_le_bytes(
+        Sha256::digest(id)[..8].try_into().unwrap(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,13 +146,4 @@ mod tests {
             assert!(parse_stat(123, invalid).is_none());
         }
     }
-}
-#[cfg(target_os = "linux")]
-pub(super) fn boot() -> io::Result<u64> {
-    use sha2::{Digest, Sha256};
-    // A PID and boot-relative start tick must not identify a process after reboot.
-    let id = std::fs::read("/proc/sys/kernel/random/boot_id")?;
-    Ok(u64::from_le_bytes(
-        Sha256::digest(id)[..8].try_into().unwrap(),
-    ))
 }
