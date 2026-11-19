@@ -786,8 +786,8 @@ model and permissions to that harness's defaults: Pi's saved default model, or
 the harness's most recently used model, else its first. Switching project keeps
 the new thread open and shows that repository in the inspector. While it is
 open, a **New thread** row marks where it will land in the sidebar. Opening
-another thread sets it aside with its text, which Cmd-N brings back; Escape or
-**Discard** clears it. Draft text and image references are saved per checkout
+another thread sets it aside in its own tab with its text; Escape or
+**Discard** removes it and closes that tab (see Tabs). Draft text and image references are saved per checkout
 in the desktop recovery journal across restarts. Cmd-Shift-N opens it with the
 model list open. A thread with no title
 yet reads **New thread**. **New Thread in Worktree** (Cmd-Option-N) asks the
@@ -965,7 +965,7 @@ already arrived at once.
 | @ | List checkout files at the start of a word; type to filter |
 | / | List local commands when it is the first character of an empty draft |
 | Up / Down, Enter or Tab, Escape | With a suggestion list open: choose, accept, dismiss |
-| Escape | Close the suggestion list, then leave message recall |
+| Escape | Close the suggestion list, then leave message recall; in a new-thread draft, then discard the draft and close its tab |
 | Escape twice | Stop the running agent, when pressed twice within 1.5 seconds |
 | Option-Delete / Option-Fn-Delete | Delete the previous / next word |
 | Cmd-Delete / Cmd-Fn-Delete | Delete to the start / end of the line |
