@@ -1,8 +1,7 @@
 name: Linux headless development
 
+# The Linux check gates a merge with the macOS tests; it does not run again on main.
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 

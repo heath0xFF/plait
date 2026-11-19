@@ -27,7 +27,9 @@
   and cargo test --workspace. Build and inspect the native app after UI changes.
 - Run builds and tests directly. Rex is optional and not a build dependency.
 - Do not run `scripts/acceptance-macos.sh` while a person is using this Mac: it
-  takes over the pointer and keyboard. It runs on CI for each release tag and
-  each other push to `main`.
+  takes over the pointer and keyboard. It runs on CI for each release build.
+- Work on a branch. `main` changes only through a pull request whose checks
+  passed; merging one that changes the app publishes the next preview. See
+  docs/RELEASING.md.
 - Read CONTRIBUTING.md for the work split. Agree before changing shared contracts;
   docs/ROADMAP.md records what is agreed for the current milestone.
