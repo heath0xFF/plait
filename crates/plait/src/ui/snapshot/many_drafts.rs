@@ -243,6 +243,11 @@ pub(super) fn scenes(h: &mut Harness, suffix: &str) {
         .update(&mut h.cx, |p, _, _| {
             let active = p.tabs.model.active().unwrap();
             let checkout = p.tab_checkout(p.host.creation.checkout.clone());
+            let connection = p
+                .host
+                .connection
+                .connected
+                .then_some(p.host.connection.epoch);
             let worktrees = p
                 .tabs
                 .model
@@ -250,7 +255,7 @@ pub(super) fn scenes(h: &mut Harness, suffix: &str) {
                     TabTarget::Worktrees {
                         checkout: checkout.clone(),
                     },
-                    Some(p.host.connection.epoch),
+                    connection,
                 )
                 .unwrap();
             let thread = p
@@ -261,7 +266,7 @@ pub(super) fn scenes(h: &mut Harness, suffix: &str) {
                         id: THREAD.into(),
                         checkout,
                     },
-                    Some(p.host.connection.epoch),
+                    connection,
                 )
                 .unwrap();
             p.tabs.model.activate(active).unwrap();
