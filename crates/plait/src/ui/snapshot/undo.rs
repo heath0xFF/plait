@@ -314,7 +314,7 @@ fn undo_redo_and_changed_files_follow_scripted_records() {
                 .is_some_and(|l| l.undone)
     });
     // A held key cannot immediately redo the operation when its reply arrives.
-    harness.keystroke("cmd-alt-u");
+    harness.held_keystroke("cmd-alt-u");
     assert_eq!(
         host.requests
             .lock()
@@ -380,6 +380,302 @@ fn undo_redo_and_changed_files_follow_scripted_records() {
     assert_eq!(undos.len(), 2);
     assert_ne!(undos[0]["request_id"], undos[1]["request_id"]);
     drop(requests);
+    drop(host);
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+/// Scripted restoration and records exercise the desktop's real async client path.
+fn shortcut_host(repository: &Path) -> Host {
+    let path = repository.join("approval.txt");
+    std::fs::write(&path, "allowed\n").unwrap();
+    let mut original = record("last", &["last"], "ready");
+    original["paths"] = json!([{"path":"approval.txt","change":"modified","added":1,"removed":1}]);
+    original["paths_total"] = json!(1);
+    let mut data = vec![original];
+    let mut undos = 0;
+    Host::start(move |request| {
+        Some(match request["op"].as_str().unwrap() {
+            "undo_turn" => {
+                assert_eq!(request["record_id"], data[0]["id"]);
+                assert_eq!(request["protocol_version"], 5);
+                assert!(request.get("leave_changed").is_none());
+                undos += 1;
+                let id = format!("undo-{undos}");
+                data[0]["state"] = json!("undone");
+                let mut undo = record(&id, &["undo-request"], "ready");
+                undo["paths"] = data[0]["paths"].clone();
+                undo["paths_total"] = json!(1);
+                undo["kind"] = json!("undo");
+                undo["undoes"] = request["record_id"].clone();
+                data.insert(0, undo);
+                std::fs::write(
+                    &path,
+                    if undos % 2 == 1 {
+                        "before\n"
+                    } else {
+                        "allowed\n"
+                    },
+                )
+                .unwrap();
+                reply("undone", &id)
+            }
+            "turn_records" => json!({"records":data,"before":null}),
+            "history" => history_reply(),
+            op => panic!("unexpected request {op}"),
+        })
+    })
+}
+
+fn restored(harness: &mut Harness, repository: &Path, count: usize) {
+    let target = format!("undo-{count}");
+    wait(harness, |p| {
+        p.records_current()
+            && p.workspace.turn_records.pending.is_none()
+            && p.workspace
+                .turn_records
+                .lines
+                .latest
+                .as_ref()
+                .is_some_and(|line| line.target.as_ref() == Some(&target))
+    });
+    harness.update(|p, _, _| {
+        assert_eq!(p.shortcut_undo().as_deref(), Some("last"));
+        assert_eq!(
+            p.workspace
+                .turn_records
+                .lines
+                .latest
+                .as_ref()
+                .unwrap()
+                .undone,
+            count % 2 == 1
+        );
+    });
+    assert_eq!(
+        std::fs::read_to_string(repository.join("approval.txt")).unwrap(),
+        if count % 2 == 1 {
+            "before\n"
+        } else {
+            "allowed\n"
+        }
+    );
+}
+
+fn undo_requests(host: &Host) -> Vec<Value> {
+    host.requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|r| r["op"] == "undo_turn")
+        .cloned()
+        .collect()
+}
+
+#[core::prelude::v1::test]
+fn shortcut_redoes_without_release_events() {
+    if !isolated("undo::shortcut_redoes_without_release_events") {
+        return;
+    }
+    let (scratch, repository, mut harness) = setup("undo-no-release");
+    let host = shortcut_host(&repository);
+    harness.update(|p, w, cx| p.focus_composer(w, cx));
+    harness.draw();
+    // Separate presses have is_held=false even when Command key-up never arrives.
+    // Do not insert a focus change, modifier change, refresh, or unrelated key.
+    for count in 1..=4 {
+        harness.keystroke("cmd-alt-u");
+        restored(&mut harness, &repository, count);
+    }
+    let requests = undo_requests(&host);
+    assert_eq!(requests.len(), 4);
+    for pair in requests.windows(2) {
+        assert_ne!(pair[0]["request_id"], pair[1]["request_id"]);
+    }
+    drop(host);
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn held_shortcut_cannot_redo_after_the_reply() {
+    if !isolated("undo::held_shortcut_cannot_redo_after_the_reply") {
+        return;
+    }
+    let (scratch, repository, mut harness) = setup("undo-held");
+    let host = shortcut_host(&repository);
+    harness.draw();
+    harness.keystroke("cmd-alt-u");
+    harness.held_keystroke("cmd-alt-u");
+    restored(&mut harness, &repository, 1);
+    for _ in 0..3 {
+        harness.held_keystroke("cmd-alt-u");
+    }
+    harness.update(|p, _, _| assert!(p.workspace.turn_records.pending.is_none()));
+    assert_eq!(undo_requests(&host).len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(repository.join("approval.txt")).unwrap(),
+        "before\n"
+    );
+    harness.keystroke("cmd-alt-u");
+    restored(&mut harness, &repository, 2);
+    assert_eq!(undo_requests(&host).len(), 2);
+    drop(host);
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn shortcut_control_and_menu_can_alternate() {
+    if !isolated("undo::shortcut_control_and_menu_can_alternate") {
+        return;
+    }
+    let (scratch, repository, mut harness) = setup("undo-routes");
+    let host = shortcut_host(&repository);
+    harness.draw();
+    harness.keystroke("cmd-alt-u");
+    restored(&mut harness, &repository, 1);
+    // The closing-line activation calls undo_run with this run and flag.
+    harness.update(|p, w, cx| p.undo_run("last", false, w, cx));
+    restored(&mut harness, &repository, 2);
+    harness.update(|p, w, cx| p.undo_run("last", false, w, cx));
+    restored(&mut harness, &repository, 3);
+    harness.update(|p, w, cx| {
+        Arc::make_mut(p.host.thread.snapshot.as_mut().unwrap()).records_revision = Some(2);
+        p.turn_records_snapshot(w, cx);
+        p.focus_composer(w, cx);
+    });
+    restored(&mut harness, &repository, 3);
+    harness.keystroke("cmd-alt-u");
+    restored(&mut harness, &repository, 4);
+    // Menu and palette actions have no key event and must execute directly.
+    harness.update(|_, w, cx| w.dispatch_action(Box::new(crate::ui::UndoLastTurn), cx));
+    restored(&mut harness, &repository, 5);
+    harness.update(|p, _, cx| {
+        p.preferences
+            .value
+            .keymap
+            .insert("thread.undo_last_turn".into(), "ctrl-shift-u".into());
+        crate::ui::actions::install(cx, &p.preferences.value.keymap);
+    });
+    harness.keystroke("ctrl-shift-u");
+    restored(&mut harness, &repository, 6);
+    harness.keystroke("cmd-alt-u");
+    assert_eq!(undo_requests(&host).len(), 6);
+    drop(host);
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn shortcut_without_a_retained_turn_is_inert() {
+    if !isolated("undo::shortcut_without_a_retained_turn_is_inert") {
+        return;
+    }
+    let (scratch, repository, mut harness) = setup("undo-empty");
+    let host = shortcut_host(&repository);
+    harness.update(|p, _, _| inject(p, vec![]));
+    harness.draw();
+    harness.update(|p, w, cx| {
+        // The Thread menu keeps the shared action available; no target is a no-op.
+        assert!(w.is_action_available(&crate::ui::UndoLastTurn, cx));
+        assert!(p.shortcut_undo().is_none());
+    });
+    harness.keystroke("cmd-alt-u");
+    harness.keystroke("cmd-alt-u");
+    harness.held_keystroke("cmd-alt-u");
+    harness.update(|_, w, cx| w.dispatch_action(Box::new(crate::ui::UndoLastTurn), cx));
+    harness.update(|p, _, _| {
+        assert!(p.workspace.turn_records.pending.is_none());
+        assert!(p.workspace.turn_records.note.is_none());
+        assert!(p.workspace.turn_records.blocked.is_none());
+    });
+    assert!(undo_requests(&host).is_empty());
+    assert_eq!(
+        std::fs::read_to_string(repository.join("approval.txt")).unwrap(),
+        "allowed\n"
+    );
+    drop(host);
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn redo_shortcut_keeps_the_control_refusals() {
+    if !isolated("undo::redo_shortcut_keeps_the_control_refusals") {
+        return;
+    }
+    let (scratch, repository, mut harness) = setup("redo-refusals");
+    std::fs::write(repository.join("src/review.rs"), "changed by the person\n").unwrap();
+    harness.update(|p, _, _| {
+        let mut undo = record("undo-1", &["undo-request"], "ready");
+        undo["kind"] = json!("undo");
+        undo["undoes"] = json!("last");
+        inject(p, vec![undo, record("last", &["last"], "undone")]);
+    });
+    let host = Host::start(|request| {
+        assert_eq!(request["op"], "undo_turn");
+        assert_eq!(request["record_id"], "undo-1");
+        assert!(request.get("leave_changed").is_none());
+        Some(reply("blocked", "undo-1"))
+    });
+    for gate in 0..4 {
+        harness.update(|p, w, cx| {
+            match gate {
+                0 => p.host.thread.controlling = true,
+                1 => {
+                    Arc::make_mut(p.host.thread.snapshot.as_mut().unwrap()).status =
+                        ThreadStatus::Running
+                }
+                2 => p.host.connection.threads[1].status = ThreadStatus::Running,
+                _ => assert!(
+                    p.state
+                        .repository
+                        .request_write(plait_core::git::WriteOp::StageAll)
+                ),
+            }
+            let line = p.workspace.turn_records.lines.latest.as_ref().unwrap();
+            assert_eq!(
+                p.undo_refusal(line),
+                Some((
+                    "Wait",
+                    "A run or another write is active in this checkout. Wait until it finishes."
+                ))
+            );
+            assert!(p.shortcut_undo().is_none());
+            p.undo_run("last", false, w, cx);
+        });
+        harness.draw();
+        harness.keystroke("cmd-alt-u");
+        harness.update(|p, _, _| {
+            assert!(p.workspace.turn_records.pending.is_none());
+            p.host.thread.controlling = false;
+            Arc::make_mut(p.host.thread.snapshot.as_mut().unwrap()).status = ThreadStatus::Idle;
+            p.host.connection.threads[1].status = ThreadStatus::Idle;
+            *p.state.repository.write_mut() = Default::default();
+        });
+    }
+    assert!(undo_requests(&host).is_empty());
+    for shortcut in [true, false] {
+        if shortcut {
+            harness.keystroke("cmd-alt-u");
+        } else {
+            harness.update(|p, w, cx| p.undo_run("last", false, w, cx));
+        }
+        wait(&mut harness, |p| p.workspace.turn_records.blocked.is_some());
+        harness.update(|p, _, cx| {
+            let blocked = &p.workspace.turn_records.blocked.as_ref().unwrap().reply;
+            assert_eq!(blocked.record_id, "undo-1");
+            assert_eq!(blocked.changed_since, [PathBuf::from("src/review.rs")]);
+            assert!(p.shortcut_undo().is_none());
+            p.cancel_undo_panel(cx);
+        });
+    }
+    assert_eq!(undo_requests(&host).len(), 2);
+    assert_eq!(
+        std::fs::read_to_string(repository.join("src/review.rs")).unwrap(),
+        "changed by the person\n"
+    );
     drop(host);
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();

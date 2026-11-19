@@ -1,17 +1,16 @@
 use super::{
-    Plait, actions,
+    Plait,
     selection::{Owner, Site},
     theme::*,
 };
 use gpui::{prelude::*, *};
 use std::time::Instant;
 
-/// Keeps a held Deny Once or Allow Once shortcut from answering again.
+/// Carries guarded keyboard actions to the key event that knows whether they repeat.
 #[derive(Default)]
 pub(super) struct ApprovalKeys {
-    /// The approval shortcut pressed last, until a key comes up or a
-    /// modifier changes. The same keystroke again before then is a repeat.
-    held: Option<Keystroke>,
+    from_key: bool,
+    action: Option<Box<dyn Action>>,
     interceptor: Option<Subscription>,
 }
 
@@ -803,76 +802,65 @@ impl Plait {
         }
     }
 
-    /// Whether `pressed` is what Deny Once or Allow Once is bound to now.
-    fn approval_key(&self, pressed: &Keystroke) -> bool {
-        let keymap = &self.preferences.value.keymap;
-        actions::ACTIONS
-            .iter()
-            .filter(|action| {
-                action.id.starts_with("approval.") || action.id == "thread.undo_last_turn"
-            })
-            .flat_map(|action| actions::bound(action, keymap))
-            .any(|key| key.modifiers == pressed.modifiers && key.key == pressed.key)
-    }
-
-    /// Whether to drop `pressed` before it reaches an action: an approval
-    /// shortcut pressed again with no key released in between.
-    ///
-    /// Actions do not carry the key event, so its repeat flag cannot be read
-    /// where the answer is sent. A press is told from a repeat by what comes
-    /// between them: a key coming up or a modifier changing. A press with no
-    /// approval waiting counts too, so a key held before a prompt arrives
-    /// cannot answer it.
-    fn approval_repeat(&mut self, pressed: &Keystroke) -> bool {
-        if !self.approval_key(pressed) {
-            self.approval_keys.held = None;
+    /// GPUI resolves actions before delivering KeyDown, which carries is_held.
+    pub(super) fn defer_key_action(&mut self, action: &dyn Action, cx: &mut Context<Self>) -> bool {
+        if !self.approval_keys.from_key {
             return false;
         }
-        let held = self.approval_keys.held.as_ref();
-        let repeat =
-            held.is_some_and(|held| held.modifiers == pressed.modifiers && held.key == pressed.key);
-        self.approval_keys.held = Some(pressed.clone());
-        repeat
+        // Propagation may visit another binding; retain the highest-priority action.
+        self.approval_keys
+            .action
+            .get_or_insert_with(|| action.boxed_clone());
+        cx.propagate();
+        true
     }
 
-    /// Watch keystrokes so a held approval shortcut answers at most once.
     pub(super) fn watch_approval_keys(&mut self, window: &Window, cx: &mut Context<Self>) {
         let entity = cx.weak_entity();
         let window_id = window.window_handle().window_id();
-        // Interceptors run before key bindings, so a repeat is dropped before
-        // it becomes an action.
-        let interceptor = cx.intercept_keystrokes(move |event, window, cx| {
+        self.approval_keys.interceptor = Some(cx.intercept_keystrokes(move |_, window, cx| {
             if window.window_handle().window_id() != window_id {
                 return;
             }
-            let repeat = entity
-                .update(cx, |this, _| this.approval_repeat(&event.keystroke))
-                .unwrap_or(false);
-            if repeat {
-                cx.stop_propagation();
-            }
-        });
-        self.approval_keys.interceptor = Some(interceptor);
+            let _ = entity.update(cx, |this, _| {
+                this.approval_keys.from_key = true;
+                this.approval_keys.action = None;
+            });
+            // Clear before the accepted action is redispatched; menu actions need no key event.
+            let entity = entity.clone();
+            cx.defer(move |cx| {
+                let _ = entity.update(cx, |this, _| {
+                    this.approval_keys.from_key = false;
+                    this.approval_keys.action = None;
+                });
+            });
+        }));
     }
 
-    /// Bind the approval actions, and rearm their keys whenever one is released.
     pub(super) fn on_approval_actions(
         &self,
         root: Stateful<Div>,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        root.on_action(cx.listener(|this, _: &super::DenyOnce, window, cx| {
-            this.answer_by_shortcut(false, window, cx)
+        root.on_action(cx.listener(|this, action: &super::DenyOnce, window, cx| {
+            if !this.defer_key_action(action, cx) {
+                this.answer_by_shortcut(false, window, cx);
+            }
         }))
-        .on_action(cx.listener(|this, _: &super::AllowOnce, window, cx| {
-            this.answer_by_shortcut(true, window, cx)
+        .on_action(cx.listener(|this, action: &super::AllowOnce, window, cx| {
+            if !this.defer_key_action(action, cx) {
+                this.answer_by_shortcut(true, window, cx);
+            }
         }))
-        // Capture, so no control below can keep a release from rearming.
-        .capture_key_up(cx.listener(|this, _: &KeyUpEvent, _, _| {
-            this.approval_keys.held = None;
-        }))
-        .on_modifiers_changed(cx.listener(|this, _: &ModifiersChangedEvent, _, _| {
-            this.approval_keys.held = None;
+        .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+            if let Some(action) = this.approval_keys.action.take() {
+                cx.stop_propagation();
+                // Command shortcuts need not deliver key-up or modifier changes.
+                // Use the platform repeat flag, not a latch waiting for release.
+                if !event.is_held {
+                    window.dispatch_action(action, cx);
+                }
+            }
         }))
     }
 

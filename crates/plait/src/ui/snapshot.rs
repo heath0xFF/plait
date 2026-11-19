@@ -737,6 +737,15 @@ impl Harness {
         self.settle();
     }
 
+    /// Deliver the platform's repeat event, rather than another fresh press.
+    fn held_keystroke(&mut self, keys: &'static str) {
+        self.pointer(PlatformInput::KeyDown(KeyDownEvent {
+            keystroke: Keystroke::parse(keys).expect("keystroke"),
+            is_held: true,
+            prefer_character_input: false,
+        }));
+    }
+
     /// Run layout and paint without saving an image.
     fn draw(&mut self) {
         let window = self.window.into();
@@ -866,10 +875,18 @@ impl Harness {
         self.press(keys, id)
     }
 
-    /// Press `keys` without releasing first, as a held key repeats.
+    /// Press `keys` without injecting release or modifier events.
     fn press(&mut self, keys: &'static str, id: &str) -> bool {
+        self.approval_press(keys, id, false)
+    }
+
+    fn approval_press(&mut self, keys: &'static str, id: &str, is_held: bool) -> bool {
         self.draw();
-        self.keystroke(keys);
+        if is_held {
+            self.held_keystroke(keys);
+        } else {
+            self.keystroke(keys);
+        }
         let id = id.to_owned();
         self.window
             .update(&mut self.cx, |plait, _, _| {
@@ -927,13 +944,22 @@ fn approval_shortcuts_act_only_when_the_buttons_would() {
 
     // A held key answers one approval, not the next.
     harness.new_approval("a3");
-    assert!(!harness.press("cmd-alt-.", "a3"), "a repeat is ignored");
+    assert!(
+        !harness.approval_press("cmd-alt-.", "a3", true),
+        "a repeat is ignored"
+    );
     assert!(harness.answers("cmd-alt-.", "a3"), "a new press answers");
     harness.new_approval("a4");
-    // A key coming up rearms the keys as a modifier change does.
+    // A delivered key-up is harmless; the next fresh press still answers.
     let key_up = Keystroke::parse("cmd-alt-y").unwrap();
     harness.pointer(PlatformInput::KeyUp(KeyUpEvent { keystroke: key_up }));
     assert!(harness.press("cmd-alt-y", "a4"));
+
+    harness.new_approval("a4-next");
+    assert!(
+        harness.press("cmd-alt-y", "a4-next"),
+        "a fresh press needs no release event"
+    );
 
     // A key held from before the approval arrived does not answer it.
     harness.change_snapshot(|snapshot| snapshot.pending_approval = None);
@@ -947,7 +973,7 @@ fn approval_shortcuts_act_only_when_the_buttons_would() {
         snapshot.pending_approval = Some(approval);
     });
     assert!(
-        !harness.press("cmd-alt-y", "a5"),
+        !harness.approval_press("cmd-alt-y", "a5", true),
         "the held key stays spent"
     );
 

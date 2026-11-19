@@ -1274,9 +1274,11 @@ impl Render for Plait {
             .capture_key_up(cx.listener(|this, _, _, cx| this.queue_tab_save(cx)))
             .capture_any_mouse_up(cx.listener(|this, _, _, cx| this.queue_tab_save(cx)))
             .map(|root| self.on_ways_out_actions(root, cx))
-            .on_action(
-                cx.listener(|this, _: &UndoLastTurn, window, cx| this.undo_last_turn(window, cx)),
-            )
+            .on_action(cx.listener(|this, action: &UndoLastTurn, window, cx| {
+                if !this.defer_key_action(action, cx) {
+                    this.undo_last_turn(window, cx);
+                }
+            }))
             .map(|root| self.on_approval_actions(root, cx))
             .map(|root| self.on_selection_actions(root, cx))
             .map(|root| self.on_keyboard_controls(root, cx))

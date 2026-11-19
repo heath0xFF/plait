@@ -360,6 +360,15 @@ recorded here:
 
 ## Native acceptance check
 
+The repeated `turn-undo-redo-shortcut` failure came from the desktop's shared
+shortcut repeat guard: it latched Cmd-Option-U until a key-up or modifier change,
+so a second fresh press without those events was discarded even with Redo ready.
+The guard now uses the key-down event's platform repeat flag; the same action,
+record target, refusal messages and host operation serve both presses. A headless
+regression reproduces the stuck Redo before the fix and checks consecutive presses,
+held keys and mixed control/shortcut use. The unchanged item should pass on the
+next CI native acceptance run; that real-window result remains unverified here.
+
 `scripts/acceptance-macos.sh` drives a separate development copy of Plait.
 **The first native run passed 4 of 42 items, failed 34, and skipped 4.** The
 fixture, permissions, full-screen round trip and sidebar toggle passed. Thirty
