@@ -427,12 +427,8 @@ class Acceptance:
 
     def tab_bar_end(self):
         # Derived purely from the AX tree's tab-row control frames and window right edge.
-        try:
-            return [float(v) for v in self.ax('tab-bar-end').split()]
-        except CommandError as error:
-            if error.returncode == 4:
-                raise Skipped(error.detail) from error
-            raise
+        # No empty end fails: the row always reserves one, even when full.
+        return [float(v) for v in self.ax('tab-bar-end').split()]
 
     def bar_drag(self, shown):
         self.pointer()

@@ -17,8 +17,7 @@ import Foundation
 
 // MARK: - Output and errors
 
-/// Exit codes: 0 done, 1 not seen or not done, 2 usage or permission, 3 refused,
-/// 4 skipped because no empty tab-bar end exists.
+/// Exit codes: 0 done, 1 not seen or not done, 2 usage or permission, 3 refused.
 func die(_ message: String, _ code: Int32 = 1) -> Never {
     FileHandle.standardError.write(Data((message + "\n").utf8))
     exit(code)
@@ -1016,7 +1015,9 @@ func run(_ arguments: [String]) throws {
         case let .point(pt, _, _):
             say("\(fmt(pt.x)) \(fmt(pt.y))")
         case let .noEmptyEnd(rightmost, windowRight, available):
-            die("no empty right end in the 40-point tab row: rightmost control ends at \(fmt(rightmost)), window right edge is \(fmt(windowRight)) (\(fmt(available)) pt remaining)", 4)
+            // The app always reserves at least 48 points here (even with a full
+            // row), so a missing end is a lost drag area, not a reason to skip.
+            die("no empty right end in the 40-point tab row (the app reserves at least 48 pt): rightmost control ends at \(fmt(rightmost)), window right edge is \(fmt(windowRight)) (\(fmt(available)) pt remaining)")
         case .noControls:
             die("no tab-row controls found in the 40-point bar", 1)
         }

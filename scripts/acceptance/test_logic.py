@@ -179,10 +179,10 @@ class HarnessTests(unittest.TestCase):
                 runner.tab('Files')
             self.assertTrue(runner.files_dirty)
 
-    def test_tab_bar_end_skips_when_full_row_has_no_empty_end(self):
+    def test_tab_bar_end_without_empty_end_fails_instead_of_skipping(self):
         with tempfile.TemporaryDirectory() as directory:
             runner = self.runner(directory)
-            no_room = CommandError('axdrive exited 4', 4, 'no empty right end in the 40-point tab row: 8.0 pt remaining')
+            no_room = CommandError('axdrive exited 4: no empty right end', 4, 'no empty right end in the 40-point tab row: 8.0 pt remaining')
 
             def ax(action, *_args, **_kwargs):
                 if action == 'tab-bar-end':
@@ -191,15 +191,11 @@ class HarnessTests(unittest.TestCase):
 
             with patch.object(runner, 'sidebar'), patch.object(runner, 'window', return_value=[20, 51, 984, 639, 0, 0]), \
                  patch.object(runner, 'ax', side_effect=ax):
-                with self.assertRaisesRegex(Skipped, 'no empty right end'):
-                    runner.bar_drag(True)
-                with self.assertRaisesRegex(Skipped, 'no empty right end'):
-                    runner.double_click()
-            # Missing tab-bar controls (exit 1) remains a failure, not a skip.
-            missing = CommandError('axdrive exited 1: no tab-row controls found', 1, 'no tab-row controls found')
-            with patch.object(runner, 'ax', side_effect=missing):
-                with self.assertRaisesRegex(AssertionError, 'no tab-row controls'):
-                    runner.tab_bar_end()
+                # No exit status turns a missing drag area into a skip.
+                for item in (lambda: runner.bar_drag(True), runner.double_click):
+                    with self.assertRaisesRegex(AssertionError, 'no empty right end') as caught:
+                        item()
+                    self.assertNotIsInstance(caught.exception, Skipped)
 
     def test_bar_drag_uses_tab_bar_end_and_waits_for_sidebar_toggle(self):
         with tempfile.TemporaryDirectory() as directory:
