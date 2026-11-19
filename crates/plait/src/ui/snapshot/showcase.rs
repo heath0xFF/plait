@@ -10,6 +10,7 @@
 
 use super::{Harness, git, isolated};
 use gpui::AppContext as _;
+use plait_core::tabs::{CheckoutKey, ThreadTarget};
 use plait_core::{
     host::{
         Approval, ApprovalKind, ApprovalMode, Message, MessageRole, Model, ModelChoice, Snapshot,
@@ -448,6 +449,49 @@ fn threads(checkout: &Path, current: ThreadStatus) -> Vec<ThreadSummary> {
     ]
 }
 
+/// The open thread in front, then the threads that are working or waiting, so
+/// the pictures show the tab row as a real window has it.
+fn open_tabs(plait: &mut crate::ui::Plait) {
+    plait.tabs = Default::default();
+    let mut open: Vec<_> = plait
+        .host
+        .connection
+        .threads
+        .iter()
+        .filter(|thread| {
+            thread.id == THREAD
+                || matches!(
+                    thread.status,
+                    ThreadStatus::Running | ThreadStatus::AwaitingApproval
+                )
+        })
+        .map(|thread| (thread.id.clone(), thread.checkout.clone()))
+        .collect();
+    open.sort_by_key(|(id, _)| id != THREAD);
+    for (id, root) in open {
+        let checkout = CheckoutKey {
+            host: plait.tabs.host.clone(),
+            root,
+            directory: None,
+        };
+        plait
+            .tabs
+            .model
+            .open(
+                ThreadTarget::Existing { id, checkout },
+                Some(plait.host.connection.epoch),
+            )
+            .expect("sample tab");
+    }
+    let front = plait.tabs.model.tabs()[0].id();
+    plait
+        .tabs
+        .model
+        .activate(front)
+        .expect("sample tab in front");
+    plait.refresh_tab_rows();
+}
+
 /// Present a connected host with `snapshot` selected. No socket is opened.
 fn stage(harness: &mut Harness, checkout: &Path, snapshot: Snapshot) {
     let checkout = checkout.to_owned();
@@ -460,6 +504,7 @@ fn stage(harness: &mut Harness, checkout: &Path, snapshot: Snapshot) {
         plait.host.creation.new_model = Some(choice());
         plait.host.connection.threads = threads(&checkout, snapshot.status);
         plait.host.thread.selected = Some(THREAD.into());
+        open_tabs(plait);
         plait.workspace.history = Default::default();
         plait.host.thread.snapshot = Some(Arc::new(snapshot));
         plait.workspace.formatted = Arc::new(plait_core::markdown::Transcript::update(
