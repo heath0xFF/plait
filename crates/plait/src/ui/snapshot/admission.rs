@@ -180,3 +180,129 @@ fn wait(h: &mut Harness, condition: impl Fn(&Plait) -> bool) {
         std::thread::sleep(Duration::from_millis(5));
     }
 }
+
+/// A host that answers a busy choice, then a ready worktree, and records every request.
+fn scripted_busy_host(
+    root: PathBuf,
+    listener: UnixListener,
+    seen: Arc<Mutex<Vec<Value>>>,
+    done: Arc<AtomicBool>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let parent = plait_core::git::worktree::worktree_parent(&root).unwrap();
+        let mut receipt = Value::Null;
+        let mut snapshot = Value::Null;
+        while !done.load(Ordering::Relaxed) {
+            let (mut stream, _) = match listener.accept() {
+                Ok(value) => value,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(2));
+                    continue;
+                }
+                Err(error) => panic!("{error}"),
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut line = String::new();
+            BufReader::new(&mut stream).read_line(&mut line).unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            seen.lock().unwrap().push(request.clone());
+            let result = match request["op"].as_str().unwrap() {
+                "admission_info" => {
+                    json!({"schema":1,"worktree_at_start_v1":true,"linked_continuation_v1":true,"queue":false,"strict_reader":false,"checkout":root,"identity":parent.identity,"project":root,"project_identity":parent.main_identity,"busy":true,"auto_worktree":false,"parent":parent,"refusal":null})
+                }
+                "create_admitted_thread" if request["placement"] == "project" => {
+                    json!({"schema":1,"admission":{"request_id":request["request_id"],"state":"choice","thread_id":null,"checkout":root,"worktree":null,"source_thread_id":null,"error":null}})
+                }
+                "create_admitted_thread" => {
+                    if receipt.is_null() {
+                        let id = "22345678-1234-4abc-8abc-123456789abc";
+                        let tree = plait_core::git::worktree::create_managed_worktree(
+                            &parent,
+                            id,
+                            None,
+                            |_| Ok(()),
+                        )
+                        .unwrap();
+                        snapshot = json!({"id":id,"checkout":tree.path,"model":{"provider":request["provider"],"model_id":request["model_id"]},"status":"idle","messages":[],"live_text":"","tools":[],"pending_approval":null,"error":null,"truncated":false,"harness":{"id":request["harness"],"mode":request["mode"],"version":null,"reported":null}});
+                        receipt = json!({"schema":1,"admission":{"request_id":request["request_id"],"state":"ready","thread_id":id,"checkout":tree.path,"worktree":tree,"source_thread_id":null,"error":null}});
+                    }
+                    receipt.clone()
+                }
+                "watch" => json!({"thread":snapshot}),
+                "list_worktrees" => json!({"schema":1,"operations":[]}),
+                "submit" => {
+                    json!({"thread_id":request["thread_id"],"accepted":true,"request_id":request["request_id"]})
+                }
+                _ => Value::Null,
+            };
+            let reply = if result.is_null() {
+                json!({"ok":false,"error":{"code":"invalid_request","message":"not supported"}})
+            } else {
+                json!({"ok":true,"result":result})
+            };
+            let _ = writeln!(stream, "{reply}");
+        }
+    })
+}
+
+/// The message sent to the new worktree is the one on screen when Own worktree is chosen.
+#[core::prelude::v1::test]
+fn edited_choice_draft() {
+    if !isolated("admission::edited_choice_draft") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-admission-edit-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let root = repository.canonicalize().unwrap();
+    let store = PathBuf::from(std::env::var_os("PLAIT_HOST_STORE").unwrap());
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let socket = store.join("host.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let stop = Arc::new(AtomicBool::new(false));
+    let server = scripted_busy_host(root.clone(), listener, requests.clone(), stop.clone());
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.update(|p, w, cx| {
+        p.host.connection.status.as_mut().unwrap().protocol_version = 6;
+        p.open_draft(w, cx);
+        let composer = p.draft.composer.clone().unwrap();
+        composer.update(cx, |composer, cx| {
+            composer.restore_draft("First wording".into(), 3, None, cx)
+        });
+        p.send_draft("First wording".into(), 3, w, cx);
+    });
+    wait(&mut harness, |p| p.admission.choice);
+    harness.update(|p, w, cx| {
+        // The composer stays editable while the person decides.
+        let composer = p.draft.composer.clone().unwrap();
+        composer.update(cx, |composer, cx| {
+            composer.restore_draft("Edited wording".into(), 4, None, cx)
+        });
+        p.accept_isolation(w, cx);
+    });
+    wait(&mut harness, |p| p.host.creation.pending_create.is_none());
+    let end = Instant::now() + Duration::from_secs(10);
+    let submitted = loop {
+        harness.settle();
+        if let Some(submit) = requests
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|r| r["op"] == "submit")
+        {
+            break submit.clone();
+        }
+        assert!(Instant::now() < end, "no submit");
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert_eq!(submitted["text"], "Edited wording");
+    stop.store(true, Ordering::Relaxed);
+    server.join().unwrap();
+    std::fs::remove_dir_all(scratch).unwrap();
+}

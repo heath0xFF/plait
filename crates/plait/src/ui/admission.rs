@@ -414,7 +414,8 @@ impl Plait {
             *placement = Placement::Worktree;
         }
         self.admission.choice = false;
-        self.create_host_thread(window, cx);
+        // The draft stays editable during the choice; send what is on screen now.
+        self.retry_create(window, cx);
     }
     pub(super) fn cancel_isolation(&mut self, cx: &mut Context<Self>) {
         if !self.admission.choice {
