@@ -1615,7 +1615,8 @@ Every new run and desktop Git mutation checks that marker under its OS lease.
 A clean run removes it only after cleanup and the after record. An uncertain
 run updates its reason, releases its OS handles, and retains exclusion through
 the durable marker (quarantine). A host/store restart cannot erase it. A separate runtime-owned liveness
-lock permits the existing parent lifecycle reader during a live run. Helpers
+lock permits the existing parent lifecycle reader during a live run, and an
+undo holds it too, so neither reads as a host that ended. Helpers
 never inherit that lock, so its loss makes an abandoned crash marker block
 readers as well; an uncertain marker always blocks them. Other checkouts
 continue normally. Use current Plait versions for all cooperating
@@ -1675,7 +1676,7 @@ These owner-authenticated operations are additive and omit `protocol_version`:
 All return `{"checkout":"/canonical/checkout","cleanup":null}` when clear,
 or `cleanup: {"token":"...","reason":"..."}` when unconfirmed, with the optional
 `process: {"group":123,"command":"git commit","can_stop":true}` for a Git record. A live run's
-crash marker is hidden while its runtime liveness lock is held, including when
+or undo's crash marker is hidden while its runtime liveness lock is held, including when
 read from another host store; an uncertain marker stays visible.
 Unknown fields, relative paths, invalid tokens, and missing or false
 `confirm_stopped` or `confirm_stop` are refused. Resolution acquires the exclusive checkout lease

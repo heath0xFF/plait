@@ -48,7 +48,7 @@ pub fn prepare(args: Vec<String>) -> io::Result<()> {
 /// With no arguments, preserves the legacy single-fd writer lock on fd 3.
 /// With `<reader|writer|exclusive|common> <canonical_path> [timeout_ms]`,
 /// verifies every inherited descriptor and acquires locks in strict Level 1 -> Level 2 order.
-/// A writer may pass `owner` as its third argument to lock runtime-only fd 5.
+/// A writer or exclusive lease may pass `owner` third to lock runtime-only fd 5.
 pub fn acquire(args: Vec<String>) -> io::Result<()> {
     if args.is_empty() {
         return acquire_legacy();
@@ -60,7 +60,8 @@ pub fn acquire(args: Vec<String>) -> io::Result<()> {
     }
     let mode = args[0].as_str();
     let target = Path::new(&args[1]);
-    let owner_fd = mode == "writer" && args.get(2).is_some_and(|arg| arg == "owner");
+    let owner_fd =
+        matches!(mode, "writer" | "exclusive") && args.get(2).is_some_and(|arg| arg == "owner");
     let timeout_ms = args
         .get(2)
         .filter(|_| !owner_fd)

@@ -188,7 +188,8 @@ export async function acquireCheckout(root: string, mode: LeaseClass = 'writer')
   let writer: FileHandle | undefined;
   let owner: FileHandle | undefined;
   try {
-    if (mode === 'writer') {
+    // Runs and undo save a restart marker; this lock tells readers it is live.
+    if (mode !== 'reader') {
       const ownerName = `cleanup-owner-${lockHex(expected.dev)}-${lockHex(expected.ino)}.lock`;
       owner = await open(join(leaseDirectory(), ownerName), constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
     }

@@ -325,3 +325,20 @@ test('a live run permits parent lifecycle readers but abandoned and uncertain ma
   try { await assert.rejects(acquireCheckout(root, 'reader'), { code: 'cleanup_uncertain' }); }
   finally { await cleanupHelper('resolve', root, 'live-run'); }
 });
+
+test('a live undo is not reported as a host that ended before confirming cleanup', async t => {
+  const { cleanupHelper, RESTART_REASON } = await import('../src/cleanup.ts');
+  const { root } = await setup(t);
+  const undo = await acquireCheckout(root, 'exclusive');
+  try {
+    await cleanupHelper('begin', root, 'live-undo', RESTART_REASON, undo);
+    assert.equal((await cleanupHelper('read', root)).cleanup, null, 'a live undo holds its liveness lock');
+    await cleanupHelper('finish', root, 'live-undo', undefined, undo);
+  } finally { await undo.close(); }
+  // A crashed undo still leaves the marker visible.
+  const crashed = await acquireCheckout(root, 'exclusive');
+  await cleanupHelper('begin', root, 'crashed-undo', RESTART_REASON, crashed);
+  await crashed.close();
+  try { assert.equal((await cleanupHelper('read', root)).cleanup?.token, 'crashed-undo'); }
+  finally { await cleanupHelper('resolve', root, 'crashed-undo'); }
+});
