@@ -10,10 +10,15 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
         return Err(io::Error::other("command expects checkout policy script"));
     }
     let command = sandbox_command(&args)?;
-    // Keep the writer lease in the guardian, never expose it to approved commands.
-    unsafe {
-        libc::fcntl(3, libc::F_SETFD, libc::FD_CLOEXEC);
-        libc::fcntl(4, libc::F_SETFD, libc::FD_CLOEXEC);
+    let keep_env = std::env::var_os("PLAIT_COMMAND_ENV_FD").is_some();
+    // Keep store, writer, and lifecycle leases in the guardian, never expose them to commands.
+    for fd in 3..inherited_descriptor_limit() {
+        if keep_env && fd == 6 {
+            continue;
+        }
+        unsafe {
+            libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+        }
     }
     guard(command, "sandboxed", io::stdin(), Stdio::null())
 }

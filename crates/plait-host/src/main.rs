@@ -34,8 +34,11 @@ fn run() -> io::Result<()> {
     if operation == "file" {
         return files::run(args.collect());
     }
+    if operation == "lease-prepare" {
+        return lease::prepare(args.collect());
+    }
     if operation == "lock-fd" {
-        return lease::acquire();
+        return lease::acquire(args.collect());
     }
     if operation == "command" {
         return command::run(args.collect());

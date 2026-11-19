@@ -624,3 +624,304 @@ fn distinct_hard_link_names_are_recorded_as_distinct_entries() {
         .collect();
     assert_eq!(paths, [name, "other"]);
 }
+
+#[test]
+fn standalone_undo_respects_writer_reader_and_exclusive_leases() {
+    use plait_core::lease::{LeaseClass, acquire_checkout};
+    let base = Scratch::new();
+    let root = repository(&base.0);
+    let store = base.0.join("store");
+    fs::create_dir(&store).unwrap();
+    let (ok, before, error) = helper("record", &json!({"checkout":root,"store":store,"id":"b"}));
+    assert!(ok, "{error}");
+    fs::write(root.join("notes.txt"), "after run\n").unwrap();
+    let (ok, after, error) = helper(
+        "record",
+        &json!({"checkout":root,"store":store,"id":"a","before":before["commit"]}),
+    );
+    assert!(ok, "{error}");
+    let meta = fs::metadata(&root).unwrap();
+    let undo_req = |id: &str| {
+        json!({
+            "checkout": root,
+            "store": store,
+            "before": before["commit"],
+            "after": after["commit"],
+            "before_id": format!("ub-{id}"),
+            "id": format!("ua-{id}"),
+            "identity": {"dev": meta.dev().to_string(), "ino": meta.ino().to_string()}
+        })
+    };
+
+    for (label, class) in [
+        ("writer", LeaseClass::Writer),
+        ("reader", LeaseClass::Reader),
+        ("exclusive", LeaseClass::Exclusive),
+    ] {
+        let held = acquire_checkout(&root, None, class).unwrap();
+        let (ok, _, stderr) = helper("undo", &undo_req(label));
+        assert!(!ok, "undo should be refused while {label} holds lease");
+        assert!(stderr.contains("busy"), "{label}: {stderr}");
+        assert_eq!(
+            fs::read_to_string(root.join("notes.txt")).unwrap(),
+            "after run\n"
+        );
+        drop(held);
+    }
+
+    // Once all leases are released, standalone undo restores the file.
+    let (ok, result, error) = helper("undo", &undo_req("free"));
+    assert!(ok, "{error}");
+    assert_eq!(result["state"], "undone");
+    assert_eq!(
+        fs::read_to_string(root.join("notes.txt")).unwrap(),
+        "before\n"
+    );
+}
+
+#[test]
+fn crash_releases_leases_while_uncertain_descendant_keeps_them_held() {
+    use plait_core::lease::{LeaseClass, LeaseErrorKind, acquire_checkout, prepare_checkout_lock};
+    use std::os::{fd::AsRawFd, unix::process::CommandExt};
+    use std::time::{Duration, Instant};
+
+    let base = Scratch::new();
+    let root = repository(&base.0);
+    let prepared = prepare_checkout_lock(&root).unwrap();
+
+    // Helper script: parent locks fd 3 (lifecycle) + fd 4 (writer) via plait-host lock-fd,
+    // writes a ready marker, and either sleeps (plain crash) or spawns a detached descendant
+    // that keeps fds 3 and 4 open after the parent is SIGKILLed.
+    let host = env!("CARGO_BIN_EXE_plait-host");
+
+    // Case 1: plain process crash releases BOTH writer and lifecycle leases immediately.
+    let ready = base.0.join("plain-ready");
+    let script = format!(
+        "exec 3<>'{}' 4<'{}'\n'{}' lock-fd writer '{}' || exit 1\necho $$ > '{}'\nexec sleep 30\n",
+        prepared.lock_path.display(),
+        prepared.root.display(),
+        host,
+        prepared.root.display(),
+        ready.display()
+    );
+    let mut child = Command::new("/bin/sh")
+        .args(["-c", &script])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !ready.exists() {
+        assert!(Instant::now() < deadline, "holder never started");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        acquire_checkout(&root, None, LeaseClass::Exclusive)
+            .unwrap_err()
+            .kind,
+        LeaseErrorKind::CheckoutBusy
+    );
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let acquired = acquire_checkout(&root, None, LeaseClass::Exclusive).unwrap();
+    drop(acquired);
+
+    // Case 2: an uncertain descendant that inherited the lease FDs keeps both leases held
+    // even after its parent crashes with SIGKILL, until that descendant itself dies.
+    let child_pid_file = base.0.join("descendant-pid");
+    let lifecycle = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&prepared.lock_path)
+        .unwrap();
+    let dir = fs::File::open(&prepared.root).unwrap();
+    let mut lock_cmd = Command::new(host);
+    lock_cmd.args(["lock-fd", "writer"]).arg(&prepared.root);
+    let (lfd, dfd) = (lifecycle.as_raw_fd(), dir.as_raw_fd());
+    unsafe {
+        lock_cmd.pre_exec(move || {
+            let a = libc::fcntl(lfd, libc::F_DUPFD_CLOEXEC, 10);
+            let b = libc::fcntl(dfd, libc::F_DUPFD_CLOEXEC, 10);
+            if a < 0 || b < 0 || libc::dup2(a, 3) < 0 || libc::dup2(b, 4) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    assert!(lock_cmd.status().unwrap().success());
+
+    // Spawn a detached descendant inheriting BOTH open file descriptions (fds 3 & 4).
+    let mut descendant = Command::new("/bin/sh");
+    descendant
+        .args([
+            "-c",
+            &format!("echo $$ > '{}'; exec sleep 30", child_pid_file.display()),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    unsafe {
+        descendant.pre_exec(move || {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let a = libc::fcntl(lfd, libc::F_DUPFD_CLOEXEC, 10);
+            let b = libc::fcntl(dfd, libc::F_DUPFD_CLOEXEC, 10);
+            if a < 0 || b < 0 || libc::dup2(a, 3) < 0 || libc::dup2(b, 4) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut descendant = descendant.spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !child_pid_file.exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Close our parent handles WITHOUT calling LOCK_UN (simulating a parent crash).
+    drop(lifecycle);
+    drop(dir);
+
+    // While the uncertain descendant is still alive, neither a writer nor an exclusive op can take the checkout.
+    assert_eq!(
+        acquire_checkout(&root, None, LeaseClass::Writer)
+            .unwrap_err()
+            .kind,
+        LeaseErrorKind::CheckoutBusy
+    );
+    assert_eq!(
+        acquire_checkout(&root, None, LeaseClass::Exclusive)
+            .unwrap_err()
+            .kind,
+        LeaseErrorKind::CheckoutBusy
+    );
+
+    // Once the descendant is killed and reaped, the OS releases both leases.
+    descendant.kill().unwrap();
+    descendant.wait().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(lease) = acquire_checkout(&root, None, LeaseClass::Exclusive) {
+            drop(lease);
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "lease did not release after descendant exited"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn record_helper_crash_releases_store_writer_and_lifecycle_leases() {
+    use plait_core::lease::{LeaseClass, acquire_checkout, prepare_checkout_lock};
+    use std::os::{
+        fd::AsRawFd,
+        unix::{fs::PermissionsExt, process::CommandExt},
+    };
+    use std::time::{Duration, Instant};
+
+    let base = Scratch::new();
+    let root = repository(&base.0);
+    let store = base.0.join("store");
+    let request = json!({"checkout":root,"store":store,"id":"seed"});
+    assert!(helper("record", &request).0);
+    let marker = store.join("records/lifecycle-descendants");
+    let wrapper = base.0.join("git-wrapper-lifecycle");
+    let real = plait_core::git::record::git_binary();
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nif [ -n \"$GIT_DIR\" ]; then\n sleep 30 &\n echo \"$$ $!\" > '{}'\n wait\nfi\nexec '{}' \"$@\"\n",
+            marker.display(),
+            real.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o700)).unwrap();
+
+    let store_lock = fs::File::create(store.join("test-lifecycle.lock")).unwrap();
+    assert_eq!(
+        unsafe { libc::flock(store_lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
+    let prepared = prepare_checkout_lock(&root).unwrap();
+    let lifecycle_lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&prepared.lock_path)
+        .unwrap();
+    let checkout_lock = fs::File::open(&prepared.root).unwrap();
+    assert_eq!(
+        unsafe { libc::flock(lifecycle_lock.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) },
+        0
+    );
+    assert_eq!(
+        unsafe { libc::flock(checkout_lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_plait-host"));
+    command
+        .arg("record")
+        .env("PLAIT_GIT", &wrapper)
+        .process_group(0)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let (sfd, wfd, lfd) = (
+        store_lock.as_raw_fd(),
+        checkout_lock.as_raw_fd(),
+        lifecycle_lock.as_raw_fd(),
+    );
+    unsafe {
+        command.pre_exec(move || {
+            let a = libc::fcntl(sfd, libc::F_DUPFD_CLOEXEC, 10);
+            let b = libc::fcntl(wfd, libc::F_DUPFD_CLOEXEC, 10);
+            let c = libc::fcntl(lfd, libc::F_DUPFD_CLOEXEC, 10);
+            if a < 0
+                || b < 0
+                || c < 0
+                || libc::dup2(a, 3) < 0
+                || libc::dup2(b, 4) < 0
+                || libc::dup2(c, 7) < 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(request.to_string().as_bytes())
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !marker.exists() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    child.kill().unwrap();
+    child.wait().unwrap();
+    drop(store_lock);
+    drop(checkout_lock);
+    drop(lifecycle_lock);
+
+    // All three leases (store, checkout writer, and checkout lifecycle) must release.
+    let store_probe = fs::File::open(store.join("test-lifecycle.lock")).unwrap();
+    while unsafe { libc::flock(store_probe.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        assert!(Instant::now() < deadline, "record leaked store lease");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    while acquire_checkout(&root, None, LeaseClass::Exclusive).is_err() {
+        assert!(
+            Instant::now() < deadline,
+            "record leaked checkout/lifecycle lease"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}

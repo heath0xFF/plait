@@ -342,38 +342,24 @@ pub fn undo() -> io::Result<()> {
 }
 
 fn undo_request(value: Value) -> io::Result<()> {
-    use std::os::{
-        fd::AsRawFd,
-        unix::{fs::MetadataExt, fs::OpenOptionsExt},
-    };
     let request: undo::Request = serde_json::from_value(value.clone()).map_err(io::Error::other)?;
     if !request.store.is_absolute() {
         return Err(failure("store must be absolute".into()));
     }
     let located = undo::locate(&request.checkout).map_err(failure)?;
-    let lease = std::fs::File::options()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY)
-        .open(&located.root)?;
-    let meta = lease.metadata()?;
-    if meta.dev().to_string() != request.identity.dev
-        || meta.ino().to_string() != request.identity.ino
-    {
-        return Err(failure("Checkout identity changed".into()));
-    }
-    // Runtime passes its lease as fd 4. Standalone calls acquire the same lock.
-    let mut inherited = std::mem::MaybeUninit::<libc::stat>::uninit();
-    let held = unsafe { libc::fstat(4, inherited.as_mut_ptr()) } == 0 && {
-        let inherited = unsafe { inherited.assume_init() };
-        // `dev_t` is 32 bits on macOS and already 64 on Linux.
-        #[allow(clippy::unnecessary_cast)]
-        let device = inherited.st_dev as u64;
-        inherited.st_ino == meta.ino() && device == meta.dev()
+    let expected = plait_core::lease::DirIdentity {
+        dev: request
+            .identity
+            .dev
+            .parse()
+            .map_err(|_| failure("Checkout identity changed".into()))?,
+        ino: request
+            .identity
+            .ino
+            .parse()
+            .map_err(|_| failure("Checkout identity changed".into()))?,
     };
-    let fd = if held { 4 } else { lease.as_raw_fd() };
-    if unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        return Err(failure("busy: checkout already has a writer".into()));
-    }
+    let _lease = crate::lease::acquire_or_verify_exclusive(&located.root, expected)?;
     let store = resolve_store(&request.store)?;
     record::sandbox_profile(&record::protected_paths(&located), &store).map_err(failure)?;
     let records = prepare_store(&store)?;
