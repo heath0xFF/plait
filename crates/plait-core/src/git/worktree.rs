@@ -831,6 +831,25 @@ mod managed_tests {
         clean(&tree);
     }
     #[test]
+    fn selected_base_does_not_follow_a_moved_parent_head() {
+        let repo = repository();
+        let parent = worktree_parent(&repo.0).unwrap();
+        fs::write(repo.0.join("file"), "new parent commit\n").unwrap();
+        repo.git(&["add", "file"]);
+        repo.git(&["commit", "-qm", "advance parent"]);
+        assert_ne!(worktree_parent(&repo.0).unwrap().base, parent.base);
+        let tree = create_managed_worktree(&parent, ID, None, |_| Ok(())).unwrap();
+        assert_eq!(
+            text_read(&tree.path, &["rev-parse", "HEAD"]).unwrap(),
+            parent.base
+        );
+        assert_eq!(
+            fs::read_to_string(tree.path.join("file")).unwrap(),
+            "committed\n"
+        );
+        clean(&tree);
+    }
+    #[test]
     fn spaces_work_and_non_utf8_main_paths_fail_explicitly() {
         use std::os::unix::ffi::OsStringExt;
         let mut repo = repository();
