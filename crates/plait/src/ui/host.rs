@@ -206,6 +206,43 @@ impl Plait {
         );
     }
 
+    /// Open a thread that has just been created, with the keyboard in its
+    /// composer. A settings modal stays open over it and keeps the keyboard,
+    /// since the answer can arrive while the person is typing there; closing
+    /// the modal lands in the new composer.
+    pub(super) fn open_created_thread(
+        &mut self,
+        id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let covered = self.settings_open;
+        let bound = self
+            .tabs
+            .model
+            .active()
+            .and_then(|tab| self.tabs.model.get(tab))
+            .is_some_and(|tab| {
+                matches!(tab.thread().target(),
+                plait_core::tabs::ThreadTarget::Existing { id: target, .. } if target == &id)
+            });
+        if bound {
+            self.select_host_thread_content(id.clone(), window, cx);
+        } else {
+            self.select_host_thread(id.clone(), window, cx);
+        }
+        if !covered {
+            return self.focus_composer(window, cx);
+        }
+        self.settings_open = true;
+        if let Some(composer) = self.workspace.composers.get(&id)
+            && self.host.thread.selected.as_ref() == Some(&id)
+        {
+            self.settings_restore = Some(composer.focus_handle(cx));
+        }
+        window.focus(&self.settings_focus, cx);
+    }
+
     pub(super) fn select_host_thread(
         &mut self,
         id: String,
@@ -640,8 +677,7 @@ impl Plait {
                 if drafted {
                     self.deliver_draft(id, window, cx);
                 } else if self.new_thread_open && self.host.thread.watch_epoch == selection_epoch {
-                    self.select_host_thread(id, window, cx);
-                    self.focus_composer(window, cx);
+                    self.open_created_thread(id, window, cx);
                 }
                 self.record_recent_model(&choice, cx);
                 self.load_threads(window, cx);

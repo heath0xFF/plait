@@ -441,3 +441,72 @@ fn menu_palette_and_sidebar_open_settings() {
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+/// A creation reply that the person is waiting for, without a draft.
+fn created(repository: &Path, request: &str, selection_epoch: u64) -> crate::ui::host::Created {
+    crate::ui::host::Created {
+        request_id: request.into(),
+        choice: choice(),
+        harness: plait_core::host::harness::HarnessId::Pi,
+        selection_epoch,
+        checkout: Some(repository.to_owned()),
+    }
+}
+
+fn created_reply(
+    repository: &Path,
+    id: &str,
+) -> Result<plait_core::host::ThreadReply, plait_core::host::Error> {
+    Ok(plait_core::host::ThreadReply {
+        thread: Snapshot {
+            id: id.into(),
+            checkout: repository.to_owned(),
+            model: choice(),
+            ..Default::default()
+        },
+    })
+}
+
+#[core::prelude::v1::test]
+fn a_thread_created_under_the_modal_opens_behind_it() {
+    if !isolated("settings_modal::a_thread_created_under_the_modal_opens_behind_it") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-modal-create-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.update(|plait, window, cx| {
+        // As the model picker leaves things while the host creates the thread.
+        plait.new_thread_open = true;
+        plait.host.creation.pending_create = Some(("picked".into(), choice()));
+        plait.host.creation.creating = true;
+        plait.show_settings(true, window, cx);
+    });
+    harness.draw();
+    harness.update(|plait, window, cx| {
+        let epoch = plait.host.thread.watch_epoch;
+        plait.finish_create(
+            created(&repository, "picked", epoch),
+            created_reply(&repository, "thr_picked"),
+            window,
+            cx,
+        );
+        assert!(plait.settings_open, "the modal stays open");
+        assert!(plait.settings_focus.contains_focused(window, cx));
+        assert_eq!(plait.host.thread.selected.as_deref(), Some("thr_picked"));
+    });
+    harness.draw();
+    harness.keystroke("escape");
+    harness.update(|plait, window, cx| {
+        assert!(!plait.settings_open);
+        assert!(
+            plait.workspace.composers["thr_picked"]
+                .focus_handle(cx)
+                .is_focused(window),
+            "closing lands in the new thread's composer"
+        );
+    });
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}

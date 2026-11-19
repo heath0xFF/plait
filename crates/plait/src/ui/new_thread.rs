@@ -553,8 +553,7 @@ impl Plait {
             Err(error) => self.set_thread_notice(id.clone(), error, true),
         }
         if visible {
-            self.select_host_thread_content(id, window, cx);
-            self.focus_composer(window, cx);
+            self.open_created_thread(id, window, cx);
         } else {
             self.capture_session(cx);
         }
