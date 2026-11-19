@@ -25,8 +25,9 @@ test('production runtime edits Plait source, runs Cargo, reconnects and resumes 
     + '        assert_eq!(title(&input), "x".repeat(TITLE_LIMIT));\n    }\n\n' + marker;
   assert(before.includes('.take(72)') && before.includes(oldConstant) && before.includes(marker), 'Update the dogfood fixture when the title implementation changes.');
   const edit = (id: string, old_text: string, new_text: string) => ({ tool: { id, name: 'edit', input: { path, old_text, new_text } } });
+  // The command sandbox denies link(2); that one test is skipped by name, not passed.
   const command = (id: string) => ({ tool: { id, name: 'command', input: {
-    command: `sleep ${id === 'test_refactor' && process.env.PLAIT_VERIFY_INSTALLED_UI === '1' ? 8 : 1}; cargo test --offline --locked -p plait-core --lib`,
+    command: `sleep ${id === 'test_refactor' && process.env.PLAIT_VERIFY_INSTALLED_UI === '1' ? 8 : 1}; cargo test --offline --locked -p plait-core --lib -- --skip lease::tests::hard_linked_lock_file_is_rejected`,
   } } });
   const replay = await replayServer([
     edit('extract_limit', '.take(72)', '.take(TITLE_LIMIT)'), edit('name_limit', oldConstant, newConstant),

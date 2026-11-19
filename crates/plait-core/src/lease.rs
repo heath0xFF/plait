@@ -1144,22 +1144,30 @@ mod tests {
                 .kind,
             LeaseErrorKind::UnsafeLeaseStore
         );
+    }
 
-        // Hard-linked lock file (`nlink > 1`). The macOS command sandbox used by
-        // dogfood tests denies `link(2)` even in scratch, so skip only EPERM there;
-        // `crates/plait-host/tests/record.rs` exercises hard-link rejection outside it.
-        fs::remove_file(&lock_path).unwrap();
+    /// Plait's command sandbox denies `link(2)`, so the dogfood fixture, which runs
+    /// these tests inside it, skips this one by name and its output counts it as
+    /// filtered out. Everywhere else it runs and must hold.
+    #[test]
+    fn hard_linked_lock_file_is_rejected() {
+        let scratch = Scratch::new("hardlink");
+        let repo = scratch.0.join("repo");
+        fs::create_dir(&repo).unwrap();
+        let leases = scratch.0.join("leases");
+        let (_, _, id) = open_verified_dir(&repo).unwrap();
+        let (_, _) = open_lease_dir(&leases).unwrap();
+        let target = scratch.0.join("outside.txt");
+        fs::write(&target, "").unwrap();
         fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
-        match fs::hard_link(&target, &lock_path) {
-            Ok(()) => assert_eq!(
-                acquire_checkout_in(&good_dir, &repo, None, LeaseClass::Writer)
-                    .unwrap_err()
-                    .kind,
-                LeaseErrorKind::UnsafeLeaseStore
-            ),
-            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {}
-            Err(error) => panic!("unexpected hard_link failure: {error}"),
-        }
+        fs::hard_link(&target, leases.join(checkout_lock_name(id)))
+            .expect("link(2) must be allowed where this test runs");
+        assert_eq!(
+            acquire_checkout_in(&leases, &repo, None, LeaseClass::Writer)
+                .unwrap_err()
+                .kind,
+            LeaseErrorKind::UnsafeLeaseStore
+        );
     }
 
     #[test]
