@@ -6805,3 +6805,11 @@ fn tabs_save_while_the_draft_journal_is_over_its_limit() {
     }
     tabs::journal_limit_saves_tabs();
 }
+
+#[core::prelude::v1::test]
+fn unchanged_large_tab_views_are_stored_once() {
+    if !isolated("unchanged_large_tab_views_are_stored_once") {
+        return;
+    }
+    tabs::stored_views();
+}

@@ -775,3 +775,81 @@ pub(super) fn journal_limit_saves_tabs() {
     drop(journal);
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+/// Saving an unchanged large view neither adds a stored record nor rewrites the tab file.
+pub(super) fn stored_views() {
+    use plait_core::{
+        session::Journal,
+        tabs::{CheckoutKey, HostKey},
+    };
+    let scratch = std::env::temp_dir().join(format!("plait-tab-blobs-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let saved_path = scratch.join("desktop/tabs.json");
+    let session = scratch.join("session");
+    let (journal, data) = Journal::open(&session, "/tab-test-host".into()).unwrap();
+    let mut h = Harness::new(&repository, None, 900., 600.);
+    h.connect(&repository, false);
+    install(&mut h, 3);
+    let host = HostKey {
+        id: "verified-test-host".into(),
+        store: "/tab-test-host".into(),
+    };
+    let checkout = CheckoutKey {
+        host: host.clone(),
+        root: repository.clone(),
+        directory: super::super::tab_identity::directory(&repository),
+    };
+    h.update(|p, w, cx| {
+        p.host.connection.connected = false;
+        p.install_tab_identity(host.clone(), vec![checkout.clone()], cx);
+        p.session.journal = Some(journal.clone());
+        p.session.data = Some(data);
+        p.tabs.identity.catalog_ready = true;
+        p.tabs.persistence.requested = true;
+        p.tabs.persistence.loaded = true;
+        p.tabs.persistence.restored = true;
+        p.tabs.persistence.writable = true;
+        p.tabs.persistence.path = Some(saved_path.clone());
+        p.tabs.persistence.window = Some(w.window_handle());
+        // A long commit message does not fit an inline bookmark.
+        p.workspace
+            .commit_message
+            .update(cx, |f, cx| f.set_text(&"x".repeat(9000), cx));
+    });
+    let views = || {
+        std::fs::read_dir(session.join("tabs"))
+            .map(|d| {
+                d.filter_map(Result::ok)
+                    .filter(|e| e.file_name().to_string_lossy().starts_with("view-"))
+                    .count()
+            })
+            .unwrap_or(0)
+    };
+    for _ in 0..3 {
+        h.window
+            .update(&mut h.cx, |p, w, cx| {
+                p.flush_tab_preferences(Some(w), cx).unwrap()
+            })
+            .unwrap()
+            .write()
+            .unwrap();
+    }
+    assert_eq!(views(), 1);
+    // A changed view replaces the record it supersedes.
+    h.update(|p, _, cx| {
+        p.workspace
+            .commit_message
+            .update(cx, |f, cx| f.set_text(&"y".repeat(9000), cx));
+    });
+    h.window
+        .update(&mut h.cx, |p, w, cx| {
+            p.flush_tab_preferences(Some(w), cx).unwrap()
+        })
+        .unwrap()
+        .write()
+        .unwrap();
+    assert_eq!(views(), 1);
+    drop(h);
+    drop(journal);
+    std::fs::remove_dir_all(scratch).unwrap();
+}

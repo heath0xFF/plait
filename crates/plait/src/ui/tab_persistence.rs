@@ -38,6 +38,8 @@ struct WriteGate {
     revision: AtomicU64,
     serial: Mutex<()>,
     last: Mutex<Option<Vec<u8>>>,
+    /// The extended view this saver last stored, so unchanged views are not rewritten.
+    view: Mutex<Option<(Vec<u8>, String)>>,
 }
 pub(super) struct SaveRequest {
     document: SavedWindow,
@@ -66,27 +68,41 @@ impl SaveRequest {
         // Save drafts first when possible. A journal over its limit reports itself;
         // the tab file stays independent, and the decoder omits drafts not yet durable.
         let _ = self.journal.flush();
+        let mut view = self
+            .gate
+            .view
+            .lock()
+            .map_err(|_| "Tab writer is unavailable.")?;
+        let mut stored = None;
         if let Some((id, bookmark)) = self.active {
-            let record =
-                match BookmarkRecord::capture(&bookmark) {
-                    Ok(record) => record,
-                    Err(BookmarkError::NeedsStorage) => {
-                        let blob = super::tab_lifecycle::record_name("view");
-                        let bytes = tabs::bookmark::encode_extended(&bookmark)
-                            .map_err(|_| "The current tab view could not be saved.")?;
-                        self.journal.write_record_bytes(
-                            &blob,
-                            &bytes,
-                            tabs::bookmark::EXTENDED_BOOKMARK_LIMIT,
-                        )?;
-                        BookmarkRecord::stored(bookmark.view, blob)
-                            .map_err(|_| "Invalid tab bookmark name.")?
-                    }
-                    Err(_) => return Err(
+            let record = match BookmarkRecord::capture(&bookmark) {
+                Ok(record) => record,
+                Err(BookmarkError::NeedsStorage) => {
+                    let bytes = tabs::bookmark::encode_extended(&bookmark)
+                        .map_err(|_| "The current tab view could not be saved.")?;
+                    let blob = match view.as_ref() {
+                        Some((old, name)) if *old == bytes => name.clone(),
+                        _ => {
+                            let blob = super::tab_lifecycle::record_name("view");
+                            self.journal.write_record_bytes(
+                                &blob,
+                                &bytes,
+                                tabs::bookmark::EXTENDED_BOOKMARK_LIMIT,
+                            )?;
+                            blob
+                        }
+                    };
+                    stored = Some((bytes, blob.clone()));
+                    BookmarkRecord::stored(bookmark.view, blob)
+                        .map_err(|_| "Invalid tab bookmark name.")?
+                }
+                Err(_) => {
+                    return Err(
                         "The current tab view could not be saved; previous saved tabs are intact."
                             .into(),
-                    ),
-                };
+                    );
+                }
+            };
             self.document
                 .set_bookmark(id, record)
                 .map_err(|_| "The current tab view could not be saved.")?;
@@ -98,11 +114,20 @@ impl SaveRequest {
             .last
             .lock()
             .map_err(|_| "Tab writer is unavailable.")?;
-        if last.as_ref() == Some(&bytes) {
-            return Ok(());
+        if last.as_ref() != Some(&bytes) {
+            storage::write(&self.path, &bytes)?;
+            *last = Some(bytes);
         }
-        storage::write(&self.path, &bytes)?;
-        *last = Some(bytes);
+        // Only the record this saver wrote earlier is removed; restored and parked
+        // views belong to the tabs that still name them.
+        let retired = view
+            .take()
+            .map(|(_, name)| name)
+            .filter(|name| stored.as_ref().is_none_or(|(_, blob)| blob != name));
+        *view = stored;
+        if let Some(name) = retired {
+            let _ = self.journal.remove_record(&name);
+        }
         Ok(())
     }
 }
