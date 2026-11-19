@@ -279,7 +279,7 @@ pub fn unconfirmed(id: DirIdentity) -> Result<Option<Cleanup>, LeaseError> {
     }
     let record = decode(&bytes);
     if let Some(record) = &record {
-        let same_boot = process::boot().map_err(io_error)? == record.boot;
+        let same_boot = !process::other_boot(record.boot).map_err(io_error)?;
         if same_boot && live_owner(record) {
             return Ok(None);
         }
@@ -336,7 +336,7 @@ pub fn stop(id: DirIdentity, expected: &str) -> Result<(), LeaseError> {
     let unverified =
         || LeaseError::io("The Git process identity could not be verified. No signal was sent.");
     let record = decode(&bytes).ok_or_else(unverified)?;
-    if process::boot().map_err(io_error)? != record.boot {
+    if process::other_boot(record.boot).map_err(io_error)? {
         return file.set_len(0).map_err(io_error);
     }
     let child = record.child.ok_or_else(unverified)?;

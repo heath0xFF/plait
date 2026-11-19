@@ -1647,7 +1647,8 @@ required for run markers, not for these process-crash records.
 
 A live desktop's record is hidden. After owner death or uncertain termination,
 cleanup reads and admission checks clear it automatically only when the
-recorded group is absent (or the machine has rebooted). A changed leader birth
+recorded group is absent, or when the record comes from an earlier boot (the
+kernel's boot ID on Linux, its boot session UUID on macOS). A changed leader birth
 identity never authorizes a signal. The optional `process` field gives the
 recorded `group`, `command`, and `can_stop` value. When `can_stop` is true, the
 same control offers **Stop processes**. Its action rechecks the token, boot,

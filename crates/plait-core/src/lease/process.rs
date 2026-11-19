@@ -106,19 +106,45 @@ pub(super) fn group_gone(group: i32) -> bool {
         && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
 }
 
+/// A record from another boot names processes that are all gone. Zero means
+/// the boot is unknown and is never treated as a different boot.
 #[cfg(target_os = "macos")]
 pub(super) fn boot() -> io::Result<u64> {
-    Ok(0)
+    // The kernel's per-boot UUID; unlike kern.boottime it ignores clock changes.
+    let mut id = [0u8; 64];
+    let mut size = id.len();
+    let read = unsafe {
+        libc::sysctlbyname(
+            c"kern.bootsessionuuid".as_ptr(),
+            id.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if read != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(boot_digest(&id[..size]))
 }
 
 #[cfg(target_os = "linux")]
 pub(super) fn boot() -> io::Result<u64> {
-    use sha2::{Digest, Sha256};
     // A PID and boot-relative start tick must not identify a process after reboot.
-    let id = std::fs::read("/proc/sys/kernel/random/boot_id")?;
-    Ok(u64::from_le_bytes(
-        Sha256::digest(id)[..8].try_into().unwrap(),
-    ))
+    Ok(boot_digest(&std::fs::read(
+        "/proc/sys/kernel/random/boot_id",
+    )?))
+}
+
+fn boot_digest(id: &[u8]) -> u64 {
+    use sha2::{Digest, Sha256};
+    let id = id.strip_suffix(b"\0").unwrap_or(id);
+    u64::from_le_bytes(Sha256::digest(id)[..8].try_into().unwrap()).max(1)
+}
+
+/// Different only when both boots are known.
+pub(super) fn other_boot(saved: u64) -> io::Result<bool> {
+    Ok(saved != 0 && boot()? != saved)
 }
 
 #[cfg(test)]
@@ -131,6 +157,19 @@ mod tests {
         assert_eq!(identity.group, unsafe { libc::getpgrp() });
         assert_ne!(identity.birth, [0, 0]);
         assert_eq!(identity, inspect(identity.pid).unwrap());
+    }
+
+    #[test]
+    fn the_boot_identity_is_known_and_stable() {
+        let boot = boot().unwrap();
+        assert_ne!(boot, 0, "a reboot must be recognizable");
+        assert_eq!(boot, super::boot().unwrap());
+        assert!(other_boot(boot ^ 1).unwrap());
+        assert!(!other_boot(boot).unwrap());
+        assert!(
+            !other_boot(0).unwrap(),
+            "an unknown boot is not another boot"
+        );
     }
 
     #[test]
