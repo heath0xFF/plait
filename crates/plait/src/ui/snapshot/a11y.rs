@@ -226,7 +226,9 @@ fn assert_settings_modals(harness: &mut Harness) {
 
     // Editor both-Custom state (matching scripts/acceptance/fixture.py): both
     // settings render the identical note and must stay distinct in the tree.
-    let base = "/private/tmp/plait-acceptance-bx6m5w3v";
+    // The native check's fixture starts this way, with one recorder in a fresh
+    // folder; the folder here is a stand-in.
+    let base = "/opt/acceptance";
     let recorder = format!("{base}/record-arguments");
     harness.update(|plait, _, cx| {
         plait.settings_tab = SettingsTab::Editor;
@@ -239,7 +241,7 @@ fn assert_settings_modals(harness: &mut Harness) {
         plait.show_editor_commands(cx);
     });
     let custom_frame = steady_frame(harness, "settings-editor-both-custom");
-    let expected_note = "Runs /private/tmp/plait-acceptance-bx6m5w3v/record-arguments directly, not through a shell.";
+    let expected_note = "Runs /opt/acceptance/record-arguments directly, not through a shell.";
     let note_nodes: Vec<_> = custom_frame
         .nodes
         .iter()
