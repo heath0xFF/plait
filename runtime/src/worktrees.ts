@@ -139,7 +139,7 @@ export class Worktrees {
     if (only !== undefined && (checkouts.length !== 1 || checkouts[0].path !== only)) fail('invalid_request', 'That folder is not one of this project’s checkouts.');
     const rows = checkouts.map(row => {
       const operation = operations.find(op => op.thread_id === row.thread_id);
-      if (this.busy(row.path) || this.store.db.prepare("SELECT 1 FROM requests JOIN threads ON threads.id=requests.scope WHERE threads.checkout=? AND requests.state='queued' LIMIT 1").get(row.path)) {
+      if (this.busy(row.path) || this.store.db.prepare("SELECT 1 FROM requests JOIN threads ON threads.id=requests.scope WHERE threads.checkout=? AND requests.state IN ('queued','checkout_queued') LIMIT 1").get(row.path)) {
         row.preservation.refusal = 'This worktree still has active, queued, or recovering work.';
         row.preservation.can_keep_local = false;
       }
@@ -244,7 +244,7 @@ export class Worktrees {
     try {
       const root = operation.worktree!.path;
       // UI summaries are advisory. In-process work and OS leases both exclude removal.
-      if (this.busy(root) || this.store.db.prepare("SELECT 1 FROM requests JOIN threads ON threads.id=requests.scope WHERE threads.checkout=? AND requests.state='queued' LIMIT 1").get(root)) fail('busy', 'This worktree still has active, queued, or recovering work.');
+      if (this.busy(root) || this.store.db.prepare("SELECT 1 FROM requests JOIN threads ON threads.id=requests.scope WHERE threads.checkout=? AND requests.state IN ('queued','checkout_queued') LIMIT 1").get(root)) fail('busy', 'This worktree still has active, queued, or recovering work.');
       operation.state = 'removing'; this.put(operation);
       operation.worktree = await worktreeHelper<Managed>({ action: 'remove', store: this.directory, thread_id: operation.thread_id, identity: request.identity, allow_unpushed: request.allow_unpushed });
       operation.state = 'removed'; operation.error = null; this.put(operation);

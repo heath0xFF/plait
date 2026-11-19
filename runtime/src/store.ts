@@ -1,3 +1,4 @@
+import { CheckoutQueue } from './checkout-queue.ts';
 import { Images } from './images.ts';
 import type { ImageRef } from './images.ts';
 import { DatabaseSync } from 'node:sqlite';
@@ -43,6 +44,7 @@ export class Store {
   outputs: CommandOutputs;
   images: Images;
   linear: LinearCache;
+  waiters: CheckoutQueue;
   constructor(directory: string) {
     this.db = new DatabaseSync(join(directory, 'host.sqlite'));
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
@@ -84,6 +86,7 @@ export class Store {
       }
     });
     this.backfill();
+    this.waiters = new CheckoutQueue(this);
     for (const snapshot of this.recoverable()) {
       if (snapshot.status === 'running' || snapshot.status === 'awaiting_approval') {
         snapshot.status = 'interrupted';
@@ -161,11 +164,19 @@ export class Store {
   }
   place(id: string, requestId: string, entry: number) {
     // A steering input the run took leaves the queue in the same write.
-    this.db.prepare('UPDATE requests SET entry=?,state=NULL,queue=NULL WHERE scope=? AND id=?').run(entry, id, requestId);
+    this.transaction(() => {
+      this.db.prepare('UPDATE requests SET entry=?,state=NULL,queue=NULL WHERE scope=? AND id=?').run(entry, id, requestId);
+      this.waiters.set(id, requestId, 'started');
+    });
   }
   /** Inputs waiting behind a run, oldest first. */
   queue(id: string): InputRecord[] {
     return this.db.prepare("SELECT id,input,entry,anchor,state,queue FROM requests WHERE scope=? AND state='queued' ORDER BY rowid").all(id).map(row => this.input(id, row));
+  }
+  waitingInput(id: string, request: string): InputRecord {
+    const row = this.db.prepare("SELECT id,input,entry,anchor,state,queue FROM requests WHERE scope=? AND id=? AND state IN ('queued','checkout_queued')").get(id,request);
+    if (!row) fail('not_found','Waiting message already started or was cancelled.');
+    return this.input(id,row);
   }
   private head(id: string) { return Number(this.db.prepare('SELECT head FROM threads WHERE id=?').get(id)?.head ?? 0); }
   private transaction<T>(work: () => T): T {
@@ -175,11 +186,19 @@ export class Store {
   }
   private refreshQueue(snapshot: Snapshot) { snapshot.queued = this.queue(snapshot.id).map(queuedView); }
   /** Accepts an input behind the active run. It joins the conversation only when it starts. */
-  enqueue(id: string, text: string, result: unknown, queued: NonNullable<InputRecord['queued']>, snapshot: Snapshot, images: string[] = []) {
+  enqueue(id: string, text: string, result: unknown, queued: NonNullable<InputRecord['queued']>, snapshot: Snapshot, images: string[] = [], checkoutWait = false) {
+    const bytes = Buffer.byteLength(text) + this.images.refs(snapshot.id, images).reduce((n, image) => n + image.size, 0);
+    this.waiters.check(snapshot, bytes);
     return this.transaction(() => {
       this.db.prepare("INSERT INTO requests (scope,id,hash,result,input,anchor,state,queue) VALUES (?,?,?,?,?,?,'queued',?)")
         .run(snapshot.id, id, digest(images.length ? { text, images } : text), JSON.stringify(result), JSON.stringify(text), this.head(snapshot.id), JSON.stringify(queued));
       this.images.attach(snapshot.id, id, images);
+      this.waiters.add(snapshot, id, queued.approval, checkoutWait ? 'checkout' : 'follow_up', bytes);
+      if (checkoutWait) {
+        this.db.prepare("UPDATE requests SET state='checkout_queued' WHERE scope=? AND id=?").run(snapshot.id,id);
+        snapshot.updated_at = Date.now();
+      }
+      if (!snapshot.title && !snapshot.renamed) snapshot.title = title(text);
       this.refreshQueue(snapshot);
       return this.save(snapshot);
     });
@@ -188,8 +207,9 @@ export class Store {
   dequeue(input: InputRecord, snapshot: Snapshot) {
     return this.transaction(() => {
       const head = this.head(snapshot.id);
-      const changed = this.db.prepare("UPDATE requests SET state=NULL,queue=NULL,anchor=? WHERE scope=? AND id=? AND state='queued'").run(head, snapshot.id, input.request_id);
+      const changed = this.db.prepare("UPDATE requests SET state=NULL,queue=NULL,anchor=? WHERE scope=? AND id=? AND state IN ('queued','checkout_queued')").run(head, snapshot.id, input.request_id);
       if (!changed.changes) fail('not_found', 'Queued message already started or was cancelled.');
+      this.waiters.set(snapshot.id,input.request_id,'started');
       pushMessage(snapshot, inputMessage(input));
       if (input.text.length > 4096) snapshot.truncated = true;
       this.refreshQueue(snapshot);
@@ -200,9 +220,9 @@ export class Store {
   cancel(id: string, requestId?: string): number {
     return this.transaction(() => {
       const changed = requestId === undefined
-        ? this.db.prepare("UPDATE requests SET state='cancelled',queue=NULL WHERE scope=? AND state='queued' RETURNING id").all(id)
-        : this.db.prepare("UPDATE requests SET state='cancelled',queue=NULL WHERE scope=? AND id=? AND state='queued' RETURNING id").all(id, requestId);
-      for (const row of changed) this.images.detach(id, String(row.id));
+        ? this.db.prepare("UPDATE requests SET state='cancelled',queue=NULL WHERE scope=? AND state IN ('queued','checkout_queued') RETURNING id").all(id)
+        : this.db.prepare("UPDATE requests SET state='cancelled',queue=NULL WHERE scope=? AND id=? AND state IN ('queued','checkout_queued') RETURNING id").all(id, requestId);
+      for (const row of changed) { this.images.detach(id, String(row.id)); this.waiters.set(id,String(row.id),'cancelled'); }
       return changed.length;
     });
   }

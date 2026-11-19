@@ -16,6 +16,7 @@ import { fauxProvider } from '@earendil-works/pi-ai/providers/faux';
 import { MAX_LINE_BYTES } from '../src/codex/server.ts';
 import { Runtime } from '../src/runtime.ts';
 import { CodexEntries } from '../src/codex/entries.ts';
+import { rootIdentity } from '../src/safety.ts';
 
 const png = readFileSync(new URL('./support/images/0.png', import.meta.url));
 const caption = 'Look\u202e here\u001b\u0085\u2028\n\tat this';
@@ -234,9 +235,10 @@ test('opening a Codex thread before the catalog arrives resolves text-only capab
   assert.equal(resumed.runtime.store.inputs(thread.id).length,0);
 });
 test('reopen releases image associations left by an older host cancellation',async t=>{
-  const {base}=await setup(t); const store=new Store(base);
+  const {base,root}=await setup(t); const store=new Store(base);
   const image=store.images.put('t',id(png),0,png.length,png.toString('base64')).image!;
-  const snapshot:Snapshot={id:'t',checkout:'/repo',model:{provider:'p',model_id:'m'},status:'idle',messages:[],tools:[],live_text:'',pending_approval:null,error:null,truncated:false};
+  const snapshot:Snapshot={id:'t',checkout:root,model:{provider:'p',model_id:'m'},status:'idle',messages:[],tools:[],live_text:'',pending_approval:null,error:null,truncated:false};
+  store.admit('create','t',{}, {},snapshot,await rootIdentity(root));
   store.enqueue('cancelled','',{}, {mode:'follow_up',approval:'ask'},snapshot,[image.id]);
   store.db.prepare("UPDATE requests SET state='cancelled',queue=NULL").run();
   store.close();

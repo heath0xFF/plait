@@ -1,3 +1,4 @@
+import { queueOperation, queueRequest, queueSettings, CHECKOUT_QUEUE_LIMIT, CHECKOUT_QUEUE_BYTES } from './checkout-queue.ts';
 import { runHeader } from './safety.ts';
 import { Worktrees, type Create as WorktreeCreate } from './worktrees.ts';
 import { CleanupProof, NEVER, RESTART_REASON, cleanupHelper, resolveProvedCleanup, handlesCleanup, validateCleanup } from './cleanup.ts';
@@ -101,6 +102,8 @@ export class Runtime {
   /** The person's Claude Code; a test runtime points it at the fake and the dev copy of the SDK. */
   claude: ClaudeHarness;
   private closing = false;
+  private queueDrains = new Map<string, Promise<void>>();
+  private queueWake?: ReturnType<typeof setTimeout>;
   private mcpObserved = new Map<string, Map<string, { fingerprint: string; observation: Observation }>>();
   private gates = new Map<string, Promise<unknown>>();
   private listeners = new Set<(id: string) => void>();
@@ -130,7 +133,7 @@ export class Runtime {
     this.codex = new CodexHarness(this.store);
     this.claude = new ClaudeHarness(this.store, { sdk: sdkDirectory(directory), cwd: directory });
     this.worktrees = new Worktrees(this.store, directory, (request, id) => this.prepareWorktreeThread(request, id), () => this.changed('#'), root => this.active.has(root) || this.records.busy(root));
-    this.admissions = new Admissions(this.store, this.worktrees, this.capacity, (input, identity) => this.handle(input, identity), root => this.active.has(root) || this.records.busy(root));
+    this.admissions = new Admissions(this.store, this.worktrees, this.capacity, (input, identity) => this.handle(input, identity), root => this.active.has(root) || this.records.busy(root) || this.store.waiters.line(root).some(waiter => waiter.kind === 'checkout' || waiter.state === 'waiting'));
   }
   /** Validate the selected harness before reserving filesystem effects. */
   private async prepareWorktreeThread(request: WorktreeCreate, id: string): Promise<Snapshot> {
@@ -255,6 +258,7 @@ export class Runtime {
     if (this.linear.handles(input)) return this.linear.handle(input);
     if (this.worktrees.handles(input)) return this.worktrees.handle(input);
     if (handlesAdmission(input)) return this.admissions.handle(input);
+    if (queueOperation(input)) return this.checkoutQueue(input);
     const request = validate(input);
     const protocol = version(request);
     const result = await this.dispatch(request, protocol, expectedCheckout);
@@ -350,7 +354,7 @@ export class Runtime {
         session?.authorization.revoke();
         // Stop also discards everything waiting behind the run.
         if (this.store.cancel(id)) snapshot.queued = [];
-        this.save(snapshot);
+        this.save(snapshot); this.changed('#'); this.drainCheckout(snapshot.checkout);
         if (session) void session.root?.abort(context).catch(() => {});
         return { thread: snapshot };
       }
@@ -601,11 +605,14 @@ export class Runtime {
       if (!session && this.active.has(snapshot.checkout)) fail('busy', 'This checkout already has an active run.');
       if (this.store.queue(id).length >= QUEUE_LIMIT) fail('busy', `This thread already has ${QUEUE_LIMIT} queued messages.`);
       this.notify(id, this.store.enqueue(requestId, text, result, { mode: whenBusy, approval: mode }, snapshot, images));
-      if (!session) this.drain(id, true);
+      this.changed('#');
+      if (!session) { this.store.waiters.resumeThread(id); this.drainCheckout(snapshot.checkout); }
       else { session.inputs = this.store.inputs(id); await this.steer(session); }
       return result;
     }
+    if (this.store.waiters.line(snapshot.checkout).some(waiter => waiter.state === 'waiting' || waiter.kind === 'checkout')) fail('busy', 'This checkout has waiting messages. Choose Wait to join its queue.');
     await this.start(snapshot, requestId, text, mode, () => this.store.admit(id, requestId, text, result, snapshot, undefined, images));
+    this.store.waiters.resumeThread(id);
     return result;
   }
   /** Admits one run: reserves the checkout, creates its own authorization, then commits acceptance. */
@@ -693,24 +700,102 @@ export class Runtime {
       if (run.steer(input.request_id, input.text, this.imageData(session.snapshot.id, input.request_id))) session.steered.set(input.request_id, JOINED);
     }
   }
-  /** Starts the next queued input as a new run with a new authorization in its own mode. */
-  private drain(id: string, resume = false) {
-    if (this.closing || this.sessions.has(id)) return;
-    const snapshot = this.store.get(id);
-    // A failed or interrupted run holds its queue. Stop clears it, so anything left after a stop was sent later.
-    if (!resume && snapshot.status !== 'idle' && snapshot.status !== 'stopped') return;
-    const next = this.store.queue(id)[0];
-    if (!next) return;
-    const begin = async () => {
-      this.usable(snapshot);
-      await this.start(snapshot, next.request_id, next.text, next.queued!.approval, () => this.store.dequeue(next, snapshot));
-    };
-    void begin().catch(error => {
-      if (this.sessions.has(id)) return;
-      const held = this.store.get(id);
-      held.status = 'error'; held.error = failure(error);
-      this.save(held);
+  private async checkoutQueue(input: unknown): Promise<unknown> {
+    const request = queueRequest(input);
+    if (request.op === 'checkout_queue_info') return { schema: 1, checkout_queue_v1: true, limit: CHECKOUT_QUEUE_LIMIT, payload_bytes: CHECKOUT_QUEUE_BYTES };
+    if (request.op === 'list_threads_queue' || request.op === 'watch_threads_queue') {
+      const page = await this.dispatch(validate({ ...request, op: request.op.replace('_queue',''), protocol_version: 6 }), 6) as { threads: import('./protocol.ts').Summary[] };
+      return { ...page, threads: page.threads.map(thread => ({ ...thread, checkout_queue: this.store.waiters.summary(thread.id,thread.checkout) })) };
+    }
+    const id = String(request.thread_id); const snapshot = this.snapshot(id);
+    if (request.op === 'submit_checkout') return this.gate(`queue:${id}`, async () => {
+      const images = request.images ?? []; const approval = request.approval ?? 'ask';
+      const previous = this.store.waiters.get(id,request.request_id);
+      if (previous && (previous.kind !== 'checkout' || previous.approval !== approval)) fail('conflict','Request ID was already used with different queue permissions.');
+      const duplicate = this.store.duplicate(id,request.request_id,images.length ? { text: request.text, images } : request.text);
+      if (duplicate !== undefined) {
+        if (!previous || previous.kind !== 'checkout') fail('conflict','Request ID already belongs to another submission.');
+        return duplicate;
+      }
+      const current = this.snapshot(id);
+      this.usable(current); await checkRoot(current.checkout,this.store.rootIdentity(id));
+      const refs = this.store.images.refs(id,images);
+      if (refs.length && this.imageInput(current) === 'no') fail('model_unavailable','This model cannot take images.');
+      const result = { thread_id: id, request_id: request.request_id, accepted: true };
+      this.notify(id,this.store.enqueue(request.request_id,request.text,result,{mode:'follow_up',approval},current,images,true));
+      this.changed('#'); this.drainCheckout(current.checkout); return result;
     });
+    if (request.op === 'resume_checkout_queue') {
+      this.store.waiters.resume(snapshot.checkout); this.changed('#'); this.drainCheckout(snapshot.checkout);
+    }
+    if (request.op === 'cancel_checkout_wait') {
+      const waiter = this.store.waiters.get(id,request.request_id);
+      if (!waiter || waiter.kind !== 'checkout') fail('not_found','Checkout waiter not found.');
+      if (waiter.state === 'started') {
+        // Never stop a later run in the same thread with an old cancellation.
+        if (this.sessions.get(id)?.requestId === request.request_id) await this.dispatch(validate({op:'stop',thread_id:id}),1);
+      } else if (waiter.state === 'waiting' || waiter.state === 'held') {
+        this.store.cancel(id,request.request_id); this.changed(id); this.changed('#'); this.drainCheckout(snapshot.checkout);
+      }
+    }
+    const line = this.store.waiters.line(snapshot.checkout);
+    return { schema: 1, thread_id: id, checkout: snapshot.checkout, waiters: this.store.waiters.receipts(id,request.request_id).map(waiter => {
+      return { request_id: waiter.request_id, state: waiter.state, position: line.findIndex(item => item.order === waiter.order) + 1, error: waiter.error };
+    }) };
+  }
+  /** Run completions wake all independent checkouts. Only external lock contention needs a timer. */
+  private drainCheckout(root: string) {
+    if (this.closing || this.active.has(root) || this.queueDrains.has(root)) return;
+    const work = this.drainLine(root).finally(() => this.queueDrains.delete(root));
+    this.queueDrains.set(root,work); void work.catch(() => {});
+  }
+  private async drainLine(root: string) {
+    while (!this.closing && !this.active.has(root)) {
+      const next = this.store.waiters.line(root).find(waiter => waiter.kind === 'checkout' || waiter.state === 'waiting');
+      if (!next || next.state === 'held') return;
+      const snapshot = this.store.get(next.thread_id);
+      try {
+        await checkRoot(root,next.identity);
+        if (next.kind === 'checkout' && (queueSettings(snapshot) !== next.settings || commandPolicy(this.store,root,next.identity) !== next.policy)) fail('queue_settings_changed','The model, permissions or project policy changed while this message waited. Send it again with the intended settings.');
+        this.usable(snapshot);
+        if (snapshot.harness?.id && snapshot.harness.id !== 'pi') {
+          await this.levels(snapshot.harness.id,snapshot.model.model_id);
+          if (snapshot.harness.mode) this.checkMode(snapshot.harness.id,snapshot.harness.mode);
+        }
+        const input = this.store.waitingInput(next.thread_id,next.request_id);
+        if (input.images?.length && this.imageInput(snapshot) === 'no') fail('model_unavailable','The queued images are not supported by this model.');
+        await this.start(snapshot,next.request_id,input.text,next.approval,() => {
+          // The cancellation may have arrived while admission awaited a lease or harness.
+          const current = this.store.waiters.get(next.thread_id,next.request_id);
+          if (this.closing || current?.state !== 'waiting') fail('cancelled','This queued message is no longer ready to start.');
+          const latest = this.store.get(next.thread_id);
+          if (next.kind === 'checkout' && (queueSettings(latest) !== next.settings || commandPolicy(this.store,root,next.identity) !== next.policy)) fail('queue_settings_changed','Queued settings changed during admission. Send again with the intended settings.');
+          return this.store.dequeue(input,snapshot);
+        });
+        this.changed('#'); return;
+      } catch (error) {
+        const reason = resourceFailure(error) ?? failure(error);
+        if (reason.code === 'busy' || reason.code === 'resource_exhausted' && this.capacity.maximum !== undefined && this.active.size >= this.capacity.maximum) { this.wakeQueue(); return; }
+        if (next.kind === 'checkout') {
+          this.store.waiters.set(next.thread_id,next.request_id,'failed',reason);
+          this.store.cancel(next.thread_id,next.request_id);
+          if (this.store.waiters.get(next.thread_id,next.request_id)?.state === 'failed') {
+            snapshot.status = 'error'; snapshot.error = reason; this.save(snapshot);
+          }
+        } else {
+          this.store.waiters.hold(next.thread_id); snapshot.status = 'error'; snapshot.error = reason; this.save(snapshot);
+        }
+        this.changed('#');
+      }
+    }
+  }
+  private wakeQueue() {
+    if (this.queueWake || this.closing) return;
+    this.queueWake = setTimeout(() => {
+      this.queueWake = undefined;
+      for (const root of this.store.waiters.roots()) this.drainCheckout(root);
+    },1000);
+    this.queueWake.unref();
   }
   /** The run's own input, or a continuation when a crash hid that an earlier run already took it as steering. */
   private async piInput(session: Session, requestId: string, text: string) {
@@ -832,7 +917,9 @@ export class Runtime {
       // Idle means a following submit can acquire the checkout immediately.
       if (snapshot.status !== 'stopped' && snapshot.status !== 'interrupted') snapshot.status = snapshot.error ? 'error' : 'idle';
       session.save(); this.sessions.delete(snapshot.id);
-      if (snapshot.error?.code !== 'cleanup_uncertain') this.drain(snapshot.id);
+      if (snapshot.status === 'error' || snapshot.status === 'interrupted') this.store.waiters.hold(snapshot.id);
+      this.changed('#');
+      for (const root of this.store.waiters.roots()) this.drainCheckout(root);
     }
   }
   /** A Codex thread's run: one Codex turn, under Codex's own sandbox and Plait's approvals. */
@@ -904,6 +991,8 @@ export class Runtime {
   }
   async close() {
     this.closing = true;
+    clearTimeout(this.queueWake);
+    await Promise.allSettled(this.queueDrains.values());
     for (const session of this.sessions.values()) {
       if (this.active.has(session.snapshot.checkout)) {
         session.snapshot.status = 'interrupted'; session.snapshot.pending_approval = null;

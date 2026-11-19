@@ -319,7 +319,7 @@ fn connection(
         }
     };
     // Register before reading state so a concurrent change cannot be missed.
-    let threads = request["op"] == "watch_threads";
+    let threads = request["op"] == "watch_threads" || request["op"] == "watch_threads_queue";
     let mut subscription = if request["op"] == "watch" {
         request["thread_id"]
             .as_str()

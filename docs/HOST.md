@@ -418,21 +418,24 @@ A queued input is saved with FULL durability before the reply. Request IDs
 deduplicate as for any submission: the same ID and text returns the original
 acceptance without queueing again, and different text returns `conflict`. A
 thread holds at most 16 queued inputs; one more returns `busy`. `when_busy` does
-not wait for another thread's run on the same checkout: that is still `busy`.
+not opt into waiting for another thread's run: that still returns `busy`. The
+explicit [checkout queue](#durable-checkout-queue) uses `submit_checkout`.
 
 A queued input is listed in the snapshot's `queued` and is not a message yet.
 When it starts or is taken, it leaves `queued` and appears in `messages` and
 `history` with the ID `request-CLIENT_UUID`, at the position where it ran.
 
-- **Starting.** When a run ends with status `idle`, the oldest queued input
-  starts as a new run through the same admission as a submission: checkout
+- **Starting.** When a run ends with status `idle`, eligible follow-ups and
+  checkout waiters share the durable acceptance order described below. The next
+  input starts through the same admission as a submission: checkout
   lease, checkout identity check, and a new authorization object in that input's
   own `approval` mode. Nothing carries over from the run before it.
 - **Held queue.** A run that ends in `error` or `interrupted`, and a host
   restart, leave the queue in place and start nothing. Queued inputs survive
   restart. The next submission with `when_busy` to that thread joins the queue
-  and starts it from its oldest input; a plain submission runs first, and the
-  queue follows when that run ends `idle`. A queued input that cannot start, for
+  and makes its follow-ups eligible in their original order; a plain submission
+  can run first only when no checkout waiter or eligible follow-up precedes it.
+  Its held follow-ups become eligible and follow when that run ends `idle`. A queued input that cannot start, for
   example because its model is no longer available, sets the thread to `error`
   with that reason and stays queued.
 - **Stop** cancels every queued input of the thread, as well as the run. An
@@ -2568,7 +2571,7 @@ request, snapshot or summary shapes, so the protocol remains version 6. Probe
 An older desktop continues to receive the existing `busy` refusal.
 
 - `admission_info {checkout}` returns schema 1, `worktree_at_start_v1:true`,
-  `linked_continuation_v1:true`, `queue:false`, `strict_reader:false`, canonical
+  `linked_continuation_v1:true`, `queue:true`, `strict_reader:false`, canonical
   `checkout`, its `identity`, main `project`, `project_identity`, `busy`,
   `auto_worktree`, nullable Stage 7 `parent` and nullable `refusal`. Busy means a
   run: this host's active or recovering run, or another host's run holding the
@@ -2585,7 +2588,9 @@ An older desktop continues to receive the existing `busy` refusal.
   threads only, including requests from the project's linked worktrees.
 - `create_admitted_thread {request_id,checkout,placement,harness,provider,
   model_id,approval,mode?,thinking?,source_thread_id?}` returns
-  `{schema:1,admission}`. Placement is `project` or `worktree`. Approval is `ask`
+  `{schema:1,admission}`. Placement is `project`, `worktree`, or explicit `wait`. Wait creates an
+  in-place thread even if the project has automatic worktrees enabled; it never
+  submits a message. Clients probe `checkout_queue_v1` before using Wait. Approval is `ask`
   or `auto`; harness/model/mode/thinking are preserved. A busy project with no
   authorization returns `choice` without creating a receipt or thread. The
   same request ID may then be explicitly resubmitted with `worktree`.
@@ -2619,7 +2624,7 @@ IDs are 1–128 ASCII letters, digits, underscores or hyphens, model fields at
 most 256 bytes, modes at most 32 lowercase letters/underscores, paths at most
 4096 UTF-8 bytes, and identities canonical unsigned 64-bit decimals. Parsers
 reject unknown reply states, inconsistent ready receipts and forged worktree
-paths. No queue, live reader, build-output copy or automatic removal is offered.
+paths. No live reader, build-output copy or automatic removal is offered.
 
 A checkout held for unconfirmed cleanup is refused with `cleanup_uncertain`
 before placement is offered, including when a cached active-run summary says
@@ -2629,6 +2634,91 @@ clears, removes or reuses protected checkout state. A held checkout must be
 resolved through the existing cleanup controls before a fresh placement request.
 Worktree effects also recheck the checkout under their lifecycle and repository
 metadata leases, closing the gap after the admission probe.
+
+### Durable checkout queue
+
+The checkout queue is host state, separate from the desktop's
+`queued_submissions` recovery cache and the snapshot's per-thread `queued`
+follow-ups. A person explicitly sends each checkout waiter. No prompt analysis,
+automatic new-thread queue choice, or agent orchestration is involved. Every
+run remains a writer.
+
+These additive operations omit `protocol_version`; versions 1–6 and their
+existing reply shapes are unchanged:
+
+| Operation | Result and meaning |
+| --- | --- |
+| `checkout_queue_info {}` | `{schema:1,checkout_queue_v1:true,limit:32,payload_bytes:33554432}`. An older host's `invalid_request` makes Wait unavailable. |
+| `submit_checkout {thread_id,request_id,text,approval?,images?}` | The existing acceptance fields `{thread_id,request_id,accepted:true}` after a durable commit. Approval defaults to `ask`; image IDs refer to completed thread-owned uploads. An available checkout may start immediately. |
+| `checkout_queue {thread_id}` | `{schema:1,thread_id,checkout,waiters}` with up to 32 checkout waiter receipts in acceptance order: pending inputs first for inclusion, then recent terminal receipts. Each has `request_id`, `state`, `position` (zero when terminal), and nullable `error`. Cancellation replies always include the requested receipt. |
+| `cancel_checkout_wait {thread_id,request_id}` | The same queue receipt. Waiting or held input becomes cancelled. If that exact input already started and is still the active run, the operation requests the existing Stop. It never stops a later run or silently discards an executing input. Repeating cancellation is safe. |
+| `resume_checkout_queue {thread_id}` | The same queue receipt. Explicitly releases all held inputs for this thread's checkout in their original order, including held follow-ups. It does not replay an interrupted run. |
+| `list_threads_queue {checkout?,limit?,cursor?,archived?}` | The version 6 thread-page shape, adding nullable `checkout_queue` to each summary. The normal listing's pagination and bounds apply. |
+| `watch_threads_queue {archived?}` | The existing shared summary-event stream, with the same queue addition. No separate watcher per waiter is required. |
+
+The compact summary is `{request_id,state,position,count}` for a thread's first
+checkout waiter; state is `waiting` or `held`. Count is that thread's checkout
+waiters, position includes preceding pending inputs in the checkout. Summaries
+contain no prompts or image bytes. Unknown states, invalid identities, unknown
+fields, excessive counts, and out-of-range positions are rejected by the core
+parsers. The current summary stream retains its newest-200-thread window; older
+threads remain available through paged listing and explicit refresh.
+
+Acceptance stores the original request ID, exact message and image references,
+canonical checkout plus directory device/inode, chosen harness, model, thinking,
+permission mode, approval, command policy, immutable writing class, acceptance
+order and cancellation state. Images remain in the host's private store. Same
+ID and payload returns the original acceptance even after cancellation or start;
+changed text, images or approval is a conflict. A busy refusal creates no accepted
+input. The new operation cannot reuse an ID from a different submission kind.
+
+There are at most **32 pending inputs and 32 MiB of text plus image payload per
+checkout**, counting held inputs and follow-ups. The existing 16-follow-up limit
+per thread also applies. Capacity errors say `queue_full`, describe the reached
+bound, and preserve the unsent draft. Counts release on start, cancellation or
+terminal rejection; permanent deduplication receipts remain. Existing per-message
+image and request-frame bounds still apply.
+
+**Fair order.** Every pending input receives the same monotonically increasing
+request-row order at durable acceptance. For one canonical checkout, the lowest
+eligible order gets the next writer lease. A later follow-up cannot bypass an
+earlier checkout waiter, and a direct submit cannot jump an eligible line.
+Steering explicitly joins the current run; a steering input that was not taken
+uses its original place for a later run. Follow-ups held after their own run
+fails remain ineligible until the existing next-send action or Resume; they do
+not prevent other threads' waiters from advancing. A restart-held checkout
+waiter keeps its place and holds later inputs until Resume or Cancel. Independent
+checkouts have independent drains and never share a queue head.
+
+| State | Transition |
+| --- | --- |
+| `waiting` | Durable acceptance; the host considers it when the checkout frees. |
+| `held` | Host startup changes every not-started input to held. Resume changes the whole checkout's held line to waiting. |
+| `started` | Revalidation and lease acquisition succeed; moving the input into the conversation and recording start are one transaction. Normal run/Stop/recovery states now own it. |
+| `cancelled` | Cancel or Stop removes a pending input and its image associations. Its request ID stays used; it never runs. |
+| `failed` | A checkout waiter fails revalidation or admission, records its reason, and leaves the line. The next waiter is considered. |
+
+Before start the host rechecks the saved folder identity, cleanup exclusion,
+harness/model availability, cancellation and settings. A changed model, thinking
+level, permission mode or command policy fails the waiter explicitly; it does
+not silently substitute new settings. Send again with the intended choices.
+Cleanup uncertainty never grants a lease. No before-record is taken while an
+input waits: recording begins only after normal run admission. A failed
+before-record is a normal failed run, with no harness execution.
+
+A host restart starts no queued work. Resume applies to the whole checkout line
+so its original order is retained without asking separately for each message.
+A run interrupted after admission is never re-queued; its existing recovery and
+cleanup controls remain authoritative. Cleanup confirmation alone does not
+resume held messages. Closing a desktop or tab does not hold an otherwise live
+host's queue.
+
+Run completion and queue operations wake drains. Local completion wakes other
+checkouts waiting for configured capacity. A single shared host timer retries
+only lease/capacity contention, including a writer in another host store; it is
+not a desktop poll or one timer per waiter. Actual resource failures are reported
+rather than silently retried. FIFO is within this host's durable line; other
+host stores participate in OS write exclusion, not a shared distributed queue.
 
 ### Run capacity and preparation
 

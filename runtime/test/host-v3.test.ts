@@ -497,3 +497,21 @@ test('the turn limit pauses the run with a distinct error and the next message c
   const again = await until(() => watch3(f, thread.id), value => value.status === 'error' && value.tools.length === 4);
   assert.equal(again.error!.code, 'turn_limit');
 });
+
+test('checkout wait survives a host crash during another run effect and streams held status', {timeout:40000}, async t=>{
+ const f=await setup(t,'effect');const a=await f.create(),b=await f.create('second');
+ const queue=(op:string)=>request(f.store,{op,thread_id:b.id});
+ const capability:any=await request(f.store,{op:'checkout_queue_info'});assert.equal(capability.result.checkout_queue_v1,true);
+ const live=stream<any>(f.store,{op:'watch_threads_queue',archived:true});t.after(async()=>{live.socket.destroy();});await until(async()=>live.frames.length,n=>n===1);
+ await f.submit(a.id);const approval=await until(()=>f.watch(a.id),s=>!!s.pending_approval);
+ const input={op:'submit_checkout',thread_id:b.id,request_id:'waiting',text:'wait for the checkout',approval:'auto'};
+ assert.equal((await request(f.store,input)).ok,true);assert.equal((await request(f.store,input)).ok,true);
+ await until(async()=>live.frames.flatMap(f=>f.threads??[]).find(t=>t.id===b.id&&t.checkout_queue?.state==='waiting'),Boolean);
+ const legacy:any=await v3(f.store,{op:'list_threads'});assert(legacy.result.threads.every((t:object)=>!Object.hasOwn(t,'checkout_queue')));
+ await f.approve(a.id,approval.pending_approval!.id);await until(()=>readFile(join(f.repo,'attempts.txt'),'utf8'),text=>text==='effect\n');
+ const [node]=await childPids(f.host.pid!);process.kill(node,'SIGKILL');await until(async()=>f.host.exitCode!==null,Boolean);await f.start('answer');
+ assert.equal((await f.watch(a.id)).status,'interrupted');const held:any=await queue('checkout_queue');assert.equal(held.result.waiters[0].state,'held');
+ await confirmStopped(f);await delay(150);assert.equal((await f.watch(b.id)).messages.length,0);
+ assert.equal((await queue('resume_checkout_queue')).ok,true);await until(()=>f.watch(b.id),s=>s.status==='idle'&&s.messages.length>0);
+ assert.equal(await readFile(join(f.repo,'attempts.txt'),'utf8'),'effect\n');assert.equal((await f.watch(a.id)).messages.filter(m=>m.id==='request-submit-1').length,1);
+});

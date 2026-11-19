@@ -78,10 +78,16 @@ for(const harness of ['pi','codex','claude'] as const) test(`busy choice, author
     ready=await admitted(h.runtime,'choice');
     assert.equal((await h.runtime.reply({...chosen,approval:'ask'})).error?.code,'invalid_request');
     assert.equal((await h.runtime.reply(chosen) as any).result.admission.thread_id,ready.thread_id);
-    const info:any=await h.runtime.reply({op:'admission_info',checkout:h.root});assert.equal(info.result.busy,true);assert.equal(info.result.auto_worktree,false);assert.equal(info.result.queue,false);
+    const info:any=await h.runtime.reply({op:'admission_info',checkout:h.root});assert.equal(info.result.busy,true);assert.equal(info.result.auto_worktree,false);assert.equal(info.result.queue,true);
     assert.equal((await h.runtime.reply({op:'set_project_isolation',checkout:h.root,identity:{...identity,ino:'0'},auto_worktree:true})).ok,false);
     assert.equal((await h.runtime.reply({op:'set_project_isolation',checkout:h.root,identity,auto_worktree:true})).ok,true);
     await h.runtime.reply(start(h.root,'automatic',harness));const automatic=await admitted(h.runtime,'automatic');assert.ok(automatic.worktree);assert.notEqual(automatic.thread_id,ready.thread_id);
+    const waiting={...start(h.root,'explicit-wait',harness),placement:'wait'};
+    assert.equal((await h.runtime.reply(waiting)).ok,true);const inPlace=await admitted(h.runtime,'explicit-wait');
+    assert.equal(inPlace.checkout,h.root);assert.equal(inPlace.worktree,null);
+    const queued=await h.runtime.reply({op:'submit_checkout',thread_id:inPlace.thread_id,request_id:'queued-first',text:'wait here',approval:'auto'});
+    assert.equal(queued.ok,true,JSON.stringify(queued));assert.equal(h.runtime.store.waiters.get(inPlace.thread_id!,'queued-first')!.state,'waiting');
+    await h.runtime.reply({op:'cancel_checkout_wait',thread_id:inPlace.thread_id,request_id:'queued-first'});
   } finally {await lease.close();}
   const target=ready!.checkout;const id=ready!.thread_id!; const snapshot=h.runtime.snapshot(id);
   assert.equal(snapshot.checkout,target);assert.equal(snapshot.harness?.id??'pi',harness);assert.equal(snapshot.approval_mode,'auto');

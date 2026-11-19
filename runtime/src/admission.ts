@@ -7,7 +7,7 @@ import { fail, failure, HostError, HARNESSES, THINKING_LEVELS, type Snapshot, ty
 import { worktreeHelper, type Worktrees, type Parent, type Managed, type Create } from './worktrees.ts';
 import type { Store } from './store.ts';
 
-export type Placement = 'project' | 'worktree';
+export type Placement = 'project' | 'worktree' | 'wait';
 export type Start = { op: 'create_admitted_thread'; request_id: string; checkout: string; placement: Placement; harness: HarnessId; provider: string; model_id: string; approval: ApprovalMode; mode?: string; thinking?: ThinkingLevel; source_thread_id?: string };
 type Request = { op: 'run_preparation'; thread_id: string } | Start | { op: 'admission_info'; checkout: string } | { op: 'set_project_isolation'; checkout: string; identity: FileIdentity; auto_worktree: boolean } | { op: 'admission_status'; request_id: string } | { op: 'thread_origin'; thread_id: string };
 export type Admission = { request_id: string; state: 'choice' | 'preparing' | 'ready' | 'failed'; thread_id: string | null; checkout: string; worktree: Managed | null; source_thread_id: string | null; error: Failure | null };
@@ -32,7 +32,7 @@ export function validateAdmission(input: unknown): Request {
     if (typeof value.auto_worktree !== 'boolean' || !identity || Object.keys(identity).sort().join(',') !== 'dev,ino' || !Object.values(identity).every(part => typeof part === 'string' && /^(0|[1-9]\d{0,19})$/.test(part) && BigInt(part) <= 18446744073709551615n)) fail('invalid_request', 'Invalid project isolation setting.');
   }
   if (value.op === 'create_admitted_thread') {
-    if (!['project', 'worktree'].includes(String(value.placement)) || !HARNESSES.includes(value.harness as HarnessId) || !['ask', 'auto'].includes(String(value.approval))) fail('invalid_request', 'Invalid thread placement or harness.');
+    if (!['project', 'worktree', 'wait'].includes(String(value.placement)) || !HARNESSES.includes(value.harness as HarnessId) || !['ask', 'auto'].includes(String(value.approval))) fail('invalid_request', 'Invalid thread placement or harness.');
     for (const key of ['provider', 'model_id']) if (typeof value[key] !== 'string' || !value[key].trim() || Buffer.byteLength(value[key]) > 256 || /[\u0000-\u001f\u007f]/u.test(value[key])) fail('invalid_request', 'Invalid admission model.');
     if (value.mode !== undefined && (typeof value.mode !== 'string' || !/^[a-z_]{1,32}$/.test(value.mode))) fail('invalid_request', 'Invalid admission mode.');
     if (value.thinking !== undefined && !THINKING_LEVELS.includes(value.thinking as ThinkingLevel)) fail('invalid_request', 'Invalid admission thinking level.');
@@ -108,7 +108,7 @@ export class Admissions {
     await checkRoot(root, identity);
     if (parent && (parent.root !== root || canonical(parent.identity) !== canonical(identity))) fail('permission_denied', 'Checkout identity changed. Refresh before starting a thread.');
     const project = parent?.main ?? root; const project_identity = parent?.main_identity ?? identity;
-    return { schema: 1, worktree_at_start_v1: true, linked_continuation_v1: true, queue: false, strict_reader: false,
+    return { schema: 1, worktree_at_start_v1: true, linked_continuation_v1: true, queue: true, strict_reader: false,
       checkout: root, identity, project, project_identity, busy, auto_worktree: this.store.setting(policyKey(project, project_identity)) === 'worktree', parent, refusal };
   }
   /** Settles when no placement probe holds this checkout's lease. */
@@ -138,9 +138,9 @@ export class Admissions {
       if (source.checkout !== info.checkout) fail('permission_denied', 'The linked thread belongs to another checkout.');
       await checkRoot(source.checkout, this.store.rootIdentity(source.id));
     }
-    const isolated = request.placement === 'worktree' || info.busy && info.auto_worktree;
+    const isolated = request.placement === 'worktree' || request.placement === 'project' && info.busy && info.auto_worktree;
     const result: Admission = { request_id: request.request_id, state: 'preparing', thread_id: null, checkout: info.checkout, worktree: null, source_thread_id: request.source_thread_id ?? null, error: null };
-    if (info.busy && !isolated) return { ...result, state: 'choice' };
+    if (info.busy && !isolated && request.placement !== 'wait') return { ...result, state: 'choice' };
     if (isolated && !info.parent) fail('worktree_unavailable', info.refusal ?? 'Make a first commit before starting a worktree.');
     const { harness, provider, model_id, approval, mode, thinking } = request;
     const effectId = randomUUID();
