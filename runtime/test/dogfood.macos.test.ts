@@ -25,9 +25,10 @@ test('production runtime edits Plait source, runs Cargo, reconnects and resumes 
     + '        assert_eq!(title(&input), "x".repeat(TITLE_LIMIT));\n    }\n\n' + marker;
   assert(before.includes('.take(72)') && before.includes(oldConstant) && before.includes(marker), 'Update the dogfood fixture when the title implementation changes.');
   const edit = (id: string, old_text: string, new_text: string) => ({ tool: { id, name: 'edit', input: { path, old_text, new_text } } });
-  // The command sandbox denies link(2); that one test is skipped by name, not passed.
+  // Cargo builds the crate and runs the tests of the module the turn edits. The
+  // whole core suite belongs to the workspace check, not inside this deadline.
   const command = (id: string) => ({ tool: { id, name: 'command', input: {
-    command: `sleep ${id === 'test_refactor' && process.env.PLAIT_VERIFY_INSTALLED_UI === '1' ? 8 : 1}; cargo test --offline --locked -p plait-core --lib -- --skip lease::tests::hard_linked_lock_file_is_rejected`,
+    command: `sleep ${id === 'test_refactor' && process.env.PLAIT_VERIFY_INSTALLED_UI === '1' ? 8 : 1}; cargo test --offline --locked -p plait-core --lib session::`,
   } } });
   const replay = await replayServer([
     edit('extract_limit', '.take(72)', '.take(TITLE_LIMIT)'), edit('name_limit', oldConstant, newConstant),
@@ -125,6 +126,9 @@ test('production runtime edits Plait source, runs Cargo, reconnects and resumes 
     const commands = done.tools.filter(tool => tool.name === 'command');
     assert.equal(commands.length, turn);
     assert.match(commands.at(-1)!.output, /test result: ok/);
+    // The first turn's run includes the regression test it added; the second, with the source restored, does not.
+    assert.equal(/dogfood_normalizes_before_applying_the_title_limit \.\.\. ok/.test(commands.at(-1)!.output), turn === 1);
+    assert.match(commands.at(-1)!.output, /titles_are_plain_whitespace_normalized_and_unicode_safe \.\.\. ok/);
     assert.equal(replay.requests.length, turn * 5);
     assert.equal((await submit(requestId)).ok, true);
     assert.equal(replay.requests.length, turn * 5, 'Retry must not call the model again.');
