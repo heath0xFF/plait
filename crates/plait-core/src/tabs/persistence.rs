@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 pub const FILE_NAME: &str = "tabs.json";
 pub const SCHEMA_VERSION: u32 = 1;
-pub const FILE_LIMIT: usize = 2 * 1024 * 1024;
+pub const FILE_LIMIT: usize = 16 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
 struct SavedTab {
@@ -144,10 +144,16 @@ pub fn decode(bytes: &[u8], window: WindowId, context: &RestoreContext<'_>) -> R
         .and_then(serde_json::Value::as_u64)
         .map(TabId);
     let mut ids = HashSet::new();
-    for entry in tabs.iter().take(MAX_TABS) {
-        let Ok(saved) = serde_json::from_value::<SavedTab>(entry.clone()) else {
+    for entry in tabs.iter().take(MAX_RESTORED_TABS) {
+        let Ok(mut saved) = serde_json::from_value::<SavedTab>(entry.clone()) else {
             continue;
         };
+        if let ThreadTarget::Draft { id, checkout } = &saved.target
+            && id == "draft"
+            && let Some(target) = context.drafts.iter().find(|t| t.checkout() == checkout)
+        {
+            saved.target = target.clone();
+        }
         if saved.id.0 == 0
             || ids.contains(&saved.id)
             || !context.contains(&saved.target)
@@ -384,12 +390,12 @@ mod tests {
 
     #[test]
     fn restore_caps_input_entries_and_later_bad_active_selects_first_survivor() {
-        let c = Catalog::new(MAX_TABS + 3);
+        let c = Catalog::new(MAX_RESTORED_TABS + 3);
         let (w, _) = source(1);
         let mut v = value(&w, &c);
         let template = v["tabs"][0].clone();
         v["tabs"] = Value::Array(
-            (0..MAX_TABS + 3)
+            (0..MAX_RESTORED_TABS + 3)
                 .map(|i| {
                     let mut t = template.clone();
                     t["id"] = json!(i + 1);
@@ -398,9 +404,9 @@ mod tests {
                 })
                 .collect(),
         );
-        v["active"] = json!(MAX_TABS + 2);
+        v["active"] = json!(MAX_RESTORED_TABS + 2);
         let r = read(&v, &c);
-        assert_eq!(r.window.tabs().len(), MAX_TABS);
+        assert_eq!(r.window.tabs().len(), MAX_RESTORED_TABS);
         assert_eq!(r.window.active(), Some(r.window.tabs()[0].id()));
         assert!(
             r.window
@@ -471,7 +477,7 @@ mod tests {
                 let mut changed = bytes.clone();
                 changed[offset] = byte;
                 let r = decode(&changed, WindowId(99), &c.context());
-                assert!(r.window.tabs().len() <= MAX_TABS);
+                assert!(r.window.tabs().len() <= MAX_RESTORED_TABS);
                 assert!(
                     r.window
                         .active()
@@ -501,7 +507,7 @@ mod tests {
 
     #[test]
     fn full_window_fits_file_bound_and_contains_no_loaded_or_submission_data() {
-        let (mut w, c) = source(MAX_TABS);
+        let (mut w, c) = source(300);
         let id = w.active().unwrap();
         let stamp = w.read_stamp(id).unwrap();
         w.resident_mut(stamp).unwrap().repository.history.selected =
@@ -511,6 +517,6 @@ mod tests {
         let text = String::from_utf8(bytes.clone()).unwrap();
         assert!(!text.contains("resident-only-sentinel"));
         let r = decode(&bytes, WindowId(99), &c.context());
-        assert_eq!(r.window.tabs().len(), MAX_TABS);
+        assert_eq!(r.window.tabs().len(), 300);
     }
 }

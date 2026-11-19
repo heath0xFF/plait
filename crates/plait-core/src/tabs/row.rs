@@ -667,16 +667,16 @@ mod tests {
             (rows[0].title.as_str(), rows[0].state),
             ("Thread a", TabState::Idle)
         );
-        // Cost must not scale with tabs × catalog: compare 100 tabs with 1 tab
+        // Cost must not scale with tabs × catalog: compare 300 tabs with 1 tab
         // whose summaries sit at the catalog's end, so each lookup scans it all.
         let mut threads = (0..50_000)
             .map(|i| summary(&format!("x{i}"), ThreadStatus::Idle))
             .collect::<Vec<_>>();
-        threads.extend((0..MAX_TABS).map(|i| summary(&format!("t{i}"), ThreadStatus::Idle)));
+        threads.extend((0..300).map(|i| summary(&format!("t{i}"), ThreadStatus::Idle)));
         let mut one = window();
         open(&mut one, "t0");
         let mut full = window();
-        for i in 0..MAX_TABS {
+        for i in 0..300 {
             open(&mut full, &format!("t{i}"));
         }
         let fastest = |w: &WindowTabs| {
@@ -699,7 +699,7 @@ mod tests {
         let (one, full) = (fastest(&one), fastest(&full));
         assert!(
             full < one * 10,
-            "100 tabs took {full:?}; 1 tab took {one:?}"
+            "300 tabs took {full:?}; 1 tab took {one:?}"
         );
     }
 

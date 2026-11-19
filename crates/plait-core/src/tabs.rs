@@ -14,7 +14,8 @@ use bookmark::BookmarkRecord;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-pub const MAX_TABS: usize = 100;
+/// Bound untrusted restore input; interactive opening has no count ceiling.
+pub const MAX_RESTORED_TABS: usize = 10_000;
 pub const CLOSED_TAB_LIMIT: usize = 20;
 pub const COLD_TAB_BYTES: usize = 16 * 1024;
 
@@ -88,7 +89,16 @@ impl ThreadTarget {
                     checkout: bc,
                 },
             ) => a == b && ac.host == bc.host,
-            (Self::Draft { checkout: a, .. }, Self::Draft { checkout: b, .. }) => a == b,
+            (
+                Self::Draft {
+                    id: a,
+                    checkout: ac,
+                },
+                Self::Draft {
+                    id: b,
+                    checkout: bc,
+                },
+            ) => a == b && ac == bc,
             _ => false,
         }
     }
@@ -375,7 +385,7 @@ impl WindowTabs {
         Ok(())
     }
 
-    /// Sidebar and New thread both use this transition. One draft per checkout.
+    /// Existing threads deduplicate; each new draft carries its own identity.
     /// Connection generations come from the connection owner, never selection.
     pub fn open(
         &mut self,
@@ -414,9 +424,6 @@ impl WindowTabs {
         index: usize,
         connection: Option<u64>,
     ) -> Result<TabId, TabError> {
-        if self.tabs.len() == MAX_TABS {
-            return Err(TabError::Capacity);
-        }
         validate_record(&target, &bookmark)?;
         // Reserve activation's identity before changing the ordered set.
         if self.serial >= u64::MAX - 1 {
@@ -569,6 +576,59 @@ impl WindowTabs {
         Ok(())
     }
 
+    pub fn move_draft(&mut self, id: TabId, checkout: CheckoutKey) -> Result<(), TabError> {
+        let index = self.index(id)?;
+        let ThreadTarget::Draft { id: draft, .. } = &self.tabs[index].thread().target else {
+            return Err(TabError::InvalidIdentity);
+        };
+        let target = ThreadTarget::Draft {
+            id: draft.clone(),
+            checkout,
+        };
+        validate_record(&target, &BookmarkRecord::default())?;
+        if self.serial >= u64::MAX - 1 {
+            return Err(TabError::IdentityExhausted);
+        }
+        let generation = self.next_serial()?;
+        self.tabs[index].lifetime.generation = generation;
+        let thread = self.tabs[index].content.thread_mut();
+        thread.target = target;
+        thread.bookmark = BookmarkRecord::default();
+        self.park(id)?;
+        if self.active == Some(id) {
+            self.activate(id)?;
+        }
+        Ok(())
+    }
+
+    /// Creation owns its draft even after close; never selects another tab.
+    pub fn bind_draft_target(
+        &mut self,
+        draft: &ThreadTarget,
+        target: ThreadTarget,
+    ) -> Result<(), TabError> {
+        if let Some(tab) = self.tabs.iter().find(|tab| tab.thread().target() == draft) {
+            let id = tab.id;
+            return if draft.checkout() == target.checkout() {
+                self.bind_created(id, target)
+            } else {
+                self.bind_worktree_created(id, draft.checkout(), target)
+            };
+        }
+        if !draft.is_draft()
+            || target.is_draft()
+            || !target.valid()
+            || draft.checkout().host != target.checkout().host
+        {
+            return Err(TabError::InvalidIdentity);
+        }
+        if let Some(closed) = self.closed.iter_mut().find(|tab| &tab.target == draft) {
+            closed.target = target;
+            closed.bookmark = BookmarkRecord::default();
+        }
+        Ok(())
+    }
+
     /// Call only after the UI's save succeeds. A save failure must leave it open.
     /// `draft_nonempty` includes images; it never copies a draft into this model.
     pub fn close(&mut self, id: TabId, draft_nonempty: bool) -> Result<(), TabError> {
@@ -628,11 +688,6 @@ impl WindowTabs {
                 }
                 self.activate(id)?;
                 return Ok(Some(id));
-            }
-            // Only a new tab needs room; keep the entry for a later attempt.
-            if self.tabs.len() == MAX_TABS {
-                self.closed.push(closed);
-                return Err(TabError::Capacity);
             }
             let id = self.insert(closed.target, closed.bookmark, closed.index, connection)?;
             self.activate(id)?;

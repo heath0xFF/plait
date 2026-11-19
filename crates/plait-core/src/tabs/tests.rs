@@ -74,10 +74,12 @@ fn opens_append_and_sidebar_activation_deduplicates_without_resetting() {
     assert_eq!(w.get(a).unwrap().content().view_commands().len(), 4);
 }
 #[test]
-fn one_draft_per_exact_checkout_and_creation_keeps_tab_but_changes_lifetime() {
+fn independent_drafts_and_creation_keeps_tab_but_changes_lifetime() {
     let mut w = window();
     let a = w.open(draft("draft-a"), Some(1)).unwrap();
-    assert_eq!(w.open(draft("draft-b"), Some(1)).unwrap(), a);
+    let b = w.open(draft("draft-b"), Some(1)).unwrap();
+    assert_ne!(a, b);
+    w.activate(a).unwrap();
     w.save_bookmark(a, bookmark(ThreadView::Changes)).unwrap();
     let old = w.read_stamp(a).unwrap();
     w.bind_created(a, target("created")).unwrap();
@@ -90,7 +92,7 @@ fn one_draft_per_exact_checkout_and_creation_keeps_tab_but_changes_lifetime() {
     );
     assert_eq!(open(&mut w, "created"), a);
     assert!(w.open(draft("next-draft"), Some(1)).is_ok());
-    assert_eq!(w.tabs().len(), 2);
+    assert_eq!(w.tabs().len(), 3);
 }
 #[test]
 fn draft_creation_rejects_wrong_checkout_existing_thread_and_stale_ack() {
@@ -409,12 +411,11 @@ fn windows_do_not_accept_each_others_lifetimes() {
 fn limits_and_invalid_operations_preserve_the_window() {
     let mut w = window();
     assert_eq!(w.open(target(""), None), Err(TabError::InvalidIdentity));
-    for i in 0..MAX_TABS {
+    for i in 0..300 {
         open(&mut w, &format!("t{i}"));
     }
+    assert!(w.open(target("beyond-300"), Some(1)).is_ok());
     let before = ids(&w);
-    assert_eq!(w.open(target("full"), Some(1)), Err(TabError::Capacity));
-    assert_eq!(ids(&w), before);
     assert_eq!(w.activate(TabId(0)), Err(TabError::MissingTab));
     assert_eq!(w.move_tab(TabId(0), 0), Err(TabError::MissingTab));
     w.serial = u64::MAX;
@@ -668,7 +669,7 @@ fn extended_payload_and_collection_limits_are_enforced() {
 #[test]
 fn reopen_at_capacity_activates_an_already_open_thread() {
     let mut w = window();
-    for i in 0..MAX_TABS {
+    for i in 0..300 {
         open(&mut w, &format!("t{i}"));
     }
     let first = ids(&w)[0];
@@ -677,12 +678,12 @@ fn reopen_at_capacity_activates_an_already_open_thread() {
     w.activate(ids(&w)[0]).unwrap();
     assert_eq!(w.reopen(|_| Some(Some(1))), Ok(Some(again)));
     assert_eq!(w.active(), Some(again));
-    // A thread that needs a new tab still refuses, keeping its history entry.
+    // Reopening beyond the old capacity also succeeds.
     let last = *ids(&w).last().unwrap();
     w.close(last, false).unwrap();
     open(&mut w, "full");
-    assert_eq!(w.reopen(|_| Some(Some(1))), Err(TabError::Capacity));
-    assert_eq!(w.closed_len(), 1);
+    assert!(w.reopen(|_| Some(Some(1))).unwrap().is_some());
+    assert_eq!(w.closed_len(), 0);
 }
 #[test]
 fn closing_a_thread_again_replaces_its_older_history_entry() {
@@ -789,4 +790,75 @@ fn worktree_creation_only_binds_the_expected_draft_and_never_steals_focus() {
         w.bind_worktree_created(a, &original, target),
         Err(TabError::InvalidIdentity)
     );
+}
+
+#[test]
+fn three_hundred_drafts_close_in_every_order_without_sharing_identity() {
+    for reverse in [false, true] {
+        let mut w = window();
+        let mut opened = Vec::new();
+        for n in 0..300 {
+            opened.push(w.open(draft(&format!("draft-{n}")), Some(1)).unwrap());
+        }
+        assert_eq!(w.tabs().len(), 300);
+        assert_eq!(
+            w.tabs()
+                .iter()
+                .filter(|t| t.thread().residency.visibility().is_some())
+                .count(),
+            1
+        );
+        if reverse {
+            opened.reverse();
+        }
+        for id in opened {
+            w.close(id, true).unwrap();
+        }
+        assert_eq!(w.closed_len(), CLOSED_TAB_LIMIT);
+        for _ in 0..CLOSED_TAB_LIMIT {
+            assert!(w.reopen(|_| Some(Some(1))).unwrap().is_some());
+        }
+        assert_eq!(w.tabs().len(), CLOSED_TAB_LIMIT);
+        assert!(w.reopen(|_| Some(Some(1))).unwrap().is_none());
+    }
+}
+
+#[test]
+fn closed_draft_creation_reopens_the_created_thread_without_stealing_focus() {
+    let mut w = window();
+    let a = w.open(draft("a"), Some(1)).unwrap();
+    w.close(a, true).unwrap();
+    let b = w.open(draft("b"), Some(1)).unwrap();
+    w.bind_draft_target(&draft("a"), target("created-a"))
+        .unwrap();
+    assert_eq!(w.active(), Some(b));
+    let reopened = w.reopen(|_| Some(Some(1))).unwrap().unwrap();
+    assert_eq!(
+        w.get(reopened).unwrap().thread().target(),
+        &target("created-a")
+    );
+}
+
+#[test]
+fn moving_a_draft_keeps_its_id_and_siblings_and_reserves_read_generations() {
+    let mut w = window();
+    let a = w.open(draft("a"), Some(1)).unwrap();
+    let b = w.open(draft("b"), Some(1)).unwrap();
+    let before = w.read_stamp(b).unwrap();
+    let mut checkout = draft("a").checkout().clone();
+    checkout.root = "/other-project".into();
+    w.move_draft(b, checkout.clone()).unwrap();
+    assert_eq!(w.active(), Some(b));
+    assert_eq!(w.get(a).unwrap().thread().target(), &draft("a"));
+    assert!(
+        matches!(w.get(b).unwrap().thread().target(), ThreadTarget::Draft { id, checkout: root } if id == "b" && root == &checkout)
+    );
+    assert!(!w.accepts_read(before));
+    let target = w.get(b).unwrap().thread().target().clone();
+    w.serial = u64::MAX - 1;
+    assert_eq!(
+        w.move_draft(b, draft("b").checkout().clone()),
+        Err(TabError::IdentityExhausted)
+    );
+    assert_eq!(w.get(b).unwrap().thread().target(), &target);
 }
