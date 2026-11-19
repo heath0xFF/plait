@@ -2078,3 +2078,44 @@ What the guard cannot cover:
   caught only if a scene draws it.
 - Synthetic accessibility children are not recorded. Plait's only use of them
   marks the parent disabled or read-only and adds no nodes.
+
+## Release check for v0.1.0-preview.19
+
+On 2026-11-19, on the commit before this record, `bash scripts/check.sh` exited
+0 with the Git that CI's fixtures use first on the path: 794 Rust tests (234
+desktop, 538 core, 14 host, 8 helper integration), 505 runtime tests,
+TypeScript checks, and release builds. This record and the README's release
+line are the only changes after it.
+
+This release adds no feature. It fixes how accessible text is identified and
+brings the native acceptance check up to date with the tab row.
+
+- **Accessibility ids.** Text that assistive technology reads took its id from
+  its own words, so two identical lines at one level collided: a release build
+  dropped the second from the accessibility tree, and a debug build stopped.
+  Accessible text now takes an id from its place. The headless guard described
+  above draws every scene and fails on a duplicate id, and on a sidebar thread
+  row, tab, close control, view or message that is missing. It found and fixed
+  duplicates on Settings → Editor, Settings → Agents, queued follow-up labels,
+  skill badges and Project settings agent rows. The work was read before
+  release by a reviewer who had not written it, which found five defects: the
+  guard could not see an element that bypassed its wrapper; sidebar thread
+  rows and Project settings agent rows took their ids from their position, so
+  an id moved when the list did; and two smaller ones. All were fixed with
+  tests. Every scene rendered byte for byte the same before and after.
+- **The native acceptance check.** Its three pointer steps use the tab row's
+  empty end, found from the accessibility tree; a missing end fails. An app
+  that exits during a run is reported once with the end of its log. A reviewer
+  who had not written the change found six defects in it, among them a failure
+  softened into a skip, and all were fixed. On CI the check then passed 37 of
+  42 items, against 23 of 42 on the previous release's code. Four of the five
+  failures are selections that time out on CI: the diagnostics added here show
+  the control's value still false after 1.5 seconds and true straight after a
+  screenshot is taken, so on CI's display the frame that carries the new state
+  is not drawn until something forces one. A real Mac passed the same steps.
+  The fifth is known: Redo by shortcut pressed straight after Undo by shortcut
+  does nothing.
+
+Not exercised: a debug build driven through Settings → Editor in a real window
+since the fix; VoiceOver itself; and the installed app.
+
