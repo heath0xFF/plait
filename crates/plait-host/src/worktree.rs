@@ -72,7 +72,15 @@ fn execute(input: Value) -> io::Result<Value> {
     serde_json::to_value(result.map_err(io::Error::other)?).map_err(io::Error::other)
 }
 fn journal_path(store: &Path, id: &str) -> io::Result<PathBuf> {
-    if id.len() != 36 || !id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
+    if id.len() != 36
+        || !id.bytes().enumerate().all(|(index, byte)| {
+            if [8, 13, 18, 23].contains(&index) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()
+            }
+        })
+    {
         return Err(io::Error::other("Invalid thread UUID."));
     }
     if !store.is_absolute() || store.canonicalize()? != store {
@@ -95,7 +103,7 @@ fn journal_path(store: &Path, id: &str) -> io::Result<PathBuf> {
     Ok(base.join(format!("{id}.json")))
 }
 fn read(path: &Path) -> io::Result<Option<ManagedWorktree>> {
-    let mut file = match OpenOptions::new()
+    let file = match OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
         .open(path)
@@ -114,7 +122,12 @@ fn read(path: &Path) -> io::Result<Option<ManagedWorktree>> {
         return Err(io::Error::other("Unsafe worktree journal."));
     }
     let mut data = Vec::new();
-    file.read_to_end(&mut data)?;
+    file.take(65537).read_to_end(&mut data)?;
+    if data.len() > 65536 {
+        return Err(io::Error::other(
+            "Worktree journal exceeds the safe read limit.",
+        ));
+    }
     serde_json::from_slice(&data)
         .map(Some)
         .map_err(io::Error::other)
@@ -187,4 +200,64 @@ pub fn git_worker(input: Value) -> io::Result<()> {
     let mut out = io::stdout().lock();
     serde_json::to_writer(&mut out, &json!({"ok":result.is_ok(),"error":result.err()}))?;
     out.write_all(b"\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    const ID: &str = "12345678-1234-4abc-8abc-123456789abc";
+    struct Store(PathBuf);
+    impl Store {
+        fn new(name: &str) -> Self {
+            let path =
+                std::env::temp_dir().join(format!("plait-worktree-{name}-{}", std::process::id()));
+            fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+            Self(path.canonicalize().unwrap())
+        }
+    }
+    impl Drop for Store {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    #[test]
+    fn journals_refuse_shared_stores_and_symlinked_directories() {
+        let store = Store::new("directory");
+        assert!(journal_path(&store.0, "------------------------------------").is_err());
+        assert!(!store.0.join("worktrees").exists());
+        fs::set_permissions(&store.0, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(journal_path(&store.0, ID).is_err());
+        fs::set_permissions(&store.0, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::remove_dir(store.0.join("worktrees")).unwrap();
+        let unrelated = store.0.join("unrelated");
+        fs::create_dir(&unrelated).unwrap();
+        symlink(&unrelated, store.0.join("worktrees")).unwrap();
+        assert!(journal_path(&store.0, ID).is_err());
+        assert_eq!(fs::read_dir(unrelated).unwrap().count(), 0);
+    }
+    #[test]
+    fn journals_refuse_symlinks_hardlinks_permissions_and_oversize() {
+        let store = Store::new("file");
+        let path = journal_path(&store.0, ID).unwrap();
+        assert!(read(&path).unwrap().is_none());
+        let unrelated = store.0.join("unrelated");
+        fs::write(&unrelated, "preserve").unwrap();
+        fs::set_permissions(&unrelated, fs::Permissions::from_mode(0o600)).unwrap();
+        symlink(&unrelated, &path).unwrap();
+        assert!(read(&path).is_err());
+        fs::remove_file(&path).unwrap();
+        fs::hard_link(&unrelated, &path).unwrap();
+        assert!(read(&path).is_err());
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, "{}").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(read(&path).unwrap_err().to_string().contains("Unsafe"));
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::write(&path, vec![b' '; 65537]).unwrap();
+        assert!(read(&path).is_err());
+        fs::write(&path, "{bad").unwrap();
+        assert!(read(&path).is_err());
+        assert_eq!(fs::read_to_string(unrelated).unwrap(), "preserve");
+    }
 }
