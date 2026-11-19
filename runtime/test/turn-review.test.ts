@@ -94,3 +94,20 @@ test('recorded patch and hunk pages share one reply frame budget', async t => {
   assert.throws(() => review.withDocuments('checkout', { title: 't'.repeat(1_048_576) }, [], []), /review limit/);
   assert.throws(() => review.withDocuments('checkout', {}, ['x'.repeat(750_000)], []), /review limit/);
 });
+
+
+test('host identity exists before the first thread and survives service recreation', async t => {
+  const h = await codex(t);
+  const first: any = await h.runtime.handle({ op: 'host_identity' });
+  assert.equal(first.schema, 1);
+  assert.match(first.host_id, /^[A-Za-z0-9_-]{1,128}$/);
+  assert.equal(first.store, h.store);
+  const review = new TurnReview(h.runtime.store, h.runtime.records, h.store);
+  assert.deepEqual(await review.handle({ op: 'host_identity' }), first);
+  for (const extra of [{ thread_id: 't' }, { protocol_version: 6 }, { store: '/' }]) {
+    await assert.rejects(h.runtime.handle({ op: 'host_identity', ...extra }), /Unknown operation or field/);
+  }
+  const thread = await h.create();
+  const info: any = await h.runtime.handle({ op: 'turn_review_info', thread_id: thread.id });
+  assert.equal(info.checkout.host_id, first.host_id);
+});

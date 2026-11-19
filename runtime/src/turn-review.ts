@@ -11,7 +11,7 @@ type Hunk = { first_line: number; last_line: number; old_start: number; old_coun
 type Read = { before: Entry; after: Entry; patch: number[]; hunks: Hunk[]; status: string; truncated: boolean; elapsed_ms: number; processes: number };
 export type Page = { token: string; offset: number; total: number; items: unknown[]; next_offset: number | null };
 type Document = { checkout: string; items: unknown[]; bytes: number; touched: number; offsets: Set<number>; pageLimit: number };
-const operations: Record<string, string[]> = { turn_review_info: ['thread_id'], turn_diff: ['thread_id', 'record_id', 'path'], turn_review_page: ['token', 'offset'] };
+const operations: Record<string, string[]> = { host_identity: [], turn_review_info: ['thread_id'], turn_diff: ['thread_id', 'record_id', 'path'], turn_review_page: ['token', 'offset'] };
 const id = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 export function validateReview(input: unknown): Record<string, unknown> & { op: string } {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail('invalid_request', 'Invalid turn review request.');
@@ -44,6 +44,7 @@ export class TurnReview {
   handles(input: unknown) { return !!input && typeof input === 'object' && Object.hasOwn(operations, String((input as { op?: unknown }).op)); }
   async handle(input: unknown) {
     const request = validateReview(input);
+    if (request.op === 'host_identity') return { schema: 1, host_id: this.host, store: this.directory };
     if (request.op === 'turn_review_page') return this.page(String(request.token), Number(request.offset));
     const thread = String(request.thread_id);
     const snapshot = this.store.get(thread);

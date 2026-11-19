@@ -1075,6 +1075,7 @@ pub use watch::{CancelWatch, Snapshots, ThreadLists, Updates};
 
 pub mod agent;
 pub mod harness;
+pub mod identity;
 pub mod policy;
 pub mod providers;
 pub mod review;

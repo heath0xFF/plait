@@ -2235,3 +2235,13 @@ non-replay rule, not remote compare-and-swap. No live API behavior is claimed.
 - No browser OAuth sign-in or token refresh yet.
 - No automatic writes, background polling, or Linear change notifications.
 - No issue-triggered autonomous runs (their rules are not yet agreed).
+
+## Desktop host identity
+
+The additive, read-only `{"op":"host_identity"}` request returns schema 1,
+the persisted `host_id` used by turn review, and the absolute host `store`
+path on the owner-authenticated local connection. It works before any thread
+exists. Unknown request fields are refused; no protocol version is added.
+Desktop tabs use this identity to validate saved tabs. An older host may
+refuse the operation; session tabs still work, and durable restore waits for
+a verified identity from turn review once a thread exists.
