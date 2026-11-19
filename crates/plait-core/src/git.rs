@@ -79,8 +79,45 @@ pub(crate) fn base_command(root: &Path) -> Command {
 
 /// A read command with every configured filter driver neutralized.
 fn read_command(root: &Path) -> Result<Command> {
-    let overrides = filter_overrides(root)?;
+    let overrides = SHARED_OVERRIDES.with_borrow_mut(|shared| match shared {
+        Some(cache) => match cache.get(root) {
+            Some(overrides) => Ok(overrides.clone()),
+            None => {
+                let overrides = filter_overrides(root)?;
+                cache.insert(root.to_owned(), overrides.clone());
+                Ok(overrides)
+            }
+        },
+        None => filter_overrides(root),
+    })?;
     Ok(read_command_with(root, &overrides))
+}
+
+thread_local! {
+    static SHARED_OVERRIDES: std::cell::RefCell<Option<std::collections::HashMap<PathBuf, Vec<String>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `read` with each checkout's filter configuration read once and reused,
+/// instead of once per Git command. Keyed by checkout because a worktree can
+/// carry its own configuration. Only for a read-only pass that decides nothing
+/// by itself: removal reads configuration afresh under its lease.
+pub(crate) fn sharing_config<T>(read: impl FnOnce() -> T) -> T {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            if self.0 {
+                SHARED_OVERRIDES.set(None);
+            }
+        }
+    }
+    let outer = SHARED_OVERRIDES.with_borrow_mut(|shared| {
+        let outer = shared.is_some();
+        shared.get_or_insert_default();
+        outer
+    });
+    let _reset = Reset(!outer);
+    read()
 }
 
 /// The base command plus `-c` overrides from `filter_overrides`, so several

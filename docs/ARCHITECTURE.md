@@ -758,7 +758,9 @@ selected. `show` validates a full object ID and passes it after
 - Disable optional index locks, fsmonitor, untracked cache, external diff, and
   textconv. Read configuration **key names only** and disable all configured
   clean/process filter drivers for each command. Git can otherwise execute a
-  filter even during a read-only diff. No pager, prompt, hook invocation, or
+  filter even during a read-only diff. A worktree inventory reads each
+  checkout's key names once and reuses them for that pass; removal reads them
+  afresh under its leases. No pager, prompt, hook invocation, or
   network command. Ignore dirty submodule contents; show gitlink changes only.
 - Ignore inherited repository-location environment variables.
 - Reap subprocesses. Bound each subprocess to 10 seconds, status/config keys to

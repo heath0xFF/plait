@@ -2469,7 +2469,8 @@ fields, including `protocol_version`, and unknown lifecycle states are refused.
   owned checkout. The operation takes no checkout lease, because a run takes
   its own without waiting and would be refused beside it; a run held by
   another host process is therefore not seen here. Removal rechecks everything
-  under its leases and refuses then. External checkouts have
+  under its leases and refuses then. The pass reads each checkout's
+  configuration key names once, not once per Git command. External checkouts have
   no creation authority. Missing folders remain rows; removed records keep
   branch/history/cache attribution with no deletion action. The result is
   bounded to 256 rows and 750,000 bytes; reading creation records is bounded

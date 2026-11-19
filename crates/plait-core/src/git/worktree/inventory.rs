@@ -106,7 +106,11 @@ pub struct Checkout {
     pub preservation: Preservation,
 }
 /// All registered checkouts, including ones created outside Plait. Never infer ownership.
+/// One configuration read per checkout serves the whole pass.
 pub fn inventory(root: &Path, records: &[ManagedWorktree]) -> Result<Vec<Checkout>> {
+    crate::git::sharing_config(|| read_inventory(root, records))
+}
+fn read_inventory(root: &Path, records: &[ManagedWorktree]) -> Result<Vec<Checkout>> {
     let paths = crate::lease::resolve_git_checkout(root).map_err(String::from)?;
     let raw = read_worktree(&paths.root, &["worktree", "list", "--porcelain", "-z"])?;
     let text = std::str::from_utf8(&raw).map_err(|_| "Worktree paths must be UTF-8.")?;
@@ -293,6 +297,116 @@ mod tests {
         if let Ok(base) = worktree_base(&tree.parent.main) {
             let _ = fs::remove_dir_all(base);
         }
+    }
+    /// The Git commands a pass started, one line each, from a logging `git`
+    /// placed first on PATH. The test re-runs itself in a child process so the
+    /// changed PATH never reaches tests running beside it.
+    pub(crate) fn counted_git(test: &str, child: impl FnOnce(&Path)) -> Option<Vec<String>> {
+        if let Some(log) = std::env::var_os("PLAIT_GIT_COUNT_LOG") {
+            child(Path::new(&log));
+            return None;
+        }
+        let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|dir| dir.join("git"))
+            .find(|git| git.is_file())
+            .unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "plait-git-count-{}-{}",
+            std::process::id(),
+            test.rsplit("::").next().unwrap()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let (shim, log) = (dir.join("git"), dir.join("log"));
+        fs::write(
+            &shim,
+            format!("#!/bin/sh\nprintf 'GIT %s\\n' \"$*\" >> \"$PLAIT_GIT_COUNT_LOG\"\nexec '{}' \"$@\"\n", real.display()),
+        )
+        .unwrap();
+        fs::set_permissions(&shim, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let mut path = std::ffi::OsString::from(&dir);
+        path.push(":");
+        path.push(std::env::var_os("PATH").unwrap());
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture", "--test-threads=1"])
+            .env("PATH", path)
+            .env("PLAIT_GIT_COUNT_LOG", &log)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        let text = fs::read_to_string(&log).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        // Only what the pass started, not the repository's setup.
+        let lines: Vec<_> = text.lines().map(str::to_owned).collect();
+        let start = lines
+            .iter()
+            .rposition(|l| l == "PASS")
+            .expect("pass marker");
+        Some(lines[start + 1..].to_vec())
+    }
+    pub(crate) fn mark_pass(log: &Path) {
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(log)
+            .unwrap();
+        writeln!(file, "PASS").unwrap();
+    }
+    /// Each checkout's filter configuration is read once per inventory, not
+    /// once per Git command; every read still carries the hardened flags.
+    #[test]
+    fn inventory_reads_each_checkouts_configuration_once() {
+        let test =
+            "git::worktree::inventory::tests::inventory_reads_each_checkouts_configuration_once";
+        let Some(lines) = counted_git(test, |log| {
+            let (repo, tree) = repository();
+            repo.git(&["config", "filter.probe.clean", "false"]);
+            for name in ["outside-a", "outside-b"] {
+                let path = repo.0.with_file_name(format!(
+                    "{}-{name}",
+                    repo.0.file_name().unwrap().to_string_lossy()
+                ));
+                repo.git(&["worktree", "add", "-q", "-b", name, path.to_str().unwrap()]);
+            }
+            mark_pass(log);
+            let rows = inventory(&repo.0, std::slice::from_ref(&tree)).unwrap();
+            assert_eq!(rows.len(), 4);
+            clean(&tree);
+        }) else {
+            return;
+        };
+        let config: Vec<_> = lines
+            .iter()
+            .filter(|l| l.ends_with("config --null --name-only --list"))
+            .collect();
+        let mut roots: Vec<_> = config
+            .iter()
+            .map(|l| l.split(" -C ").nth(1).unwrap().split(' ').next().unwrap())
+            .collect();
+        roots.sort();
+        roots.dedup();
+        assert_eq!(
+            (config.len(), roots.len()),
+            (4, 4),
+            "one configuration read per checkout:\n{}",
+            lines.join("\n")
+        );
+        let hardened = "GIT --no-pager --no-optional-locks --literal-pathspecs --no-replace-objects -c core.fsmonitor=false -c core.untrackedCache=false -c color.ui=false -C ";
+        for line in &lines {
+            assert!(line.starts_with(hardened), "unhardened read: {line}");
+            assert!(
+                config.contains(&line) || line.contains(" -c filter.probe.clean= "),
+                "a read kept the filter driver: {line}"
+            );
+        }
+        eprintln!(
+            "inventory, main + 3 worktrees: {} Git processes",
+            lines.len()
+        );
     }
     /// Runs take their writer lease without waiting; a preview must never be the
     /// reason one is refused.
