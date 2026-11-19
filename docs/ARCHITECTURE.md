@@ -599,7 +599,13 @@ draft cannot overwrite that mirror. Removing its owner promotes an intact
 sibling. Legacy mirrors also retain the draft's unconfirmed `creation` request,
 so compatible older readers reuse the same thread and worktree identity. An older
 journal imports its single draft and any captured creation; changed legacy text
-from an older build imports as another draft, preserving both versions. No first send
+from an older build imports as another draft, preserving both versions. Older
+builds ignore `draft_tabs` and collect images only from the legacy fields, so
+each save also copies every other nonempty draft into `new_drafts` under the key
+`<checkout>` NUL `<draft id>`, which no folder can have. Older builds keep,
+validate and retain images for those entries without showing them; this build
+moves them back into `draft_tabs` on open. Copies are omitted when they would
+exceed 4 MiB or 384 legacy records (128 below the older 512-record bound). No first send
 is replayed at launch; an explicit retry reuses its captured ID and payload.
 Atomic synced replacement and the 4 MiB serialized limit are unchanged. Legacy
 thread/project fields retain their 512-record bound, independent drafts have a

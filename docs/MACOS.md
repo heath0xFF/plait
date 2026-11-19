@@ -266,6 +266,16 @@ closing until it fits; the previous file is unchanged. Shorten or explicitly
 discard drafts to free space. Force quit can lose the unsaved changes. Twenty
 drafts of the maximum size are not a supported capacity.
 
+Builds before independent drafts (v0.1.0-preview.19 and earlier) show one New
+thread draft per project: the first one opened there. While the journal has
+room, every other draft with text or images is also saved in a form those
+builds keep, image files included, without showing it. Opening this build again
+returns those drafts as tabs at the end. If an older build saved the journal
+in between, their model, harness and permission choices return to the defaults. The copies are left out when they would take
+the journal over 4 MiB, or past 384 saved threads and project drafts, which
+leaves older builds room under their own 512-record bound. Drafts left out in
+that way are lost if an older build saves the journal.
+
 If recovery reports an error, do not delete or reset the journal. Close duplicate
 Plait clients first. Keep a copy of the file before repair; malformed or unknown
 versions are left intact. A conflicting saved checkout disables sending

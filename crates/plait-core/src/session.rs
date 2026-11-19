@@ -418,8 +418,7 @@ impl Journal {
         }
         let session = &saved.session;
         session.validate()?;
-        let bytes =
-            serde_json::to_vec(session).map_err(|e| format!("Cannot encode workspace: {e}"))?;
+        let bytes = session.encode()?;
         if bytes.len() > FILE_LIMIT {
             return Err("Saved workspace exceeds 4 MiB. Shorten drafts before sending; nothing was discarded.".into());
         }

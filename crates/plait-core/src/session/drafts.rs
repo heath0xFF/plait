@@ -4,6 +4,10 @@ use crate::host::{ApprovalMode, ModelChoice, ThinkingLevel, harness::HarnessId};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Older builds refuse a journal whose threads and legacy drafts exceed 512;
+/// compatibility copies leave 128 of those records for the older build's own use.
+const LEGACY_RECORDS: usize = 384;
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct DraftSettings {
@@ -128,9 +132,95 @@ impl Session {
         }
     }
 
+    /// The file form. Older schema-1 builds read only the legacy fields, sweep
+    /// images no legacy field names, and rewrite only what they know; so each
+    /// other nonempty draft is also copied into `new_drafts` under a key no
+    /// folder can have. Copies are left out rather than cost the file its size
+    /// limit or an older build its record bound, with room for its own threads.
+    pub(super) fn encode(&self) -> Result<Vec<u8>, String> {
+        let encode = |session: &Session| {
+            serde_json::to_vec(session).map_err(|e| format!("Cannot encode workspace: {e}"))
+        };
+        let plain = encode(self)?;
+        let room = LEGACY_RECORDS.saturating_sub(self.threads.len() + self.new_drafts.len());
+        let mut copied = self.clone();
+        for (id, tab) in &self.draft_tabs {
+            if copied.new_drafts.len() - self.new_drafts.len() == room {
+                break;
+            }
+            if (tab.draft.text.is_empty() && tab.draft.images.is_empty())
+                || self.new_draft_for(&tab.checkout) == Some(&tab.draft)
+            {
+                continue;
+            }
+            let mut key = tab.checkout.clone().into_os_string();
+            key.push("\0");
+            key.push(id);
+            copied.new_drafts.insert(key.into(), tab.draft.clone());
+        }
+        if copied.new_drafts.len() == self.new_drafts.len() {
+            return Ok(plain);
+        }
+        let bytes = encode(&copied)?;
+        Ok(if bytes.len() <= super::FILE_LIMIT {
+            bytes
+        } else {
+            plain
+        })
+    }
+
+    /// Return copies written by `encode` to `draft_tabs`. Older builds never
+    /// edit them, so a live entry with the same id and checkout wins.
+    fn import_copies(&mut self) {
+        let keys: Vec<_> = self
+            .new_drafts
+            .keys()
+            .filter(|key| key.as_os_str().as_encoded_bytes().contains(&0))
+            .cloned()
+            .collect();
+        for key in keys {
+            let draft = self.new_drafts.remove(&key).unwrap();
+            let bytes = key.as_os_str().as_encoded_bytes();
+            let split = bytes.iter().position(|b| *b == 0).unwrap();
+            let checkout = PathBuf::from(String::from_utf8_lossy(&bytes[..split]).into_owned());
+            let id = String::from_utf8_lossy(&bytes[split + 1..]).into_owned();
+            if self.draft_tab(&id, &checkout).is_some()
+                || self
+                    .draft_tabs
+                    .values()
+                    .any(|tab| tab.checkout == checkout && tab.draft == draft)
+            {
+                continue;
+            }
+            let id = if identifier(&id) && !self.draft_tabs.contains_key(&id) {
+                id
+            } else {
+                self.legacy_id()
+            };
+            self.draft_tabs.insert(
+                id,
+                DraftTab {
+                    legacy: false,
+                    creation: DraftTabCreation::from_legacy(&draft, &checkout),
+                    checkout,
+                    draft,
+                    settings: DraftSettings::default(),
+                },
+            );
+        }
+    }
+
+    fn legacy_id(&self) -> String {
+        (0..)
+            .map(|n| format!("legacy-{n}"))
+            .find(|id| !self.draft_tabs.contains_key(id))
+            .unwrap()
+    }
+
     /// A downgrade may edit only a legacy field. Import that version as another
     /// draft rather than choosing one version and losing the other person's text.
     pub fn import_legacy_drafts(&mut self) {
+        self.import_copies();
         let legacy: Vec<_> = self
             .new_draft
             .iter()
@@ -145,14 +235,7 @@ impl Session {
             {
                 continue;
             }
-            let mut n = 0;
-            let id = loop {
-                let id = format!("legacy-{n}");
-                if !self.draft_tabs.contains_key(&id) {
-                    break id;
-                }
-                n += 1;
-            };
+            let id = self.legacy_id();
             for tab in self
                 .draft_tabs
                 .values_mut()
@@ -434,5 +517,155 @@ mod tests {
         assert_eq!(restored.draft_tabs.len(), 300);
         assert_eq!(restored.draft_tabs["draft-299"].draft.text, "Message 299");
         std::fs::remove_dir_all(root).unwrap();
+    }
+    /// preview.19's journal: no `draft_tabs`, no `Draft.creation`, and image
+    /// retention counted only from the fields below. It rewrites what it knows.
+    #[derive(Serialize, Deserialize)]
+    struct ReleasedDraft {
+        images: Vec<crate::images::ImageRef>,
+        text: String,
+        revision: u64,
+        submitted: Option<(String, u64)>,
+    }
+    #[derive(Serialize, Deserialize)]
+    struct ReleasedSession {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        new_draft: Option<(PathBuf, ReleasedDraft)>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        new_drafts: BTreeMap<PathBuf, ReleasedDraft>,
+        schema_version: u32,
+        host_store: PathBuf,
+        checkout: Option<PathBuf>,
+        selected: Option<String>,
+        threads: BTreeMap<String, serde_json::Value>,
+    }
+    impl ReleasedSession {
+        // preview.19's `Session::set_new_draft`, verbatim.
+        fn set_new_draft(&mut self, checkout: PathBuf, draft: ReleasedDraft) {
+            if let Some((path, old)) = self.new_draft.take()
+                && path != checkout
+            {
+                self.new_drafts.insert(path, old);
+            }
+            self.new_drafts.remove(&checkout);
+            self.new_draft = Some((checkout, draft));
+        }
+        fn image_ids(&self) -> Vec<String> {
+            let drafts = self.new_draft.iter().map(|(_, d)| d);
+            drafts
+                .chain(self.new_drafts.values())
+                .flat_map(|d| d.images.iter().map(|image| image.id.clone()))
+                .collect()
+        }
+    }
+    fn image(c: char) -> crate::images::ImageRef {
+        crate::images::ImageRef {
+            id: std::iter::repeat_n(c, 64).collect(),
+            media_type: "image/png".into(),
+            size: 10,
+            width: 1,
+            height: 1,
+        }
+    }
+
+    #[test]
+    fn released_build_keeps_every_draft_through_open_and_rewrite() {
+        if !isolated(
+            "session::drafts::tests::released_build_keeps_every_draft_through_open_and_rewrite",
+        ) {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("plait-downgrade-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (journal, mut session) = super::super::Journal::open(&root, "/host".into()).unwrap();
+        // The first tab owns the legacy field and is empty; its siblings have work.
+        session.set_draft_tab("a".into(), tab(""));
+        let mut b = tab("B text");
+        b.draft.images = vec![image('b')];
+        b.settings.mode = Some("plan".into());
+        session.set_draft_tab("b".into(), b);
+        let mut c = tab("C text");
+        c.checkout = "/other".into();
+        session.set_draft_tab("c".into(), c);
+        session.set_draft_tab("d".into(), tab("D text"));
+        journal.queue(session);
+        journal.flush().unwrap();
+        drop(journal);
+
+        let bytes = std::fs::read(root.join("desktop.json")).unwrap();
+        assert!(OldSession::decode(&bytes).is_ok());
+        let mut released: ReleasedSession = serde_json::from_slice(&bytes).unwrap();
+        assert!(
+            released.image_ids().contains(&image('b').id),
+            "the released build's sweep would delete this draft's image"
+        );
+        // The released build edits its one visible draft and saves what it knows.
+        released.set_new_draft(
+            "/project".into(),
+            ReleasedDraft {
+                images: Vec::new(),
+                text: "typed in the released build".into(),
+                revision: 9,
+                submitted: None,
+            },
+        );
+        std::fs::write(
+            root.join("desktop.json"),
+            serde_json::to_vec(&released).unwrap(),
+        )
+        .unwrap();
+
+        let (_, mut restored) = super::super::Journal::open(&root, "/host".into()).unwrap();
+        restored.import_legacy_drafts();
+        let texts = |checkout: &str| {
+            let mut texts: Vec<_> = restored
+                .draft_tabs
+                .values()
+                .filter(|t| t.checkout == Path::new(checkout))
+                .map(|t| t.draft.text.clone())
+                .collect();
+            texts.sort();
+            texts
+        };
+        assert_eq!(
+            texts("/project"),
+            ["B text", "D text", "typed in the released build"]
+        );
+        assert_eq!(texts("/other"), ["C text"]);
+        assert_eq!(restored.draft_tabs["b"].draft.images, [image('b')]);
+        assert!(
+            restored
+                .new_drafts
+                .keys()
+                .all(|key| key.to_str().is_some_and(|k| !k.contains('\0'))),
+            "compatibility copies stay out of memory"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compatibility_copies_never_cost_the_size_or_record_limits() {
+        let copies = |bytes: &[u8]| {
+            let old = OldSession::decode(bytes).unwrap();
+            assert!(old.threads.len() + old.new_drafts.len() <= LEGACY_RECORDS);
+            old.new_drafts.len()
+        };
+        let mut many = Session::empty("/host".into());
+        for n in 0..500 {
+            many.set_draft_tab(format!("d{n}"), tab(&format!("Message {n}")));
+        }
+        assert_eq!(copies(&many.encode().unwrap()), LEGACY_RECORDS);
+        let mut restored: Session = serde_json::from_slice(&many.encode().unwrap()).unwrap();
+        restored.import_legacy_drafts();
+        assert_eq!(restored, many, "copies of live drafts add nothing");
+
+        // Twelve near-maximal drafts fit once, not twice: write them once.
+        let mut large = Session::empty("/host".into());
+        for n in 0..12 {
+            large.set_draft_tab(format!("d{n}"), tab(&"x".repeat(250 * 1024)));
+        }
+        let bytes = large.encode().unwrap();
+        assert!(bytes.len() <= super::super::FILE_LIMIT);
+        assert_eq!(bytes, serde_json::to_vec(&large).unwrap());
     }
 }
