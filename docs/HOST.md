@@ -2035,7 +2035,10 @@ local client asks over the owner-only host socket.
 - **`linear_bind_project`** and **`linear_get_project_binding`** bind a
   canonical Git checkout (checked by canonical path, device, and inode, as in
   [Command policy](#command-policy)) to a team ID (pass `"team_id":null` to
-  unbind; `team_key` and `team_name` are optional). Both return
+  unbind; `team_key` and `team_name` are optional). A different directory at
+  the same path does not inherit a binding; a directory removed and created
+  again there is a different one only if the filesystem gives it a different
+  inode. Both return
   `{"checkout":"/canonical/checkout","binding":null}` or
   `{"checkout":"/canonical/checkout","binding":{"workspace_id":"ORG_ID","team_id":"TEAM_ID","team_key":"PLA","team_name":"Plait","updated_at":1763300000000}}`.
 - **`linear_list_issues`** takes `team_id`, preset `filter` (`active`,

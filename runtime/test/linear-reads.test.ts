@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, realpath, rm, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rename, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -158,7 +158,9 @@ test('teams, project binding, and offline cache fallback work with TTLs and chec
   assert.equal(bound.result.binding.workspace_id, 'org-1');
 
   // Replacing the checkout directory at the same path does not inherit the old binding.
-  await rm(repo, { recursive: true, force: true });
+  // The old directory is moved aside, not removed, so its inode stays in use: a
+  // filesystem may hand a removed directory's inode straight to the next one.
+  await rename(repo, join(h.dir, 'project-a-old'));
   const replaced = await makeRepo(h.dir, 'project-a');
   assert.equal((await h.call({ op: 'linear_get_project_binding', checkout: replaced })).result.binding, null);
   await h.call({ op: 'linear_bind_project', checkout: replaced, team_id: 'team-ops' });
