@@ -582,6 +582,19 @@ mod tests {
                 git_in(&t.path, &["checkout", "-q", &t.branch]);
             }),
             ("unpushed", &|t| commit(&t.path, "ahead")),
+            ("unpushed and untracked", &|t| {
+                commit(&t.path, "ahead");
+                fs::write(t.path.join("new"), "x").unwrap()
+            }),
+            ("unfinished merge", &|t| {
+                let head = text_read(&t.path, &["rev-parse", "HEAD"]).unwrap();
+                let git_dir = text_read(&t.path, &["rev-parse", "--absolute-git-dir"]).unwrap();
+                fs::write(Path::new(&git_dir).join("MERGE_HEAD"), head + "\n").unwrap();
+            }),
+            ("unfinished rebase", &|t| {
+                let git_dir = text_read(&t.path, &["rev-parse", "--absolute-git-dir"]).unwrap();
+                fs::create_dir(Path::new(&git_dir).join("rebase-merge")).unwrap();
+            }),
             ("branch changed", &|t| {
                 git_in(&t.path, &["checkout", "-qb", "different"])
             }),
