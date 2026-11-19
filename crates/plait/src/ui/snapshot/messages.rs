@@ -29,7 +29,7 @@ fn stage(harness: &mut Harness, repository: &Path) {
         snapshot.live_text.clear();
         snapshot.live_reasoning.clear();
     });
-    harness.update(|plait, _, _| plait.live_scroll.scroll_to(ListOffset::default()));
+    harness.update(|plait, _, _| plait.workspace.live_scroll.scroll_to(ListOffset::default()));
 }
 
 pub(super) fn walk(harness: &mut Harness, repository: &Path, suffix: &str) {
@@ -82,11 +82,14 @@ fn request_panels_keep_quotes_selectable_and_out_of_the_turn_gutter() {
         assert!(instruction.x > answer.x, "requests have panel padding");
         assert!(quote.y < instruction.y && instruction.y < answer.y);
         harness.update(|plait, _, _| {
-            let viewport = plait.live_scroll.viewport_bounds();
+            let viewport = plait.workspace.live_scroll.viewport_bounds();
             for point in [quote, instruction, answer] {
                 assert!(viewport.contains(&point), "text fits the viewport");
             }
-            assert_eq!(plait.formatted.messages["request"].source, REQUEST);
+            assert_eq!(
+                plait.workspace.formatted.messages["request"].source,
+                REQUEST
+            );
         });
 
         // Selecting across the panel's blocks copies visible text, not labels
@@ -127,13 +130,19 @@ fn request_panels_keep_quotes_selectable_and_out_of_the_turn_gutter() {
         });
         harness.update(|plait, _, _| {
             plait.clear_reading_selection();
-            plait.live_scroll.scroll_to(ListOffset::default());
+            plait.workspace.live_scroll.scroll_to(ListOffset::default());
         });
         let first = caret(&mut harness, "request", 0, 0);
         let last = caret(&mut harness, "request", 0, long.len());
         assert!(last.y > first.y, "long requests wrap inside their panel");
         harness.update(|plait, _, _| {
-            assert!(plait.live_scroll.viewport_bounds().contains(&last));
+            assert!(
+                plait
+                    .workspace
+                    .live_scroll
+                    .viewport_bounds()
+                    .contains(&last)
+            );
         });
     }
 }
@@ -153,7 +162,7 @@ fn copy_message_cross_label_selection_and_image_only_requests() {
     let view = harness
         .window
         .update(&mut harness.cx, |plait, _, _| {
-            plait.live_scroll.viewport_bounds()
+            plait.workspace.live_scroll.viewport_bounds()
         })
         .unwrap();
 

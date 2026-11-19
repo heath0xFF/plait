@@ -99,7 +99,7 @@ impl Plait {
         file: &'a records::File,
         line: &'a Line,
     ) -> &'a str {
-        if self.turn_review.older {
+        if self.workspace.turn_review.older {
             &file.current_detail
         } else if line.availability == Availability::Ready {
             &file.review_detail
@@ -115,28 +115,34 @@ impl Plait {
             epoch: self.host.connection.epoch,
             watch: self.host.thread.watch_epoch,
             revision: snapshot.records_revision,
-            generation: self.turn_records.generation,
+            generation: self.workspace.turn_records.generation,
         })
     }
     pub(super) fn records_current(&self) -> bool {
         self.host.protocol() >= 5
-            && self.turn_records.loaded
-            && self.turn_records.projected_generation == self.turn_records.generation
-            && self.turn_records.stamp == self.record_stamp()
+            && self.workspace.turn_records.loaded
+            && self.workspace.turn_records.projected_generation
+                == self.workspace.turn_records.generation
+            && self.workspace.turn_records.stamp == self.record_stamp()
     }
     pub(super) fn turn_records_snapshot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(stamp) = self.record_stamp() else {
             return;
         };
-        if self.turn_records.stamp.as_ref() == Some(&stamp) {
+        if self.workspace.turn_records.stamp.as_ref() == Some(&stamp) {
             return;
         }
-        let same_thread = self.turn_records.stamp.as_ref().is_some_and(|old| {
-            old.thread == stamp.thread && old.epoch == stamp.epoch && old.watch == stamp.watch
-        });
+        let same_thread = self
+            .workspace
+            .turn_records
+            .stamp
+            .as_ref()
+            .is_some_and(|old| {
+                old.thread == stamp.thread && old.epoch == stamp.epoch && old.watch == stamp.watch
+            });
         if !same_thread {
-            let generation = self.turn_records.generation + 1;
-            self.turn_records = TurnRecords {
+            let generation = self.workspace.turn_records.generation + 1;
+            self.workspace.turn_records = TurnRecords {
                 generation,
                 ..Default::default()
             };
@@ -150,14 +156,14 @@ impl Plait {
         if !self.host.connection.connected || self.host.protocol() < 5 {
             return;
         }
-        self.turn_records.generation += 1;
+        self.workspace.turn_records.generation += 1;
         let Some(stamp) = self.record_stamp() else {
             return;
         };
-        self.turn_records.stamp = Some(stamp.clone());
-        self.turn_records.loading = true;
-        self.turn_records.loaded = false;
-        self.turn_records.error = None;
+        self.workspace.turn_records.stamp = Some(stamp.clone());
+        self.workspace.turn_records.loading = true;
+        self.workspace.turn_records.loaded = false;
+        self.workspace.turn_records.error = None;
         let thread = stamp.thread.clone();
         let task = cx.background_executor().spawn(async move {
             records::read(&Client::from_environment()?, &thread).map(Arc::new)
@@ -168,16 +174,16 @@ impl Plait {
                 if this.record_stamp().as_ref() != Some(&stamp) {
                     return;
                 }
-                this.turn_records.loading = false;
+                this.workspace.turn_records.loading = false;
                 match result {
                     Ok(records) => {
                         this.record_thread_files(&records, cx);
-                        this.turn_records.data = records;
-                        this.turn_records.data_generation = stamp.generation;
-                        this.turn_records.loaded = true;
+                        this.workspace.turn_records.data = records;
+                        this.workspace.turn_records.data_generation = stamp.generation;
+                        this.workspace.turn_records.loaded = true;
                         this.conversation_changed(window, cx);
                     }
-                    Err(error) => this.turn_records.error = Some(error.to_string()),
+                    Err(error) => this.workspace.turn_records.error = Some(error.to_string()),
                 }
                 cx.notify();
             });
@@ -187,17 +193,18 @@ impl Plait {
 
     /// Called with the background conversation projection, never from render.
     pub(super) fn install_record_lines(&mut self, lines: Arc<Lines>, generation: u64) {
-        self.turn_records.projected_generation = generation;
-        let old = std::mem::replace(&mut self.turn_records.lines, lines);
+        self.workspace.turn_records.projected_generation = generation;
+        let old = std::mem::replace(&mut self.workspace.turn_records.lines, lines);
         let Some(snapshot) = self.conversation_snapshot() else {
             return;
         };
-        for (index, slot) in self.live_layout.iter().enumerate() {
+        for (index, slot) in self.workspace.live_layout.iter().enumerate() {
             if let Some(key) = transcript::resolve(snapshot, *slot).and_then(records::closing_key)
-                && (old.rows.get(&key) != self.turn_records.lines.rows.get(&key)
-                    || old.covered.contains(&key) != self.turn_records.lines.covered.contains(&key))
+                && (old.rows.get(&key) != self.workspace.turn_records.lines.rows.get(&key)
+                    || old.covered.contains(&key)
+                        != self.workspace.turn_records.lines.covered.contains(&key))
             {
-                self.live_scroll.remeasure_items(index..index + 1);
+                self.workspace.live_scroll.remeasure_items(index..index + 1);
             }
         }
     }
@@ -205,16 +212,17 @@ impl Plait {
         let Some(snapshot) = self.conversation_snapshot() else {
             return;
         };
-        for (index, slot) in self.live_layout.iter().enumerate() {
+        for (index, slot) in self.workspace.live_layout.iter().enumerate() {
             if let Some(key) = transcript::resolve(snapshot, *slot).and_then(records::closing_key)
                 && self
+                    .workspace
                     .turn_records
                     .lines
                     .rows
                     .get(&key)
                     .is_some_and(|line| line.run == run)
             {
-                self.live_scroll.remeasure_items(index..index + 1);
+                self.workspace.live_scroll.remeasure_items(index..index + 1);
             }
         }
     }
@@ -222,7 +230,7 @@ impl Plait {
         if !self.host.connection.connected {
             return Some(("Offline", "Reconnect to the host to undo this run."));
         }
-        if self.turn_records.pending.is_some() {
+        if self.workspace.turn_records.pending.is_some() {
             return Some(("Working", "An undo is waiting for the host's reply."));
         }
         if !self.records_current() {
@@ -265,14 +273,17 @@ impl Plait {
         }
     }
     pub(super) fn shortcut_undo(&self) -> Option<String> {
-        if self.settings_open || self.tab != Workspace::Conversation || self.overlay.is_some() {
+        if self.settings_open
+            || self.workspace.tab != Workspace::Conversation
+            || self.overlay.is_some()
+        {
             return None;
         }
-        let line = self.turn_records.lines.latest.as_ref()?;
+        let line = self.workspace.turn_records.lines.latest.as_ref()?;
         (self.undo_refusal(line).is_none()
-            && self.turn_records.blocked.is_none()
-            && self.turn_records.retry.is_none()
-            && self.turn_records.note.is_none())
+            && self.workspace.turn_records.blocked.is_none()
+            && self.workspace.turn_records.retry.is_none()
+            && self.workspace.turn_records.note.is_none())
         .then(|| line.run.clone())
     }
     pub(super) fn undo_last_turn(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -287,7 +298,7 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(line) = self.turn_records.lines.runs.get(run) else {
+        let Some(line) = self.workspace.turn_records.lines.runs.get(run) else {
             return;
         };
         if self.undo_refusal(line).is_some() {
@@ -298,6 +309,7 @@ impl Plait {
         };
         if leave_changed
             && !self
+                .workspace
                 .turn_records
                 .blocked
                 .as_ref()
@@ -306,6 +318,7 @@ impl Plait {
             return;
         }
         let attempt = self
+            .workspace
             .turn_records
             .retry
             .take()
@@ -330,9 +343,9 @@ impl Plait {
             attempt.request.clone(),
             attempt.leave_changed,
         );
-        self.turn_records.blocked = None;
-        self.turn_records.note = None;
-        self.turn_records.pending = Some(attempt.clone());
+        self.workspace.turn_records.blocked = None;
+        self.workspace.turn_records.note = None;
+        self.workspace.turn_records.pending = Some(attempt.clone());
         self.remeasure_undo_panel(&attempt.run);
         let task = cx
             .background_executor()
@@ -343,17 +356,17 @@ impl Plait {
                 // The operation itself changes records_revision. Guard identity,
                 // not that revision, so its own watch update cannot hide success.
                 if !this.host.accepts_watch(stamp.epoch, stamp.watch, &stamp.thread)
-                    || this.turn_records.pending.as_ref().is_none_or(|p| p.request != attempt.request)
+                    || this.workspace.turn_records.pending.as_ref().is_none_or(|p| p.request != attempt.request)
                 { return; }
-                this.turn_records.pending = None;
+                this.workspace.turn_records.pending = None;
                 match reply {
                     Ok(reply) if reply.state == UndoState::Blocked => {
-                        let coverage = this.turn_records.lines.runs.get(&attempt.run)
+                        let coverage = this.workspace.turn_records.lines.runs.get(&attempt.run)
                             .map(|line| line.not_covered.as_slice()).unwrap_or_default();
-                        this.turn_records.blocked = Some(Blocked::new(attempt.run.clone(), reply, coverage));
+                        this.workspace.turn_records.blocked = Some(Blocked::new(attempt.run.clone(), reply, coverage));
                     }
                     Ok(_) => {
-                        this.turn_records.retry = None;
+                        this.workspace.turn_records.retry = None;
                         this.fetch_turn_records(window, cx);
                         this.state.repository.refresh();
                         this.pump(cx);
@@ -363,15 +376,15 @@ impl Plait {
                         let detail = if error.code == "undo_incomplete" {
                             "Undo was interrupted; some files may have changed. Inspect Changes before another undo.".into()
                         } else { error.message };
-                        this.turn_records.note = Some((attempt.run.clone(), label, detail));
+                        this.workspace.turn_records.note = Some((attempt.run.clone(), label, detail));
                         this.fetch_turn_records(window, cx);
                         this.state.repository.refresh();
                         this.pump(cx);
                     }
                     Err(error) => {
                         // An explicit Retry repeats the identical ID and flags.
-                        this.turn_records.retry = Some(attempt.clone());
-                        this.turn_records.note = Some((attempt.run.clone(), "Retry", format!("The reply was not received. Retry checks the same operation without applying it twice. {error}")));
+                        this.workspace.turn_records.retry = Some(attempt.clone());
+                        this.workspace.turn_records.note = Some((attempt.run.clone(), "Retry", format!("The reply was not received. Retry checks the same operation without applying it twice. {error}")));
                     }
                 }
                 this.remeasure_undo_panel(&attempt.run);
@@ -381,7 +394,7 @@ impl Plait {
         cx.notify();
     }
     pub(super) fn cancel_undo_panel(&mut self, cx: &mut Context<Self>) {
-        if let Some(blocked) = self.turn_records.blocked.take() {
+        if let Some(blocked) = self.workspace.turn_records.blocked.take() {
             self.remeasure_undo_panel(&blocked.run);
         }
         cx.notify();
@@ -408,10 +421,11 @@ impl Plait {
                     path: None,
                 });
         let available = line.availability == Availability::Ready;
-        let older = self.turn_review.older;
+        let older = self.workspace.turn_review.older;
 
         let refusal = self.undo_refusal(line);
         let note = self
+            .workspace
             .turn_records
             .note
             .as_ref()
@@ -442,10 +456,14 @@ impl Plait {
                 el.on_activate(cx, {
                     let run = run.clone();
                     move |this, window, cx| {
-                        if let Some(attempt) =
-                            this.turn_records.retry.clone().filter(|p| p.run == run)
+                        if let Some(attempt) = this
+                            .workspace
+                            .turn_records
+                            .retry
+                            .clone()
+                            .filter(|p| p.run == run)
                         {
-                            if this.turn_records.pending.is_none() {
+                            if this.workspace.turn_records.pending.is_none() {
                                 this.send_undo(attempt, window, cx);
                             }
                         } else {
@@ -475,7 +493,7 @@ impl Plait {
                 _ => None,
             };
             if let Some((label, tint)) = status {
-                let detail = plait_core::history::run_state(snapshot, self.history.now)
+                let detail = plait_core::history::run_state(snapshot, self.workspace.history.now)
                     .map(|(text, _)| text)
                     .unwrap_or_default();
                 content = content.child(
@@ -639,6 +657,7 @@ impl Plait {
     }
     fn undo_panel(&self, line: &Line, cx: &mut Context<Self>) -> Option<AnyElement> {
         let blocked = self
+            .workspace
             .turn_records
             .blocked
             .as_ref()
@@ -685,9 +704,9 @@ impl Plait {
     pub(super) fn legacy_record_tip(&self) -> String {
         if self.host.protocol() < 5 {
             "Undo needs a newer host (version 5 or later).".into()
-        } else if let Some(error) = &self.turn_records.error {
+        } else if let Some(error) = &self.workspace.turn_records.error {
             format!("Records could not be read. {error}")
-        } else if self.turn_records.loading {
+        } else if self.workspace.turn_records.loading {
             "Loading the host's run records.".into()
         } else {
             "No retained host record is available for this turn.".into()

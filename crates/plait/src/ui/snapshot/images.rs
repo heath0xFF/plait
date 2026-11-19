@@ -63,12 +63,12 @@ pub(super) fn install(harness: &mut Harness, count: usize) {
         snapshot.live_text.clear();
         snapshot.status = ThreadStatus::Idle;
         plait.host.thread.snapshot = Some(Arc::new(snapshot));
-        plait.history = Default::default();
-        plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
+        plait.workspace.history = Default::default();
+        plait.workspace.formatted = Arc::new(plait_core::markdown::Transcript::update(
             &Default::default(),
             plait.host.thread.snapshot.as_ref().unwrap(),
         ));
-        plait.images = super::super::images::ImageCache::scene(
+        plait.workspace.images = super::super::images::ImageCache::scene(
             (
                 plait.host.connection.epoch,
                 plait.host.thread.watch_epoch,
@@ -90,7 +90,7 @@ pub(super) fn install(harness: &mut Harness, count: usize) {
                 .collect(),
         );
         plait.refresh_live_list(None);
-        plait.live_scroll.scroll_to_end();
+        plait.workspace.live_scroll.scroll_to_end();
         plait.sync_composer(cx);
     });
 }
@@ -119,7 +119,7 @@ pub(super) fn walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     });
     harness.capture(&format!("images-composer-several-{suffix}"));
     harness.update(|plait, _, cx| {
-        let composer = plait.composers[THREAD].clone();
+        let composer = plait.workspace.composers[THREAD].clone();
         let revision = composer.update(cx, |composer, cx| {
             let revision = composer.saved_draft().1;
             composer.restore_draft(String::new(), revision, None, cx);
@@ -182,7 +182,7 @@ pub(super) fn walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     install(harness, 3);
     harness.capture(&format!("images-conversation-{suffix}"));
     harness.update(|plait, _, _| {
-        plait.images.enlarged = Some((
+        plait.workspace.images.enlarged = Some((
             fixture[0].0.clone(),
             Some(Ok(super::super::images::decode(
                 include_bytes!("../../../../../runtime/test/support/images/0.png"),
@@ -193,5 +193,5 @@ pub(super) fn walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         ))
     });
     harness.capture(&format!("images-enlarged-{suffix}"));
-    harness.update(|plait, _, _| plait.images.enlarged = None);
+    harness.update(|plait, _, _| plait.workspace.images.enlarged = None);
 }

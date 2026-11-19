@@ -50,59 +50,49 @@ impl Plait {
             connection: self.host.connection.epoch,
             watch: self.host.thread.watch_epoch,
             repository: self.state.repository.epoch(),
-            generation: self.turn_review.generation,
-            target: self.turn_review.target.clone(),
-            current: self.turn_review.current,
+            generation: self.workspace.turn_review.generation,
+            target: self.workspace.turn_review.target.clone(),
+            current: self.workspace.turn_review.current,
         })
     }
     pub(super) fn clear_turn_review(&mut self) {
-        let state = &mut self.turn_review;
-        state.generation += 1;
-        state.target = None;
-        state.window = None;
-        state.record = None;
-        state.diff = None;
-        state.status = None;
-        state.selected = None;
-        state.current = false;
-        state.error = None;
-        state.loading = false;
-        state.pending = false;
+        self.workspace.clear_turn_review();
     }
     pub(super) fn refresh_turn_review(&mut self, cx: &mut Context<Self>) {
-        if cfg!(test) && self.turn_review.target.is_none() {
+        if cfg!(test) && self.workspace.turn_review.target.is_none() {
             return;
         }
-        if self.turn_review.epoch != Some(self.host.connection.epoch) {
-            self.turn_review.epoch = Some(self.host.connection.epoch);
-            self.turn_review.older = false;
-            self.turn_review.info = None;
+        if self.workspace.turn_review.epoch != Some(self.host.connection.epoch) {
+            self.workspace.turn_review.epoch = Some(self.host.connection.epoch);
+            self.workspace.turn_review.older = false;
+            self.workspace.turn_review.info = None;
         }
-        if self.turn_review.older || self.host.thread.selected.is_none() {
+        if self.workspace.turn_review.older || self.host.thread.selected.is_none() {
             return;
         }
-        self.turn_review.generation += 1;
-        self.turn_review.pending = true;
+        self.workspace.turn_review.generation += 1;
+        self.workspace.turn_review.pending = true;
         self.pump_turn_review(cx);
     }
     fn pump_turn_review(&mut self, cx: &mut Context<Self>) {
-        if self.turn_review.running || !self.turn_review.pending {
+        if self.workspace.turn_review.running || !self.workspace.turn_review.pending {
             return;
         }
         let Some(stamp) = self.review_stamp() else {
             return;
         };
         if !self.host.connection.connected {
-            if self.turn_review.target.is_some() {
-                self.turn_review.error =
+            if self.workspace.turn_review.target.is_some() {
+                self.workspace.turn_review.error =
                     Some(("Offline", "Reconnect to read turn changes.".into()));
             }
             return;
         }
-        self.turn_review.running = true;
-        self.turn_review.pending = false;
-        self.turn_review.loading = self.turn_review.target.is_some() && !self.turn_review.current;
-        let records = self.turn_records.data.clone();
+        self.workspace.turn_review.running = true;
+        self.workspace.turn_review.pending = false;
+        self.workspace.turn_review.loading =
+            self.workspace.turn_review.target.is_some() && !self.workspace.turn_review.current;
+        let records = self.workspace.turn_records.data.clone();
         let complete = self.records_current();
         let snapshot = self.state.repository.snapshot().ready().cloned();
         let history = self.host.thread.snapshot.clone();
@@ -179,7 +169,7 @@ impl Plait {
             result.record = Some(record);
             Ok(result)
         });
-        let window = self.turn_review.window;
+        let window = self.workspace.turn_review.window;
         cx.spawn(async move |this, cx| {
             let result = task.await;
             if let Some(window) = window {
@@ -202,51 +192,52 @@ impl Plait {
         window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
-        self.turn_review.running = false;
+        self.workspace.turn_review.running = false;
         if self.review_stamp().as_ref() != Some(&stamp) {
-            self.turn_review.pending =
-                self.turn_review.target.is_some() || self.tab == Workspace::Changes;
+            self.workspace.turn_review.pending = self.workspace.turn_review.target.is_some()
+                || self.workspace.tab == Workspace::Changes;
             self.pump_turn_review(cx);
             return;
         }
-        self.turn_review.loading = false;
+        self.workspace.turn_review.loading = false;
         match result {
             Ok(result) => {
-                self.turn_review.info = Some(result.info);
+                self.workspace.turn_review.info = Some(result.info);
                 let offline = result.error.as_ref().is_some_and(|e| e.0 == "Offline");
-                self.turn_review.error = result.error;
+                self.workspace.turn_review.error = result.error;
                 if let Some(record) = result.record {
-                    self.turn_review.record = Some(Arc::new(record));
-                    self.turn_review.selected = result.selected;
+                    self.workspace.turn_review.record = Some(Arc::new(record));
+                    self.workspace.turn_review.selected = result.selected;
                 }
-                if !self.turn_review.current {
-                    self.turn_review.status = result.status;
+                if !self.workspace.turn_review.current {
+                    self.workspace.turn_review.status = result.status;
                     if !offline {
-                        self.turn_review.diff = result.diff.map(Arc::new);
+                        self.workspace.turn_review.diff = result.diff.map(Arc::new);
                     }
                 }
             }
             Err(error) if review::needs_host_update(&error) => {
-                self.turn_review.older = true;
+                self.workspace.turn_review.older = true;
                 if let Some(path) = stamp.target.as_ref().and_then(|target| target.path.clone())
                     && let Some(window) = window
                 {
                     self.open_thread_file(path, window, cx);
                     return;
                 }
-                self.turn_review.error = Some((
+                self.workspace.turn_review.error = Some((
                     "Older host",
                     "Turn review needs a newer host. Current Git changes are still available."
                         .into(),
                 ));
-                self.turn_review.diff = None;
+                self.workspace.turn_review.diff = None;
             }
             Err(host::Error::Transport(_)) => {
-                self.turn_review.error = Some(("Offline", "Reconnect to read turn changes.".into()))
+                self.workspace.turn_review.error =
+                    Some(("Offline", "Reconnect to read turn changes.".into()))
             }
             Err(error) => {
-                self.turn_review.error = Some(("Unavailable", error.to_string()));
-                self.turn_review.diff = None;
+                self.workspace.turn_review.error = Some(("Unavailable", error.to_string()));
+                self.workspace.turn_review.diff = None;
             }
         }
         self.sync_recorded_current(cx);
@@ -264,21 +255,21 @@ impl Plait {
         {
             return;
         }
-        if self.turn_review.older
+        if self.workspace.turn_review.older
             && let Some(path) = &target.path
         {
             self.open_thread_file(path.clone(), window, cx);
             return;
         }
         self.clear_turn_review();
-        self.turn_review.window = Some(window.window_handle());
-        self.turn_review.target = Some(target);
-        self.diff_scroll = UniformListScrollHandle::new();
-        self.file_scroll = UniformListScrollHandle::new();
+        self.workspace.turn_review.window = Some(window.window_handle());
+        self.workspace.turn_review.target = Some(target);
+        self.workspace.diff_scroll = UniformListScrollHandle::new();
+        self.workspace.file_scroll = UniformListScrollHandle::new();
         self.show_tab(Workspace::Changes, window, cx);
         window.focus(&self.focus, cx);
-        if self.turn_review.older {
-            self.turn_review.error = Some((
+        if self.workspace.turn_review.older {
+            self.workspace.turn_review.error = Some((
                 "Older host",
                 "Turn review needs a newer host. Current Git changes are still available.".into(),
             ));
@@ -292,6 +283,7 @@ impl Plait {
         cx: &mut Context<Self>,
     ) {
         let Some(file) = self
+            .workspace
             .turn_review
             .record
             .as_ref()
@@ -300,20 +292,20 @@ impl Plait {
             return;
         };
         let path = file.path.clone();
-        if let Some(target) = self.turn_review.target.as_mut() {
+        if let Some(target) = self.workspace.turn_review.target.as_mut() {
             target.path = Some(path);
         }
-        self.turn_review.selected = Some(index);
-        self.turn_review.diff = None;
-        self.turn_review.error = None;
-        self.diff_scroll = UniformListScrollHandle::new();
+        self.workspace.turn_review.selected = Some(index);
+        self.workspace.turn_review.diff = None;
+        self.workspace.turn_review.error = None;
+        self.workspace.diff_scroll = UniformListScrollHandle::new();
         window.focus(&self.focus, cx);
         self.refresh_turn_review(cx);
         self.sync_recorded_current(cx);
         cx.notify();
     }
     pub(super) fn review_comparison(&mut self, current: bool, cx: &mut Context<Self>) {
-        if current && self.turn_review.older {
+        if current && self.workspace.turn_review.older {
             self.clear_turn_review();
             cx.notify();
             return;
@@ -321,15 +313,15 @@ impl Plait {
         if self.recorded_file().is_none() {
             return;
         }
-        self.turn_review.current = current;
-        self.diff_scroll = UniformListScrollHandle::new();
-        self.line_pick = None;
+        self.workspace.turn_review.current = current;
+        self.workspace.diff_scroll = UniformListScrollHandle::new();
+        self.workspace.line_pick = None;
         self.refresh_turn_review(cx);
         self.sync_recorded_current(cx);
         cx.notify();
     }
     pub(super) fn sync_recorded_current(&mut self, cx: &mut Context<Self>) {
-        if !self.turn_review.current {
+        if !self.workspace.turn_review.current {
             return;
         }
         let Some(file) = self.recorded_file() else {
@@ -379,15 +371,16 @@ impl Plait {
         }
     }
     pub(super) fn recorded_file(&self) -> Option<&plait_core::review::recorded::File> {
-        self.turn_review
+        self.workspace
+            .turn_review
             .record
             .as_ref()?
             .files
-            .get(self.turn_review.selected?)
+            .get(self.workspace.turn_review.selected?)
     }
     pub(super) fn recorded_current_available(&self) -> bool {
         // Selection is prepared by event handlers; no status scan in render.
-        self.turn_review.current
+        self.workspace.turn_review.current
             && self.recorded_file().is_some_and(|file| {
                 self.state
                     .repository
@@ -419,16 +412,17 @@ impl Plait {
         }
     }
     pub(super) fn review_scope_text(&self) -> (String, String) {
-        if let Some(record) = &self.turn_review.record {
+        if let Some(record) = &self.workspace.turn_review.record {
             (record.label.clone(), record.detail.clone())
-        } else if self.turn_review.target.is_some() {
+        } else if self.workspace.turn_review.target.is_some() {
             let detail = self
+                .workspace
                 .turn_review
                 .error
                 .as_ref()
                 .map(|e| e.1.clone())
                 .unwrap_or_else(|| {
-                    if self.turn_review.loading {
+                    if self.workspace.turn_review.loading {
                         "Reading this run's recorded changes from the host."
                     } else {
                         "Show this run's recorded changes."
@@ -460,7 +454,7 @@ impl Plait {
         let Some(stamp) = self.review_stamp() else {
             return;
         };
-        let data = self.turn_records.data.clone();
+        let data = self.workspace.turn_records.data.clone();
         let history = self.host.thread.snapshot.clone();
         let task = cx.background_executor().spawn(async move {
             let mut choices = Vec::new();
@@ -541,6 +535,7 @@ impl Plait {
     }
     pub(super) fn recorded_files(&self, cx: &mut Context<Self>) -> AnyElement {
         let count = self
+            .workspace
             .turn_review
             .record
             .as_ref()
@@ -554,12 +549,13 @@ impl Plait {
             cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
                 range
                     .map(|index| {
-                        let file = &this.turn_review.record.as_ref().unwrap().files[index];
+                        let file =
+                            &this.workspace.turn_review.record.as_ref().unwrap().files[index];
                         let detail = file.detail.clone();
                         nav_row(
                             ("recorded-file", index),
                             file.detail.clone(),
-                            this.turn_review.selected == Some(index),
+                            this.workspace.turn_review.selected == Some(index),
                         )
                         .h(px(28.))
                         .min_w_0()
@@ -594,7 +590,7 @@ impl Plait {
                     .collect::<Vec<_>>()
             }),
         )
-        .track_scroll(&self.file_scroll)
+        .track_scroll(&self.workspace.file_scroll)
         .flex_1()
         .min_h_0()
         .into_any_element()
@@ -676,36 +672,44 @@ impl Plait {
     pub(super) fn recorded_switch(&self, cx: &Context<Self>) -> Div {
         segmented()
             .child(
-                segment("review-recorded", "Recorded", !self.turn_review.current)
-                    .aria_description("Compare this record's before and after versions.")
-                    .tooltip(|_, cx| {
-                        cx.new(|_| {
-                            TextTooltip("Compare this record's before and after versions.".into())
-                        })
-                        .into()
+                segment(
+                    "review-recorded",
+                    "Recorded",
+                    !self.workspace.turn_review.current,
+                )
+                .aria_description("Compare this record's before and after versions.")
+                .tooltip(|_, cx| {
+                    cx.new(|_| {
+                        TextTooltip("Compare this record's before and after versions.".into())
                     })
-                    .on_activate(cx, |this, _, cx| this.review_comparison(false, cx)),
+                    .into()
+                })
+                .on_activate(cx, |this, _, cx| this.review_comparison(false, cx)),
             )
             .child(
-                segment("review-current", "Current", self.turn_review.current)
-                    .aria_description("Review this file's current staged and unstaged changes.")
-                    .tooltip(|_, cx| {
-                        cx.new(|_| {
-                            TextTooltip(
-                                "Review this file's current staged and unstaged changes.".into(),
-                            )
-                        })
-                        .into()
+                segment(
+                    "review-current",
+                    "Current",
+                    self.workspace.turn_review.current,
+                )
+                .aria_description("Review this file's current staged and unstaged changes.")
+                .tooltip(|_, cx| {
+                    cx.new(|_| {
+                        TextTooltip(
+                            "Review this file's current staged and unstaged changes.".into(),
+                        )
                     })
-                    .on_activate(cx, |this, _, cx| this.review_comparison(true, cx)),
+                    .into()
+                })
+                .on_activate(cx, |this, _, cx| this.review_comparison(true, cx)),
             )
     }
     pub(super) fn recorded_notice(&self) -> Option<(&'static str, &'static str)> {
-        (self.turn_review.status == Some(review::Status::Mode))
+        (self.workspace.turn_review.status == Some(review::Status::Mode))
             .then_some(("Mode", "The recorded executable bit or file type changed."))
     }
     pub(super) fn recorded_diff(&self, cx: &mut Context<Self>) -> AnyElement {
-        let state = &self.turn_review;
+        let state = &self.workspace.turn_review;
         if state.loading && state.diff.is_none() {
             return empty("Loading", "Reading this file's diff from the host.").into_any_element();
         }
@@ -731,7 +735,7 @@ impl Plait {
                     .child(self.diff_lines(
                         "recorded-patch",
                         diff.clone(),
-                        &self.diff_scroll,
+                        &self.workspace.diff_scroll,
                         None,
                         DiffControls::default(),
                         cx,
@@ -749,7 +753,7 @@ impl Plait {
                     )
                     .mb_4()
                     .on_activate(cx, |this, _, cx| {
-                        if this.turn_review.older {
+                        if this.workspace.turn_review.older {
                             this.clear_turn_review();
                         } else {
                             this.refresh_turn_review(cx);
@@ -770,7 +774,7 @@ impl Plait {
             let patch = self.diff_lines(
                 "recorded-patch",
                 diff.clone(),
-                &self.diff_scroll,
+                &self.workspace.diff_scroll,
                 None,
                 DiffControls::default(),
                 cx,

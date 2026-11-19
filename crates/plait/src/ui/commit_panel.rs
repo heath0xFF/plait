@@ -130,7 +130,12 @@ impl Plait {
     }
 
     fn commit_message_text(&self, cx: &App) -> String {
-        self.commit_message.read(cx).text().trim_end().to_owned()
+        self.workspace
+            .commit_message
+            .read(cx)
+            .text()
+            .trim_end()
+            .to_owned()
     }
 
     /// Why Commit is unavailable, in words, or `None` when it can run.
@@ -141,7 +146,14 @@ impl Plait {
             Some("Resolve the conflicts, then mark each file resolved.")
         } else if self.staged_count() == 0 {
             Some("Stage a change to commit it.")
-        } else if self.commit_message.read(cx).text().trim().is_empty() {
+        } else if self
+            .workspace
+            .commit_message
+            .read(cx)
+            .text()
+            .trim()
+            .is_empty()
+        {
             Some("Write a commit message.")
         } else {
             None
@@ -153,7 +165,7 @@ impl Plait {
             return;
         }
         let message = self.commit_message_text(cx);
-        self.commit_sent = Some(message.clone());
+        self.workspace.commit_sent = Some(message.clone());
         self.git_write(WriteOp::Commit { message }, cx);
     }
 
@@ -163,11 +175,12 @@ impl Plait {
         if self.state.repository.write().busy() {
             return;
         }
-        let sent = self.commit_sent.take();
+        let sent = self.workspace.commit_sent.take();
         if self.state.repository.write_mut().committed.take().is_some()
             && sent.is_some_and(|sent| sent == self.commit_message_text(cx))
         {
-            self.commit_message
+            self.workspace
+                .commit_message
                 .update(cx, |field, cx| field.set_text("", cx));
         }
     }
@@ -300,8 +313,8 @@ impl Plait {
 
     /// Put the cursor in the commit message, on the Changes tab.
     pub(super) fn focus_commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.tab = super::Workspace::Changes;
-        window.focus(&self.commit_message.focus_handle(cx), cx);
+        self.workspace.tab = super::Workspace::Changes;
+        window.focus(&self.workspace.commit_message.focus_handle(cx), cx);
         cx.notify();
     }
 
@@ -342,7 +355,7 @@ impl Plait {
             .border_color(rgb(colors().border))
             .children(self.sync_row(busy, cx))
             .when(
-                self.turn_review.target.is_none() || self.turn_review.current,
+                self.workspace.turn_review.target.is_none() || self.workspace.turn_review.current,
                 |el| {
                     el.child(
                         row()
@@ -367,7 +380,7 @@ impl Plait {
             .child(
                 div()
                     .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                        if this.commit_message.read(cx).is_composing() {
+                        if this.workspace.commit_message.read(cx).is_composing() {
                             return;
                         }
                         // Plain Return only; modified Return is left to the field.
@@ -376,7 +389,7 @@ impl Plait {
                             cx.stop_propagation();
                         }
                     }))
-                    .child(self.commit_message.clone()),
+                    .child(self.workspace.commit_message.clone()),
             )
             .child(
                 // The count lives on the button, where it fits at any width.

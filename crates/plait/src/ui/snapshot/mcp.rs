@@ -153,7 +153,7 @@ pub(super) fn mcp_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         let tool = plait.host.thread.snapshot.as_ref().unwrap().tools[1]
             .id
             .clone();
-        plait.expanded_live_tools.insert(tool);
+        plait.workspace.expanded_live_tools.insert(tool);
     });
     harness.capture(&format!("mcp-tool-controls-{suffix}"));
 }
@@ -235,7 +235,7 @@ fn mcp_replies_are_guarded_by_checkout_connection_and_refresh() {
         plait.open_file(review.mcp_servers[0].file.clone().unwrap(), None, cx);
         assert!(!plait.settings_open);
         assert_eq!(
-            plait.file_viewer.path.as_deref(),
+            plait.workspace.file_viewer.path.as_deref(),
             Some(Path::new(".pi/mcp.json"))
         );
     });

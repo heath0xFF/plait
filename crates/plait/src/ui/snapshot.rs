@@ -595,10 +595,13 @@ fn pin_scene_values(plait: &mut Plait, wide: bool, name: &str) {
     let text = match name {
         "message-roles-streaming-wide" | "message-roles-streaming-narrow" => "I’ll".len(),
         "palette-no-matches-narrow" => "The edit is applied. Running the tests in the sandb".len(),
-        _ => total(plait.formatted.live.as_ref()),
+        _ => total(plait.workspace.formatted.live.as_ref()),
     };
-    let reasoning = total(plait.formatted.live_reasoning.as_ref());
-    plait.reveal.set_scene_prefixes(THREAD, text, reasoning);
+    let reasoning = total(plait.workspace.formatted.live_reasoning.as_ref());
+    plait
+        .workspace
+        .reveal
+        .set_scene_prefixes(THREAD, text, reasoning);
     plait.last_render_us = 320;
     plait.max_render_us = 640;
     plait.switch_us = 480;
@@ -678,8 +681,8 @@ impl Harness {
         self.update(|plait, _, cx| {
             let previous = plait.host.thread.snapshot.clone().expect("sample snapshot");
             change(Arc::make_mut(plait.host.thread.snapshot.as_mut().unwrap()));
-            plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
-                &plait.formatted,
+            plait.workspace.formatted = Arc::new(plait_core::markdown::Transcript::update(
+                &plait.workspace.formatted,
                 plait.host.thread.snapshot.as_ref().unwrap(),
             ));
             plait.refresh_live_list(Some(&previous));
@@ -788,18 +791,18 @@ impl Harness {
             ];
             // Mirror select_host_thread without opening a socket.
             plait.host.thread.selected = Some(THREAD.into());
-            plait.history = Default::default();
+            plait.workspace.history = Default::default();
             plait.host.thread.snapshot = Some(Arc::new(thread_snapshot(&checkout, approval)));
-            plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
-                &plait.formatted,
+            plait.workspace.formatted = Arc::new(plait_core::markdown::Transcript::update(
+                &plait.workspace.formatted,
                 plait.host.thread.snapshot.as_ref().unwrap(),
             ));
             plait.settings_open = false;
             plait.settings_page = SettingsPage::default();
             plait.new_thread_open = false;
-            plait.tab = super::Workspace::Conversation;
+            plait.workspace.tab = super::Workspace::Conversation;
             let composer = cx.new(|cx| Composer::new(window, cx));
-            plait.composers.insert(THREAD.into(), composer);
+            plait.workspace.composers.insert(THREAD.into(), composer);
             plait.refresh_live_list(None);
             plait
                 .session
@@ -959,14 +962,14 @@ fn approval_shortcuts_act_only_when_the_buttons_would() {
     );
     harness.update(|plait, _, _| {
         plait.settings_open = false;
-        plait.tab = super::Workspace::Changes;
+        plait.workspace.tab = super::Workspace::Changes;
     });
     assert!(
         !harness.answers("cmd-alt-y", "a6"),
         "Changes covers the card"
     );
     harness.update(|plait, _, _| {
-        plait.tab = super::Workspace::Conversation;
+        plait.workspace.tab = super::Workspace::Conversation;
         plait.host.thread.selected = Some("thr_0c44a9d1".into());
     });
     assert!(
@@ -1015,7 +1018,7 @@ fn desktop_recovery_does_not_rebind_saved_work_or_clear_a_newer_revision() {
             .submissions
             .begin(THREAD, "first".into())
             .unwrap();
-        plait.composers[THREAD].update(cx, |composer, cx| {
+        plait.workspace.composers[THREAD].update(cx, |composer, cx| {
             composer.restore_draft("first".into(), 7, Some(("first".into(), 6)), cx);
         });
         plait.capture_session(cx);
@@ -1032,7 +1035,10 @@ fn desktop_recovery_does_not_rebind_saved_work_or_clear_a_newer_revision() {
         let composer = cx.new(|cx| Composer::new(window, cx));
         plait.restore_composer(THREAD, &composer, cx);
         assert_eq!(composer.read(cx).saved_draft().0, "");
-        plait.composers.insert(THREAD.into(), composer.clone());
+        plait
+            .workspace
+            .composers
+            .insert(THREAD.into(), composer.clone());
         plait.capture_session(cx);
         plait.record_snapshot(cx);
         assert_eq!(plait.session.data.as_ref().unwrap().threads[THREAD], saved);
@@ -1060,31 +1066,37 @@ fn files_tab_reads_finds_and_reloads_a_real_file() {
     let _ = std::fs::remove_dir_all(&scratch);
     let repository = fixture_repository(&scratch);
     let mut harness = Harness::new(&repository, None, 900., 600.);
-    let text = |plait: &Plait| match plait.file_viewer.opened.as_deref().map(|o| &o.contents) {
+    let text = |plait: &Plait| match plait
+        .workspace
+        .file_viewer
+        .opened
+        .as_deref()
+        .map(|o| &o.contents)
+    {
         Some(Contents::Text(text)) => text.text.clone(),
         other => panic!("not text: {other:?}"),
     };
     harness.update(|plait, _, cx| plait.open_file("src/review.rs".into(), Some(2), cx));
     harness.update(|plait, _, _| {
-        assert_eq!(plait.tab, super::Workspace::Files);
+        assert_eq!(plait.workspace.tab, super::Workspace::Files);
         assert!(text(plait).contains("notify_when_ready"));
     });
     harness.draw();
     // Find counts matches off the UI thread and steps through them, wrapping.
     harness.update(|plait, window, cx| {
         plait.open_find(window, cx);
-        let field = plait.file_viewer.find.field.clone().unwrap();
+        let field = plait.workspace.file_viewer.find.field.clone().unwrap();
         field.update(cx, |field, cx| field.set_text("STATUS", cx));
     });
     harness.update(|plait, _, cx| {
         assert_eq!(
-            plait.file_viewer.find.matches.len(),
+            plait.workspace.file_viewer.find.matches.len(),
             1,
             "ASCII case is ignored"
         );
         plait.step_find(true, cx);
         assert_eq!(
-            plait.file_viewer.find.current, 0,
+            plait.workspace.file_viewer.find.current, 0,
             "one match wraps to itself"
         );
     });
@@ -1092,11 +1104,11 @@ fn files_tab_reads_finds_and_reloads_a_real_file() {
     // Closing clears the matches; reopening searches the kept query again.
     harness.update(|plait, window, cx| {
         plait.close_find(window, cx);
-        assert!(plait.file_viewer.find.matches.is_empty());
+        assert!(plait.workspace.file_viewer.find.matches.is_empty());
         plait.open_find(window, cx);
     });
     harness.update(|plait, _, cx| {
-        let find = &plait.file_viewer.find;
+        let find = &plait.workspace.file_viewer.find;
         assert_eq!(find.field.as_ref().unwrap().read(cx).text(), "STATUS");
         assert_eq!(find.matches.len(), 1, "reopening finds the kept query");
     });
@@ -1106,11 +1118,11 @@ fn files_tab_reads_finds_and_reloads_a_real_file() {
     harness.update(|plait, _, _| {
         assert_eq!(text(plait), "pub fn refresh() {}\n");
         assert_eq!(
-            plait.file_viewer.note.as_deref(),
+            plait.workspace.file_viewer.note.as_deref(),
             Some("Updated from disk.")
         );
         assert!(
-            plait.file_viewer.find.matches.is_empty(),
+            plait.workspace.file_viewer.find.matches.is_empty(),
             "find reruns on new text"
         );
     });
@@ -1121,6 +1133,7 @@ fn files_tab_reads_finds_and_reloads_a_real_file() {
         assert_eq!(text(plait), "pub fn refresh() {}\n");
         assert!(
             plait
+                .workspace
                 .file_viewer
                 .note
                 .as_ref()
@@ -1132,11 +1145,14 @@ fn files_tab_reads_finds_and_reloads_a_real_file() {
     std::fs::write(repository.join("notes.txt"), "Café\ncafé CAFÉ\n").unwrap();
     harness.update(|plait, _, cx| plait.open_file("notes.txt".into(), None, cx));
     harness.update(|plait, _, cx| {
-        let field = plait.file_viewer.find.field.clone().unwrap();
+        let field = plait.workspace.file_viewer.find.field.clone().unwrap();
         field.update(cx, |field, cx| field.set_text("CAFÉ", cx));
     });
     harness.update(|plait, _, _| {
-        assert_eq!(*plait.file_viewer.find.matches, vec![0..5, 6..11, 12..17]);
+        assert_eq!(
+            *plait.workspace.file_viewer.find.matches,
+            vec![0..5, 6..11, 12..17]
+        );
     });
     // Binary files are described, not drawn.
     std::fs::write(repository.join("logo.png"), [0x89, b'P', 0, 0]).unwrap();
@@ -1146,7 +1162,13 @@ fn files_tab_reads_finds_and_reloads_a_real_file() {
     });
     harness.update(|plait, _, _| {
         assert!(matches!(
-            plait.file_viewer.opened.as_deref().unwrap().contents,
+            plait
+                .workspace
+                .file_viewer
+                .opened
+                .as_deref()
+                .unwrap()
+                .contents,
             Contents::Binary { len: 4 }
         ));
     });
@@ -1167,12 +1189,12 @@ fn files_walk(harness: &mut Harness, suffix: &str) {
     harness.capture(&format!("files-{suffix}"));
     harness.update(|plait, window, cx| {
         plait.open_find(window, cx);
-        let field = plait.file_viewer.find.field.clone().unwrap();
+        let field = plait.workspace.file_viewer.find.field.clone().unwrap();
         field.update(cx, |field, cx| field.set_text("re", cx));
     });
     // Two matches in "refresh", and the current one in "ready", underlined.
     harness.update(|plait, _, cx| plait.step_find(false, cx));
-    harness.update(|plait, _, _| assert_eq!(plait.file_viewer.find.matches.len(), 3));
+    harness.update(|plait, _, _| assert_eq!(plait.workspace.file_viewer.find.matches.len(), 3));
     harness.capture(&format!("files-find-{suffix}"));
     harness.update(|plait, window, cx| {
         plait.close_find(window, cx);
@@ -1475,7 +1497,7 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
                 .any(|t| t.id == "thr_discarded")
         );
         assert!(plait.host.thread.selected.is_none());
-        assert!(!plait.composers.contains_key("thr_discarded"));
+        assert!(!plait.workspace.composers.contains_key("thr_discarded"));
         assert!(plait.host.submissions.all("thr_discarded").is_empty());
 
         // A reply for another request than the pending one changes nothing.
@@ -1494,7 +1516,10 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
         // Nor does a reply for a draft from before a discard.
         plait.draft.generation += 1;
         plait.finish_create(created("current"), reply("thr_stale"), window, cx);
-        assert!(plait.host.thread.selected.is_none() && !plait.composers.contains_key("thr_stale"));
+        assert!(
+            plait.host.thread.selected.is_none()
+                && !plait.workspace.composers.contains_key("thr_stale")
+        );
         plait.discard_draft(window, cx);
 
         // Left for another thread: the message goes to the new thread, which
@@ -1505,7 +1530,7 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
         plait.finish_create(created("left"), reply("thr_left"), window, cx);
         assert_eq!(plait.host.thread.selected.as_deref(), Some(THREAD));
         assert!(
-            plait.composers.contains_key("thr_left"),
+            plait.workspace.composers.contains_key("thr_left"),
             "the draft's composer moved"
         );
         assert_eq!(
@@ -1762,8 +1787,11 @@ fn changed_files_count_with_git_hide_on_request_and_open_in_changes() {
             .unwrap()
             .protocol_version = 3;
         plait.host.thread.selected = Some(THREAD.into());
-        plait.thread_files.inject(THREAD, root, Vec::new());
-        plait.thread_files.set_paths(vec![
+        plait
+            .workspace
+            .thread_files
+            .inject(THREAD, root, Vec::new());
+        plait.workspace.thread_files.set_paths(vec![
             "src/review.rs".into(),
             "notes.md".into(),
             "untouched.txt".into(),
@@ -1787,6 +1815,7 @@ fn changed_files_count_with_git_hide_on_request_and_open_in_changes() {
     }
     harness.update(|plait, window, cx| {
         let paths: Vec<_> = plait
+            .workspace
             .thread_files
             .counted()
             .map(|c| c.path.clone())
@@ -1800,7 +1829,7 @@ fn changed_files_count_with_git_hide_on_request_and_open_in_changes() {
         assert!(plait.thread_files_card(cx).is_none());
         plait.preferences.value.hide_changed_files = false;
         plait.open_thread_file("src/review.rs".into(), window, cx);
-        assert_eq!(plait.tab, super::Workspace::Changes);
+        assert_eq!(plait.workspace.tab, super::Workspace::Changes);
         let repo = &plait.state.repository;
         let key = repo.selected_diff().unwrap();
         assert_eq!(
@@ -1823,8 +1852,11 @@ fn streaming_text_flows_in_over_display_frames_and_catches_up() {
         harness
             .window
             .update(&mut harness.cx, |plait, _, _| {
-                let blocks = &plait.formatted.live.as_ref().unwrap().blocks;
-                plait.reveal.pending_text(plait_core::reveal::total(blocks))
+                let blocks = &plait.workspace.formatted.live.as_ref().unwrap().blocks;
+                plait
+                    .workspace
+                    .reveal
+                    .pending_text(plait_core::reveal::total(blocks))
             })
             .unwrap()
     };
@@ -1892,7 +1924,7 @@ fn asking_about_picked_lines_quotes_them_into_the_thread_composer() {
         plait.pick_line(first - 1, true, cx);
         // Without a thread there is nobody to ask; the pick stays.
         plait.ask_about_pick(window, cx);
-        assert!(plait.line_pick.is_some());
+        assert!(plait.workspace.line_pick.is_some());
 
         plait.host.thread.selected = Some(THREAD.into());
         let composer = cx.new(|cx| Composer::new(window, cx));
@@ -1900,19 +1932,22 @@ fn asking_about_picked_lines_quotes_them_into_the_thread_composer() {
             composer.set_enabled(true, None, cx);
             composer.type_text("Why this?", window, cx);
         });
-        plait.composers.insert(THREAD.into(), composer.clone());
+        plait
+            .workspace
+            .composers
+            .insert(THREAD.into(), composer.clone());
         plait.ask_about_pick(window, cx);
         let text = composer.read(cx).text().to_owned();
         assert!(text.starts_with("Why this?\n\n`"), "{text}");
         assert!(text.contains("` (unstaged):\n```diff\n"), "{text}");
         assert!(text.ends_with("```\n\n"), "{text}");
-        assert!(plait.line_pick.is_none());
-        assert_eq!(plait.tab, super::Workspace::Conversation);
+        assert!(plait.workspace.line_pick.is_none());
+        assert_eq!(plait.workspace.tab, super::Workspace::Conversation);
 
         // A pick belongs to its file and side.
         plait.show_tab(super::Workspace::Changes, window, cx);
         plait.pick_line(first, false, cx);
-        assert!(plait.line_pick.is_some());
+        assert!(plait.workspace.line_pick.is_some());
         plait.select_file(1, DiffMode::Staged, window, cx);
         assert!(plait.current_pick(usize::MAX).is_none());
         // Clicking a lone picked line again clears it.
@@ -1923,7 +1958,7 @@ fn asking_about_picked_lines_quotes_them_into_the_thread_composer() {
         let first = first_added(plait);
         assert!(plait.current_pick(usize::MAX).is_some(), "back on its side");
         plait.pick_line(first, false, cx);
-        assert!(plait.line_pick.is_none());
+        assert!(plait.workspace.line_pick.is_none());
     });
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();
@@ -2008,7 +2043,7 @@ fn keys_drive_the_palette_and_picker() {
     press(&mut harness, "enter");
     harness.update(|plait, window, cx| {
         assert_eq!(plait.host.thread.selected.as_deref(), Some("thr_0c44a9d1"));
-        let composer = plait.composers["thr_0c44a9d1"].focus_handle(cx);
+        let composer = plait.workspace.composers["thr_0c44a9d1"].focus_handle(cx);
         assert!(window.focused(cx) == Some(composer));
         // Selecting dropped the sample connection; restore it for the picker.
         plait.host.connection.connected = true;
@@ -2069,7 +2104,7 @@ fn walk(output: Option<&Path>) {
         // A typed message and the result of an earlier write, without writing:
         // every scene shares this fixture repository.
         harness.update(|plait, _, cx| {
-            plait.commit_message.update(cx, |field, cx| {
+            plait.workspace.commit_message.update(cx, |field, cx| {
                 field.set_text("Queue the status refresh", cx)
             });
             plait.state.repository.write_mut().note = Some(("Staged 1 file".into(), false));
@@ -2113,11 +2148,12 @@ fn walk(output: Option<&Path>) {
         });
         harness.capture(&format!("changes-pick-{suffix}"));
         harness.update(|plait, _, cx| {
-            plait.line_pick = None;
+            plait.workspace.line_pick = None;
             cx.notify();
         });
         harness.update(|plait, window, cx| {
             plait
+                .workspace
                 .commit_message
                 .update(cx, |field, cx| field.set_text("", cx));
             plait.state.repository.write_mut().note = None;
@@ -2148,12 +2184,12 @@ fn walk(output: Option<&Path>) {
                 .map(|commit| commit.id.clone())
                 .expect("the fixture has a root commit");
             plait.state.repository.select_commit(id);
-            plait.commit_scroll = UniformListScrollHandle::new();
+            plait.workspace.commit_scroll = UniformListScrollHandle::new();
             plait.pump(cx);
         });
         harness.capture(&format!("history-files-{suffix}"));
         harness.update(|plait, _, _| {
-            plait.tab = super::Workspace::Conversation;
+            plait.workspace.tab = super::Workspace::Conversation;
             plait.host.connection.connecting = false;
             plait.host.connection.connected = true;
             plait.host.connection.status = Some(status());
@@ -2200,7 +2236,7 @@ fn walk(output: Option<&Path>) {
         navigation_walk(&mut harness, &repository, suffix);
         // Threads exist, but none is open.
         harness.update(|plait, _, _| {
-            plait.host_watch = None;
+            plait.workspace.host_watch = None;
             plait.host.select(None);
         });
         harness.capture(&format!("home-threads-{suffix}"));
@@ -2236,7 +2272,7 @@ fn streaming_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     });
     harness.update(|plait, _, cx| {
         plait.toggle_live_tool("t2", cx);
-        plait.live_scroll.scroll_to(ListOffset {
+        plait.workspace.live_scroll.scroll_to(ListOffset {
             item_ix: 12,
             offset_in_item: px(7.),
         });
@@ -2245,12 +2281,12 @@ fn streaming_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     let anchor = harness
         .window
         .update(&mut harness.cx, |plait, _, _| {
-            plait.live_scroll.logical_scroll_top()
+            plait.workspace.live_scroll.logical_scroll_top()
         })
         .unwrap();
     for _ in 0..20 {
         harness.update(|plait, _, _| {
-            let measured = plait.live_scroll.bounds_for_item(anchor.item_ix);
+            let measured = plait.workspace.live_scroll.bounds_for_item(anchor.item_ix);
             assert!(
                 measured.is_some(),
                 "visible history row must already be measured"
@@ -2259,16 +2295,19 @@ fn streaming_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
             Arc::make_mut(plait.host.thread.snapshot.as_mut().unwrap())
                 .live_text
                 .push_str(" another streamed word");
-            plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
-                &plait.formatted,
+            plait.workspace.formatted = Arc::new(plait_core::markdown::Transcript::update(
+                &plait.workspace.formatted,
                 plait.host.thread.snapshot.as_ref().unwrap(),
             ));
             plait.refresh_live_list(Some(&previous));
-            assert_eq!(plait.live_scroll.bounds_for_item(anchor.item_ix), measured);
-            let current = plait.live_scroll.logical_scroll_top();
+            assert_eq!(
+                plait.workspace.live_scroll.bounds_for_item(anchor.item_ix),
+                measured
+            );
+            let current = plait.workspace.live_scroll.logical_scroll_top();
             assert_eq!(current.item_ix, anchor.item_ix);
             assert_eq!(current.offset_in_item, anchor.offset_in_item);
-            assert!(plait.expanded_live_tools.contains("t2"));
+            assert!(plait.workspace.expanded_live_tools.contains("t2"));
         });
     }
     // Text arrived while the reader was elsewhere in the history.
@@ -2285,18 +2324,18 @@ fn streaming_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         snapshot.tools[1].output = "Sample test output: 24 tests passed.".into();
     });
     harness.update(|plait, _, _| {
-        let current = plait.live_scroll.logical_scroll_top();
+        let current = plait.workspace.live_scroll.logical_scroll_top();
         assert_eq!(current.item_ix, anchor.item_ix - 1);
         assert_eq!(current.offset_in_item, anchor.offset_in_item);
-        assert!(plait.expanded_live_tools.contains("t2"));
-        assert!(!plait.expanded_live_tools.contains("t1"));
-        plait.live_scroll.scroll_to_end();
+        assert!(plait.workspace.expanded_live_tools.contains("t2"));
+        assert!(!plait.workspace.expanded_live_tools.contains("t1"));
+        plait.workspace.live_scroll.scroll_to_end();
     });
     harness.capture(&format!("stream-tool-{suffix}"));
     harness.change_snapshot(|snapshot| {
         snapshot.tools.remove(1);
     });
-    harness.update(|plait, _, _| assert!(!plait.expanded_live_tools.contains("t2")));
+    harness.update(|plait, _, _| assert!(!plait.workspace.expanded_live_tools.contains("t2")));
 }
 
 /// Done, failed, and interrupted tool calls, two of them expanded, with the
@@ -2310,7 +2349,7 @@ fn tool_states_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         plait.sync_composer(cx);
         plait.toggle_live_tool("t2", cx);
         plait.toggle_live_tool("t3", cx);
-        plait.live_scroll.scroll_to_end();
+        plait.workspace.live_scroll.scroll_to_end();
     });
     harness.capture(&format!("live-tools-{suffix}"));
     // Later scenes show the usual thread list again.
@@ -2329,7 +2368,7 @@ fn reading_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.update(|plait, _, cx| {
         plait.host.connection.threads[0].status = ThreadStatus::Idle;
         plait.sync_composer(cx);
-        plait.live_scroll.scroll_to(at(0));
+        plait.workspace.live_scroll.scroll_to(at(0));
     });
     harness.capture(&format!("read-prose-{suffix}"));
     let reply = || Owner::Message("r2".into());
@@ -2380,7 +2419,7 @@ fn reading_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.pointer(moved(link, None));
     harness.update(|plait, _, _| {
         assert_eq!(
-            plait.reading.hovered_link.as_deref(),
+            plait.workspace.reading.hovered_link.as_deref(),
             Some("https://gpui.rs/")
         );
     });
@@ -2463,8 +2502,12 @@ fn reading_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     let (below, before) = harness
         .window
         .update(&mut harness.cx, |plait, _, _| {
-            let list = plait.live_scroll.viewport_bounds();
-            let offset = plait.live_scroll.scroll_px_offset_for_scrollbar().y;
+            let list = plait.workspace.live_scroll.viewport_bounds();
+            let offset = plait
+                .workspace
+                .live_scroll
+                .scroll_px_offset_for_scrollbar()
+                .y;
             (point(from.x, list.bottom() + px(60.)), offset)
         })
         .unwrap();
@@ -2476,7 +2519,11 @@ fn reading_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.capture(&format!("read-drag-scroll-{suffix}"));
     harness.pointer(release(below));
     harness.update(|plait, _, _| {
-        let offset = plait.live_scroll.scroll_px_offset_for_scrollbar().y;
+        let offset = plait
+            .workspace
+            .live_scroll
+            .scroll_px_offset_for_scrollbar()
+            .y;
         assert!(offset < before - px(200.), "{offset} {before}");
         let copied = plait.selected_text().expect("selection across rows");
         assert!(copied.starts_with("See the GPUI site"), "{copied}");
@@ -2486,7 +2533,7 @@ fn reading_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         );
     });
 
-    harness.update(|plait, _, _| plait.live_scroll.scroll_to(at(3)));
+    harness.update(|plait, _, _| plait.workspace.live_scroll.scroll_to(at(3)));
     harness.capture(&format!("read-code-{suffix}"));
     // In code, a triple click takes one line.
     let code = Owner::Message("r4".into());
@@ -2508,8 +2555,11 @@ fn reading_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     let jump = harness
         .window
         .update(&mut harness.cx, |plait, _, _| {
-            assert!(plait.live_scroll.logical_scroll_top().item_ix < plait.live_count);
-            let list = plait.live_scroll.viewport_bounds();
+            assert!(
+                plait.workspace.live_scroll.logical_scroll_top().item_ix
+                    < plait.workspace.live_count
+            );
+            let list = plait.workspace.live_scroll.viewport_bounds();
             // It ends at the right edge of the text column.
             let column = (list.size.width - px(48.)).min(px(760.));
             point(
@@ -2522,8 +2572,8 @@ fn reading_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.pointer(release(jump));
     harness.capture(&format!("read-latest-{suffix}"));
     harness.update(|plait, _, _| {
-        let top = plait.live_scroll.logical_scroll_top();
-        assert_eq!(top.item_ix, plait.live_count, "at the newest row");
+        let top = plait.workspace.live_scroll.logical_scroll_top();
+        assert_eq!(top.item_ix, plait.workspace.live_count, "at the newest row");
     });
     harness.capture(&format!("read-data-{suffix}"));
     harness.connect(repository, false);
@@ -2539,24 +2589,24 @@ fn tool_cards_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         for id in ["c1", "c2", "c3"] {
             plait.toggle_live_tool(id, cx);
         }
-        plait.live_scroll.scroll_to_end();
+        plait.workspace.live_scroll.scroll_to_end();
     });
     harness.capture(&format!("tools-files-{suffix}"));
     harness.update(|plait, _, cx| {
         for id in ["c1", "c2", "c3", "c4", "c5", "c6"] {
             plait.toggle_live_tool(id, cx);
         }
-        plait.live_scroll.scroll_to_end();
+        plait.workspace.live_scroll.scroll_to_end();
     });
     harness.capture(&format!("tools-commands-{suffix}"));
 
     harness.connect(repository, false);
     harness.change_snapshot(|snapshot| long_run(snapshot, false));
-    harness.update(|plait, _, _| plait.live_scroll.scroll_to_end());
+    harness.update(|plait, _, _| plait.workspace.live_scroll.scroll_to_end());
     harness.capture(&format!("tools-group-{suffix}"));
     // How the group's first two rows were last drawn: (hidden, leads the group).
     let drawn = |plait: &Plait| {
-        let folds = plait.reading.folds.borrow();
+        let folds = plait.workspace.reading.folds.borrow();
         (folds["g0"], folds["g1"])
     };
     harness.update(|plait, _, _| {
@@ -2565,7 +2615,7 @@ fn tool_cards_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.update(|plait, _, cx| {
         plait.toggle_tool_group("g0", cx);
         plait.toggle_live_tool("g3", cx);
-        plait.live_scroll.scroll_to_end();
+        plait.workspace.live_scroll.scroll_to_end();
     });
     harness.capture(&format!("tools-group-open-{suffix}"));
     harness.update(|plait, _, _| {
@@ -2582,7 +2632,7 @@ fn tool_cards_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
 
     harness.connect(repository, false);
     harness.change_snapshot(|snapshot| long_run(snapshot, true));
-    harness.update(|plait, _, _| plait.live_scroll.scroll_to_end());
+    harness.update(|plait, _, _| plait.workspace.live_scroll.scroll_to_end());
     harness.capture(&format!("tools-running-{suffix}"));
     harness.connect(repository, false);
 }
@@ -2593,11 +2643,11 @@ fn draft_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.change_snapshot(finished_turn);
     harness.update(|plait, _, cx| {
         plait.host.connection.threads[0].status = ThreadStatus::Idle;
-        plait.composers[THREAD].update(cx, |composer, cx| {
+        plait.workspace.composers[THREAD].update(cx, |composer, cx| {
             composer.restore_draft(DRAFT.into(), 1, None, cx);
         });
         plait.sync_composer(cx);
-        plait.live_scroll.scroll_to_end();
+        plait.workspace.live_scroll.scroll_to_end();
     });
     harness.capture(&format!("live-draft-{suffix}"));
     harness.connect(repository, false);
@@ -2635,7 +2685,7 @@ impl Harness {
         self.update(|plait, _, cx| {
             plait.host.connection.threads[0].status = ThreadStatus::Idle;
             plait.sync_composer(cx);
-            plait.live_scroll.scroll_to_end();
+            plait.workspace.live_scroll.scroll_to_end();
         });
     }
 
@@ -2646,7 +2696,8 @@ impl Harness {
         let result = self
             .window
             .update(&mut self.cx, |plait, window, cx| {
-                plait.composers[THREAD].update(cx, |composer, cx| change(composer, window, cx))
+                plait.workspace.composers[THREAD]
+                    .update(cx, |composer, cx| change(composer, window, cx))
             })
             .expect("window update");
         self.settle();
@@ -2688,11 +2739,11 @@ fn composer_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         let event =
             super::composer::ComposerEvent::Command(super::composer::CommandId::ShowChanges);
         plait.composer_event(&event, window, cx);
-        assert_eq!(plait.tab, super::Workspace::Changes);
+        assert_eq!(plait.workspace.tab, super::Workspace::Changes);
         let event =
             super::composer::ComposerEvent::Command(super::composer::CommandId::ShowConversation);
         plait.composer_event(&event, window, cx);
-        assert_eq!(plait.tab, super::Workspace::Conversation);
+        assert_eq!(plait.workspace.tab, super::Workspace::Conversation);
     });
 
     let lines = |count: usize| {
@@ -2704,7 +2755,7 @@ fn composer_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.composer(|composer, _, cx| composer.restore_draft(lines(6), 1, None, cx));
     harness.capture(&format!("composer-lines-{suffix}"));
     harness.update(|plait, window, cx| {
-        window.focus(&plait.composers[THREAD].focus_handle(cx), cx);
+        window.focus(&plait.workspace.composers[THREAD].focus_handle(cx), cx);
     });
     harness.draw();
     // Both adjacent controls must lead back to the composer through normal Tab order.
@@ -2713,7 +2764,7 @@ fn composer_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         harness.update(|plait, window, cx| {
             assert_ne!(
                 window.focused(cx),
-                Some(plait.composers[THREAD].focus_handle(cx)),
+                Some(plait.workspace.composers[THREAD].focus_handle(cx)),
                 "{leave} leaves the composer when no completion is open"
             );
         });
@@ -2721,7 +2772,7 @@ fn composer_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         harness.update(|plait, window, cx| {
             assert_eq!(
                 window.focused(cx),
-                Some(plait.composers[THREAD].focus_handle(cx)),
+                Some(plait.workspace.composers[THREAD].focus_handle(cx)),
                 "{return_key} reaches the composer from its adjacent control"
             );
         });
@@ -3784,14 +3835,14 @@ fn a_mode_reply_lands_only_on_the_thread_it_was_sent_for() {
         plait.finish_thread_mode(request, reply("ask"), cx);
         // The latest run's report was for the old mode, so it is not an override.
         assert_eq!(shown(plait), ("ask".into(), false));
-        assert!(plait.thread_controls.note.is_none());
+        assert!(plait.workspace.thread_controls.note.is_none());
 
         // A reply naming another mode is reported, not shown as chosen.
         let request = plait.begin_thread_mode("read_only".into()).unwrap();
         plait.finish_thread_mode(request, reply("ask"), cx);
         assert_eq!(shown(plait), ("ask".into(), false));
-        assert!(plait.thread_controls.note.as_ref().unwrap().2);
-        plait.thread_controls.note = None;
+        assert!(plait.workspace.thread_controls.note.as_ref().unwrap().2);
+        plait.workspace.thread_controls.note = None;
 
         // Sent, then the person opened another thread and came back: the
         // reply belongs to a watch that has ended, so it changes nothing.
@@ -3802,12 +3853,12 @@ fn a_mode_reply_lands_only_on_the_thread_it_was_sent_for() {
         plait.host.thread.snapshot = saved;
         plait.finish_thread_mode(request, reply("read_only"), cx);
         assert_eq!(shown(plait), ("ask".into(), false));
-        assert!(plait.thread_controls.note.is_none());
+        assert!(plait.workspace.thread_controls.note.is_none());
         // A failure for a thread no longer open says nothing here either.
         let request = plait.begin_thread_mode("read_only".into()).unwrap();
         plait.host.select(Some("thr_0c44a9d1".into()));
         plait.finish_thread_mode(request, Err(Error::Protocol("late".into())), cx);
-        assert!(plait.thread_controls.note.is_none());
+        assert!(plait.workspace.thread_controls.note.is_none());
     });
     harness.update(|plait, _, cx| {
         plait.host.select(Some(THREAD.into()));
@@ -3833,13 +3884,13 @@ fn inspector_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         plait.toggle_inspector(window, cx);
         let wide = Plait::wide(window);
         assert_eq!(plait.preferences.value.hide_inspector, wide);
-        assert_eq!(plait.inspector_note, !wide);
+        assert_eq!(plait.workspace.inspector_note, !wide);
     });
     harness.capture(&format!("inspector-hidden-{suffix}"));
     harness.update(|plait, window, cx| {
         plait.toggle_inspector(window, cx);
         assert!(!plait.preferences.value.hide_inspector);
-        assert!(!plait.inspector_note);
+        assert!(!plait.workspace.inspector_note);
     });
     // Widths saved by dragging, fitted so the conversation keeps its room.
     harness.update(|plait, _, _| {
@@ -4285,7 +4336,7 @@ fn composer_v3_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
             removed,
             untracked,
         };
-        plait.thread_files.inject(
+        plait.workspace.thread_files.inject(
             THREAD,
             root,
             vec![
@@ -4304,12 +4355,12 @@ fn composer_v3_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     });
     harness.capture(&format!("composer-v3-changed-files-{suffix}"));
     harness.update(|plait, _, cx| {
-        plait.thread_files.collapsed = true;
+        plait.workspace.thread_files.collapsed = true;
         cx.notify();
     });
     harness.capture(&format!("composer-v3-changed-files-collapsed-{suffix}"));
     harness.update(|plait, _, cx| {
-        plait.thread_files = Default::default();
+        plait.workspace.thread_files = Default::default();
         cx.notify();
     });
     harness.composer(|composer, window, cx| {
@@ -4367,7 +4418,7 @@ fn composer_v3_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let recorded = events.clone();
     harness.update(move |plait, _, cx| {
-        let composer = plait.composers[THREAD].clone();
+        let composer = plait.workspace.composers[THREAD].clone();
         cx.subscribe(&composer, move |_, _, event, _| {
             if let ComposerEvent::Submit {
                 text,
@@ -4485,9 +4536,9 @@ fn composer_v3_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness
         .change_snapshot(|snapshot| snapshot.usage.as_mut().unwrap().context_used = Some(190000));
     harness.capture(&format!("composer-v3-context-full-{suffix}"));
-    harness.update(|plait, _, _| plait.thread_controls.usage_open = true);
+    harness.update(|plait, _, _| plait.workspace.thread_controls.usage_open = true);
     harness.capture(&format!("composer-v3-context-details-{suffix}"));
-    harness.update(|plait, _, _| plait.thread_controls.usage_open = false);
+    harness.update(|plait, _, _| plait.workspace.thread_controls.usage_open = false);
     harness.update(|plait, _, cx| {
         plait
             .host
@@ -4537,14 +4588,14 @@ fn stored_page(
 fn install_history(plait: &mut Plait, cache: plait_core::history::History) {
     let snapshot = cache.project(plait.host.thread.snapshot.as_ref().unwrap());
     let stored = snapshot.tools.iter().map(|tool| tool.id.clone()).collect();
-    plait.formatted = Arc::new(plait_core::markdown::Transcript::update_stored(
-        &plait.formatted,
+    plait.workspace.formatted = Arc::new(plait_core::markdown::Transcript::update_stored(
+        &plait.workspace.formatted,
         &snapshot,
         &stored,
     ));
-    let previous = plait.history.display.replace(Arc::new(snapshot));
-    plait.history.cache = Arc::new(cache);
-    plait.history.enabled = true;
+    let previous = plait.workspace.history.display.replace(Arc::new(snapshot));
+    plait.workspace.history.cache = Arc::new(cache);
+    plait.workspace.history.enabled = true;
     plait
         .host
         .connection
@@ -4599,7 +4650,7 @@ fn history_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         let mut cache = History::default();
         cache.latest(stored_page(items(), None));
         install_history(plait, cache);
-        plait.live_scroll.scroll_to(ListOffset::default());
+        plait.workspace.live_scroll.scroll_to(ListOffset::default());
     });
     harness.capture(&format!("history-reasoning-collapsed-{suffix}"));
     harness.update(|plait, _, cx| plait.toggle_reasoning("h-think", cx));
@@ -4639,7 +4690,7 @@ fn history_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         let mut cache = History::default();
         let long = format!("Beginning of the complete reply.\n\n{}\n\nEnd of the complete reply.", "This paragraph remains in stored history even when the live snapshot no longer contains its beginning.\n\n".repeat(65));
         cache.latest(stored_page(vec![stored_message("h-answer", MessageRole::Assistant, &long, "")], None));
-        install_history(plait, cache); plait.live_scroll.scroll_to(ListOffset::default());
+        install_history(plait, cache); plait.workspace.live_scroll.scroll_to(ListOffset::default());
         assert!(plait.conversation_snapshot().unwrap().messages[0].text.len() > 4096);
     });
     harness.capture(&format!("history-full-message-{suffix}"));
@@ -4654,16 +4705,16 @@ fn history_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.capture(&format!("history-text-parts-{suffix}"));
 
     harness.update(|plait, _, _| {
-        plait.history.loading = Some(super::history::Load::Older);
+        plait.workspace.history.loading = Some(super::history::Load::Older);
     });
     harness.capture(&format!("history-loading-{suffix}"));
     harness.update(|plait, _, _| {
-        plait.history.loading = None;
+        plait.workspace.history.loading = None;
         let mut cache = History::default();
         cache.latest(stored_page((10..35).map(|i| stored_message(&format!("history-{i}"), if i % 2 == 0 { MessageRole::User } else { MessageRole::Assistant }, &format!("Sample history message {i}. This is stored fixture content, not an agent run."), "")).collect(), Some("earlier")));
-        install_history(plait, cache); plait.live_scroll.scroll_to(ListOffset { item_ix: 10, offset_in_item: px(5.) });
+        install_history(plait, cache); plait.workspace.live_scroll.scroll_to(ListOffset { item_ix: 10, offset_in_item: px(5.) });
         // No host request from the fixture's scroll callback.
-        plait.history.loading = Some(super::history::Load::Older);
+        plait.workspace.history.loading = Some(super::history::Load::Older);
     });
     harness.capture(&format!("history-scrolled-{suffix}"));
     harness.pointer(PlatformInput::Scroll(ScrollEvent {
@@ -4673,8 +4724,8 @@ fn history_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     }));
     harness.draw();
     harness.update(|plait, _, _| {
-        let before = plait.live_scroll.logical_scroll_top();
-        let mut cache = (*plait.history.cache).clone();
+        let before = plait.workspace.live_scroll.logical_scroll_top();
+        let mut cache = (*plait.workspace.history.cache).clone();
         cache.prepend(stored_page(
             (0..10)
                 .map(|i| {
@@ -4689,26 +4740,28 @@ fn history_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
             None,
         ));
         install_history(plait, cache);
-        let after = plait.live_scroll.logical_scroll_top();
+        let after = plait.workspace.live_scroll.logical_scroll_top();
         assert_eq!(after.item_ix, before.item_ix + 10);
         assert_eq!(after.offset_in_item, before.offset_in_item);
-        plait.history.loading = None;
+        plait.workspace.history.loading = None;
     });
     harness.capture(&format!("history-prepended-{suffix}"));
     harness.keystroke("home");
     harness.capture(&format!("history-beginning-{suffix}"));
-    harness.update(|plait, _, _| assert_eq!(plait.live_scroll.logical_scroll_top().item_ix, 0));
+    harness.update(|plait, _, _| {
+        assert_eq!(plait.workspace.live_scroll.logical_scroll_top().item_ix, 0)
+    });
     harness.keystroke("end");
     harness.update(|plait, _, _| {
         assert_eq!(
-            plait.live_scroll.logical_scroll_top().item_ix,
-            plait.live_count
+            plait.workspace.live_scroll.logical_scroll_top().item_ix,
+            plait.workspace.live_count
         )
     });
     harness.connect(repository, false);
     harness.change_snapshot(|snapshot| { snapshot.live_text.clear(); snapshot.live_reasoning = "Checking how cancellation interacts with the next queued input.\n\nThe writer lease must be released before another run is admitted.".into(); });
     harness.update(|plait, _, _| {
-        plait.history.enabled = true;
+        plait.workspace.history.enabled = true;
     });
     harness.capture(&format!("history-live-reasoning-{suffix}"));
     for (name, state, error) in [
@@ -4751,7 +4804,7 @@ fn history_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         });
     });
     harness.update(|plait, _, _| {
-        plait.history.now = 2000;
+        plait.workspace.history.now = 2000;
     });
     harness.capture(&format!("history-retry-{suffix}"));
 }
@@ -4788,11 +4841,11 @@ fn delayed_history_cannot_land_after_a_thread_switch() {
     harness
         .window
         .update(&mut harness.cx, |plait, window, cx| {
-            plait.history.enabled = true;
+            plait.workspace.history.enabled = true;
             plait.load_history(super::history::Load::Latest, window, cx);
             // The request was scheduled for this thread; switch before its reply.
             plait.host.select(Some("other-thread".into()));
-            plait.history = Default::default();
+            plait.workspace.history = Default::default();
         })
         .unwrap();
     harness.settle();
@@ -4802,8 +4855,8 @@ fn delayed_history_cannot_land_after_a_thread_switch() {
         std::thread::sleep(Duration::from_millis(5));
     }
     harness.update(|plait, _, _| {
-        assert!(!plait.history.cache.loaded);
-        assert!(plait.history.display.is_none());
+        assert!(!plait.workspace.history.cache.loaded);
+        assert!(plait.workspace.history.display.is_none());
     });
     drop(harness);
     std::fs::remove_file(socket).unwrap();
@@ -4996,6 +5049,7 @@ fn project_switching_keeps_each_draft_and_rejects_the_old_watch() {
             ..Default::default()
         });
         plait
+            .workspace
             .composers
             .get(THREAD)
             .unwrap()
@@ -5021,6 +5075,7 @@ fn project_switching_keeps_each_draft_and_rejects_the_old_watch() {
                 .contains("not confirmed")
         );
         plait
+            .workspace
             .composers
             .get("other-thread")
             .unwrap()
@@ -5030,11 +5085,14 @@ fn project_switching_keeps_each_draft_and_rejects_the_old_watch() {
         plait.select_host_thread(THREAD.into(), window, cx);
         assert_eq!(plait.host.creation.checkout, repository);
         assert_eq!(
-            plait.composers[THREAD].read(cx).saved_draft().0,
+            plait.workspace.composers[THREAD].read(cx).saved_draft().0,
             "Original draft"
         );
         assert_eq!(
-            plait.composers["other-thread"].read(cx).saved_draft().0,
+            plait.workspace.composers["other-thread"]
+                .read(cx)
+                .saved_draft()
+                .0,
             "Separate draft"
         );
         assert_eq!(plait.host.connection.threads.len(), 3);
@@ -5706,6 +5764,7 @@ fn host_acceptance_collects_the_original_after_clearing_the_draft() {
     harness.update(|plait, _, cx| {
         plait.host.submissions.confirm(THREAD, &pending.request_id);
         plait
+            .workspace
             .composers
             .get(THREAD)
             .unwrap()
@@ -6187,7 +6246,7 @@ fn image_queued_edit_preserves_attachments() {
     let (received, release, server) = delayed_image_reply(reply);
     harness.update(|plait, window, cx| {
         plait.cancel_input("queued-image".into(), true, window, cx);
-        plait.composers[THREAD].update(cx, |composer, cx| {
+        plait.workspace.composers[THREAD].update(cx, |composer, cx| {
             let revision = composer.saved_draft().1;
             composer.type_text("An edit during cancellation", window, cx);
             composer.scene_refuse(
@@ -6273,5 +6332,66 @@ fn image_removed_during_restore_drops_pixels() {
         assert!(composer.saved_images().is_empty());
         assert_eq!(composer.scene_image_status().4, 0);
     });
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn thread_workspace_preserves_selection_and_reconnect_resets() {
+    if !isolated("thread_workspace_preserves_selection_and_reconnect_resets") {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("plait-workspace-reset-{}", std::process::id()));
+    let repository = fixture_repository(&root);
+    let mut harness = Harness::new(&repository, None, 1380., 860.);
+    harness.connect(&repository, false);
+    let second_id = "second-thread".to_owned();
+    harness.update(|plait, window, cx| {
+        plait.host.connection.connected = false;
+        let mut second = plait.host.connection.threads[0].clone();
+        second.id = second_id.clone();
+        second.status = ThreadStatus::Idle;
+        second.title = Some("Second".into());
+        plait.host.connection.threads.push(second);
+        plait.workspace.tab = super::Workspace::Files;
+        plait.workspace.history.error = Some("old error".into());
+        plait
+            .workspace
+            .expanded_live_tools
+            .insert("tool-before-switch".into());
+        plait.workspace.composers[THREAD].update(cx, |composer, cx| {
+            composer.restore_draft("Keep this draft".into(), 7, None, cx);
+        });
+        plait.workspace.turn_review.target = Some(plait_core::review::recorded::Target {
+            thread: THREAD.into(),
+            checkout: plait.host.creation.checkout.clone(),
+            record: "rec-1".into(),
+            original: "rec-1".into(),
+            path: None,
+        });
+        let review_gen = plait.workspace.turn_review.generation;
+        plait.select_host_thread(second_id.clone(), window, cx);
+        assert_eq!(plait.host.thread.selected.as_deref(), Some("second-thread"));
+        assert_eq!(plait.workspace.tab, super::Workspace::Conversation);
+        assert!(plait.workspace.history.error.is_none());
+        assert!(plait.workspace.turn_review.target.is_none());
+        assert!(plait.workspace.turn_review.generation > review_gen);
+        assert!(plait.workspace.host_watch.is_none());
+        assert!(plait.workspace.live_layout.is_empty());
+        assert_eq!(plait.workspace.live_count, 0);
+        assert_eq!(plait.workspace.live_scroll.item_count(), 0);
+        assert!(plait.workspace.expanded_live_tools.is_empty());
+        assert_eq!(
+            plait.workspace.composers[THREAD].read(cx).saved_draft().0,
+            "Keep this draft"
+        );
+        assert!(plait.workspace.composers.contains_key("second-thread"));
+        // Reconnect resets workspace connection-bound caches and advances review generation.
+        plait.workspace.history.error = Some("stale".into());
+        let before_reconnect = plait.workspace.turn_review.generation;
+        plait.workspace.reset_for_reconnect();
+        assert!(plait.workspace.history.error.is_none());
+        assert_eq!(plait.workspace.turn_review.generation, before_reconnect + 1);
+    });
+    drop(harness);
     std::fs::remove_dir_all(root).unwrap();
 }

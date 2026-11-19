@@ -81,7 +81,7 @@ impl Plait {
         if self.settings_open {
             return None;
         }
-        match self.tab {
+        match self.workspace.tab {
             Workspace::Files => self.files_target(),
             Workspace::Changes => self.changes_target(),
             Workspace::Conversation | Workspace::History => None,
@@ -91,7 +91,7 @@ impl Plait {
     /// The file in Files, at the current find match, or else at the first
     /// line on screen.
     fn files_target(&self) -> Option<Target> {
-        let viewer = &self.file_viewer;
+        let viewer = &self.workspace.file_viewer;
         let path = viewer.path.as_ref()?;
         let text = match viewer.opened.as_deref().map(|opened| &opened.contents) {
             Some(Contents::Text(text)) => Some(text),
@@ -117,7 +117,7 @@ impl Plait {
     /// The file selected in Changes, at the picked line when lines are
     /// picked, or else at the diff's first change.
     fn changes_target(&self) -> Option<Target> {
-        if self.turn_review.target.is_some() && !self.recorded_current_available() {
+        if self.workspace.turn_review.target.is_some() && !self.recorded_current_available() {
             return None;
         }
         let repo = &self.state.repository;

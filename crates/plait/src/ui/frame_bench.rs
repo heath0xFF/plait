@@ -336,8 +336,8 @@ fn heavy_repository(root: &Path) -> PathBuf {
 
 fn scroll_conversation(harness: &mut Harness, fraction: f32) {
     harness.update(|plait, _, _| {
-        let item_ix = (plait.live_count as f32 * fraction) as usize;
-        plait.live_scroll.scroll_to(ListOffset {
+        let item_ix = (plait.workspace.live_count as f32 * fraction) as usize;
+        plait.workspace.live_scroll.scroll_to(ListOffset {
             item_ix,
             offset_in_item: px(0.),
         });
@@ -360,16 +360,16 @@ fn select(harness: &mut Harness, index: usize) {
 fn install_thread(harness: &mut Harness, id: &'static str, snapshot: Snapshot) {
     harness.update(move |plait, window, cx| {
         plait.host.thread.selected = Some(id.into());
-        plait.history = Default::default();
+        plait.workspace.history = Default::default();
         plait.host.thread.snapshot = Some(Arc::new(snapshot));
-        plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
+        plait.workspace.formatted = Arc::new(plait_core::markdown::Transcript::update(
             &Default::default(),
             plait.host.thread.snapshot.as_ref().unwrap(),
         ));
         plait.refresh_live_list(None);
-        if !plait.composers.contains_key(id) {
+        if !plait.workspace.composers.contains_key(id) {
             let composer = cx.new(|cx| Composer::new(window, cx));
-            plait.composers.insert(id.into(), composer);
+            plait.workspace.composers.insert(id.into(), composer);
         }
         plait.sync_composer(cx);
     });
@@ -433,7 +433,7 @@ pub fn run() -> Vec<Row> {
     harness.change_snapshot(move |snapshot| *snapshot = long);
     let count = harness
         .window
-        .update(&mut harness.cx, |plait, _, _| plait.live_count)
+        .update(&mut harness.cx, |plait, _, _| plait.workspace.live_count)
         .unwrap();
     scroll_conversation(&mut harness, 1.0);
     rows.push(harness.steady(&format!("c1 conversation, {count} rows, at bottom")));
@@ -448,7 +448,7 @@ pub fn run() -> Vec<Row> {
     // drawn carries highlights. Typing waits for the background search.
     let set_query = |harness: &mut Harness, query: &'static str| {
         harness.update(move |plait, _, cx| {
-            let field = plait.conversation_find.field.clone().unwrap();
+            let field = plait.workspace.conversation_find.field.clone().unwrap();
             field.update(cx, |field, cx| field.set_text(query, cx));
         });
     };
@@ -467,21 +467,25 @@ pub fn run() -> Vec<Row> {
 
     // a. Changes: 2,000 files, an injected 20k-line diff.
     harness.update(|plait, _, cx| {
-        plait.tab = Workspace::Changes;
+        plait.workspace.tab = Workspace::Changes;
         plait.state.repository.view.changes.diff = Load::Ready(big_diff(20_000));
         plait.state.repository.view.changes.selected = Some(DiffKey {
             file: 0,
             mode: DiffMode::Unstaged,
         });
-        plait.diff_scroll = UniformListScrollHandle::new();
+        plait.workspace.diff_scroll = UniformListScrollHandle::new();
         cx.notify();
     });
     rows.push(harness.steady("a1 changes, 2000 files + 20k-line diff, top"));
     harness.update(|plait, _, _| {
         plait
+            .workspace
             .diff_scroll
             .scroll_to_item(10_000, ScrollStrategy::Top);
-        plait.file_scroll.scroll_to_item(1_000, ScrollStrategy::Top);
+        plait
+            .workspace
+            .file_scroll
+            .scroll_to_item(1_000, ScrollStrategy::Top);
     });
     rows.push(harness.steady("a2 changes, 2000 files + 20k-line diff, middle"));
     rows.push(harness.scrolling(
@@ -497,7 +501,11 @@ pub fn run() -> Vec<Row> {
 
     turn_review::scene(&mut harness, &heavy, "ready", Some(big_diff(5_000)));
     rows.push(harness.steady("recorded 5k-line diff, top"));
-    harness.update(|p, _, _| p.diff_scroll.scroll_to_item(2_500, ScrollStrategy::Top));
+    harness.update(|p, _, _| {
+        p.workspace
+            .diff_scroll
+            .scroll_to_item(2_500, ScrollStrategy::Top)
+    });
     rows.push(harness.steady("recorded 5k-line diff, middle"));
     rows.push(harness.scrolling(
         "recorded 5k-line diff, scrolling",
@@ -508,20 +516,22 @@ pub fn run() -> Vec<Row> {
 
     // b. History: 5,000 commits, an injected 20k-line patch.
     harness.update(|plait, _, cx| {
-        plait.tab = Workspace::History;
+        plait.workspace.tab = Workspace::History;
         plait.state.repository.data.commits.list = Load::Ready(commits(5_000));
         plait.state.repository.view.history.selected = Some(format!("{:040x}", 0));
         plait.state.repository.view.history.patch = Load::Ready(big_diff(20_000));
-        plait.commit_scroll = UniformListScrollHandle::new();
-        plait.history_scroll = UniformListScrollHandle::new();
+        plait.workspace.commit_scroll = UniformListScrollHandle::new();
+        plait.workspace.history_scroll = UniformListScrollHandle::new();
         cx.notify();
     });
     rows.push(harness.steady("b1 history, 5000 commits + 20k-line patch, top"));
     harness.update(|plait, _, _| {
         plait
+            .workspace
             .history_scroll
             .scroll_to_item(2_500, ScrollStrategy::Top);
         plait
+            .workspace
             .commit_scroll
             .scroll_to_item(10_000, ScrollStrategy::Top);
     });

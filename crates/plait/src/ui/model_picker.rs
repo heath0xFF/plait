@@ -412,7 +412,7 @@ impl Plait {
     /// The composer the conversation tab shows: the selected thread's, or the draft's.
     pub(super) fn visible_composer(&self) -> Option<&Entity<Composer>> {
         match &self.host.thread.selected {
-            Some(id) => self.composers.get(id),
+            Some(id) => self.workspace.composers.get(id),
             None => self.draft.composer.as_ref().filter(|_| self.draft.open),
         }
     }

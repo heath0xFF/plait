@@ -116,9 +116,7 @@ impl Plait {
         if self.host.connection.connecting {
             return;
         }
-        self.host_watch = None;
-        self.images = Default::default();
-        self.history = Default::default();
+        self.workspace.reset_for_reconnect();
         self.navigation.watch = None;
         self.navigation.generation += 1;
         self.navigation.loading = false;
@@ -126,7 +124,6 @@ impl Plait {
             self.navigation.error =
                 Some("Thread change not confirmed. Refresh to check before trying again.".into());
         }
-        self.turn_review.generation += 1;
         self.host.reconnect();
         self.sync_composer(cx);
         self.host_request(
@@ -207,20 +204,15 @@ impl Plait {
         self.navigation.menu = None;
         self.navigation.rename = None;
         window.focus(&self.focus, cx);
-        self.host_watch = None;
-        self.images = Default::default();
-        self.clear_turn_review();
+        self.workspace.reset_for_thread_selection();
         self.host.select(Some(id.clone()));
-        self.history = Default::default();
         self.settings_open = false;
         self.new_thread_open = false;
         // Leaving a new-thread draft keeps its text for the next New Thread.
         self.draft.open = false;
-        self.tab = super::Workspace::Conversation;
         self.refresh_live_list(None);
-        self.formatted = Default::default();
         self.conversation_rows_changed(cx);
-        if !self.composers.contains_key(&id) {
+        if !self.workspace.composers.contains_key(&id) {
             let composer = cx.new(|cx| Composer::new(window, cx));
             self.restore_composer(&id, &composer, cx);
             self.attach_composer(id.clone(), composer, window, cx);
@@ -260,11 +252,11 @@ impl Plait {
             }
         })
         .detach();
-        self.composers.insert(id, composer);
+        self.workspace.composers.insert(id, composer);
     }
 
     fn watch_thread(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
-        self.host_watch = None;
+        self.workspace.host_watch = None;
         self.host.thread.watch_epoch += 1;
         let epoch = self.host.connection.epoch;
         let watch_epoch = self.host.thread.watch_epoch;
@@ -294,7 +286,7 @@ impl Plait {
                     if !this.host.accepts_watch(epoch, watch_epoch, &id) {
                         return false;
                     }
-                    this.host_watch = Some(lease);
+                    this.workspace.host_watch = Some(lease);
                     true
                 })
                 .unwrap_or(false);
@@ -328,7 +320,7 @@ impl Plait {
                                 }
                                 let previous = this.host.thread.snapshot.clone();
                                 if !this.host.apply_snapshot(epoch, watch_epoch, snapshot) {
-                                    this.host_watch = None;
+                                    this.workspace.host_watch = None;
                                     this.sync_composer(cx);
                                     cx.notify();
                                     return false;
@@ -394,7 +386,7 @@ impl Plait {
         if !self.host.accepts_watch(epoch, watch_epoch, id) {
             return;
         }
-        self.host_watch = None;
+        self.workspace.host_watch = None;
         self.host.connection.connected = false;
         self.host.connection.error = Some(error.to_string());
         self.refresh_turn_review(cx);
@@ -403,7 +395,7 @@ impl Plait {
     }
 
     pub(super) fn refresh_live_list(&mut self, previous: Option<&Snapshot>) {
-        self.history.display = self.host.thread.snapshot.clone();
+        self.workspace.history.display = self.host.thread.snapshot.clone();
         self.reconcile_live_list(previous);
     }
 
@@ -411,36 +403,41 @@ impl Plait {
     /// whether rows were added or removed while the others kept their
     /// measured heights.
     pub(super) fn reconcile_live_list(&mut self, previous: Option<&Snapshot>) -> bool {
-        let next = self.history.display.as_deref();
+        let next = self.workspace.history.display.as_deref();
         let mut spliced = false;
         match transcript::changes(previous, next) {
             Update::Reset(count) => {
-                self.live_scroll.reset(count);
-                self.expanded_live_tools.clear();
-                self.history.expanded.clear();
+                self.workspace.live_scroll.reset(count);
+                self.workspace.expanded_live_tools.clear();
+                self.workspace.history.expanded.clear();
             }
             Update::Patch { splices, remeasure } => {
                 spliced = !splices.is_empty();
                 for splice in splices {
-                    self.live_scroll.splice(splice.range, splice.count);
+                    self.workspace
+                        .live_scroll
+                        .splice(splice.range, splice.count);
                 }
                 for range in remeasure {
-                    self.live_scroll.remeasure_items(range);
+                    self.workspace.live_scroll.remeasure_items(range);
                 }
-                self.history.expanded.retain(|id| {
+                self.workspace.history.expanded.retain(|id| {
                     next.is_some_and(|snapshot| {
                         snapshot.messages.iter().any(|message| message.id == *id)
                     })
                 });
-                self.expanded_live_tools.retain(|id| {
+                self.workspace.expanded_live_tools.retain(|id| {
                     next.is_some_and(|snapshot| snapshot.tools.iter().any(|tool| tool.id == *id))
                 });
             }
         }
         // Cached once per snapshot; rendering resolves visible rows by position.
-        self.live_layout = next.map(transcript::layout).unwrap_or_default();
-        self.live_count = self.live_layout.len();
-        debug_assert_eq!(self.live_scroll.item_count(), self.live_count);
+        self.workspace.live_layout = next.map(transcript::layout).unwrap_or_default();
+        self.workspace.live_count = self.workspace.live_layout.len();
+        debug_assert_eq!(
+            self.workspace.live_scroll.item_count(),
+            self.workspace.live_count
+        );
         spliced
     }
 
@@ -453,17 +450,23 @@ impl Plait {
         previous: Option<&Snapshot>,
         before: &plait_core::markdown::Transcript,
     ) {
-        let (Some(previous), Some(next)) = (previous, self.history.display.as_deref()) else {
+        let (Some(previous), Some(next)) = (previous, self.workspace.history.display.as_deref())
+        else {
             return;
         };
         let moved = plait_core::history::moved_records(
             (previous, &before.turn_summaries),
-            (next, &self.formatted.turn_summaries),
+            (next, &self.workspace.formatted.turn_summaries),
         );
         for message in moved {
             let slot = transcript::Slot::Message(message);
-            if let Some(row) = self.live_layout.iter().position(|shown| *shown == slot) {
-                self.live_scroll.remeasure_items(row..row + 1);
+            if let Some(row) = self
+                .workspace
+                .live_layout
+                .iter()
+                .position(|shown| *shown == slot)
+            {
+                self.workspace.live_scroll.remeasure_items(row..row + 1);
             }
         }
     }
@@ -615,6 +618,7 @@ impl Plait {
             host::QueueMode::FollowUp
         });
         let images = self
+            .workspace
             .composers
             .get(&id)
             .map(|c| c.read(cx).saved_images().to_vec())
@@ -673,7 +677,7 @@ impl Plait {
             return;
         }
         let id = id.to_owned();
-        let composer = self.composers.get(&id).cloned();
+        let composer = self.workspace.composers.get(&id).cloned();
         self.host.thread.submitting = true;
         self.host.connection.error = None;
         self.sync_composer(cx);
@@ -844,7 +848,7 @@ impl Plait {
         let Some(id) = self.host.thread.selected.as_ref() else {
             return;
         };
-        let Some(composer) = self.composers.get(id) else {
+        let Some(composer) = self.workspace.composers.get(id) else {
             return;
         };
         let busy = self
@@ -860,7 +864,9 @@ impl Plait {
             Some("Restoring saved work…".into())
         } else if !self.session_accepts_thread(id) {
             Some("Thread checkout differs from the saved draft. Original work is preserved.".into())
-        } else if self.thread_controls.editing.get(id) == Some(&self.host.connection.epoch) {
+        } else if self.workspace.thread_controls.editing.get(id)
+            == Some(&self.host.connection.epoch)
+        {
             Some("Restoring the queued message. Wait for cancellation to finish.".into())
         } else if !self.host.connection.connected {
             Some("Host disconnected. Reconnect to send.".into())

@@ -94,7 +94,7 @@ impl Plait {
                         this.session.journal = Some(journal);
                         this.session.data = Some(data);
                         this.session.note = None;
-                        for (id, composer) in &this.composers {
+                        for (id, composer) in &this.workspace.composers {
                             this.restore_composer(id, composer, cx);
                         }
                         // A folder chosen while disk state loaded wins over the saved folder.
@@ -184,7 +184,6 @@ impl Plait {
         preferences.navigation.open(&path);
         self.persist_navigation(preferences, cx);
         self.host.submissions.disconnected();
-        self.history = Default::default();
         let epoch = self.host.connection.epoch + 1;
         let submissions = std::mem::take(&mut self.host.submissions);
         let live = self.host.protocol() >= 3 && self.host.connection.connected;
@@ -203,7 +202,7 @@ impl Plait {
             self.host.connection.epoch = epoch;
         }
         self.host.submissions = submissions;
-        self.host_watch = None;
+        self.workspace.reset_for_checkout_change();
         self.session.restore_thread = None;
         self.navigation.managing = None;
         self.navigation.rename = None;
@@ -213,7 +212,6 @@ impl Plait {
         if drafting {
             self.open_draft(window, cx);
         }
-        self.file_scroll = UniformListScrollHandle::new();
         self.notice = None;
         self.state.repository.open(path);
         self.rebuild_projects(cx);
@@ -307,7 +305,7 @@ impl Plait {
             .clone()
             .or_else(|| self.session.restore_thread.clone());
         for summary in &self.host.connection.threads {
-            let Some(composer) = self.composers.get(&summary.id) else {
+            let Some(composer) = self.workspace.composers.get(&summary.id) else {
                 continue;
             };
             let composer = composer.read(cx);
@@ -474,7 +472,7 @@ impl Plait {
         let accepted = self.host.submissions.observe(snapshot);
         let accepted_any = !accepted.is_empty();
         for pending in accepted {
-            if let Some(composer) = self.composers.get(&id) {
+            if let Some(composer) = self.workspace.composers.get(&id) {
                 composer.update(cx, |composer, cx| {
                     composer.acknowledge(&pending.text, pending.draft_revision, cx);
                 });

@@ -216,7 +216,7 @@ impl Plait {
             block: 0,
         };
         let body = (!message.text.is_empty() || message.images.is_empty()).then(|| {
-            match self.formatted.messages.get(&message.id) {
+            match self.workspace.formatted.messages.get(&message.id) {
                 Some(parsed) if user => self.request(&site, &parsed.blocks),
                 Some(parsed) => self.markdown(&site, &parsed.blocks, &message.id, cx),
                 // The projection arrives with the snapshot; this is a one-frame fallback.
@@ -238,6 +238,7 @@ impl Plait {
             })
             .when(user, |el| el.p_3().rounded_md().bg(rgb(colors().panel)));
         let part = self
+            .workspace
             .history
             .cache
             .get(&Key::Message(message.id.clone()))
@@ -298,16 +299,20 @@ impl Plait {
             // A record stays on the open surface, never inside a request panel.
             .when_some(
                 self.conversation_snapshot().and_then(|shown| {
-                    history::row_record(&self.formatted.turn_summaries, shown, &message.id).filter(
-                        |_| {
-                            self.host.protocol() < 5
-                                || !self
-                                    .turn_records
-                                    .lines
-                                    .covered
-                                    .contains(&Key::Message(message.id.clone()))
-                        },
+                    history::row_record(
+                        &self.workspace.formatted.turn_summaries,
+                        shown,
+                        &message.id,
                     )
+                    .filter(|_| {
+                        self.host.protocol() < 5
+                            || !self
+                                .workspace
+                                .turn_records
+                                .lines
+                                .covered
+                                .contains(&Key::Message(message.id.clone()))
+                    })
                 }),
                 |el, summary| el.child(self.turn_record(&message.id, summary, cx)),
             )
@@ -330,7 +335,7 @@ impl Plait {
         {
             return None;
         }
-        let summary = self.formatted.turn_summaries.get(&last.id)?;
+        let summary = self.workspace.formatted.turn_summaries.get(&last.id)?;
         Some((&last.id, summary))
     }
 
@@ -447,9 +452,9 @@ impl Plait {
         let total = |parsed: Option<&std::sync::Arc<plait_core::markdown::Message>>| {
             parsed.map_or(0, |parsed| plait_core::reveal::total(&parsed.blocks))
         };
-        let text = total(self.formatted.live.as_ref());
-        let reasoning = total(self.formatted.live_reasoning.as_ref());
-        let reveal = &mut self.reveal;
+        let text = total(self.workspace.formatted.live.as_ref());
+        let reasoning = total(self.workspace.formatted.live_reasoning.as_ref());
+        let reveal = &mut self.workspace.reveal;
         reveal.text_shown = reveal.text.advance(key, text, now);
         reveal.reasoning_shown = reveal.reasoning.advance(key, reasoning, now);
         if reveal.text.pending(text) || reveal.reasoning.pending(reasoning) {
@@ -469,9 +474,9 @@ impl Plait {
             row: index,
             block: 0,
         };
-        let body = match self.formatted.live.as_ref() {
+        let body = match self.workspace.formatted.live.as_ref() {
             Some(parsed) => {
-                let (whole, tail) = self.revealed(self.reveal.text_shown, &parsed.blocks);
+                let (whole, tail) = self.revealed(self.workspace.reveal.text_shown, &parsed.blocks);
                 self.markdown_with(&site, whole, tail.as_ref(), "stream", cx)
             }
             None => prose().child(text.to_owned()).into_any_element(),
@@ -497,7 +502,7 @@ impl Plait {
         live: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let open = live || self.history.expanded.contains(id);
+        let open = live || self.workspace.history.expanded.contains(id);
         let site = Site {
             owner: if live {
                 Owner::LiveReasoning
@@ -508,9 +513,9 @@ impl Plait {
             block: 0,
         };
         let parsed = if live {
-            self.formatted.live_reasoning.as_ref()
+            self.workspace.formatted.live_reasoning.as_ref()
         } else {
-            self.formatted.reasoning.get(id)
+            self.workspace.formatted.reasoning.get(id)
         };
         let key = id.to_owned();
         // The chevron says open or closed, as on a tool call; the words are
@@ -567,7 +572,7 @@ impl Plait {
                         .when(live, |el| el.max_h(px(180.)).overflow_y_scroll())
                         .when_some(parsed, |el, parsed| {
                             let (whole, tail) = if live {
-                                self.revealed(self.reveal.reasoning_shown, &parsed.blocks)
+                                self.revealed(self.workspace.reveal.reasoning_shown, &parsed.blocks)
                             } else {
                                 (&parsed.blocks[..], None)
                             };
@@ -596,6 +601,7 @@ impl Plait {
             return div().into_any_element();
         };
         let Some(row) = self
+            .workspace
             .live_layout
             .get(index)
             .and_then(|slot| transcript::resolve(snapshot, *slot))
@@ -606,7 +612,7 @@ impl Plait {
         // text use the same spacing, so completion does not move the author.
         let request = matches!(row, Row::Message(message) if message.role == MessageRole::User);
         let recorded = history::records::closing_key(row)
-            .and_then(|key| self.turn_records.lines.rows.get(&key))
+            .and_then(|key| self.workspace.turn_records.lines.rows.get(&key))
             .filter(|_| self.host.protocol() >= 5);
         let (content, top, bottom) = match row {
             Row::Message(message) if request => (self.live_message(message, index, cx), 24., 8.),
@@ -669,7 +675,7 @@ impl Plait {
     /// selection, the way back to the newest row, and a hovered link's address.
     /// Whether the list is scrolled away from its newest row.
     fn reading_back(&self) -> bool {
-        self.live_scroll.logical_scroll_top().item_ix < self.live_count
+        self.workspace.live_scroll.logical_scroll_top().item_ix < self.workspace.live_count
     }
 
     fn live_rows(&self, snapshot: &Snapshot, cx: &mut Context<Self>) -> AnyElement {
@@ -681,9 +687,9 @@ impl Plait {
             snapshot.live_text.len() + snapshot.live_reasoning.len(),
         );
         if !away {
-            self.reading.seen.set(size);
+            self.workspace.reading.seen.set(size);
         }
-        let unseen = self.reading.seen.get() != size;
+        let unseen = self.workspace.reading.seen.get() != size;
         div()
             .relative()
             .flex_1()
@@ -691,7 +697,7 @@ impl Plait {
             .child(self.selection_surface(cx))
             .child(
                 list(
-                    self.live_scroll.clone(),
+                    self.workspace.live_scroll.clone(),
                     cx.processor(|this, index, _, cx| this.live_event(index, cx)),
                 )
                 .size_full()
@@ -738,7 +744,7 @@ impl Plait {
                         ),
                 )
             })
-            .when_some(self.reading.hovered_link.clone(), |el, url| {
+            .when_some(self.workspace.reading.hovered_link.clone(), |el, url| {
                 el.child(
                     div()
                         .absolute()
@@ -777,7 +783,7 @@ impl Plait {
         // arguments the person cannot see. A command chosen in the palette
         // runs after the palette has closed.
         let shown = !self.settings_open
-            && self.tab == super::Workspace::Conversation
+            && self.workspace.tab == super::Workspace::Conversation
             && self.overlay.is_none();
         let snapshot = self.host.thread.snapshot.as_ref().filter(|snapshot| {
             shown && self.host.thread.selected.as_deref() == Some(snapshot.id.as_str())
@@ -1076,7 +1082,7 @@ Tone::Filled,
                     "The conversation comes from the host. Reconnect if the host is unavailable.",
                 )
                 .into_any_element()
-            } else if self.live_count == 0 {
+            } else if self.workspace.live_count == 0 {
                 empty(
                     "Start this conversation",
                     "Send a message below. Change the model or thinking level between runs.",
@@ -1088,15 +1094,15 @@ Tone::Filled,
                 div().into_any_element()
             });
         if let Some(snapshot) = &snapshot {
-            let state = history::run_state(snapshot, self.history.now);
+            let state = history::run_state(snapshot, self.workspace.history.now);
             // The turn line runs from the rows to the state's node. It is
             // broken while the rows on screen stop short of the latest turn:
             // scrolled back from the newest row, or reading older history.
-            let joined = self.live_count > 0
+            let joined = self.workspace.live_count > 0
                 && state.is_some()
-                && !self.history.cache.detached
+                && !self.workspace.history.cache.detached
                 && !self.reading_back();
-            if snapshot.truncated && !self.history.enabled {
+            if snapshot.truncated && !self.workspace.history.enabled {
                 main = main.child(
                     div().px_6().child(
                         div()
@@ -1114,6 +1120,7 @@ Tone::Filled,
                 );
             }
             if let Some(line) = self
+                .workspace
                 .turn_records
                 .lines
                 .latest
@@ -1210,7 +1217,7 @@ Tone::Filled,
                     ),
                 );
             }
-            if self.history.enabled
+            if self.workspace.history.enabled
                 && snapshot.status.busy()
                 && (snapshot.live_text.encode_utf16().count() >= 16_383
                     || snapshot.live_reasoning.encode_utf16().count() >= 16_383)
@@ -1238,7 +1245,7 @@ Tone::Filled,
             .thread
             .selected
             .as_ref()
-            .and_then(|id| self.composers.get(id));
+            .and_then(|id| self.workspace.composers.get(id));
         main = main.child(
             column()
                 .flex_shrink_0()

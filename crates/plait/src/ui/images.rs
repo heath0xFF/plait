@@ -141,13 +141,13 @@ impl Plait {
             .flex_wrap()
             .gap_2()
             .children(references.iter().enumerate().map(|(index, reference)| {
-                let ready = (self.images.key.as_ref() == Some(&key))
-                    .then(|| self.images.ready.get(&reference.id))
+                let ready = (self.workspace.images.key.as_ref() == Some(&key))
+                    .then(|| self.workspace.images.ready.get(&reference.id))
                     .flatten();
                 if ready.is_none()
-                    && (self.images.key.as_ref() != Some(&key)
-                        || (!self.images.pending.contains(&reference.id)
-                            && self.images.pending.len() < 4))
+                    && (self.workspace.images.key.as_ref() != Some(&key)
+                        || (!self.workspace.images.pending.contains(&reference.id)
+                            && self.workspace.images.pending.len() < 4))
                     && self.host.accepts_watch(key.0, key.1, &key.2)
                 {
                     missing.push(reference.clone());
@@ -192,9 +192,9 @@ impl Plait {
             let weak = cx.weak_entity();
             cx.defer(move |cx| {
                 let _ = weak.update(cx, |this, cx| {
-                    if this.images.key.as_ref() == Some(&key) {
+                    if this.workspace.images.key.as_ref() == Some(&key) {
                         for id in visible {
-                            this.images.touch(&id);
+                            this.workspace.images.touch(&id);
                         }
                     }
                     if !missing.is_empty() {
@@ -214,20 +214,20 @@ impl Plait {
         if !self.host.accepts_watch(key.0, key.1, &key.2) {
             return;
         }
-        if self.images.key.as_ref() != Some(&key) {
-            self.images = ImageCache {
+        if self.workspace.images.key.as_ref() != Some(&key) {
+            self.workspace.images = ImageCache {
                 key: Some(key.clone()),
                 ..Default::default()
             };
         }
         for reference in references {
-            if self.images.ready.contains_key(&reference.id)
-                || self.images.pending.contains(&reference.id)
-                || self.images.pending.len() >= 4
+            if self.workspace.images.ready.contains_key(&reference.id)
+                || self.workspace.images.pending.contains(&reference.id)
+                || self.workspace.images.pending.len() >= 4
             {
                 continue;
             }
-            self.images.pending.insert(reference.id.clone());
+            self.workspace.images.pending.insert(reference.id.clone());
             let expected = key.clone();
             let id = reference.id.clone();
             let task = cx.background_executor().spawn(async move {
@@ -245,7 +245,7 @@ impl Plait {
                         this.host.thread.watch_epoch,
                         this.host.thread.selected.clone().unwrap_or_default(),
                     );
-                    if this.images.complete(&key, &current, id, result) {
+                    if this.workspace.images.complete(&key, &current, id, result) {
                         cx.notify();
                     }
                 });
@@ -262,9 +262,9 @@ impl Plait {
             self.host.thread.watch_epoch,
             thread,
         );
-        self.images.large_generation += 1;
-        let generation = self.images.large_generation;
-        self.images.enlarged = Some((reference.clone(), None));
+        self.workspace.images.large_generation += 1;
+        let generation = self.workspace.images.large_generation;
+        self.workspace.images.enlarged = Some((reference.clone(), None));
         window.focus(&self.focus, cx);
         cx.notify();
         let expected = key.clone();
@@ -282,10 +282,10 @@ impl Plait {
                     this.host.thread.watch_epoch,
                     this.host.thread.selected.clone().unwrap_or_default(),
                 );
-                if !accepts(&key, &actual) || this.images.large_generation != generation {
+                if !accepts(&key, &actual) || this.workspace.images.large_generation != generation {
                     return;
                 }
-                if let Some((_, pixels)) = &mut this.images.enlarged {
+                if let Some((_, pixels)) = &mut this.workspace.images.enlarged {
                     *pixels = Some(result);
                     cx.notify();
                 }
@@ -298,7 +298,7 @@ impl Plait {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let (reference, pixels) = self.images.enlarged.as_ref()?;
+        let (reference, pixels) = self.workspace.images.enlarged.as_ref()?;
         let bounds = window.viewport_size();
         let (width, height) = pixels
             .as_ref()
@@ -328,8 +328,8 @@ impl Plait {
                                 .child(button("close-image", "Close").on_activate(
                                     cx,
                                     |this, window, cx| {
-                                        this.images.enlarged = None;
-                                        this.images.large_generation += 1;
+                                        this.workspace.images.enlarged = None;
+                                        this.workspace.images.large_generation += 1;
                                         this.focus_composer(window, cx);
                                         cx.notify();
                                     },

@@ -460,19 +460,19 @@ fn stage(harness: &mut Harness, checkout: &Path, snapshot: Snapshot) {
         plait.host.creation.new_model = Some(choice());
         plait.host.connection.threads = threads(&checkout, snapshot.status);
         plait.host.thread.selected = Some(THREAD.into());
-        plait.history = Default::default();
+        plait.workspace.history = Default::default();
         plait.host.thread.snapshot = Some(Arc::new(snapshot));
-        plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
-            &plait.formatted,
+        plait.workspace.formatted = Arc::new(plait_core::markdown::Transcript::update(
+            &plait.workspace.formatted,
             plait.host.thread.snapshot.as_ref().unwrap(),
         ));
         plait.settings_open = false;
         plait.new_thread_open = false;
         plait.sidebar = true;
-        plait.tab = crate::ui::Workspace::Conversation;
-        if !plait.composers.contains_key(THREAD) {
+        plait.workspace.tab = crate::ui::Workspace::Conversation;
+        if !plait.workspace.composers.contains_key(THREAD) {
             let composer = cx.new(|cx| crate::ui::composer::Composer::new(window, cx));
-            plait.composers.insert(THREAD.into(), composer);
+            plait.workspace.composers.insert(THREAD.into(), composer);
         }
         plait.state.projects[0].machines[0].name = MACHINE.into();
         // In memory only, as every scene's preferences are.
@@ -528,7 +528,7 @@ fn walk(output: &Path) {
             .position(|file| file.path.ends_with("client.rs"))
             .expect("client.rs is changed");
         plait.select_file(index, DiffMode::Staged, window, cx);
-        plait.commit_message.update(cx, |field, cx| {
+        plait.workspace.commit_message.update(cx, |field, cx| {
             field.set_text("Retry rate-limited forecast requests", cx)
         });
     });
@@ -537,7 +537,7 @@ fn walk(output: &Path) {
     harness.update(|plait, _, cx| plait.open_file("src/retry.rs".into(), Some(33), cx));
     harness.update(|plait, window, cx| {
         plait.open_find(window, cx);
-        let field = plait.file_viewer.find.field.clone().unwrap();
+        let field = plait.workspace.file_viewer.find.field.clone().unwrap();
         field.update(cx, |field, cx| field.set_text("delay", cx));
     });
     harness.capture("files");

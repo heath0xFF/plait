@@ -31,14 +31,14 @@ pub(super) fn scene(
         let id=if kind=="undo" {"restore"} else {"last"};
         if kind=="undo" { inject(p,vec![data,record("last", &["last"], "undone")]); } else { inject(p,vec![data]); }
         let target=target(p,id,None);
-        let mut saved=Record::prepare(&p.turn_records.data,&target).unwrap();
-        saved.describe(&p.turn_records.data,p.host.thread.snapshot.as_deref());
-        p.turn_review=TurnReview { selected:saved.selected(&target), target:Some(target), record:Some(Arc::new(saved)), diff:(!matches!(kind,"empty"|"loading"|"unavailable"|"old")).then(||lines.unwrap_or_else(||Arc::new(plait_core::git::recorded_diff(PATCH.as_bytes(),false,Duration::from_millis(18))))), epoch:Some(p.host.connection.epoch), ..Default::default() };
-        if kind=="loading" {p.turn_review.loading=true;}
-        if kind=="unavailable" {p.turn_review.error=Some(("Unavailable","The saved content is unavailable.".into()));}
-        if kind=="old" {p.turn_review.older=true;p.turn_review.error=Some(("Older host","Turn review needs a newer host. Current Git changes are still available.".into()));}
+        let mut saved=Record::prepare(&p.workspace.turn_records.data,&target).unwrap();
+        saved.describe(&p.workspace.turn_records.data,p.host.thread.snapshot.as_deref());
+        p.workspace.turn_review=TurnReview { selected:saved.selected(&target), target:Some(target), record:Some(Arc::new(saved)), diff:(!matches!(kind,"empty"|"loading"|"unavailable"|"old")).then(||lines.unwrap_or_else(||Arc::new(plait_core::git::recorded_diff(PATCH.as_bytes(),false,Duration::from_millis(18))))), epoch:Some(p.host.connection.epoch), ..Default::default() };
+        if kind=="loading" {p.workspace.turn_review.loading=true;}
+        if kind=="unavailable" {p.workspace.turn_review.error=Some(("Unavailable","The saved content is unavailable.".into()));}
+        if kind=="old" {p.workspace.turn_review.older=true;p.workspace.turn_review.error=Some(("Older host","Turn review needs a newer host. Current Git changes are still available.".into()));}
         if kind=="clean" { p.state.repository.complete(plait_core::state::Job::Status {epoch:p.state.repository.epoch(),path:repository.into()}, plait_core::state::Reply::Status(Ok(Arc::new(plait_core::model::Snapshot {root:repository.into(),branch:"main".into(),named:true,tracking:None,changes:vec![],elapsed:Duration::ZERO})))); p.state.repository.view.changes.selected=None; }
-        p.diff_scroll=UniformListScrollHandle::new(); p.file_scroll=UniformListScrollHandle::new();p.tab=Workspace::Changes;
+        p.workspace.diff_scroll=UniformListScrollHandle::new(); p.workspace.file_scroll=UniformListScrollHandle::new();p.workspace.tab=Workspace::Changes;
     });
 }
 pub(super) fn walk(h: &mut Harness, repository: &Path, suffix: &str) {
@@ -77,9 +77,9 @@ pub(super) fn walk(h: &mut Harness, repository: &Path, suffix: &str) {
             data["paths"] = json!([{ "path": if name == "latin1" { "latin1" } else { "empty" }, "change": change, "added": if name == "latin1" { 1 } else { 0 }, "removed": if name == "latin1" { 1 } else { 0 } }]);
             data["paths_total"] = json!(1);
             inject(p, vec![data]);
-            let mut saved = Record::prepare(&p.turn_records.data, p.turn_review.target.as_ref().unwrap()).unwrap();
-            saved.describe(&p.turn_records.data, p.host.thread.snapshot.as_deref());
-            p.turn_review.record = Some(Arc::new(saved));
+            let mut saved = Record::prepare(&p.workspace.turn_records.data, p.workspace.turn_review.target.as_ref().unwrap()).unwrap();
+            saved.describe(&p.workspace.turn_records.data, p.host.thread.snapshot.as_deref());
+            p.workspace.turn_review.record = Some(Arc::new(saved));
         });
         h.capture(&format!("turn-recorded-{name}-{suffix}"));
     }
@@ -88,10 +88,16 @@ pub(super) fn walk(h: &mut Harness, repository: &Path, suffix: &str) {
         let mut data = record("last", &["unloaded-request"], "ready");
         data["created_at"] = json!(now_ms() - 300_000);
         inject(p, vec![data]);
-        let mut saved =
-            Record::prepare(&p.turn_records.data, p.turn_review.target.as_ref().unwrap()).unwrap();
-        saved.describe(&p.turn_records.data, p.host.thread.snapshot.as_deref());
-        p.turn_review.record = Some(Arc::new(saved));
+        let mut saved = Record::prepare(
+            &p.workspace.turn_records.data,
+            p.workspace.turn_review.target.as_ref().unwrap(),
+        )
+        .unwrap();
+        saved.describe(
+            &p.workspace.turn_records.data,
+            p.host.thread.snapshot.as_deref(),
+        );
+        p.workspace.turn_review.record = Some(Arc::new(saved));
     });
     h.capture(&format!("turn-recorded-request-unloaded-{suffix}"));
     scene(h, repository, "ready", None);
@@ -116,7 +122,7 @@ pub(super) fn walk(h: &mut Harness, repository: &Path, suffix: &str) {
     for empty in [false, true] {
         scene(h, repository, "old", None);
         h.update(|p, _, _| {
-            p.tab = Workspace::Conversation;
+            p.workspace.tab = Workspace::Conversation;
             if empty {
                 let mut data = record("last", &["last"], "ready");
                 data["paths"] = json!([]);
@@ -150,7 +156,7 @@ pub(super) fn walk(h: &mut Harness, repository: &Path, suffix: &str) {
             }
         }
         set_changes(p, changes);
-        p.turn_review.current = true;
+        p.workspace.turn_review.current = true;
         p.sync_recorded_current(cx);
     });
     h.capture(&format!("turn-current-staged-{suffix}"));
@@ -158,7 +164,7 @@ pub(super) fn walk(h: &mut Harness, repository: &Path, suffix: &str) {
     let snapshot = h
         .window
         .update(&mut h.cx, |p, _, _| {
-            p.turn_review.current = true;
+            p.workspace.turn_review.current = true;
             p.state.repository.view.changes.selected = None;
             std::mem::replace(&mut p.state.repository.data.snapshot, Load::Loading)
         })
@@ -172,8 +178,8 @@ pub(super) fn walk(h: &mut Harness, repository: &Path, suffix: &str) {
     for kind in ["loading", "unavailable", "old"] {
         scene(h, repository, kind, None);
         h.update(|p, _, _| {
-            p.turn_review.record = None;
-            p.turn_review.selected = None;
+            p.workspace.turn_review.record = None;
+            p.workspace.turn_review.selected = None;
         });
         h.capture(&format!("turn-record-{kind}-{suffix}"));
     }
@@ -237,7 +243,7 @@ fn recorded_identity_survives_undo() {
     let (scratch, repository, mut h) = setup("review-binding");
     let host = Host::start(answer);
     h.update(|p, w, cx| p.open_turn_review(target(p, "last", Some("README.md")), w, cx));
-    wait(&mut h, |p| p.turn_review.diff.is_some());
+    wait(&mut h, |p| p.workspace.turn_review.diff.is_some());
     h.update(|p, _, cx| {
         let mut leaf = record("restore", &["undo"], "ready");
         leaf["kind"] = json!("undo");
@@ -252,11 +258,17 @@ fn recorded_identity_survives_undo() {
         );
         p.refresh_turn_review(cx);
     });
-    wait(&mut h, |p| !p.turn_review.running);
+    wait(&mut h, |p| !p.workspace.turn_review.running);
     h.update(|p, _, _| {
-        assert_eq!(p.turn_review.target.as_ref().unwrap().record, "last");
+        assert_eq!(
+            p.workspace.turn_review.target.as_ref().unwrap().record,
+            "last"
+        );
         assert_eq!(p.recorded_file().unwrap().path, PathBuf::from("README.md"));
-        assert_eq!(p.turn_review.record.as_ref().unwrap().files.len(), 4);
+        assert_eq!(
+            p.workspace.turn_review.record.as_ref().unwrap().files.len(),
+            4
+        );
     });
     assert!(
         host.requests
@@ -283,10 +295,13 @@ fn old_host_and_incomplete_pages() {
         )
     });
     h.update(|p, w, cx| p.open_turn_review(target(p, "last", None), w, cx));
-    wait(&mut h, |p| p.turn_review.older);
+    wait(&mut h, |p| p.workspace.turn_review.older);
     h.update(|p, _, _| {
-        assert!(p.turn_review.diff.is_none());
-        assert_eq!(p.turn_review.error.as_ref().unwrap().0, "Older host");
+        assert!(p.workspace.turn_review.diff.is_none());
+        assert_eq!(
+            p.workspace.turn_review.error.as_ref().unwrap().0,
+            "Older host"
+        );
     });
     drop(host);
     let host = Host::start(|request| {
@@ -299,13 +314,16 @@ fn old_host_and_incomplete_pages() {
         }
     });
     h.update(|p, w, cx| {
-        p.turn_review.older = false;
+        p.workspace.turn_review.older = false;
         p.open_turn_review(target(p, "last", None), w, cx);
     });
-    wait(&mut h, |p| !p.turn_review.running);
+    wait(&mut h, |p| !p.workspace.turn_review.running);
     h.update(|p, _, _| {
-        assert!(p.turn_review.diff.is_none());
-        assert_eq!(p.turn_review.error.as_ref().unwrap().0, "Unavailable");
+        assert!(p.workspace.turn_review.diff.is_none());
+        assert_eq!(
+            p.workspace.turn_review.error.as_ref().unwrap().0,
+            "Unavailable"
+        );
     });
     drop(host);
     drop(h);
@@ -338,7 +356,7 @@ fn stale_review_replies() {
                 p.open_turn_review(target(p, "last", None), w, cx);
                 // Each identity member is changed alone. Going offline prevents
                 // a replacement read, so only the old response can install data.
-                p.tab = Workspace::Conversation;
+                p.workspace.tab = Workspace::Conversation;
                 p.host.connection.connected = false;
                 match change {
                     0 => p.host.thread.selected = Some("other".into()),
@@ -349,15 +367,24 @@ fn stale_review_replies() {
                         p.state.repository.refresh();
                         p.pump(cx);
                     }
-                    5 => p.turn_review.generation += 1,
-                    6 => p.turn_review.current = true,
-                    _ => p.turn_review.target.as_mut().unwrap().path = Some("other.rs".into()),
+                    5 => p.workspace.turn_review.generation += 1,
+                    6 => p.workspace.turn_review.current = true,
+                    _ => {
+                        p.workspace.turn_review.target.as_mut().unwrap().path =
+                            Some("other.rs".into())
+                    }
                 }
             });
-            wait(&mut h, |p| !p.turn_review.running);
+            wait(&mut h, |p| !p.workspace.turn_review.running);
             h.update(|p, _, _| {
-                assert!(p.turn_review.diff.is_none(), "{phase}, identity {change}");
-                assert!(p.turn_review.record.is_none(), "{phase}, identity {change}");
+                assert!(
+                    p.workspace.turn_review.diff.is_none(),
+                    "{phase}, identity {change}"
+                );
+                assert!(
+                    p.workspace.turn_review.record.is_none(),
+                    "{phase}, identity {change}"
+                );
                 p.clear_turn_review();
             });
             assert!(
@@ -390,15 +417,18 @@ fn scope_keys_and_clean_files() {
         let mut original = record("last", &["last"], "undone");
         original["paths"][1]["change"] = json!("deleted");
         inject(p, vec![undo, original]);
-        let line = p.turn_records.lines.latest.as_ref().unwrap();
+        let line = p.workspace.turn_records.lines.latest.as_ref().unwrap();
         assert_eq!(line.run, "last");
         assert_eq!(line.displayed, "restore");
         assert_eq!(line.files.len(), 1);
     });
     h.update(|p, w, cx| p.open_turn_review(target(p, "restore", None), w, cx));
-    wait(&mut h, |p| p.turn_review.diff.is_some());
+    wait(&mut h, |p| p.workspace.turn_review.diff.is_some());
     h.update(|p, w, cx| {
-        assert_eq!(p.turn_review.record.as_ref().unwrap().files.len(), 1);
+        assert_eq!(
+            p.workspace.turn_review.record.as_ref().unwrap().files.len(),
+            1
+        );
         assert!(p.focus.is_focused(w));
         p.open_review_scopes(w, cx);
     });
@@ -413,13 +443,19 @@ fn scope_keys_and_clean_files() {
     wait(&mut h, |p| p.overlay.is_some());
     set_query(&mut h, "Original");
     press(&mut h, "enter");
-    wait(&mut h, |p| !p.turn_review.running);
+    wait(&mut h, |p| !p.workspace.turn_review.running);
     h.update(|p, w, cx| {
-        assert_eq!(p.turn_review.target.as_ref().unwrap().record, "last");
-        assert_eq!(p.turn_review.record.as_ref().unwrap().files.len(), 4);
+        assert_eq!(
+            p.workspace.turn_review.target.as_ref().unwrap().record,
+            "last"
+        );
+        assert_eq!(
+            p.workspace.turn_review.record.as_ref().unwrap().files.len(),
+            4
+        );
         p.select_recorded_file(1, w, cx);
     });
-    wait(&mut h, |p| !p.turn_review.running);
+    wait(&mut h, |p| !p.workspace.turn_review.running);
     h.update(|p, _, cx| {
         assert_eq!(p.recorded_file().unwrap().path, PathBuf::from("README.md"));
         assert_eq!(p.recorded_file().unwrap().label, "Deleted");
@@ -435,9 +471,9 @@ fn scope_keys_and_clean_files() {
         p.review_comparison(true, cx);
         assert!(!p.recorded_current_available());
     });
-    wait(&mut h, |p| !p.turn_review.running);
+    wait(&mut h, |p| !p.workspace.turn_review.running);
     h.update(|p, _, cx| p.review_comparison(false, cx));
-    wait(&mut h, |p| p.turn_review.diff.is_some());
+    wait(&mut h, |p| p.workspace.turn_review.diff.is_some());
     h.update(|p, _, _| assert_eq!(p.recorded_file().unwrap().path, PathBuf::from("README.md")));
     drop(host);
     drop(h);
@@ -452,15 +488,15 @@ fn empty_and_more_links() {
     let (scratch, _, mut h) = setup("review-links");
     let host = Host::start(answer);
     h.update(|p, _, _| {
-        let line = p.turn_records.lines.latest.as_ref().unwrap();
+        let line = p.workspace.turn_records.lines.latest.as_ref().unwrap();
         assert_eq!(line.more_label, "1 more");
         assert_eq!(line.more_detail, "Review all 4 files in this record.");
         assert_eq!(line.displayed, "last");
     });
     // The no-path target used by the step count and N more opens the first file.
     h.update(|p, w, cx| p.open_turn_review(target(p, "last", None), w, cx));
-    wait(&mut h, |p| !p.turn_review.running);
-    h.update(|p, _, _| assert_eq!(p.turn_review.selected, Some(0)));
+    wait(&mut h, |p| !p.workspace.turn_review.running);
+    h.update(|p, _, _| assert_eq!(p.workspace.turn_review.selected, Some(0)));
     h.update(|p, w, cx| {
         let mut empty = record("last", &["last"], "ready");
         empty["paths"] = json!([]);
@@ -468,11 +504,19 @@ fn empty_and_more_links() {
         inject(p, vec![empty]);
         p.open_turn_review(target(p, "last", None), w, cx);
     });
-    wait(&mut h, |p| !p.turn_review.running);
+    wait(&mut h, |p| !p.workspace.turn_review.running);
     h.update(|p, _, _| {
-        assert!(p.turn_review.record.as_ref().unwrap().files.is_empty());
-        assert!(p.turn_review.selected.is_none());
-        assert!(p.turn_review.diff.is_none());
+        assert!(
+            p.workspace
+                .turn_review
+                .record
+                .as_ref()
+                .unwrap()
+                .files
+                .is_empty()
+        );
+        assert!(p.workspace.turn_review.selected.is_none());
+        assert!(p.workspace.turn_review.diff.is_none());
     });
     assert_eq!(
         host.requests
@@ -498,7 +542,7 @@ fn current_waits_for_status_and_requires_a_file() {
     h.update(|p, _, cx| {
         p.host.connection.connected = false;
         p.review_comparison(true, cx);
-        assert!(p.turn_review.current);
+        assert!(p.workspace.turn_review.current);
         p.state.repository.refresh();
         assert!(!p.recorded_current_available());
         assert_eq!(p.recorded_current_message().0, "Reading diff…");
@@ -507,13 +551,13 @@ fn current_waits_for_status_and_requires_a_file() {
     for kind in ["empty", "loading", "unavailable", "old"] {
         scene(&mut h, &repository, kind, None);
         h.update(|p, _, cx| {
-            p.turn_review.record = None;
-            p.turn_review.selected = None;
-            p.turn_review.current = false;
-            p.turn_review.older = false;
+            p.workspace.turn_review.record = None;
+            p.workspace.turn_review.selected = None;
+            p.workspace.turn_review.current = false;
+            p.workspace.turn_review.older = false;
             p.review_comparison(true, cx);
             assert!(p.recorded_file().is_none());
-            assert!(!p.turn_review.current, "{kind}");
+            assert!(!p.workspace.turn_review.current, "{kind}");
         });
         h.draw();
     }
@@ -607,8 +651,8 @@ fn undo_picker_names_the_request_and_keeps_newest_first() {
         // Deliberately unordered input: the picker must put newest first.
         inject(p, vec![older, original, newer]);
         for (id, age) in [("last", "5m"), ("private-newer-undo", "1m"), ("private-older-undo", "2m")] {
-            let mut saved = Record::prepare(&p.turn_records.data, &target(p, id, None)).unwrap();
-            saved.describe(&p.turn_records.data, p.host.thread.snapshot.as_deref());
+            let mut saved = Record::prepare(&p.workspace.turn_records.data, &target(p, id, None)).unwrap();
+            saved.describe(&p.workspace.turn_records.data, p.host.thread.snapshot.as_deref());
             assert_eq!(saved.label, "Turn · Document the behavior…");
             let prefix = if saved.restored { "Files an undo put back from" } else { "Files recorded during" };
             assert!(saved.detail.starts_with(&format!("{prefix} Document the behavior and regenerate the file list., {age} ago, in this thread.")));
@@ -624,10 +668,10 @@ fn undo_picker_names_the_request_and_keeps_newest_first() {
     );
     press(&mut h, "down");
     press(&mut h, "enter");
-    wait(&mut h, |p| !p.turn_review.running);
+    wait(&mut h, |p| !p.workspace.turn_review.running);
     h.update(|p, w, cx| {
         assert_eq!(
-            p.turn_review.target.as_ref().unwrap().record,
+            p.workspace.turn_review.target.as_ref().unwrap().record,
             "private-newer-undo"
         );
         assert_eq!(p.review_scope_text().0, "Turn · Document the behavior…");
@@ -637,10 +681,10 @@ fn undo_picker_names_the_request_and_keeps_newest_first() {
     set_query(&mut h, "2m ago");
     assert_eq!(shown(&mut h), ["Restored"]);
     press(&mut h, "enter");
-    wait(&mut h, |p| !p.turn_review.running);
+    wait(&mut h, |p| !p.workspace.turn_review.running);
     h.update(|p, _, _| {
         assert_eq!(
-            p.turn_review.target.as_ref().unwrap().record,
+            p.workspace.turn_review.target.as_ref().unwrap().record,
             "private-older-undo"
         )
     });
@@ -670,11 +714,11 @@ fn first_old_host_file_click_opens_current() {
         )
     });
     h.update(|p, w, cx| {
-        assert!(!p.turn_review.older);
+        assert!(!p.workspace.turn_review.older);
         p.open_turn_review(target(p, "last", Some("src/review.rs")), w, cx);
     });
     wait(&mut h, |p| {
-        p.turn_review.older && p.turn_review.target.is_none()
+        p.workspace.turn_review.older && p.workspace.turn_review.target.is_none()
     });
     h.update(|p, _, _| {
         let selected = p.state.repository.selected_diff().unwrap();
@@ -682,11 +726,11 @@ fn first_old_host_file_click_opens_current() {
             p.state.repository.snapshot().ready().unwrap().changes[selected.file].path,
             Path::new("src/review.rs")
         );
-        let line = p.turn_records.lines.latest.as_ref().unwrap();
+        let line = p.workspace.turn_records.lines.latest.as_ref().unwrap();
         let detail = p.closing_file_detail(&line.files[0], line);
         assert!(detail.contains("current Changes"));
         assert!(!detail.contains("recorded"));
-        assert_eq!(p.tab, Workspace::Changes);
+        assert_eq!(p.workspace.tab, Workspace::Changes);
     });
     // A second click uses the known capability and performs no further probe.
     let probes = host.requests.lock().unwrap().len();
@@ -694,15 +738,15 @@ fn first_old_host_file_click_opens_current() {
     assert_eq!(host.requests.lock().unwrap().len(), probes);
     // A stale old-host response must never redirect another thread or checkout.
     h.update(|p, w, cx| {
-        p.turn_review.older = false;
+        p.workspace.turn_review.older = false;
         p.open_turn_review(target(p, "last", Some("src/review.rs")), w, cx);
         p.host.creation.checkout = repository.join("different");
         p.host.connection.connected = false;
-        p.tab = Workspace::Conversation;
+        p.workspace.tab = Workspace::Conversation;
         p.state.repository.view.changes.selected = None;
     });
     h.update(|p, _, _| {
-        assert_eq!(p.tab, Workspace::Conversation);
+        assert_eq!(p.workspace.tab, Workspace::Conversation);
         assert!(p.state.repository.selected_diff().is_none());
     });
     drop(host);
@@ -719,11 +763,11 @@ fn recorded_wording_names_only_available_states() {
     for kind in ["loading", "unavailable", "old"] {
         scene(&mut h, &repository, kind, None);
         h.update(|p, _, _| {
-            p.turn_review.record = None;
+            p.workspace.turn_review.record = None;
             let (label, detail) = p.review_scope_text();
             assert_eq!(label, "Recorded");
             assert!(!detail.contains("all current staged"));
-            if let Some(error) = &p.turn_review.error {
+            if let Some(error) = &p.workspace.turn_review.error {
                 assert_eq!(detail, error.1);
             } else {
                 assert!(detail.contains("Reading this run"));
@@ -741,7 +785,7 @@ fn recorded_wording_names_only_available_states() {
         ))),
     );
     h.update(|p, _, _| {
-        assert!(p.turn_review.diff.as_ref().unwrap().truncated);
+        assert!(p.workspace.turn_review.diff.as_ref().unwrap().truncated);
         assert!(
             p.recorded_notice().is_none(),
             "the shared diff notice is sufficient"
@@ -761,20 +805,28 @@ fn recorded_wording_names_only_available_states() {
         one["created_at"] = json!(now - 120_000);
         two["created_at"] = json!(now - 60_000);
         inject(p, vec![two, one, original]);
-        let mut original = Record::prepare(&p.turn_records.data, &target(p, "last", None)).unwrap();
+        let mut original =
+            Record::prepare(&p.workspace.turn_records.data, &target(p, "last", None)).unwrap();
         assert_eq!(
             original.files[0].detail,
             "src/review.rs, Modified. Recorded during this run."
         );
-        original.describe(&p.turn_records.data, p.host.thread.snapshot.as_deref());
+        original.describe(
+            &p.workspace.turn_records.data,
+            p.host.thread.snapshot.as_deref(),
+        );
         assert!(original.detail.contains('\n'));
         let detail = crate::ui::turn_review::review_picker_detail(&original);
         assert!(!detail.contains(['\n', '\r']));
         assert!(detail.contains("Not covered: build/"));
         let mut details = Vec::new();
         for id in ["undo-one", "undo-two"] {
-            let mut saved = Record::prepare(&p.turn_records.data, &target(p, id, None)).unwrap();
-            saved.describe(&p.turn_records.data, p.host.thread.snapshot.as_deref());
+            let mut saved =
+                Record::prepare(&p.workspace.turn_records.data, &target(p, id, None)).unwrap();
+            saved.describe(
+                &p.workspace.turn_records.data,
+                p.host.thread.snapshot.as_deref(),
+            );
             assert!(saved.detail.contains("Document the behavior"));
             details.push(saved.detail);
         }

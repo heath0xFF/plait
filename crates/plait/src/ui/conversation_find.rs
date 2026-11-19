@@ -33,8 +33,6 @@ pub(super) struct ConversationFind {
     generation: u64,
     /// One search at a time; a stale result starts the next.
     searching: bool,
-    /// Where focus was before the bar opened; Escape returns it there.
-    return_focus: Option<FocusHandle>,
     reveal: Option<Reveal>,
     _events: Option<Subscription>,
 }
@@ -64,24 +62,24 @@ impl Plait {
         if self.host.thread.selected.is_none() {
             return;
         }
-        let field = match self.conversation_find.field.clone() {
+        let field = match self.workspace.conversation_find.field.clone() {
             Some(field) => field,
             None => {
                 let field = cx.new(|cx| {
                     TextField::new("Find in conversation", "Find in conversation", cx).search()
                 });
-                self.conversation_find._events =
+                self.workspace.conversation_find._events =
                     Some(cx.subscribe(&field, |this, _, _: &TextFieldEvent, cx| {
                         this.search_conversation(cx)
                     }));
-                self.conversation_find.field = Some(field.clone());
+                self.workspace.conversation_find.field = Some(field.clone());
                 field
             }
         };
         let handle = field.focus_handle(cx);
-        let find = &mut self.conversation_find;
+        let find = &mut self.workspace.conversation_find;
         if !find.open {
-            find.return_focus = window.focused(cx).filter(|focused| *focused != handle);
+            self.conversation_find_focus = window.focused(cx).filter(|focused| *focused != handle);
             find.open = true;
             // A query kept from last time is searched again over today's rows.
             find.query.clear();
@@ -92,14 +90,14 @@ impl Plait {
     }
 
     pub(super) fn close_conversation_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let find = &mut self.conversation_find;
+        let find = &mut self.workspace.conversation_find;
         find.open = false;
         find.matches = Arc::default();
         find.reveal = None;
         // Whatever search is running now answers nothing.
         find.generation += 1;
-        let focus = find
-            .return_focus
+        let focus = self
+            .conversation_find_focus
             .take()
             .unwrap_or_else(|| self.focus.clone());
         window.focus(&focus, cx);
@@ -109,14 +107,14 @@ impl Plait {
     /// The rows shown changed (a reply arrived, history loaded, another
     /// thread opened): search them again if the bar is open.
     pub(super) fn conversation_rows_changed(&mut self, cx: &mut Context<Self>) {
-        if self.conversation_find.open {
+        if self.workspace.conversation_find.open {
             self.search_conversation(cx);
         }
     }
 
     /// Mark any running search stale and start one unless one is running.
     pub(super) fn search_conversation(&mut self, cx: &mut Context<Self>) {
-        let find = &mut self.conversation_find;
+        let find = &mut self.workspace.conversation_find;
         find.generation += 1;
         if !find.searching {
             self.start_search(cx);
@@ -124,7 +122,7 @@ impl Plait {
     }
 
     fn start_search(&mut self, cx: &mut Context<Self>) {
-        let find = &mut self.conversation_find;
+        let find = &mut self.workspace.conversation_find;
         let query = match (&find.field, find.open) {
             (Some(field), true) => field.read(cx).text().to_owned(),
             _ => String::new(),
@@ -133,12 +131,13 @@ impl Plait {
         let generation = find.generation;
         // Both are shared, already prepared, and replaced rather than changed.
         let snapshot = self
+            .workspace
             .history
             .display
             .clone()
             .or_else(|| self.host.thread.snapshot.clone());
-        let transcript = self.formatted.clone();
-        let history = self.history.cache.clone();
+        let transcript = self.workspace.formatted.clone();
+        let history = self.workspace.history.cache.clone();
         let task = cx.background_executor().spawn(async move {
             let matches = match &snapshot {
                 Some(snapshot) => conversation_find::search(snapshot, &transcript, &query),
@@ -155,7 +154,7 @@ impl Plait {
         cx.spawn(async move |this, cx| {
             let found = task.await;
             let _ = this.update(cx, |this, cx| {
-                this.conversation_find.searching = false;
+                this.workspace.conversation_find.searching = false;
                 this.land_search(found, cx);
             });
         })
@@ -165,8 +164,10 @@ impl Plait {
     /// Show a finished search, unless the query or the rows changed since it
     /// started; then search again instead.
     pub(super) fn land_search(&mut self, found: Found, cx: &mut Context<Self>) {
-        let find = &mut self.conversation_find;
-        if found.generation != find.generation || !Arc::ptr_eq(&found.transcript, &self.formatted) {
+        let find = &mut self.workspace.conversation_find;
+        if found.generation != find.generation
+            || !Arc::ptr_eq(&found.transcript, &self.workspace.formatted)
+        {
             if find.open && !find.searching {
                 self.start_search(cx);
             }
@@ -181,9 +182,9 @@ impl Plait {
         if typed {
             // A new query starts at the first match from the top of the view,
             // or at the newest when the list rests on its end.
-            let top = self.live_scroll.logical_scroll_top().item_ix;
-            let find = &mut self.conversation_find;
-            find.current = if top >= self.live_count {
+            let top = self.workspace.live_scroll.logical_scroll_top().item_ix;
+            let find = &mut self.workspace.conversation_find;
+            find.current = if top >= self.workspace.live_count {
                 count.saturating_sub(1)
             } else {
                 find.matches.first_from(top)
@@ -200,7 +201,7 @@ impl Plait {
 
     /// Enter, Cmd-G, and their Shift forms: the next or previous match, wrapping.
     pub(super) fn step_conversation_find(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let find = &mut self.conversation_find;
+        let find = &mut self.workspace.conversation_find;
         if !find.open || find.matches.is_empty() {
             return;
         }
@@ -216,18 +217,18 @@ impl Plait {
             return;
         };
         if self.place_match(&hit) {
-            self.conversation_find.reveal = None;
+            self.workspace.conversation_find.reveal = None;
             return;
         }
-        self.live_scroll.scroll_to(ListOffset {
+        self.workspace.live_scroll.scroll_to(ListOffset {
             item_ix: hit.row,
             offset_in_item: px(0.),
         });
-        self.conversation_find.reveal = Some(Reveal::AfterDraw);
+        self.workspace.conversation_find.reveal = Some(Reveal::AfterDraw);
     }
 
     fn current_hit(&self) -> Option<conversation_find::Hit> {
-        let find = &self.conversation_find;
+        let find = &self.workspace.conversation_find;
         find.matches.hits.get(find.current).cloned()
     }
 
@@ -238,7 +239,7 @@ impl Plait {
         let Some(point) = self.text_point(&owner, hit.block, hit.range.start) else {
             return false;
         };
-        let scroll = &self.live_scroll;
+        let scroll = &self.workspace.live_scroll;
         let view = scroll.viewport_bounds();
         let margin = px(REVEAL_MARGIN);
         if point.y < view.top() + margin || point.y > view.bottom() - margin {
@@ -254,14 +255,14 @@ impl Plait {
 
     /// Once per frame, from `render`: finish bringing a match into view.
     pub(super) fn settle_find_reveal(&mut self, window: &mut Window) {
-        match self.conversation_find.reveal {
+        match self.workspace.conversation_find.reveal {
             None => {}
             Some(Reveal::AfterDraw) => {
-                self.conversation_find.reveal = Some(Reveal::Measure);
+                self.workspace.conversation_find.reveal = Some(Reveal::Measure);
                 window.request_animation_frame();
             }
             Some(Reveal::Measure) => {
-                self.conversation_find.reveal = None;
+                self.workspace.conversation_find.reveal = None;
                 if let Some(hit) = self.current_hit() {
                     self.place_match(&hit);
                 }
@@ -276,7 +277,7 @@ impl Plait {
         range: &Range<usize>,
         runs: &mut Vec<(Range<usize>, HighlightStyle)>,
     ) {
-        let find = &self.conversation_find;
+        let find = &self.workspace.conversation_find;
         let Owner::Message(id) = &site.owner else {
             return;
         };
@@ -301,7 +302,7 @@ impl Plait {
     /// Why some of the conversation is not searched, in one sentence, or
     /// `None` when everything the host holds is loaded.
     pub(super) fn unsearched(&self) -> Option<&'static str> {
-        let history = &self.history;
+        let history = &self.workspace.history;
         let cache = &history.cache;
         if history.enabled && cache.detached {
             Some(
@@ -320,7 +321,7 @@ impl Plait {
             Some(
                 "Only loaded messages are searched. The host clipped older messages from this conversation.",
             )
-        } else if self.conversation_find.partial {
+        } else if self.workspace.conversation_find.partial {
             Some(
                 "Only loaded text is searched. A long message shows part of its text until you load the rest.",
             )
@@ -331,7 +332,8 @@ impl Plait {
 
     /// The bar over the conversation, when it is open.
     pub(super) fn conversation_find_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        self.conversation_find
+        self.workspace
+            .conversation_find
             .open
             .then(|| self.find_bar(FindIn::Conversation, cx))
     }
@@ -342,9 +344,9 @@ impl Plait {
     /// A search result as if it had been started now, for guard tests.
     pub(super) fn found_now(&self, query: &str, matches: Matches) -> Found {
         Found {
-            generation: self.conversation_find.generation,
+            generation: self.workspace.conversation_find.generation,
             query: query.into(),
-            transcript: self.formatted.clone(),
+            transcript: self.workspace.formatted.clone(),
             matches,
             partial: false,
         }

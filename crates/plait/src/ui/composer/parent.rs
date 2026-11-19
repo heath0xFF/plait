@@ -10,7 +10,7 @@ impl Plait {
     /// The open thread's composer, or the draft's when it is open instead.
     fn selected_composer(&self) -> Option<&Entity<Composer>> {
         match &self.host.thread.selected {
-            Some(id) => self.composers.get(id),
+            Some(id) => self.workspace.composers.get(id),
             None => self.draft.composer.as_ref().filter(|_| self.draft.open),
         }
     }

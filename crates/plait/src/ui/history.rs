@@ -58,20 +58,21 @@ fn tail_stamp(snapshot: &Snapshot) -> u64 {
 }
 impl Plait {
     pub(super) fn conversation_snapshot(&self) -> Option<&Snapshot> {
-        self.history
+        self.workspace
+            .history
             .display
             .as_deref()
             .or(self.host.thread.snapshot.as_deref())
     }
     pub(super) fn conversation_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.history.enabled = self.host.protocol() >= 3;
-        self.history.revision += 1;
-        self.history.now = millis();
+        self.workspace.history.enabled = self.host.protocol() >= 3;
+        self.workspace.history.revision += 1;
+        self.workspace.history.now = millis();
         self.prepare_conversation(window, cx);
         self.tick_retry(window, cx);
     }
     fn tick_retry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.history.timer
+        if self.workspace.history.timer
             || self
                 .host
                 .thread
@@ -81,7 +82,7 @@ impl Plait {
         {
             return;
         }
-        self.history.timer = true;
+        self.workspace.history.timer = true;
         let epoch = self.host.connection.epoch;
         let watch_epoch = self.host.thread.watch_epoch;
         cx.spawn_in(window, async move |this, cx| {
@@ -94,7 +95,7 @@ impl Plait {
                         {
                             return false;
                         }
-                        this.history.now = millis();
+                        this.workspace.history.now = millis();
                         let keep = this
                             .host
                             .thread
@@ -102,7 +103,7 @@ impl Plait {
                             .as_ref()
                             .is_some_and(|s| s.retry.is_some());
                         if !keep {
-                            this.history.timer = false;
+                            this.workspace.history.timer = false;
                         }
                         cx.notify();
                         keep
@@ -118,22 +119,22 @@ impl Plait {
     /// One projection at a time. A newer snapshot marks the result stale and is
     /// coalesced into the next job, rather than spawning a task per token.
     fn prepare_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.history.projecting {
+        if self.workspace.history.projecting {
             return;
         }
         let Some(snapshot) = self.host.thread.snapshot.clone() else {
             return;
         };
-        self.history.projecting = true;
+        self.workspace.history.projecting = true;
         let id = snapshot.id.clone();
         let epoch = self.host.connection.epoch;
         let watch_epoch = self.host.thread.watch_epoch;
-        let revision = self.history.revision;
-        let cache = self.history.cache.clone();
-        let enabled = self.history.enabled;
-        let previous = self.formatted.clone();
-        let records = self.turn_records.data.clone();
-        let record_generation = self.turn_records.data_generation;
+        let revision = self.workspace.history.revision;
+        let cache = self.workspace.history.cache.clone();
+        let enabled = self.workspace.history.enabled;
+        let previous = self.workspace.formatted.clone();
+        let records = self.workspace.turn_records.data.clone();
+        let record_generation = self.workspace.turn_records.data_generation;
         let task = cx.background_executor().spawn(async move {
             let display = if enabled {
                 cache.project(&snapshot)
@@ -166,23 +167,23 @@ impl Plait {
                 if !this.host.accepts_watch(epoch, watch_epoch, &id) {
                     return;
                 }
-                this.history.projecting = false;
-                if this.history.revision != revision {
+                this.workspace.history.projecting = false;
+                if this.workspace.history.revision != revision {
                     this.prepare_conversation(window, cx);
                     return;
                 }
-                let previous = this.history.display.replace(display);
-                let before = std::mem::replace(&mut this.formatted, formatted);
+                let previous = this.workspace.history.display.replace(display);
+                let before = std::mem::replace(&mut this.workspace.formatted, formatted);
                 if this.reconcile_live_list(previous.as_deref()) {
                     this.remeasure_records(previous.as_deref(), &before);
                 }
                 this.install_record_lines(lines, record_generation);
                 this.conversation_rows_changed(cx);
-                if this.history.enabled
-                    && this.history.loading.is_none()
+                if this.workspace.history.enabled
+                    && this.workspace.history.loading.is_none()
                     && let Some(live) = this.host.thread.snapshot.as_ref()
-                    && this.history.cache.needs_latest(live)
-                    && this.history.tried != Some(tail_stamp(live))
+                    && this.workspace.history.cache.needs_latest(live)
+                    && this.workspace.history.tried != Some(tail_stamp(live))
                 {
                     this.load_history(Load::Latest, window, cx);
                 }
@@ -192,9 +193,9 @@ impl Plait {
         .detach();
     }
     pub(super) fn load_history(&mut self, load: Load, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.history.enabled
+        if !self.workspace.history.enabled
             || !self.host.connection.connected
-            || self.history.loading.is_some()
+            || self.workspace.history.loading.is_some()
         {
             return;
         }
@@ -205,17 +206,17 @@ impl Plait {
         let epoch = self.host.connection.epoch;
         let watch_epoch = self.host.thread.watch_epoch;
         let before = match &load {
-            Load::Older => match self.history.cache.older.clone() {
+            Load::Older => match self.workspace.history.cache.older.clone() {
                 Some(cursor) => cursor,
                 None => return,
             },
             _ => None,
         };
-        self.history.tried = Some(tail_stamp(snapshot));
-        self.history.loading = Some(load.clone());
-        self.history.error = None;
-        self.history.failed = None;
-        let cache = self.history.cache.clone();
+        self.workspace.history.tried = Some(tail_stamp(snapshot));
+        self.workspace.history.loading = Some(load.clone());
+        self.workspace.history.error = None;
+        self.workspace.history.failed = None;
+        let cache = self.workspace.history.cache.clone();
         let operation = load.clone();
         let thread = id.clone();
         let protocol = self.host.protocol();
@@ -247,20 +248,20 @@ impl Plait {
                 if !this.host.accepts_watch(epoch, watch_epoch, &id) {
                     return;
                 }
-                this.history.loading = None;
+                this.workspace.history.loading = None;
                 match result {
                     Ok(cache) => {
                         if matches!(load, Load::Part(..)) {
                             this.clear_reading_selection();
                         }
-                        this.history.cache = cache;
-                        this.history.revision += 1;
+                        this.workspace.history.cache = cache;
+                        this.workspace.history.revision += 1;
                         this.prepare_conversation(window, cx);
                     }
                     Err(error) => {
-                        this.history.error =
+                        this.workspace.history.error =
                             Some(format!("Could not load conversation text: {error}"));
-                        this.history.failed = Some(load);
+                        this.workspace.history.failed = Some(load);
                     }
                 }
                 cx.notify();
@@ -270,10 +271,10 @@ impl Plait {
         cx.notify();
     }
     pub(super) fn jump_latest(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.history.cache.detached {
+        if self.workspace.history.cache.detached {
             self.load_history(Load::Latest, window, cx);
         }
-        self.live_scroll.scroll_to_end();
+        self.workspace.live_scroll.scroll_to_end();
         cx.notify();
     }
     pub(super) fn scroll_history(
@@ -282,30 +283,41 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if event.is_scrolled && event.visible_range.start <= 3 && self.history.error.is_none() {
+        if event.is_scrolled
+            && event.visible_range.start <= 3
+            && self.workspace.history.error.is_none()
+        {
             self.load_history(Load::Older, window, cx);
         }
     }
     pub(super) fn history_heading(&self, cx: &mut Context<Self>) -> AnyElement {
-        if !self.history.enabled {
+        if !self.workspace.history.enabled {
             return div().into_any_element();
         }
-        let loading = self.history.loading.is_some();
-        let failed = self.history.failed.clone();
-        let label = if let Some(error) = &self.history.error {
+        let loading = self.workspace.history.loading.is_some();
+        let failed = self.workspace.history.failed.clone();
+        let label = if let Some(error) = &self.workspace.history.error {
             error.clone()
         } else if loading {
             "Loading conversation text…".into()
-        } else if self.history.cache.detached {
+        } else if self.workspace.history.cache.detached {
             "Reading older history · newer pages are outside this window".into()
-        } else if self.history.cache.loaded && self.history.cache.older.is_none() {
-            if self.live_scroll.scroll_px_offset_for_scrollbar().y >= px(-1.) {
+        } else if self.workspace.history.cache.loaded
+            && self.workspace.history.cache.older.is_none()
+        {
+            if self
+                .workspace
+                .live_scroll
+                .scroll_px_offset_for_scrollbar()
+                .y
+                >= px(-1.)
+            {
                 "Beginning of conversation"
             } else {
                 "History loaded · scroll up for the beginning"
             }
             .into()
-        } else if self.history.cache.loaded {
+        } else if self.workspace.history.cache.loaded {
             "Earlier messages available".into()
         } else {
             "Loading complete history · live preview below".into()
@@ -343,8 +355,8 @@ impl Plait {
                     })
                     .when(
                         !loading
-                            && self.history.error.is_none()
-                            && self.history.cache.older.is_some(),
+                            && self.workspace.history.error.is_none()
+                            && self.workspace.history.cache.older.is_some(),
                         |row| {
                             row.child(
                                 button("older-history", "Load earlier")
@@ -354,7 +366,7 @@ impl Plait {
                             )
                         },
                     )
-                    .when(self.history.cache.detached, |row| {
+                    .when(self.workspace.history.cache.detached, |row| {
                         row.child(
                             button("latest-history", "Latest")
                                 .on_activate(cx, |this, window, cx| this.jump_latest(window, cx)),
@@ -369,7 +381,7 @@ impl Plait {
         field: Option<HistoryField>,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let entry = self.history.cache.get(&key)?;
+        let entry = self.workspace.history.cache.get(&key)?;
         if !entry
             .parts
             .iter()
@@ -411,7 +423,7 @@ impl Plait {
                     .when(part.has_next(), |row| {
                         row.child(
                             button(SharedString::from(format!("{id}-next")), "Next part")
-                                .disabled(self.history.loading.is_some())
+                                .disabled(self.workspace.history.loading.is_some())
                                 .on_activate(cx, move |this, window, cx| {
                                     this.load_history(
                                         Load::Part(next_key.clone(), field, false),
@@ -424,7 +436,7 @@ impl Plait {
                     .when(part.start > 0, |row| {
                         row.child(
                             button(SharedString::from(format!("{id}-start")), "Start over")
-                                .disabled(self.history.loading.is_some())
+                                .disabled(self.workspace.history.loading.is_some())
                                 .on_activate(cx, move |this, window, cx| {
                                     this.load_history(
                                         Load::Part(start_key.clone(), field, true),
@@ -439,19 +451,18 @@ impl Plait {
         Some(view.into_any_element())
     }
     pub(super) fn toggle_reasoning(&mut self, id: &str, cx: &mut Context<Self>) {
-        if !self.history.expanded.remove(id) {
-            self.history.expanded.insert(id.to_owned());
+        if !self.workspace.history.expanded.remove(id) {
+            self.workspace.history.expanded.insert(id.to_owned());
         }
         if let Some(snapshot) = self.conversation_snapshot()
-            && let Some(index) = self
-                .live_layout
-                .iter()
-                .position(|slot| match transcript::resolve(snapshot, *slot) {
+            && let Some(index) = self.workspace.live_layout.iter().position(|slot| {
+                match transcript::resolve(snapshot, *slot) {
                     Some(transcript::Row::Reasoning(m)) => m.id == id,
                     _ => false,
-                })
+                }
+            })
         {
-            self.live_scroll.remeasure_items(index..index + 1);
+            self.workspace.live_scroll.remeasure_items(index..index + 1);
         }
         cx.notify();
     }

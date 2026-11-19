@@ -295,7 +295,7 @@ impl Plait {
         };
         if set_mono(family) {
             // Another font has other widths and heights.
-            self.live_scroll.remeasure();
+            self.workspace.live_scroll.remeasure();
             cx.refresh_windows();
         }
     }

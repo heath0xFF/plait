@@ -95,7 +95,11 @@ fn the_branch_palette_lists_creates_and_switches() {
         branch_now(plait).as_deref() == Some("feature/login")
     });
     harness.update(|plait, _, _| {
-        assert_eq!(plait.tab, Workspace::Changes, "where the result is shown");
+        assert_eq!(
+            plait.workspace.tab,
+            Workspace::Changes,
+            "where the result is shown"
+        );
         assert_eq!(
             plait.state.repository.write().note,
             Some(("Switched to feature/login".into(), false))
@@ -289,6 +293,6 @@ pub(super) fn branches_walk(harness: &mut Harness, repository: &Path, suffix: &s
     harness.update(|plait, window, cx| {
         plait.close_overlay(true, window, cx);
         plait.state.repository.data.branches = Load::Empty;
-        plait.tab = Workspace::Conversation;
+        plait.workspace.tab = Workspace::Conversation;
     });
 }

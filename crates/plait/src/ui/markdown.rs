@@ -95,7 +95,7 @@ impl Plait {
             .collect();
         // Found text first, so a selection over it still reads as selected.
         self.mark_found(site, &range, &mut runs);
-        if let Some(selected) = self.reading.selected(site, block, &range) {
+        if let Some(selected) = self.workspace.reading.selected(site, block, &range) {
             markdown::restyle(&mut runs, selected, |style| {
                 style.background_color = Some(selection_fill())
             });

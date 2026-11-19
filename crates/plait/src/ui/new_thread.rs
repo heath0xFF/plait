@@ -66,20 +66,20 @@ impl Plait {
         self.draft.open
             && self.host.thread.selected.is_none()
             && !self.settings_open
-            && self.tab == Workspace::Conversation
+            && self.workspace.tab == Workspace::Conversation
     }
 
     /// Show the draft, with any text it kept, in the active project.
     pub(super) fn open_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_overlay(false, window, cx);
         self.settings_open = false;
-        self.tab = Workspace::Conversation;
+        self.workspace.tab = Workspace::Conversation;
         if self.host.thread.selected.is_some() {
-            self.host_watch = None;
+            self.workspace.host_watch = None;
             self.host.select(None);
-            self.history = Default::default();
+            self.workspace.history = Default::default();
             self.refresh_live_list(None);
-            self.formatted = Default::default();
+            self.workspace.formatted = Default::default();
         }
         // A saved selection arriving later must not replace the draft.
         self.session.restore_thread = None;
@@ -624,7 +624,7 @@ impl Plait {
         self.new_thread_open = true;
         self.draft.open = false;
         self.settings_open = false;
-        self.tab = Workspace::Conversation;
+        self.workspace.tab = Workspace::Conversation;
         self.create_host_thread(window, cx);
         cx.notify();
     }

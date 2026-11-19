@@ -105,7 +105,7 @@ impl Plait {
         !self.preferences.value.hide_changed_files
             && self.host.connection.connected
             && self.host.protocol() >= 3
-            && self.thread_files.unsupported != Some(self.host.connection.epoch)
+            && self.workspace.thread_files.unsupported != Some(self.host.connection.epoch)
     }
 
     /// After a snapshot: ask the host again when the thread changed or a
@@ -119,7 +119,7 @@ impl Plait {
             .iter()
             .filter(|tool| writes(&tool.name) && tool.status != host::ToolStatus::Running)
             .count();
-        let files = &self.thread_files;
+        let files = &self.workspace.thread_files;
         if files.thread.as_deref() == Some(snapshot.id.as_str())
             && files.root == snapshot.checkout
             && files.tools_done == done
@@ -130,7 +130,7 @@ impl Plait {
         let id = snapshot.id.clone();
         let root = snapshot.checkout.clone();
         self.fetch_thread_files(id, root, cx);
-        self.thread_files.tools_done = done;
+        self.workspace.thread_files.tools_done = done;
     }
 
     /// Full paged records include command writes and are not capped by the
@@ -143,35 +143,37 @@ impl Plait {
         let Some(snapshot) = self.host.thread.snapshot.as_ref() else {
             return;
         };
-        self.thread_files.select(&snapshot.id, &snapshot.checkout);
-        self.thread_files.record_paths = records
+        self.workspace
+            .thread_files
+            .select(&snapshot.id, &snapshot.checkout);
+        self.workspace.thread_files.record_paths = records
             .iter()
             .flat_map(|record| record.paths.iter().map(|path| path.path.clone()))
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect();
-        self.thread_files.merge_paths();
+        self.workspace.thread_files.merge_paths();
         self.count_thread_files(cx);
     }
 
     /// After a Git status read: recount, since commits and edits move the numbers.
     pub(super) fn thread_files_status(&mut self, cx: &mut Context<Self>) {
         if self.shows_thread_files()
-            && self.thread_files.thread.is_some()
-            && !self.thread_files.paths.is_empty()
+            && self.workspace.thread_files.thread.is_some()
+            && !self.workspace.thread_files.paths.is_empty()
         {
             self.count_thread_files(cx);
         }
     }
 
     fn fetch_thread_files(&mut self, id: String, root: PathBuf, cx: &mut Context<Self>) {
-        self.thread_files.select(&id, &root);
+        self.workspace.thread_files.select(&id, &root);
         if !self.shows_thread_files() {
             return;
         }
-        self.thread_files.requested = true;
-        self.thread_files.request_generation += 1;
-        let generation = self.thread_files.request_generation;
+        self.workspace.thread_files.requested = true;
+        self.workspace.thread_files.request_generation += 1;
+        let generation = self.workspace.thread_files.request_generation;
         let epoch = self.host.connection.epoch;
         let watch = self.host.thread.watch_epoch;
         let thread = id.clone();
@@ -182,20 +184,24 @@ impl Plait {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                if this.thread_files.request_generation != generation
+                if this.workspace.thread_files.request_generation != generation
                     || !this.host.accepts_watch(epoch, watch, &thread)
                 {
                     return;
                 }
                 match result {
                     Ok(reply) => {
-                        if this.thread_files.accept_paths(generation, reply.files) {
+                        if this
+                            .workspace
+                            .thread_files
+                            .accept_paths(generation, reply.files)
+                        {
                             this.count_thread_files(cx);
                         }
                     }
                     // A host from before this operation; stop asking it.
                     Err(host::Error::Rejected(_)) => {
-                        this.thread_files.unsupported = Some(epoch);
+                        this.workspace.thread_files.unsupported = Some(epoch);
                         cx.notify();
                     }
                     // Transport trouble shows elsewhere; keep the last list.
@@ -207,26 +213,26 @@ impl Plait {
     }
 
     fn count_thread_files(&mut self, cx: &mut Context<Self>) {
-        self.thread_files.generation += 1;
-        if self.thread_files.paths.is_empty() {
-            self.thread_files.counts.clear();
+        self.workspace.thread_files.generation += 1;
+        if self.workspace.thread_files.paths.is_empty() {
+            self.workspace.thread_files.counts.clear();
             return cx.notify();
         }
-        let generation = self.thread_files.generation;
-        let root = self.thread_files.root.clone();
-        let paths = self.thread_files.paths.clone();
+        let generation = self.workspace.thread_files.generation;
+        let root = self.workspace.thread_files.root.clone();
+        let paths = self.workspace.thread_files.paths.clone();
         let task = cx
             .background_executor()
             .spawn(async move { git::line_counts(&root, &paths) });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                if this.thread_files.generation != generation {
+                if this.workspace.thread_files.generation != generation {
                     return;
                 }
                 // A failed count keeps the last one; Changes reports Git errors.
                 if let Ok(counts) = result {
-                    this.thread_files.counts = counts;
+                    this.workspace.thread_files.counts = counts;
                     cx.notify();
                 }
             });
@@ -273,7 +279,7 @@ impl Plait {
     /// The card above the composer, or nothing when the thread has no
     /// uncommitted changes of its own.
     pub(super) fn thread_files_card(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let files = &self.thread_files;
+        let files = &self.workspace.thread_files;
         if !self.shows_thread_files()
             || files.counts.is_empty()
             || files.thread.as_ref() != self.host.thread.selected.as_ref()
@@ -305,7 +311,7 @@ impl Plait {
             .child(div().flex_1())
             .child(div().text_color(rgb(colors().subtle)).child("Uncommitted"))
             .on_click(cx.listener(|this, _, _, cx| {
-                this.thread_files.collapsed = !this.thread_files.collapsed;
+                this.workspace.thread_files.collapsed = !this.workspace.thread_files.collapsed;
                 cx.notify();
             }));
         let rows = (!collapsed).then(|| {

@@ -67,7 +67,7 @@ impl Render for TextTooltip {
 
 impl Plait {
     pub(super) fn set_thread_notice(&mut self, id: String, message: String, failed: bool) {
-        self.thread_controls.note = Some((id, message, failed));
+        self.workspace.thread_controls.note = Some((id, message, failed));
     }
 
     /// The open thread's model, from its harness's list when it does not run in Pi.
@@ -87,8 +87,9 @@ impl Plait {
     }
 
     pub(super) fn thread_configuration_pending(&self) -> bool {
-        self.thread_controls.pending_epoch == self.host.connection.epoch
+        self.workspace.thread_controls.pending_epoch == self.host.connection.epoch
             && self
+                .workspace
                 .thread_controls
                 .pending
                 .as_ref()
@@ -120,12 +121,12 @@ impl Plait {
     pub(super) fn open_thread_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(reason) = self.configure_reason() {
             if let Some(id) = &self.host.thread.selected {
-                self.thread_controls.note = Some((id.clone(), reason.into(), false));
+                self.workspace.thread_controls.note = Some((id.clone(), reason.into(), false));
             }
             cx.notify();
             return;
         }
-        self.thread_controls.picker_thread = self
+        self.workspace.thread_controls.picker_thread = self
             .host
             .thread
             .selected
@@ -140,7 +141,7 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((id, epoch)) = self.thread_controls.picker_thread.take() else {
+        let Some((id, epoch)) = self.workspace.thread_controls.picker_thread.take() else {
             return;
         };
         if epoch != self.host.connection.epoch || self.host.thread.selected.as_ref() != Some(&id) {
@@ -170,22 +171,22 @@ impl Plait {
         let id = snapshot.id.clone();
         let checkout = snapshot.checkout.clone();
         let watch_epoch = self.host.thread.watch_epoch;
-        self.thread_controls.serial += 1;
-        let serial = self.thread_controls.serial;
-        self.thread_controls.pending = Some((id.clone(), serial));
-        self.thread_controls.pending_epoch = self.host.connection.epoch;
+        self.workspace.thread_controls.serial += 1;
+        let serial = self.workspace.thread_controls.serial;
+        self.workspace.thread_controls.pending = Some((id.clone(), serial));
+        self.workspace.thread_controls.pending_epoch = self.host.connection.epoch;
         // The controls show the new choice; only a failure needs words.
-        self.thread_controls.note = None;
+        self.workspace.thread_controls.note = None;
         self.sync_composer(cx);
         self.host_request::<host::ThreadReply>(
             Request::configure_thread(id.clone(), model.clone(), thinking),
             window,
             cx,
             move |this, result, _, cx| {
-                if this.thread_controls.pending.as_ref() != Some(&(id.clone(), serial)) {
+                if this.workspace.thread_controls.pending.as_ref() != Some(&(id.clone(), serial)) {
                     return;
                 }
-                this.thread_controls.pending = None;
+                this.workspace.thread_controls.pending = None;
                 if !this
                     .host
                     .accepts_watch(this.host.connection.epoch, watch_epoch, &id)
@@ -206,7 +207,7 @@ impl Plait {
                     }
                     Err(error) => Err(error.to_string()),
                 };
-                this.thread_controls.note = result
+                this.workspace.thread_controls.note = result
                     .err()
                     .map(|error| (id, format!("Not saved: {error}"), true));
                 this.capture_session(cx);
@@ -358,7 +359,8 @@ impl Plait {
                     .aria_description(detail.clone())
                     .tooltip(move |_, cx| cx.new(|_| TextTooltip(detail.clone())).into())
                     .on_activate(cx, |this, _, cx| {
-                        this.thread_controls.usage_open = !this.thread_controls.usage_open;
+                        this.workspace.thread_controls.usage_open =
+                            !this.workspace.thread_controls.usage_open;
                         cx.notify();
                     }),
             );
@@ -387,7 +389,7 @@ impl Plait {
         {
             content = content.child(tag(differs, colors().amber).line_height(px(16.)));
         }
-        if self.thread_controls.usage_open
+        if self.workspace.thread_controls.usage_open
             && let Some(usage) = usage
         {
             content = content.child(
@@ -397,7 +399,7 @@ impl Plait {
                     .child(usage.detail),
             );
         }
-        if let Some((id, note, failed)) = &self.thread_controls.note
+        if let Some((id, note, failed)) = &self.workspace.thread_controls.note
             && id == &snapshot.id
         {
             content = content.child(
@@ -436,9 +438,10 @@ impl Plait {
         };
         if !self.host.connection.connected
             || (restore
-                && self.thread_controls.editing.get(&snapshot.id)
+                && self.workspace.thread_controls.editing.get(&snapshot.id)
                     == Some(&self.host.connection.epoch))
-            || self.thread_controls.cancelling.get(&request_id) == Some(&self.host.connection.epoch)
+            || self.workspace.thread_controls.cancelling.get(&request_id)
+                == Some(&self.host.connection.epoch)
         {
             return;
         }
@@ -459,23 +462,25 @@ impl Plait {
         }
         let id = snapshot.id.clone();
         let checkout = snapshot.checkout.clone();
-        let composer = self.composers.get(&id).cloned();
+        let composer = self.workspace.composers.get(&id).cloned();
         let revision = composer.as_ref().map(|c| c.read(cx).saved_draft().1);
         if restore && composer.as_ref().is_none_or(|c| !c.read(cx).is_empty()) {
             return;
         }
-        self.thread_controls
+        self.workspace
+            .thread_controls
             .cancelling
             .insert(request_id.clone(), self.host.connection.epoch);
         if restore {
-            self.thread_controls
+            self.workspace
+                .thread_controls
                 .editing
                 .insert(id.clone(), self.host.connection.epoch);
         }
         self.sync_composer(cx);
         self.host_request::<host::ThreadReply>(Request::cancel_queued(id.clone(), request_id.clone()), window, cx, move |this, result, window, cx| {
-            this.thread_controls.cancelling.remove(&request_id);
-            this.thread_controls.editing.remove(&id);
+            this.workspace.thread_controls.cancelling.remove(&request_id);
+            this.workspace.thread_controls.editing.remove(&id);
             match result {
                 Ok(reply) if reply.thread.id == id && reply.thread.checkout == checkout && !reply.thread.queued.iter().any(|q| q.request_id == request_id) => {
                     this.host.submissions.forget_accepted(&id, &request_id);
@@ -518,6 +523,7 @@ impl Plait {
             ));
         }
         let draft_empty = self
+            .workspace
             .composers
             .get(&snapshot.id)
             .is_some_and(|c| c.read(cx).is_empty());
@@ -525,7 +531,7 @@ impl Plait {
             let request_id = queued.request_id.clone();
             let cancel_id = request_id.clone();
             let edit_id = request_id.clone();
-            let cancelling = self.thread_controls.cancelling.get(&request_id)
+            let cancelling = self.workspace.thread_controls.cancelling.get(&request_id)
                 == Some(&self.host.connection.epoch);
             let mode = match queued.mode {
                 QueueMode::FollowUp => "Follow-up",
@@ -533,7 +539,7 @@ impl Plait {
             };
             let edit = draft_empty
                 && self.queued_text(queued).is_some()
-                && self.thread_controls.editing.get(&snapshot.id)
+                && self.workspace.thread_controls.editing.get(&snapshot.id)
                     != Some(&self.host.connection.epoch);
             let image_count = self
                 .host
@@ -743,7 +749,7 @@ impl Plait {
 
     /// This thread's own approval choice, if it has one.
     pub(super) fn thread_approval(&self, id: &str) -> Option<ApprovalMode> {
-        if let Some(chosen) = self.thread_controls.approvals.get(id) {
+        if let Some(chosen) = self.workspace.thread_controls.approvals.get(id) {
             return *chosen;
         }
         let summary = self
@@ -762,7 +768,7 @@ impl Plait {
         mode: Option<ApprovalMode>,
         cx: &mut Context<Self>,
     ) {
-        self.thread_controls.approvals.insert(id, mode);
+        self.workspace.thread_controls.approvals.insert(id, mode);
         self.capture_session(cx);
         cx.notify();
     }
@@ -865,7 +871,7 @@ impl Plait {
 
     /// The mode sent for the open thread and not yet answered.
     fn mode_pending(&self) -> Option<&str> {
-        let request = self.thread_controls.mode.as_ref()?;
+        let request = self.workspace.thread_controls.mode.as_ref()?;
         (request.epoch == self.host.connection.epoch
             && self.host.thread.selected.as_ref() == Some(&request.thread))
         .then_some(request.mode.as_str())
@@ -947,18 +953,18 @@ impl Plait {
         let snapshot = self.host.thread.snapshot.as_ref()?;
         // Only a mode the harness listed.
         self.harness_row(harness_of(snapshot))?.mode(&mode)?;
-        self.thread_controls.serial += 1;
+        self.workspace.thread_controls.serial += 1;
         let request = ModeRequest {
             thread: snapshot.id.clone(),
             checkout: snapshot.checkout.clone(),
-            serial: self.thread_controls.serial,
+            serial: self.workspace.thread_controls.serial,
             epoch: self.host.connection.epoch,
             watch_epoch: self.host.thread.watch_epoch,
             mode,
         };
-        self.thread_controls.mode = Some(request.clone());
+        self.workspace.thread_controls.mode = Some(request.clone());
         // The chip shows the new choice; only a failure needs words.
-        self.thread_controls.note = None;
+        self.workspace.thread_controls.note = None;
         Some(request)
     }
 
@@ -970,10 +976,10 @@ impl Plait {
         result: Result<host::ThreadReply, host::Error>,
         cx: &mut Context<Self>,
     ) {
-        if self.thread_controls.mode.as_ref() != Some(&request) {
+        if self.workspace.thread_controls.mode.as_ref() != Some(&request) {
             return;
         }
-        self.thread_controls.mode = None;
+        self.workspace.thread_controls.mode = None;
         if !self
             .host
             .accepts_watch(request.epoch, request.watch_epoch, &request.thread)

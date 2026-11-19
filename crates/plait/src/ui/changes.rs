@@ -299,7 +299,7 @@ impl Plait {
     }
 
     pub(super) fn file_panel(&self, compact: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        if !compact && self.turn_review.target.is_some() {
+        if !compact && self.workspace.turn_review.target.is_some() {
             return self.recorded_file_panel(cx);
         }
         let repo = &self.state.repository;
@@ -385,7 +385,7 @@ impl Plait {
                                     .collect::<Vec<_>>()
                             }),
                         )
-                        .track_scroll(&self.file_scroll)
+                        .track_scroll(&self.workspace.file_scroll)
                         .flex_1()
                         .min_h_0()
                         .into_any_element()
@@ -472,7 +472,7 @@ impl Plait {
                         )
                     }),
             )
-            .when(self.turn_review.target.is_some(), |el| {
+            .when(self.workspace.turn_review.target.is_some(), |el| {
                 el.child(self.recorded_switch(cx))
             })
             .child(
@@ -583,7 +583,7 @@ impl Plait {
                 self.diff_lines(
                     "diff-lines",
                     diff.clone(),
-                    &self.diff_scroll,
+                    &self.workspace.diff_scroll,
                     Some("Click line numbers to ask · ⌥↑ ⌥↓ switch file"),
                     DiffControls {
                         hunks: self.hunk_target(),
@@ -598,7 +598,7 @@ impl Plait {
 
     /// The pick, if it belongs to the file and side on screen.
     pub(super) fn current_pick(&self, lines: usize) -> Option<LinePick> {
-        let pick = self.line_pick.as_ref()?;
+        let pick = self.workspace.line_pick.as_ref()?;
         let repo = &self.state.repository;
         let key = repo.selected_diff()?;
         let change = repo.snapshot().ready()?.changes.get(key.file)?;
@@ -625,7 +625,7 @@ impl Plait {
             _ => return,
         };
         let current = self.current_pick(lines);
-        self.line_pick = match current {
+        self.workspace.line_pick = match current {
             Some(pick) if extend => Some(LinePick { end: index, ..pick }),
             Some(pick) if pick.anchor == index && pick.end == index => None,
             _ => Some(LinePick {
@@ -652,7 +652,7 @@ impl Plait {
             .thread
             .selected
             .as_ref()
-            .and_then(|id| self.composers.get(id))
+            .and_then(|id| self.workspace.composers.get(id))
             .cloned()
         else {
             return;
@@ -669,8 +669,8 @@ impl Plait {
             self.notice = Some("This thread cannot take a message right now.".into());
             return cx.notify();
         }
-        self.line_pick = None;
-        self.tab = super::Workspace::Conversation;
+        self.workspace.line_pick = None;
+        self.workspace.tab = super::Workspace::Conversation;
         cx.notify();
     }
 
@@ -709,7 +709,7 @@ impl Plait {
             )
             .child(
                 button("pick-clear", "Clear").on_activate(cx, |this, _, cx| {
-                    this.line_pick = None;
+                    this.workspace.line_pick = None;
                     cx.notify();
                 }),
             )
@@ -940,14 +940,16 @@ impl Plait {
                     .child(self.file_panel(false, cx)),
             )
             .child(column().flex_1().min_w_0().min_h_0().child(
-                if self.turn_review.target.is_some() && !self.recorded_current_available() {
+                if self.workspace.turn_review.target.is_some() && !self.recorded_current_available()
+                {
                     column()
                         .flex_1()
                         .min_w_0()
                         .min_h_0()
                         .child(self.recorded_header(cx))
                         .child(
-                            if self.turn_review.current && self.recorded_file().is_some() {
+                            if self.workspace.turn_review.current && self.recorded_file().is_some()
+                            {
                                 let (label, detail) = self.recorded_current_message();
                                 empty(label, detail.to_owned()).into_any_element()
                             } else {

@@ -77,12 +77,12 @@ pub(super) fn prepare(harness: &mut Harness, repository: &Path) {
             .as_mut()
             .unwrap()
             .protocol_version = 5;
-        plait.turn_records = Default::default();
-        plait.thread_files = Default::default();
+        plait.workspace.turn_records = Default::default();
+        plait.workspace.thread_files = Default::default();
         plait.preferences.value.hide_inspector = true;
         plait.settings_open = false;
         plait.overlay = None;
-        plait.history = Default::default();
+        plait.workspace.history = Default::default();
         let data = vec![
             record("last", &["last"], "ready"),
             record("first", &["first"], "ready"),
@@ -92,7 +92,7 @@ pub(super) fn prepare(harness: &mut Harness, repository: &Path) {
 }
 pub(super) fn inject(plait: &mut Plait, data: Vec<Value>) {
     let snapshot = plait.host.thread.snapshot.as_ref().unwrap();
-    plait.turn_records.inject(
+    plait.workspace.turn_records.inject(
         data.into_iter()
             .map(|v| serde_json::from_value(v).unwrap())
             .collect(),
@@ -210,15 +210,15 @@ fn undo_control_and_shortcut_share_the_gate() {
     assert_ne!(key.key, "z");
     let (scratch, _, mut harness) = setup("undo-gates");
     harness.update(|plait, window, cx| {
-        let line = plait.turn_records.lines.latest.clone().unwrap();
+        let line = plait.workspace.turn_records.lines.latest.clone().unwrap();
         assert!(plait.undo_refusal(&line).is_none());
         assert_eq!(plait.shortcut_undo().as_deref(), Some("last"));
-        plait.turn_records.projected_generation += 1;
+        plait.workspace.turn_records.projected_generation += 1;
         assert!(
             plait.shortcut_undo().is_none(),
             "raw records cannot enable an older projection"
         );
-        plait.turn_records.projected_generation -= 1;
+        plait.workspace.turn_records.projected_generation -= 1;
         plait.host.connection.connected = false;
         assert!(plait.shortcut_undo().is_none());
         plait.host.connection.connected = true;
@@ -241,9 +241,9 @@ fn undo_control_and_shortcut_share_the_gate() {
         plait.settings_open = true;
         assert!(plait.shortcut_undo().is_none());
         plait.settings_open = false;
-        plait.tab = Workspace::Changes;
+        plait.workspace.tab = Workspace::Changes;
         assert!(plait.shortcut_undo().is_none());
-        plait.tab = Workspace::Conversation;
+        plait.workspace.tab = Workspace::Conversation;
         plait.toggle_command_palette(window, cx);
         assert!(plait.shortcut_undo().is_none());
         plait.overlay = None;
@@ -254,7 +254,7 @@ fn undo_control_and_shortcut_share_the_gate() {
             inject(plait, vec![record("last", &["last"], state)]);
             assert_eq!(
                 plait
-                    .undo_refusal(plait.turn_records.lines.latest.as_ref().unwrap())
+                    .undo_refusal(plait.workspace.turn_records.lines.latest.as_ref().unwrap())
                     .unwrap()
                     .0,
                 label
@@ -306,7 +306,8 @@ fn undo_redo_and_changed_files_follow_scripted_records() {
     harness.keystroke("cmd-alt-u");
     wait(&mut harness, |p| {
         p.records_current()
-            && p.turn_records
+            && p.workspace
+                .turn_records
                 .lines
                 .latest
                 .as_ref()
@@ -325,14 +326,16 @@ fn undo_redo_and_changed_files_follow_scripted_records() {
     );
     harness.release();
     wait(&mut harness, |p| {
-        p.thread_files
+        p.workspace
+            .thread_files
             .counted()
             .any(|c| c.path == Path::new("src/generated.rs"))
     });
     harness.update(|plait, window, cx| {
-        assert!(!plait.turn_records.pending());
+        assert!(!plait.workspace.turn_records.pending());
         assert_eq!(
             plait
+                .workspace
                 .turn_records
                 .lines
                 .latest
@@ -344,6 +347,7 @@ fn undo_redo_and_changed_files_follow_scripted_records() {
         );
         assert!(
             plait
+                .workspace
                 .turn_records
                 .paths()
                 .contains(&PathBuf::from("src/generated.rs"))
@@ -352,14 +356,25 @@ fn undo_redo_and_changed_files_follow_scripted_records() {
     });
     wait(&mut harness, |p| {
         p.records_current()
-            && p.turn_records
+            && p.workspace
+                .turn_records
                 .lines
                 .latest
                 .as_ref()
                 .is_some_and(|l| l.target.as_deref() == Some("undo-2"))
     });
-    harness
-        .update(|plait, _, _| assert!(!plait.turn_records.lines.latest.as_ref().unwrap().undone));
+    harness.update(|plait, _, _| {
+        assert!(
+            !plait
+                .workspace
+                .turn_records
+                .lines
+                .latest
+                .as_ref()
+                .unwrap()
+                .undone
+        )
+    });
     let requests = host.requests.lock().unwrap();
     let undos: Vec<_> = requests.iter().filter(|r| r["op"] == "undo_turn").collect();
     assert_eq!(undos.len(), 2);
@@ -406,7 +421,7 @@ fn blocked_undo_applies_only_after_undo_the_rest() {
         })
     });
     harness.update(|p, w, c| p.undo_run("last", false, w, c));
-    wait(&mut harness, |p| p.turn_records.blocked());
+    wait(&mut harness, |p| p.workspace.turn_records.blocked());
     harness.draw();
     harness.update(|p, _, c| {
         assert!(p.shortcut_undo().is_none());
@@ -418,18 +433,19 @@ fn blocked_undo_applies_only_after_undo_the_rest() {
         "Cancel sends nothing"
     );
     harness.update(|p, w, c| p.undo_run("last", false, w, c));
-    wait(&mut harness, |p| p.turn_records.blocked());
+    wait(&mut harness, |p| p.workspace.turn_records.blocked());
     harness.update(|p, w, c| p.undo_run("last", true, w, c));
     wait(&mut harness, |p| {
         p.records_current()
-            && p.turn_records
+            && p.workspace
+                .turn_records
                 .lines
                 .latest
                 .as_ref()
                 .is_some_and(|l| l.undone)
     });
     harness.update(|p, _, _| {
-        let line = p.turn_records.lines.latest.as_ref().unwrap();
+        let line = p.workspace.turn_records.lines.latest.as_ref().unwrap();
         assert_eq!(line.files.len(), 1);
         assert_eq!(line.files[0].path, PathBuf::from("README.md"));
     });
@@ -468,13 +484,21 @@ fn stale_record_replies_cannot_cross_thread_revision_or_epoch() {
                     p.host.thread.watch_epoch += 1;
                 }
                 _ => {
-                    p.turn_records.generation += 1;
+                    p.workspace.turn_records.generation += 1;
                 }
             }
         });
         std::thread::sleep(Duration::from_millis(60));
         harness.settle();
-        harness.update(|p, _, _| assert!(p.turn_records.data.iter().all(|r| r.id != "wrong")));
+        harness.update(|p, _, _| {
+            assert!(
+                p.workspace
+                    .turn_records
+                    .data
+                    .iter()
+                    .all(|r| r.id != "wrong")
+            )
+        });
     }
     drop(host);
     drop(harness);
@@ -518,7 +542,7 @@ pub(super) fn undo_walk(harness: &mut Harness, repository: &Path, suffix: &str) 
     harness.capture(&format!("undo-redo-{suffix}"));
     prepare(harness, repository);
     harness.update(|p, _, _| {
-        p.turn_records.block(
+        p.workspace.turn_records.block(
             "last",
             serde_json::from_value(reply("blocked", "last")).unwrap(),
         )
@@ -533,7 +557,7 @@ pub(super) fn undo_walk(harness: &mut Harness, repository: &Path, suffix: &str) 
         );
         record["not_covered_total"] = json!(10000);
         inject(p, vec![record]);
-        p.turn_records.block(
+        p.workspace.turn_records.block(
             "last",
             serde_json::from_value(reply("blocked", "last")).unwrap(),
         );
@@ -553,11 +577,11 @@ pub(super) fn undo_walk(harness: &mut Harness, repository: &Path, suffix: &str) 
     prepare(harness, repository);
     harness.update(|p, _, _| {
         p.host.connection.status.as_mut().unwrap().protocol_version = 4;
-        p.turn_records = Default::default();
+        p.workspace.turn_records = Default::default();
     });
     harness.capture(&format!("undo-older-host-{suffix}"));
     harness.update(|p, _, _| {
-        p.turn_records = Default::default();
+        p.workspace.turn_records = Default::default();
     });
 }
 impl TurnRecords {
@@ -635,14 +659,15 @@ fn a_lost_undo_reply_reuses_the_same_request() {
         op => panic!("unexpected {op}"),
     });
     harness.update(|p, w, c| p.undo_run("last", false, w, c));
-    wait(&mut harness, |p| p.turn_records.retry.is_some());
+    wait(&mut harness, |p| p.workspace.turn_records.retry.is_some());
     harness.update(|p, w, c| {
         assert!(p.shortcut_undo().is_none());
         p.undo_run("last", false, w, c);
     });
     wait(&mut harness, |p| {
         p.records_current()
-            && p.turn_records
+            && p.workspace
+                .turn_records
                 .lines
                 .latest
                 .as_ref()
@@ -671,13 +696,13 @@ fn an_incomplete_undo_refreshes_without_replaying() {
     });
     harness.update(|p, w, c| p.undo_run("last", false, w, c));
     wait(&mut harness, |p| {
-        p.turn_records.note.is_some() && p.records_current()
+        p.workspace.turn_records.note.is_some() && p.records_current()
     });
     harness.update(|p, _, _| {
-        let (_, label, detail) = p.turn_records.note.as_ref().unwrap();
+        let (_, label, detail) = p.workspace.turn_records.note.as_ref().unwrap();
         assert_eq!(*label, "Incomplete");
         assert!(detail.contains("some files may have changed"));
-        assert!(p.turn_records.retry.is_none() && p.shortcut_undo().is_none());
+        assert!(p.workspace.turn_records.retry.is_none() && p.shortcut_undo().is_none());
     });
     harness.draw();
     assert_eq!(
@@ -713,7 +738,7 @@ fn a_blocked_earlier_run_remeasures_its_row() {
         Some(reply("blocked", "first"))
     });
     harness.update(|p, _, _| {
-        p.live_scroll.scroll_to(ListOffset {
+        p.workspace.live_scroll.scroll_to(ListOffset {
             item_ix: 0,
             offset_in_item: px(0.),
         })
@@ -722,16 +747,26 @@ fn a_blocked_earlier_run_remeasures_its_row() {
     let before = harness
         .window
         .update(&mut harness.cx, |p, _, _| {
-            p.live_scroll.bounds_for_item(1).unwrap().size.height
+            p.workspace
+                .live_scroll
+                .bounds_for_item(1)
+                .unwrap()
+                .size
+                .height
         })
         .unwrap();
     harness.update(|p, w, c| p.undo_run("first", false, w, c));
-    wait(&mut harness, |p| p.turn_records.blocked());
+    wait(&mut harness, |p| p.workspace.turn_records.blocked());
     harness.draw();
     let after = harness
         .window
         .update(&mut harness.cx, |p, _, _| {
-            p.live_scroll.bounds_for_item(1).unwrap().size.height
+            p.workspace
+                .live_scroll
+                .bounds_for_item(1)
+                .unwrap()
+                .size
+                .height
         })
         .unwrap();
     assert!(
@@ -742,7 +777,12 @@ fn a_blocked_earlier_run_remeasures_its_row() {
     harness.draw();
     harness.update(|p, _, _| {
         assert_eq!(
-            p.live_scroll.bounds_for_item(1).unwrap().size.height,
+            p.workspace
+                .live_scroll
+                .bounds_for_item(1)
+                .unwrap()
+                .size
+                .height,
             before
         )
     });

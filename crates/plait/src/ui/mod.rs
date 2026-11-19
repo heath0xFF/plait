@@ -39,6 +39,7 @@ mod text_field;
 pub mod theme;
 mod thread_controls;
 mod thread_files;
+mod thread_workspace;
 mod tool_card;
 mod turn_records;
 mod turn_review;
@@ -53,11 +54,7 @@ use plait_core::{
     model::DiffMode,
     state::{AppState, Load},
 };
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-    time::Instant,
-};
+use std::{path::PathBuf, time::Instant};
 use theme::*;
 pub use window_bar::TRAFFIC_LIGHTS;
 
@@ -124,14 +121,9 @@ const WIDE_WINDOW: f32 = 1150.;
 pub struct Plait {
     state: AppState,
     host: HostState,
-    host_watch: Option<host::WatchLease>,
     navigation: navigation::Navigation,
-    composers: HashMap<String, Entity<composer::Composer>>,
-    live_scroll: ListState,
-    live_count: usize,
-    live_layout: Vec<plait_core::transcript::Slot>,
-    formatted: std::sync::Arc<plait_core::markdown::Transcript>,
-    history: history::HistoryView,
+    /// Presentation state for the single selected thread workspace.
+    workspace: thread_workspace::ThreadWorkspace,
     /// A settings page covers the workspace; `settings_page` says which.
     settings_open: bool,
     settings_page: settings::SettingsPage,
@@ -152,40 +144,17 @@ pub struct Plait {
     new_thread_open: bool,
     /// The new thread being written, before anything exists on the host.
     draft: new_thread::Draft,
-    images: images::ImageCache,
     /// A worktree is being created or removed.
     worktree_busy: bool,
-    /// Diff lines picked in Changes to ask the selected thread about.
-    line_pick: Option<changes::LinePick>,
-    /// Files the selected thread changed, above its composer.
-    thread_files: thread_files::ThreadFiles,
-    turn_records: turn_records::TurnRecords,
-    turn_review: turn_review::TurnReview,
-    reveal: live_conversation::Reveals,
     approval_keys: live_conversation::ApprovalKeys,
     /// The command palette or model picker, above the workspace.
     overlay: Option<commands::Overlay>,
-    /// The inspector toggle was used on a window too narrow to show it.
-    inspector_note: bool,
     panels: panels::Panels,
-    thread_controls: thread_controls::ThreadControls,
     focus: FocusHandle,
-    /// The composer or find field that had the keyboard when another tab
-    /// hid the conversation; it gets it back when the conversation returns.
+    /// The conversation field that gets focus back after changing views.
     conversation_focus: Option<FocusHandle>,
-    expanded_live_tools: HashSet<String>,
-    reading: selection::Reading,
-    file_scroll: UniformListScrollHandle,
-    diff_scroll: UniformListScrollHandle,
-    /// The History tab's commit list and the selected commit's patch.
-    history_scroll: UniformListScrollHandle,
-    commit_scroll: UniformListScrollHandle,
-    /// The commit message in Changes. Kept across tab switches until it commits.
-    commit_message: Entity<text_field::TextField>,
-    /// The message the running commit was sent with. The field clears after
-    /// the commit only if it still holds this, so later typing survives.
-    commit_sent: Option<String>,
-    tab: Workspace,
+    /// The window control that had focus before conversation find opened.
+    conversation_find_focus: Option<FocusHandle>,
     sidebar: bool,
     /// A left press on the window bar may become a window move.
     window_drag: bool,
@@ -193,8 +162,6 @@ pub struct Plait {
     preferences: jump::PreferenceState,
     themes: appearance::Themes,
     code_font: appearance::CodeFont,
-    file_viewer: file_view::FileViewer,
-    conversation_find: conversation_find::ConversationFind,
     updates: update::UpdateState,
     session: session::SessionState,
     picker_open: bool,
@@ -218,17 +185,13 @@ impl Plait {
         let state = AppState::new(path);
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
+        let commit_message =
+            cx.new(|cx| text_field::TextField::new("Commit message", "Commit message", cx));
         let mut this = Self {
             state,
             host,
-            host_watch: None,
             navigation: navigation::Navigation::new(cx),
-            composers: HashMap::new(),
-            live_scroll: ListState::new(0, ListAlignment::Bottom, px(300.)),
-            live_count: 0,
-            live_layout: Vec::new(),
-            formatted: Default::default(),
-            history: Default::default(),
+            workspace: thread_workspace::ThreadWorkspace::new(commit_message),
             settings_open: false,
             settings_page: Default::default(),
             settings_tab: Default::default(),
@@ -242,38 +205,19 @@ impl Plait {
             providers: Default::default(),
             new_thread_open: false,
             draft: Default::default(),
-            images: Default::default(),
             worktree_busy: false,
-            line_pick: None,
-            thread_files: Default::default(),
-            turn_records: Default::default(),
-            turn_review: Default::default(),
-            reveal: Default::default(),
             approval_keys: Default::default(),
             overlay: None,
-            inspector_note: false,
             panels: Default::default(),
-            thread_controls: Default::default(),
             focus,
             conversation_focus: None,
-            expanded_live_tools: HashSet::new(),
-            reading: Default::default(),
-            file_scroll: UniformListScrollHandle::new(),
-            history_scroll: UniformListScrollHandle::new(),
-            commit_scroll: UniformListScrollHandle::new(),
-            commit_message: cx
-                .new(|cx| text_field::TextField::new("Commit message", "Commit message", cx)),
-            commit_sent: None,
-            diff_scroll: UniformListScrollHandle::new(),
-            tab: Workspace::Conversation,
+            conversation_find_focus: None,
             sidebar: true,
             window_drag: false,
             diagnostics: false,
             preferences: jump::PreferenceState::default(),
             themes: Default::default(),
             code_font: Default::default(),
-            file_viewer: Default::default(),
-            conversation_find: Default::default(),
             updates: update::UpdateState::default(),
             session: session::SessionState::default(),
             picker_open: false,
@@ -285,7 +229,8 @@ impl Plait {
             interaction: None,
             switch_us: 0,
         };
-        this.live_scroll
+        this.workspace
+            .live_scroll
             .set_scroll_handler(cx.listener(Self::scroll_history));
         this.initialize_navigation(window, cx);
         this.pump(cx);
@@ -381,7 +326,7 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let same_recorded_file = self.turn_review.current
+        let same_recorded_file = self.workspace.turn_review.current
             && self.recorded_file().is_some_and(|recorded| {
                 self.state
                     .repository
@@ -412,24 +357,26 @@ impl Plait {
             Some(forward) => self.state.repository.step(file, mode, forward),
             None => self.state.repository.select(file, mode),
         }
-        self.diff_scroll = UniformListScrollHandle::new();
-        self.tab = Workspace::Changes;
+        self.workspace.diff_scroll = UniformListScrollHandle::new();
+        self.workspace.tab = Workspace::Changes;
         self.refresh_turn_review(cx);
         self.pump(cx);
         cx.notify();
     }
 
     fn step_file(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(record) = &self.turn_review.record {
+        if let Some(record) = &self.workspace.turn_review.record {
             let count = record.files.len();
             if count > 0 {
-                let selected = self.turn_review.selected.unwrap_or(0);
+                let selected = self.workspace.turn_review.selected.unwrap_or(0);
                 let next = if forward {
                     (selected + 1) % count
                 } else {
                     (selected + count - 1) % count
                 };
-                self.file_scroll.scroll_to_item(next, ScrollStrategy::Top);
+                self.workspace
+                    .file_scroll
+                    .scroll_to_item(next, ScrollStrategy::Top);
                 self.select_recorded_file(next, window, cx);
             }
             return;
@@ -453,7 +400,9 @@ impl Plait {
         } else {
             DiffMode::Staged
         };
-        self.file_scroll.scroll_to_item(next, ScrollStrategy::Top);
+        self.workspace
+            .file_scroll
+            .scroll_to_item(next, ScrollStrategy::Top);
         self.show_file(next, mode, Some(forward), window, cx);
     }
 
@@ -564,7 +513,7 @@ impl Plait {
             None => self.close_provider_form(cx),
         }
         if page.is_none()
-            && self.tab == Workspace::Conversation
+            && self.workspace.tab == Workspace::Conversation
             && let Some(id) = self.host.thread.selected.clone()
         {
             self.mark_thread_read(&id, cx);
@@ -586,11 +535,11 @@ impl Plait {
     /// has no room for it, so the toggle says where Git is instead.
     fn toggle_inspector(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !Self::wide(window) {
-            self.inspector_note = !self.inspector_note;
+            self.workspace.inspector_note = !self.workspace.inspector_note;
             cx.notify();
             return;
         }
-        self.inspector_note = false;
+        self.workspace.inspector_note = false;
         let mut value = self.preferences.value.clone();
         value.hide_inspector = !value.hide_inspector;
         self.set_preferences(value, jump::PreferenceGroup::View, cx);
@@ -617,14 +566,14 @@ impl Plait {
                 toned_button("inspector-note-changes", "Show Changes", Tone::Filled).on_activate(
                     cx,
                     |this, window, cx| {
-                        this.inspector_note = false;
+                        this.workspace.inspector_note = false;
                         this.show_tab(Workspace::Changes, window, cx);
                     },
                 ),
             )
             .child(
                 button("inspector-note-dismiss", "Dismiss").on_activate(cx, |this, _, cx| {
-                    this.inspector_note = false;
+                    this.workspace.inspector_note = false;
                     cx.notify();
                 }),
             )
@@ -639,12 +588,12 @@ impl Plait {
 
     fn show_tab(&mut self, tab: Workspace, window: &mut Window, cx: &mut Context<Self>) {
         let conversation = Workspace::Conversation;
-        if self.tab == conversation && tab != conversation {
+        if self.workspace.tab == conversation && tab != conversation {
             self.leave_conversation_focus(window, cx);
-        } else if self.tab != conversation && tab == conversation {
+        } else if self.workspace.tab != conversation && tab == conversation {
             self.return_conversation_focus(window, cx);
         }
-        self.tab = tab;
+        self.workspace.tab = tab;
         if tab == Workspace::Changes {
             self.refresh_turn_review(cx);
         }
@@ -669,7 +618,7 @@ impl Plait {
     /// Where the conversation can hold the keyboard: its composer, and its
     /// find field while the bar is open.
     fn conversation_fields(&self, cx: &App) -> [Option<FocusHandle>; 2] {
-        let find = &self.conversation_find;
+        let find = &self.workspace.conversation_find;
         [
             self.visible_composer()
                 .map(|composer| composer.focus_handle(cx)),
@@ -800,7 +749,7 @@ impl Plait {
                 segment(
                     "conversation-tab",
                     "Conversation",
-                    self.tab == Workspace::Conversation,
+                    self.workspace.tab == Workspace::Conversation,
                 )
                 .aria_keyshortcuts(self.shortcut_aria("view.conversation"))
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -808,30 +757,42 @@ impl Plait {
                 })),
             )
             .child(
-                segment("changes-tab", "Changes", self.tab == Workspace::Changes)
-                    .aria_keyshortcuts(self.shortcut_aria("view.changes"))
-                    // The accessible name stays "Changes"; the count is visual.
-                    .when_some(changed, |el, count| {
-                        el.child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(rgb(colors().subtle))
-                                .child(count.to_string()),
-                        )
-                    })
-                    .on_click(cx.listener(|this, _, window, cx| {
+                segment(
+                    "changes-tab",
+                    "Changes",
+                    self.workspace.tab == Workspace::Changes,
+                )
+                .aria_keyshortcuts(self.shortcut_aria("view.changes"))
+                // The accessible name stays "Changes"; the count is visual.
+                .when_some(changed, |el, count| {
+                    el.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(rgb(colors().subtle))
+                            .child(count.to_string()),
+                    )
+                })
+                .on_click(
+                    cx.listener(|this, _, window, cx| {
                         this.show_tab(Workspace::Changes, window, cx)
-                    })),
+                    }),
+                ),
             )
             .child(
-                segment("history-tab", "History", self.tab == Workspace::History)
-                    .aria_keyshortcuts(self.shortcut_aria("view.history"))
-                    .on_click(cx.listener(|this, _, window, cx| {
+                segment(
+                    "history-tab",
+                    "History",
+                    self.workspace.tab == Workspace::History,
+                )
+                .aria_keyshortcuts(self.shortcut_aria("view.history"))
+                .on_click(
+                    cx.listener(|this, _, window, cx| {
                         this.show_tab(Workspace::History, window, cx)
-                    })),
+                    }),
+                ),
             )
             .child(
-                segment("files-tab", "Files", self.tab == Workspace::Files)
+                segment("files-tab", "Files", self.workspace.tab == Workspace::Files)
                     .aria_keyshortcuts(self.shortcut_aria("view.files"))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.show_tab(Workspace::Files, window, cx)
@@ -1034,7 +995,9 @@ impl Render for Plait {
                 this.toggle_command_palette(window, cx)
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" && this.images.enlarged.take().is_some() {
+                if event.keystroke.key == "escape"
+                    && this.workspace.images.enlarged.take().is_some()
+                {
                     this.focus_composer(window, cx);
                     cx.stop_propagation();
                     cx.notify();
@@ -1191,9 +1154,10 @@ impl Render for Plait {
                                 )
                             })
                             .when_some(self.creation_bar(cx), |el, bar| el.child(bar))
-                            .when(self.inspector_note && !wide && page.is_none(), |el| {
-                                el.child(self.inspector_note(cx))
-                            })
+                            .when(
+                                self.workspace.inspector_note && !wide && page.is_none(),
+                                |el| el.child(self.inspector_note(cx)),
+                            )
                             .child(if let Some(page) = page {
                                 match page {
                                     settings::SettingsPage::Application => {
@@ -1203,11 +1167,11 @@ impl Render for Plait {
                                         self.project_settings(cx).into_any_element()
                                     }
                                 }
-                            } else if self.tab == Workspace::History {
+                            } else if self.workspace.tab == Workspace::History {
                                 self.history_view(wide, cx).into_any_element()
-                            } else if self.tab == Workspace::Files {
+                            } else if self.workspace.tab == Workspace::Files {
                                 self.file_view(cx)
-                            } else if self.tab == Workspace::Changes {
+                            } else if self.workspace.tab == Workspace::Changes {
                                 self.changes(wide, cx).into_any_element()
                             } else if real {
                                 self.live_conversation(wide, cx).into_any_element()

@@ -99,6 +99,7 @@ fn open_what_is_on_screen() {
     harness.update(|plait, _, _| {
         let offset = point(px(0.), px(-LINE_HEIGHT * 40.));
         plait
+            .workspace
             .file_viewer
             .scroll
             .0
@@ -127,7 +128,7 @@ fn open_what_is_on_screen() {
     // The current find match wins over the scroll position.
     harness.update(|plait, window, cx| {
         plait.open_find(window, cx);
-        let field = plait.file_viewer.find.field.clone().unwrap();
+        let field = plait.workspace.file_viewer.find.field.clone().unwrap();
         field.update(cx, |field, cx| field.set_text("line 150", cx));
     });
     harness.update(|plait, _, cx| plait.open_in_editor(cx));
@@ -178,7 +179,7 @@ fn open_what_is_on_screen() {
     assert_eq!(opened(&mut harness)[1], "1");
     // The staged side starts with a removed line: it opens where that was.
     harness.update(|plait, window, cx| {
-        plait.line_pick = None;
+        plait.workspace.line_pick = None;
         let index = change(plait, "src/review.rs");
         plait.select_file(index, DiffMode::Staged, window, cx);
     });
@@ -333,6 +334,6 @@ pub(super) fn ways_out_walk(harness: &mut Harness, repository: &Path, suffix: &s
         plait.show_editor_commands(cx);
         plait.open_page(None, window, cx);
         plait.settings_tab = SettingsTab::default();
-        plait.tab = Workspace::Conversation;
+        plait.workspace.tab = Workspace::Conversation;
     });
 }

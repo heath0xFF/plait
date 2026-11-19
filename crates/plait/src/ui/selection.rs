@@ -344,13 +344,13 @@ impl Plait {
             range,
             by_line,
             links,
-            regions: self.reading.regions.clone(),
+            regions: self.workspace.reading.regions.clone(),
         }
     }
 
     /// Pointer handling for the conversation, sized to cover its list.
     pub(super) fn selection_surface(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let regions = self.reading.regions.clone();
+        let regions = self.workspace.reading.regions.clone();
         let fresh = regions.clone();
         let entity = cx.weak_entity();
         canvas(
@@ -407,28 +407,33 @@ impl Plait {
     fn row_blocks(&self, row: Row<'_>) -> Vec<&Block> {
         match row {
             Row::Message(message) => self
+                .workspace
                 .formatted
                 .messages
                 .get(&message.id)
                 .map(|message| message.blocks.iter().collect()),
             Row::Streaming(_) => self
+                .workspace
                 .formatted
                 .live
                 .as_ref()
                 .map(|message| message.blocks.iter().collect()),
             Row::Reasoning(message) => self
+                .workspace
                 .formatted
                 .reasoning
                 .get(&message.id)
-                .filter(|_| self.history.expanded.contains(&message.id))
+                .filter(|_| self.workspace.history.expanded.contains(&message.id))
                 .map(|message| message.blocks.iter().collect()),
             Row::LiveReasoning(_) => self
+                .workspace
                 .formatted
                 .live_reasoning
                 .as_ref()
                 .map(|message| message.blocks.iter().collect()),
             // Details that are folded away are not part of what is on screen.
             Row::Tool(tool) => self
+                .workspace
                 .formatted
                 .tools
                 .get(&tool.id)
@@ -441,6 +446,7 @@ impl Plait {
     fn anchored_block(&self, anchor: &Anchor) -> Option<&Block> {
         let snapshot = self.conversation_snapshot()?;
         let row = self
+            .workspace
             .live_layout
             .iter()
             .filter_map(|slot| transcript::resolve(snapshot, *slot))
@@ -450,17 +456,18 @@ impl Plait {
 
     /// Place the selection in this frame's row order. Rows that have gone drop it.
     pub(super) fn resolve_selection(&self) {
-        self.reading.span.set(None);
-        let (Some(selection), Some(snapshot)) =
-            (&self.reading.selection, self.conversation_snapshot())
-        else {
+        self.workspace.reading.span.set(None);
+        let (Some(selection), Some(snapshot)) = (
+            &self.workspace.reading.selection,
+            self.conversation_snapshot(),
+        ) else {
             return;
         };
         if selection.thread != snapshot.id {
             return;
         }
         let position = |anchor: &Anchor| {
-            let row = self.live_layout.iter().position(|slot| {
+            let row = self.workspace.live_layout.iter().position(|slot| {
                 transcript::resolve(snapshot, *slot).is_some_and(|row| anchor.owner.is(row))
             })?;
             Some(Position {
@@ -472,7 +479,7 @@ impl Plait {
         let span = position(&selection.anchor)
             .zip(position(&selection.head))
             .and_then(|(anchor, head)| Span::between(anchor, head));
-        self.reading.span.set(span);
+        self.workspace.reading.span.set(span);
     }
 
     fn press_text(
@@ -483,11 +490,11 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.reading.dragging = false;
-        self.reading.pressed_link = None;
+        self.workspace.reading.dragging = false;
+        self.workspace.reading.pressed_link = None;
         let (Some(hit), Some(thread)) = (hit, self.host.thread.selected.clone()) else {
             // A press on anything that is not text clears the selection.
-            if self.reading.selection.take().is_some() {
+            if self.workspace.reading.selection.take().is_some() {
                 cx.notify();
             }
             return;
@@ -510,6 +517,7 @@ impl Plait {
             Some(hit.range.start + range.start..hit.range.start + range.end)
         });
         let previous = self
+            .workspace
             .reading
             .selection
             .take()
@@ -519,9 +527,9 @@ impl Plait {
             (None, Some(selection)) => (selection.anchor, hit.anchor.clone()),
             (None, None) => (hit.anchor.clone(), hit.anchor.clone()),
         };
-        self.reading.dragging = clicks <= 1;
-        self.reading.pressed_link = hit.link.filter(|_| clicks <= 1 && !extend);
-        self.reading.selection = Some(Selection {
+        self.workspace.reading.dragging = clicks <= 1;
+        self.workspace.reading.pressed_link = hit.link.filter(|_| clicks <= 1 && !extend);
+        self.workspace.reading.selection = Some(Selection {
             thread,
             anchor,
             head,
@@ -530,33 +538,35 @@ impl Plait {
     }
 
     fn drag_text(&mut self, hit: Option<Hit>, past: Pixels, cx: &mut Context<Self>) {
-        if !self.reading.dragging {
+        if !self.workspace.reading.dragging {
             return;
         }
         // Dragging past an edge scrolls that way, so a selection can outgrow
         // the screen. Each pointer movement scrolls once; nothing is animated.
         if past != px(0.) {
             let step = past.clamp(px(-SCROLL_STEP), px(SCROLL_STEP));
-            let offset = self.live_scroll.scroll_px_offset_for_scrollbar();
-            self.live_scroll
+            let offset = self.workspace.live_scroll.scroll_px_offset_for_scrollbar();
+            self.workspace
+                .live_scroll
                 .set_offset_from_scrollbar(point(px(0.), offset.y - step));
             cx.notify();
         }
-        let (Some(hit), Some(selection)) = (hit, &mut self.reading.selection) else {
+        let (Some(hit), Some(selection)) = (hit, &mut self.workspace.reading.selection) else {
             return;
         };
         if selection.head != hit.anchor {
             selection.head = hit.anchor;
             // A drag is no longer a click on the link it may have started on.
-            self.reading.hovered_link = None;
+            self.workspace.reading.hovered_link = None;
             cx.notify();
         }
     }
 
     fn release_text(&mut self, link: Option<SharedString>, cx: &mut Context<Self>) {
-        self.reading.dragging = false;
-        let pressed = self.reading.pressed_link.take();
+        self.workspace.reading.dragging = false;
+        let pressed = self.workspace.reading.pressed_link.take();
         let empty = self
+            .workspace
             .reading
             .selection
             .as_ref()
@@ -564,7 +574,7 @@ impl Plait {
         if !empty {
             return;
         }
-        self.reading.selection = None;
+        self.workspace.reading.selection = None;
         // A click, not a drag, that began and ended on the same link.
         if let Some(url) = pressed.filter(|url| link.as_ref() == Some(url))
             && markdown::safe_url(&url).is_some()
@@ -575,23 +585,24 @@ impl Plait {
     }
 
     fn hover_link(&mut self, link: Option<SharedString>, cx: &mut Context<Self>) {
-        if self.reading.hovered_link != link {
-            self.reading.hovered_link = link;
+        if self.workspace.reading.hovered_link != link {
+            self.workspace.reading.hovered_link = link;
             cx.notify();
         }
     }
 
     pub(super) fn clear_reading_selection(&mut self) {
-        self.reading.selection = None;
-        self.reading.span.set(None);
-        self.reading.dragging = false;
+        self.workspace.reading.selection = None;
+        self.workspace.reading.span.set(None);
+        self.workspace.reading.dragging = false;
     }
 
     /// The text the current selection would copy, if there is one.
     pub(super) fn selected_text(&self) -> Option<String> {
-        let span = self.reading.span.get()?;
+        let span = self.workspace.reading.span.get()?;
         let snapshot = self.conversation_snapshot()?;
         let rows = self
+            .workspace
             .live_layout
             .iter()
             .enumerate()
@@ -614,19 +625,19 @@ impl Plait {
     ) -> Stateful<Div> {
         root.on_action(cx.listener(|this, _: &HistoryStart, window, cx| {
             if this.settings_open
-                || this.tab != super::Workspace::Conversation
+                || this.workspace.tab != super::Workspace::Conversation
                 || this.host.thread.selected.is_none()
             {
                 cx.propagate();
                 return;
             }
-            this.live_scroll.scroll_to(ListOffset::default());
+            this.workspace.live_scroll.scroll_to(ListOffset::default());
             this.load_history(super::history::Load::Older, window, cx);
             cx.notify();
         }))
         .on_action(cx.listener(|this, _: &HistoryEnd, window, cx| {
             if this.settings_open
-                || this.tab != super::Workspace::Conversation
+                || this.workspace.tab != super::Workspace::Conversation
                 || this.host.thread.selected.is_none()
             {
                 cx.propagate();
@@ -650,7 +661,7 @@ impl Plait {
         block: usize,
         offset: usize,
     ) -> Option<Point<Pixels>> {
-        let regions = self.reading.regions.borrow();
+        let regions = self.workspace.reading.regions.borrow();
         let region = regions.iter().find(|region| {
             region.site.owner == *owner
                 && region.site.block == block

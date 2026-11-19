@@ -516,7 +516,7 @@ impl Plait {
         self.set_preferences(value, PreferenceGroup::View, cx);
         // Lists were not fetched while hidden.
         if !hidden {
-            self.thread_files.reset();
+            self.workspace.thread_files.reset();
             self.thread_files_snapshot(cx);
         }
     }

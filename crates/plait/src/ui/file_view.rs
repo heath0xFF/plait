@@ -71,16 +71,16 @@ impl Plait {
     /// Show `path` in the Files tab, at `line` (zero-based) when given.
     pub(super) fn open_file(&mut self, path: PathBuf, line: Option<usize>, cx: &mut Context<Self>) {
         let root = self.file_root();
-        let viewer = &mut self.file_viewer;
+        let viewer = &mut self.workspace.file_viewer;
         let same = viewer.path.as_ref() == Some(&path) && viewer.root == root;
         viewer.reveal = line;
-        self.tab = Workspace::Files;
+        self.workspace.tab = Workspace::Files;
         self.settings_open = false;
-        if same && self.file_viewer.opened.is_some() {
+        if same && self.workspace.file_viewer.opened.is_some() {
             self.reveal_line(cx);
             return self.check_file(cx);
         }
-        let viewer = &mut self.file_viewer;
+        let viewer = &mut self.workspace.file_viewer;
         viewer.path = Some(path);
         viewer.root = root;
         viewer.opened = None;
@@ -92,7 +92,7 @@ impl Plait {
     }
 
     fn read_file(&mut self, reload: bool, cx: &mut Context<Self>) {
-        let viewer = &mut self.file_viewer;
+        let viewer = &mut self.workspace.file_viewer;
         let Some(path) = viewer.path.clone() else {
             return;
         };
@@ -106,7 +106,7 @@ impl Plait {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                let viewer = &mut this.file_viewer;
+                let viewer = &mut this.workspace.file_viewer;
                 if viewer.generation != generation {
                     return;
                 }
@@ -143,7 +143,7 @@ impl Plait {
 
     /// Reread the open file if its size or time changed. Cheap: one stat.
     pub(super) fn check_file(&mut self, cx: &mut Context<Self>) {
-        let viewer = &self.file_viewer;
+        let viewer = &self.workspace.file_viewer;
         let (Some(path), Some(opened)) = (viewer.path.clone(), viewer.opened.clone()) else {
             return;
         };
@@ -158,7 +158,7 @@ impl Plait {
         cx.spawn(async move |this, cx| {
             let stamp = task.await;
             let _ = this.update(cx, |this, cx| {
-                if this.file_viewer.generation == generation
+                if this.workspace.file_viewer.generation == generation
                     && stamp.as_ref().ok() != Some(&opened.stamp)
                 {
                     this.read_file(true, cx);
@@ -169,8 +169,9 @@ impl Plait {
     }
 
     fn reveal_line(&mut self, cx: &mut Context<Self>) {
-        if let Some(line) = self.file_viewer.reveal.take() {
-            self.file_viewer
+        if let Some(line) = self.workspace.file_viewer.reveal.take() {
+            self.workspace
+                .file_viewer
                 .scroll
                 .scroll_to_item(line, ScrollStrategy::Center);
             cx.notify();
@@ -187,6 +188,7 @@ impl Plait {
             placeholder: "Open a file in this checkout…".into(),
             empty: empty.into(),
             initial: self
+                .workspace
                 .file_viewer
                 .path
                 .as_ref()
@@ -255,24 +257,24 @@ impl Plait {
 
     /// Cmd-F: show the find field over the open file.
     pub(super) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.tab != Workspace::Files || self.file_viewer.opened.is_none() {
+        if self.workspace.tab != Workspace::Files || self.workspace.file_viewer.opened.is_none() {
             return;
         }
-        let field = match self.file_viewer.find.field.clone() {
+        let field = match self.workspace.file_viewer.find.field.clone() {
             Some(field) => field,
             None => {
                 let field =
                     cx.new(|cx| TextField::new("Find in file", "Find in file", cx).search());
-                self.file_viewer.find._events =
+                self.workspace.file_viewer.find._events =
                     Some(cx.subscribe(&field, |this, _, _: &TextFieldEvent, cx| {
                         this.update_find(cx)
                     }));
-                self.file_viewer.find.field = Some(field.clone());
+                self.workspace.file_viewer.find.field = Some(field.clone());
                 field
             }
         };
-        if !self.file_viewer.find.open {
-            self.file_viewer.find.open = true;
+        if !self.workspace.file_viewer.find.open {
+            self.workspace.file_viewer.find.open = true;
             // A query kept from last time is searched again over the file as it is now.
             self.update_find(cx);
         }
@@ -281,7 +283,7 @@ impl Plait {
     }
 
     pub(super) fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let find = &mut self.file_viewer.find;
+        let find = &mut self.workspace.file_viewer.find;
         find.open = false;
         find.matches = Arc::default();
         // Whatever search is running now answers nothing.
@@ -292,14 +294,14 @@ impl Plait {
 
     /// Search off the UI thread; a large file with no match scans it all.
     fn update_find(&mut self, cx: &mut Context<Self>) {
-        let find = &mut self.file_viewer.find;
+        let find = &mut self.workspace.file_viewer.find;
         find.generation += 1;
         let generation = find.generation;
         let query = match (&find.field, find.open) {
             (Some(field), true) => field.read(cx).text().to_owned(),
             _ => String::new(),
         };
-        let text = match self.file_viewer.opened.as_deref() {
+        let text = match self.workspace.file_viewer.opened.as_deref() {
             Some(Opened {
                 contents: Contents::Text(text),
                 ..
@@ -312,7 +314,7 @@ impl Plait {
         cx.spawn(async move |this, cx| {
             let matches = task.await;
             let _ = this.update(cx, |this, cx| {
-                let find = &mut this.file_viewer.find;
+                let find = &mut this.workspace.file_viewer.find;
                 if find.generation != generation {
                     return;
                 }
@@ -326,7 +328,7 @@ impl Plait {
 
     /// Enter, Cmd-G, and their Shift forms: the next or previous match, wrapping.
     pub(super) fn step_find(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let find = &mut self.file_viewer.find;
+        let find = &mut self.workspace.file_viewer.find;
         let count = find.matches.len();
         if count == 0 {
             return;
@@ -340,7 +342,7 @@ impl Plait {
     }
 
     fn show_match(&mut self, cx: &mut Context<Self>) {
-        let viewer = &self.file_viewer;
+        let viewer = &self.workspace.file_viewer;
         if let (Some(found), Some(Contents::Text(text))) = (
             viewer.find.matches.get(viewer.find.current),
             viewer.opened.as_deref().map(|opened| &opened.contents),
@@ -353,7 +355,7 @@ impl Plait {
 
     /// The Files tab.
     pub(super) fn file_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        let viewer = &self.file_viewer;
+        let viewer = &self.workspace.file_viewer;
         let Some(path) = viewer.path.as_ref() else {
             return empty(
                 "No file open",
@@ -473,7 +475,7 @@ impl Plait {
         if self.settings_open {
             return None;
         }
-        match self.tab {
+        match self.workspace.tab {
             Workspace::Files => Some(FindIn::File),
             Workspace::Conversation if self.host.thread.selected.is_some() => {
                 Some(FindIn::Conversation)
@@ -513,7 +515,7 @@ impl Plait {
     pub(super) fn find_bar(&self, target: FindIn, cx: &mut Context<Self>) -> AnyElement {
         let (prefix, field, current, count, unsearched) = match target {
             FindIn::File => {
-                let find = &self.file_viewer.find;
+                let find = &self.workspace.file_viewer.find;
                 (
                     "file-find",
                     &find.field,
@@ -523,7 +525,7 @@ impl Plait {
                 )
             }
             FindIn::Conversation => {
-                let find = &self.conversation_find;
+                let find = &self.workspace.conversation_find;
                 (
                     "conversation-find",
                     &find.field,
@@ -603,7 +605,7 @@ impl Plait {
 
     /// Every line, virtualized: only those on screen are laid out.
     fn file_lines(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(opened) = self.file_viewer.opened.clone() else {
+        let Some(opened) = self.workspace.file_viewer.opened.clone() else {
             return div().into_any_element();
         };
         let Contents::Text(text) = &opened.contents else {
@@ -613,8 +615,8 @@ impl Plait {
         let digits = count.to_string().len().max(3);
         let gutter = digits as f32 * 7.5 + 24.;
         let widest = widest_index(text, text.widest);
-        let matches = self.file_viewer.find.matches.clone();
-        let current = self.file_viewer.find.current;
+        let matches = self.workspace.file_viewer.find.matches.clone();
+        let current = self.workspace.file_viewer.find.current;
         uniform_list(
             "file-lines",
             count,
@@ -659,7 +661,7 @@ impl Plait {
         )
         .with_width_from_item(Some(widest))
         .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
-        .track_scroll(&self.file_viewer.scroll)
+        .track_scroll(&self.workspace.file_viewer.scroll)
         .flex_1()
         .min_h_0()
         .into_any_element()

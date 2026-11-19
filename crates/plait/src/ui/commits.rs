@@ -74,7 +74,7 @@ impl Plait {
             )
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.state.repository.select_commit(id.clone());
-                this.commit_scroll = UniformListScrollHandle::new();
+                this.workspace.commit_scroll = UniformListScrollHandle::new();
                 this.pump(cx);
                 cx.notify();
             }))
@@ -117,7 +117,7 @@ impl Plait {
                             .collect::<Vec<_>>()
                     }),
                 )
-                .track_scroll(&self.history_scroll)
+                .track_scroll(&self.workspace.history_scroll)
                 .flex_1()
                 .min_h_0(),
             )
@@ -158,7 +158,7 @@ impl Plait {
             Load::Ready(diff) => self.diff_lines(
                 "commit-lines",
                 diff.clone(),
-                &self.commit_scroll,
+                &self.workspace.commit_scroll,
                 None,
                 Default::default(),
                 cx,

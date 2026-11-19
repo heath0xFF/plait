@@ -15,7 +15,12 @@ use plait_core::{
 use std::{ops::Range, path::Path, sync::Arc};
 
 fn type_query(plait: &mut Plait, query: &'static str, cx: &mut Context<Plait>) {
-    let field = plait.conversation_find.field.clone().expect("find is open");
+    let field = plait
+        .workspace
+        .conversation_find
+        .field
+        .clone()
+        .expect("find is open");
     field.update(cx, |field, cx| field.set_text(query, cx));
 }
 
@@ -26,7 +31,7 @@ fn reading_at_top(harness: &mut Harness, repository: &Path) {
     harness.update(|plait, _, cx| {
         plait.host.connection.threads[0].status = ThreadStatus::Idle;
         plait.sync_composer(cx);
-        plait.live_scroll.scroll_to(ListOffset::default());
+        plait.workspace.live_scroll.scroll_to(ListOffset::default());
     });
     // Find places a match by where its text was last drawn.
     harness.draw();
@@ -48,8 +53,8 @@ pub(super) fn find_walk(harness: &mut Harness, repository: &Path, suffix: &str) 
     harness.capture(&format!("find-conversation-none-{suffix}"));
     // A version 3 host with earlier pages not yet read.
     harness.update(|plait, _, cx| {
-        plait.history.enabled = true;
-        let cache = Arc::make_mut(&mut plait.history.cache);
+        plait.workspace.history.enabled = true;
+        let cache = Arc::make_mut(&mut plait.workspace.history.cache);
         cache.loaded = true;
         cache.older = Some(None);
         type_query(plait, "sample", cx);
@@ -57,7 +62,7 @@ pub(super) fn find_walk(harness: &mut Harness, repository: &Path, suffix: &str) 
     harness.capture(&format!("find-conversation-unloaded-{suffix}"));
     harness.update(|plait, window, cx| {
         plait.close_conversation_find(window, cx);
-        plait.history = Default::default();
+        plait.workspace.history = Default::default();
     });
 }
 
@@ -73,24 +78,27 @@ fn find_opens_only_in_the_view_on_screen() {
     let mut harness = Harness::new(&repository, None, 900., 600.);
     reading_at_top(&mut harness, &repository);
     harness.update(|plait, window, cx| {
-        let composer = plait.composers[THREAD].clone();
+        let composer = plait.workspace.composers[THREAD].clone();
         window.focus(&composer.focus_handle(cx), cx);
     });
     harness.draw();
     harness.keystroke("cmd-f");
     harness.update(|plait, window, cx| {
-        assert!(plait.conversation_find.open);
-        assert!(!plait.file_viewer.find.open, "the Files bar stays closed");
-        let field = plait.conversation_find.field.clone().unwrap();
+        assert!(plait.workspace.conversation_find.open);
+        assert!(
+            !plait.workspace.file_viewer.find.open,
+            "the Files bar stays closed"
+        );
+        let field = plait.workspace.conversation_find.field.clone().unwrap();
         assert!(field.focus_handle(cx).is_focused(window));
         type_query(plait, "sample", cx);
     });
     harness.draw();
     harness.keystroke("escape");
     harness.update(|plait, window, cx| {
-        assert!(!plait.conversation_find.open);
-        assert!(plait.conversation_find.matches.is_empty());
-        let composer = plait.composers[THREAD].clone();
+        assert!(!plait.workspace.conversation_find.open);
+        assert!(plait.workspace.conversation_find.matches.is_empty());
+        let composer = plait.workspace.composers[THREAD].clone();
         assert!(
             composer.focus_handle(cx).is_focused(window),
             "focus returns to the composer"
@@ -101,9 +109,9 @@ fn find_opens_only_in_the_view_on_screen() {
     harness.update(|plait, _, cx| plait.open_file("src/review.rs".into(), None, cx));
     harness.keystroke("cmd-f");
     harness.update(|plait, _, _| {
-        assert!(plait.file_viewer.find.open);
+        assert!(plait.workspace.file_viewer.find.open);
         assert!(
-            !plait.conversation_find.open,
+            !plait.workspace.conversation_find.open,
             "the conversation's bar stays closed"
         );
     });
@@ -134,7 +142,7 @@ fn composer_state(harness: &mut Harness) -> ((String, Range<usize>), bool, bool)
     harness
         .window
         .update(&mut harness.cx, |plait, window, cx| {
-            let composer = plait.composers[THREAD].clone();
+            let composer = plait.workspace.composers[THREAD].clone();
             let composer = composer.read(cx);
             (
                 (composer.text().to_owned(), composer.caret()),
@@ -162,7 +170,7 @@ fn the_keyboard_leaves_a_hidden_composer_and_returns_to_it() {
     harness.update(|plait, _, cx| plait.open_file("src/review.rs".into(), None, cx));
     harness.update(|plait, window, cx| plait.show_tab(Workspace::Conversation, window, cx));
     harness.update(|plait, window, cx| {
-        let composer = plait.composers[THREAD].clone();
+        let composer = plait.workspace.composers[THREAD].clone();
         composer.update(cx, |composer, cx| {
             composer.type_text("Sample draft", window, cx)
         });
@@ -175,7 +183,7 @@ fn the_keyboard_leaves_a_hidden_composer_and_returns_to_it() {
     let tab = |harness: &mut Harness| {
         harness
             .window
-            .update(&mut harness.cx, |plait, _, _| plait.tab)
+            .update(&mut harness.cx, |plait, _, _| plait.workspace.tab)
             .unwrap()
     };
     // By shortcut: Changes, where the composer is not drawn, so the root
@@ -201,7 +209,7 @@ fn the_keyboard_leaves_a_hidden_composer_and_returns_to_it() {
         harness
             .window
             .update(&mut harness.cx, |plait, window, cx| {
-                let find = &plait.file_viewer.find;
+                let find = &plait.workspace.file_viewer.find;
                 find.open
                     && find
                         .field
@@ -254,7 +262,7 @@ fn a_stale_conversation_search_is_dropped() {
         harness
             .window
             .update(&mut harness.cx, |plait, _, _| {
-                (*plait.conversation_find.matches).clone()
+                (*plait.workspace.conversation_find.matches).clone()
             })
             .unwrap()
     };
@@ -288,8 +296,8 @@ fn a_stale_conversation_search_is_dropped() {
         .window
         .update(&mut harness.cx, |plait, _, _| {
             let stale = plait.found_now("fixture", invented());
-            plait.formatted = Arc::new(plait_core::markdown::Transcript::update(
-                &plait.formatted,
+            plait.workspace.formatted = Arc::new(plait_core::markdown::Transcript::update(
+                &plait.workspace.formatted,
                 plait.host.thread.snapshot.as_ref().unwrap(),
             ));
             stale
@@ -347,11 +355,11 @@ fn current_in_view(harness: &mut Harness) -> (String, bool) {
     harness
         .window
         .update(&mut harness.cx, |plait, _, _| {
-            let find = &plait.conversation_find;
+            let find = &plait.workspace.conversation_find;
             let hit = find.matches.hits[find.current].clone();
             let owner = Owner::Message(hit.message.clone().into());
             let point = plait.text_point(&owner, hit.block, hit.range.start);
-            let view = plait.live_scroll.viewport_bounds();
+            let view = plait.workspace.live_scroll.viewport_bounds();
             (
                 hit.message,
                 point.is_some_and(|point| view.contains(&point)),
@@ -372,13 +380,13 @@ fn next_and_previous_bring_each_match_into_view() {
     let mut harness = Harness::new(&repository, None, 900., 600.);
     harness.connect(&repository, false);
     harness.change_snapshot(haystack);
-    harness.update(|plait, _, _| plait.live_scroll.scroll_to_end());
+    harness.update(|plait, _, _| plait.workspace.live_scroll.scroll_to_end());
     harness.draw();
     harness.update(|plait, window, cx| {
         plait.open_conversation_find(window, cx);
         type_query(plait, "NEEDLE", cx);
     });
-    harness.update(|plait, _, _| assert_eq!(plait.conversation_find.matches.len(), 3));
+    harness.update(|plait, _, _| assert_eq!(plait.workspace.conversation_find.matches.len(), 3));
     // At the end of the conversation, the first match from the view is the last one.
     assert_eq!(current_in_view(&mut harness), ("hay-57".into(), true));
     let step = |harness: &mut Harness, forward: bool| {
@@ -402,7 +410,7 @@ fn next_and_previous_bring_each_match_into_view() {
         harness
             .window
             .update(&mut harness.cx, |plait, _, _| {
-                plait.live_scroll.logical_scroll_top()
+                plait.workspace.live_scroll.logical_scroll_top()
             })
             .unwrap()
     };
@@ -418,7 +426,7 @@ fn next_and_previous_bring_each_match_into_view() {
     });
     harness.draw();
     harness.update(|plait, _, _| {
-        let find = &plait.conversation_find;
+        let find = &plait.workspace.conversation_find;
         assert_eq!(find.matches.len(), 4);
         assert_eq!(find.matches.hits[find.current].message, "hay-30");
     });

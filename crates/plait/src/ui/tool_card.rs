@@ -63,17 +63,19 @@ impl Plait {
             .snapshot
             .as_ref()
             .map(|snapshot| &snapshot.id);
-        thread == Some(&self.reading.groups_thread) && self.reading.open_groups.contains(key)
+        thread == Some(&self.workspace.reading.groups_thread)
+            && self.workspace.reading.open_groups.contains(key)
     }
 
     /// Whether a tool's details are on screen: opened, and not folded into a closed group.
     pub(super) fn tool_details_shown(&self, id: &str) -> bool {
         let hidden = self
+            .workspace
             .formatted
             .runs
             .place(id)
             .is_some_and(|place| place.folded() && !self.group_open(place.run.key()));
-        self.expanded_live_tools.contains(id) && !hidden
+        self.workspace.expanded_live_tools.contains(id) && !hidden
     }
 
     pub(super) fn toggle_live_tool(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -84,16 +86,17 @@ impl Plait {
             return;
         };
         let Some(index) = self
+            .workspace
             .live_layout
             .iter()
             .position(|slot| *slot == Slot::Tool(offset))
         else {
             return;
         };
-        if !self.expanded_live_tools.remove(id) {
-            self.expanded_live_tools.insert(id.to_owned());
+        if !self.workspace.expanded_live_tools.remove(id) {
+            self.workspace.expanded_live_tools.insert(id.to_owned());
         }
-        self.live_scroll.remeasure_items(index..index + 1);
+        self.workspace.live_scroll.remeasure_items(index..index + 1);
         cx.notify();
     }
 
@@ -108,15 +111,15 @@ impl Plait {
         else {
             return;
         };
-        if self.reading.groups_thread != *thread {
-            self.reading.groups_thread = thread.clone();
-            self.reading.open_groups.clear();
+        if self.workspace.reading.groups_thread != *thread {
+            self.workspace.reading.groups_thread = thread.clone();
+            self.workspace.reading.open_groups.clear();
         }
-        if !self.reading.open_groups.remove(key) {
-            self.reading.open_groups.insert(key.to_owned());
+        if !self.workspace.reading.open_groups.remove(key) {
+            self.workspace.reading.open_groups.insert(key.to_owned());
         }
         // The next frame remeasures the rows this shows or hides.
-        self.reading.planned.set(0);
+        self.workspace.reading.planned.set(0);
         cx.notify();
     }
 
@@ -124,14 +127,14 @@ impl Plait {
     /// A row that is on screen is laid out afresh anyway; this keeps the
     /// heights of rows outside the viewport honest, so scrolling stays even.
     pub(super) fn reconcile_tool_rows(&self) {
-        let stamp = Arc::as_ptr(&self.formatted) as usize;
-        if self.reading.planned.replace(stamp) == stamp {
+        let stamp = Arc::as_ptr(&self.workspace.formatted) as usize;
+        if self.workspace.reading.planned.replace(stamp) == stamp {
             return;
         }
-        let mut previous = self.reading.folds.borrow_mut();
+        let mut previous = self.workspace.reading.folds.borrow_mut();
         let mut folds = HashMap::with_capacity(previous.len());
-        let rows = self.live_scroll.item_count();
-        for run in self.formatted.runs.iter() {
+        let rows = self.workspace.live_scroll.item_count();
+        for run in self.workspace.formatted.runs.iter() {
             let open = self.group_open(run.key());
             for (position, id) in run.tools.iter().enumerate() {
                 let state = (
@@ -140,7 +143,7 @@ impl Plait {
                 );
                 let row = run.first_row + position;
                 if previous.get(id).is_some_and(|drawn| *drawn != state) && row < rows {
-                    self.live_scroll.remeasure_items(row..row + 1);
+                    self.workspace.live_scroll.remeasure_items(row..row + 1);
                 }
                 folds.insert(id.clone(), state);
             }
@@ -155,7 +158,7 @@ impl Plait {
         row: usize,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let place = self.formatted.runs.place(&tool.id);
+        let place = self.workspace.formatted.runs.place(&tool.id);
         let open = place.is_some_and(|place| self.group_open(place.run.key()));
         let folded = place.is_some_and(|place| place.folded());
         let summary = place
@@ -163,13 +166,16 @@ impl Plait {
             .map(|place| self.group_summary(place.run, open, cx));
         let card = (!folded || open).then(|| {
             column()
-                .when(self.expanded_live_tools.contains(&tool.id), |el| {
-                    el.children(self.history_parts(
-                        plait_core::history::Key::Tool(tool.id.clone()),
-                        None,
-                        cx,
-                    ))
-                })
+                .when(
+                    self.workspace.expanded_live_tools.contains(&tool.id),
+                    |el| {
+                        el.children(self.history_parts(
+                            plait_core::history::Key::Tool(tool.id.clone()),
+                            None,
+                            cx,
+                        ))
+                    },
+                )
                 .child(self.tool_card(tool, row, folded, cx))
         });
         (summary.is_some() || card.is_some()).then(|| {
@@ -226,10 +232,10 @@ impl Plait {
         nested: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let expanded = self.expanded_live_tools.contains(&tool.id);
+        let expanded = self.workspace.expanded_live_tools.contains(&tool.id);
         let id = tool.id.clone();
         let subject = transcript::tool_subject(tool);
-        let view = self.formatted.tools.get(&tool.id);
+        let view = self.workspace.formatted.tools.get(&tool.id);
         let facts = view.and_then(|view| view.facts.clone());
         column()
             .gap_1()

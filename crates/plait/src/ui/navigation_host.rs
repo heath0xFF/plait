@@ -16,13 +16,13 @@ impl Plait {
             // Another app may have changed the open file.
             if window.is_window_active() {
                 this.check_file(cx);
-                if this.tab == super::Workspace::Changes {
+                if this.workspace.tab == super::Workspace::Changes {
                     this.refresh_turn_review(cx);
                 }
             }
             if window.is_window_active()
                 && !this.settings_open
-                && this.tab == super::Workspace::Conversation
+                && this.workspace.tab == super::Workspace::Conversation
                 && let Some(id) = this.host.thread.selected.clone()
             {
                 this.mark_thread_read(&id, cx);
@@ -205,7 +205,7 @@ impl Plait {
         }
         let visible = (window.is_window_active()
             && !self.settings_open
-            && self.tab == super::Workspace::Conversation)
+            && self.workspace.tab == super::Workspace::Conversation)
             .then_some(self.host.thread.selected.as_deref())
             .flatten();
         let mut preferences = self.preferences.value.clone();

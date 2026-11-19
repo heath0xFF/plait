@@ -44,6 +44,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
   tool_card.rs          one line per tool call, its details, and grouped runs
   thread_controls.rs    model, thinking, context, run settings, and queued inputs
   thread_files.rs       files the thread changed, above its composer
+  thread_workspace.rs   GPUI presentation container for the single selected thread workspace
   turn_records.rs       guarded record pages, closing-line undo, conflict panel
   changes.rs            changed-file list and diff view
   commit_panel.rs       staging buttons, commit message, and write results
@@ -428,6 +429,16 @@ Plain core state separates ownership while preserving one selected thread slot:
   `checkout_state.rs`) from the selected workspace's Git view selection
   (`ThreadRepositoryView` in `thread_view.rs`, alongside the
   presentation-independent `ThreadView` enum).
+- **`ThreadWorkspace`** (`ui/thread_workspace.rs`) owns the GPUI presentation
+  state for the single selected thread (active view, transcript list/scroll
+  and formatted blocks, history view, images, line pick, changed files, turn
+  records/review, reveal cursors, reading selection, conversation/file find,
+  file viewer, Changes/History scroll handles, commit message state, and the
+  existing per-thread composer map). The
+  root `Plait` view retains window-owned state (focus, approval key debounce,
+  sidebar navigation, overlays, settings pages, panels, new-thread drafts,
+  and shared desktop services) and delegates selection, reconnect, and checkout
+  resets through `ThreadWorkspace`.
 
 The checkout's file list is a third job, started only when a composer asks for
 it. It has its own queue slot, so it cannot displace a diff, and it runs after
