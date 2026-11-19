@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { Snapshot } from '../../src/protocol.ts';
+import './leases.ts';
 
 export const exec = promisify(execFile);
 export const binary = process.env.PLAIT_HOST_BINARY ?? resolve('../target/debug/plait-host');

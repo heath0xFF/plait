@@ -248,6 +248,12 @@ pub fn default_lease_dir() -> Result<PathBuf, LeaseError> {
         }
         return Ok(path);
     }
+    // Lock files are never removed where Plait runs, so unit tests keep theirs
+    // out of the account's lease directory.
+    if cfg!(test) {
+        let uid = unsafe { libc::geteuid() };
+        return Ok(std::env::temp_dir().join(format!("plait-test-leases-{uid}")));
+    }
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
@@ -980,6 +986,24 @@ mod tests {
             );
             drop(lease);
         }
+    }
+
+    #[test]
+    fn unit_tests_keep_lock_files_out_of_the_account_lease_directory() {
+        let scratch = Scratch::new("account");
+        let repo = scratch.0.join("repo");
+        init_repo(&repo);
+        crate::git::write(&repo, &crate::git::WriteOp::StageAll).unwrap();
+        let (_, _, id) = open_verified_dir(&repo).unwrap();
+        assert!(
+            default_lease_dir()
+                .unwrap()
+                .join(checkout_lock_name(id))
+                .is_file()
+        );
+        let account =
+            PathBuf::from(std::env::var_os("HOME").unwrap()).join(".local/share/plait-leases");
+        assert!(!account.join(checkout_lock_name(id)).exists());
     }
 
     #[test]

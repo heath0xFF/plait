@@ -123,6 +123,7 @@ struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
+        isolate_leases();
         let path = std::env::temp_dir().join(format!(
             "plait-host-records-{}-{}",
             std::process::id(),
@@ -133,6 +134,19 @@ impl Scratch {
         Self(fs::canonicalize(path).unwrap())
     }
 }
+/// Lock files are never removed where Plait runs, so these tests keep theirs out
+/// of the account's lease directory; the helpers they start inherit the setting.
+fn isolate_leases() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let uid = unsafe { libc::geteuid() };
+        let directory = std::env::temp_dir().join(format!("plait-host-test-leases-{uid}"));
+        // SAFETY: set once, before any test here takes a lease (each makes a Scratch
+        // first), and the standard library orders its own environment reads after it.
+        unsafe { std::env::set_var("PLAIT_LEASE_DIR", directory) };
+    });
+}
+
 impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
@@ -1049,4 +1063,26 @@ fn undo_never_converts_an_inherited_shared_lifecycle_lock() {
     );
     // The runtime still holds its lease after the helper exits.
     assert!(acquire_checkout(&root, None, LeaseClass::Reader).is_err());
+}
+
+#[test]
+fn host_tests_keep_lock_files_out_of_the_account_lease_directory() {
+    use plait_core::lease::{LeaseClass, acquire_checkout, checkout_lock_name, open_verified_dir};
+    let base = Scratch::new();
+    let root = repository(&base.0);
+    drop(acquire_checkout(&root, None, LeaseClass::Writer).unwrap());
+    let output = Command::new(env!("CARGO_BIN_EXE_plait-host"))
+        .args(["lease-prepare", "checkout"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let prepared: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let private = fs::canonicalize(std::env::var_os("PLAIT_LEASE_DIR").unwrap()).unwrap();
+    assert!(Path::new(prepared["lock_path"].as_str().unwrap()).starts_with(&private));
+    let (_, _, id) = open_verified_dir(&root).unwrap();
+    assert!(private.join(checkout_lock_name(id)).is_file());
+    let account =
+        PathBuf::from(std::env::var_os("HOME").unwrap()).join(".local/share/plait-leases");
+    assert!(!account.join(checkout_lock_name(id)).exists());
 }

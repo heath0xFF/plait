@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import './leases.ts';
 
 export const exec = promisify(execFile);
 process.env.PLAIT_HOST_EXE = process.env.PLAIT_HOST_BINARY ?? resolve('../target/debug/plait-host');

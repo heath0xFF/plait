@@ -52,7 +52,7 @@ test('production runtime edits Plait source, runs Cargo, reconnects and resumes 
   for (const file of ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'AGENTS.md']) {
     await cp(join(source, file), join(repo, file));
   }
-  const environment = { PATH: process.env.PATH, HOME: process.env.HOME, PI_CODING_AGENT_DIR: agent, PI_OFFLINE: '1' };
+  const environment = { PATH: process.env.PATH, HOME: process.env.HOME, PI_CODING_AGENT_DIR: agent, PI_OFFLINE: '1', PLAIT_LEASE_DIR: process.env.PLAIT_LEASE_DIR };
   assert(environment.HOME, 'Installed Rust toolchain discovery needs the test account home.');
   const git = (args: string[]) => exec('/usr/bin/git', ['-C', repo, ...args], {
     env: { PATH: process.env.PATH, HOME: process.env.HOME, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' },

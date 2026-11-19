@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdir, writeFile, readFile, rm, symlink, link, chmod, stat, rename } from 'node:fs/promises';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { test } from 'node:test';
 import { fileAction, dirtyPaths, identities, safePath, acquireCheckout, acquireCommonMetadata, checkoutLockName, rootIdentity, checkRoot } from '../src/safety.ts';
 import { prepareBuildCache } from '../src/build-cache.ts';
@@ -265,4 +266,14 @@ test('a checkout lease starts one host helper, as before lifecycle locks', async
   // The lock file the runtime opened is the one plait-host verifies and reports.
   const prepared = JSON.parse((await exec(real, ['lease-prepare', 'checkout', root])).stdout);
   assert.equal(prepared.lock_path.split('/').at(-1), checkoutLockName({ dev: prepared.dev, ino: prepared.ino }));
+});
+
+test('tests keep lock files out of the account lease directory', async t => {
+  const { root } = await setup(t);
+  const lease = await acquireCheckout(root, 'writer');
+  await lease.close();
+  const name = checkoutLockName(lease.identity);
+  assert.notEqual(process.env.PLAIT_LEASE_DIR, undefined);
+  assert.equal((await stat(join(process.env.PLAIT_LEASE_DIR!, name))).isFile(), true);
+  await assert.rejects(stat(join(homedir(), '.local/share/plait-leases', name)), { code: 'ENOENT' });
 });
