@@ -811,7 +811,7 @@ impl Plait {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .text_ellipsis()
+                    .truncate()
                     .child(meta.title.clone()),
             )
             .when(!meta.word.is_empty(), |el| {
@@ -981,7 +981,7 @@ impl Plait {
                 div()
                     .min_w_0()
                     .flex_1()
-                    .text_ellipsis()
+                    .truncate()
                     .child(meta.title.clone()),
             )
             .child(
