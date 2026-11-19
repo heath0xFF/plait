@@ -1,4 +1,5 @@
 import { fail } from '../protocol.ts';
+import { issueReference } from './identity.ts';
 import { validateLinearKey } from './auth.ts';
 import { FIELD_LIMITS, LINEAR_COMMENT_BODY_MAX_BYTES, LINEAR_FILTER_PRESETS } from './types.ts';
 import type { LinearFilterPreset } from './types.ts';
@@ -15,8 +16,10 @@ const OPERATIONS: Record<string, OperationSpec> = {
   linear_bind_project: { required: ['checkout', 'team_id'], optional: ['team_key', 'team_name'] },
   linear_get_project_binding: { required: ['checkout'], optional: [] },
   linear_list_issues: { required: ['team_id', 'filter'], optional: ['search', 'cursor', 'refresh'] },
-  linear_get_issue: { required: ['issue_id'], optional: ['comments_cursor', 'refresh'] },
-  linear_link_thread: { required: ['thread_id', 'issue_id', 'identifier', 'url', 'title'], optional: [] },
+  linear_get_issue: { required: ['issue_id'], optional: ['comments_cursor', 'refresh', 'workspace_id'] },
+  linear_resolve_issue: { required: ['checkout', 'reference'], optional: ['refresh'] },
+  linear_get_linked_issue: { required: ['thread_id'], optional: ['comments_cursor', 'refresh'] },
+  linear_link_thread: { required: ['thread_id', 'issue_id', 'identifier', 'url', 'title'], optional: ['workspace_id'] },
   linear_unlink_thread: { required: ['thread_id'], optional: [] },
   linear_get_thread_link: { required: ['thread_id'], optional: [] },
   linear_list_thread_links: { required: [], optional: ['limit', 'cursor'] },
@@ -140,13 +143,22 @@ export function validateLinearRequest(input: unknown): LinearRequest {
       if (request.cursor !== undefined) checkCursor(request.cursor, 'cursor');
       if (request.refresh !== undefined && typeof request.refresh !== 'boolean') fail('invalid_request', 'refresh must be boolean.');
       return request;
+    case 'linear_resolve_issue':
+      checkCheckout(request.checkout);
+      issueReference(checkBoundedText(request.reference, 'reference', FIELD_LIMITS.url));
+      if (request.refresh !== undefined && typeof request.refresh !== 'boolean') fail('invalid_request', 'refresh must be boolean.');
+      return request;
+    case 'linear_get_linked_issue':
     case 'linear_get_issue':
-      checkId(request.issue_id, 'issue_id');
+      if (request.op === 'linear_get_linked_issue') checkId(request.thread_id, 'thread_id');
+      else checkId(request.issue_id, 'issue_id');
+      if (request.workspace_id !== undefined) checkId(request.workspace_id, 'workspace_id');
       if (request.comments_cursor !== undefined) checkCursor(request.comments_cursor, 'comments_cursor');
       if (request.refresh !== undefined && typeof request.refresh !== 'boolean') fail('invalid_request', 'refresh must be boolean.');
       return request;
     case 'linear_link_thread':
       checkId(request.thread_id, 'thread_id');
+      if (request.workspace_id !== undefined) checkId(request.workspace_id, 'workspace_id');
       checkId(request.issue_id, 'issue_id');
       if (typeof request.identifier !== 'string' || !IDENTIFIER_PATTERN.test(request.identifier)) {
         fail('invalid_request', 'Invalid identifier.');

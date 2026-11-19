@@ -70,6 +70,8 @@ test('thread links are local to Plait, persist across operations, emit no notifi
   assert.equal(linked.ok, true);
   assert.deepEqual(linked.result.link, {
     thread_id: t1,
+    workspace_id: null,
+    historical: true,
     issue_id: 'issue-142',
     identifier: 'PLA-142',
     url: 'https://linear.app/acme/issue/PLA-142/fix-retry',
@@ -197,4 +199,57 @@ test('thread link operations validate inputs and reject unknown threads', async 
     assert.equal(reply.ok, false, JSON.stringify(bad));
     assert.equal(reply.error.code, 'invalid_request', JSON.stringify(bad));
   }
+});
+
+test('workspace-scoped links remain history on sign-out and never borrow another workspace state', async t => {
+  const h = await setup(t);
+  const thread = await h.createThread();
+  await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+  const request = { op: 'linear_link_thread', thread_id: thread, issue_id: 'issue-142', identifier: 'PLA-142',
+    url: 'https://linear.app/acme/issue/PLA-142', title: 'Fix retry', workspace_id: 'org-1' };
+  const linked = await h.call(request);
+  assert.equal(linked.result.link.workspace_id, 'org-1');
+  assert.equal(linked.result.link.historical, false);
+  assert.equal((await h.call({ op: 'linear_get_linked_issue', thread_id: thread })).result.issue.id, 'issue-142');
+  assert.equal((await h.call({ ...request, workspace_id: 'org-2' })).error.code, 'conflict');
+  assert.equal((await h.call({ ...request, url: 'https://linear.app/other/issue/PLA-142' })).error.code, 'conflict');
+  await h.call({ op: 'linear_sign_out' });
+  assert.equal((await h.call({ op: 'linear_get_thread_link', thread_id: thread })).result.link.historical, true);
+  assert.equal((await h.call({ op: 'linear_list_thread_links' })).result.links.length, 1);
+  let count = h.fake.requests.length;
+  assert.equal((await h.call({ op: 'linear_get_linked_issue', thread_id: thread })).error.code, 'conflict');
+  assert.equal(h.fake.requests.length, count);
+  h.fake.organization = { id: 'org-2', name: 'Other', urlKey: 'other' };
+  await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+  count = h.fake.requests.length;
+  assert.equal((await h.call({ op: 'linear_get_linked_issue', thread_id: thread })).error.code, 'conflict');
+  assert.equal(h.fake.requests.length, count);
+  assert.equal((await h.call({ op: 'linear_get_thread_link', thread_id: thread })).result.link.workspace_id, 'org-1');
+  assert.equal((await h.call({ op: 'linear_unlink_thread', thread_id: thread })).result.removed, true);
+});
+
+test('legacy links are historical, old requests still work, and link changes fence live replies', async t => {
+  const h = await setup(t);
+  const thread = await h.createThread();
+  // A row written by the old schema contains no workspace identity.
+  h.runtime.store.db.prepare('INSERT INTO linear_thread_links(thread_id,issue_id,identifier,url,title,linked_at) VALUES (?,?,?,?,?,?)')
+    .run(thread, 'issue-142', 'PLA-142', 'https://linear.app/acme/issue/PLA-142', 'Legacy', h.now);
+  await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+  const legacy = (await h.call({ op: 'linear_get_thread_link', thread_id: thread })).result.link;
+  assert.equal(legacy.workspace_id, null);
+  assert.equal(legacy.historical, true);
+  assert.equal((await h.call({ op: 'linear_get_linked_issue', thread_id: thread })).error.code, 'conflict');
+  const request = { op: 'linear_link_thread', thread_id: thread, issue_id: 'issue-142', identifier: 'PLA-142',
+    url: 'https://linear.app/acme/issue/PLA-142', title: 'Relinked' };
+  assert.equal((await h.call(request)).result.link.workspace_id, 'org-1');
+  let release!: () => void;
+  const started = new Promise<void>(resolve => h.fake.enqueueFault(async () => {
+    resolve(); await new Promise<void>(done => { release = done; }); return false;
+  }));
+  const pending = h.call({ op: 'linear_get_linked_issue', thread_id: thread, refresh: true });
+  await started;
+  await h.call({ op: 'linear_unlink_thread', thread_id: thread });
+  release();
+  assert.equal((await pending).error.code, 'conflict');
+  assert.equal((await h.call({ ...request, url: 'https://example.invalid/old-url' })).result.link.workspace_id, null);
 });

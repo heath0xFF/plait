@@ -4,6 +4,7 @@ import { checkout, rootIdentity } from '../safety.ts';
 import type { Store } from '../store.ts';
 import { LinearAuthStore, formatAuthStatus, validateLinearKey } from './auth.ts';
 import type { StoredLinearAuth } from './auth.ts';
+import { issueReference, issueSummary, matchesIssueUrl } from './identity.ts';
 import { LinearClient } from './client.ts';
 import { LINEAR_WRITE_HISTORY_LIMIT } from './writes.ts';
 import type { WriteIntent, WriteReceipt } from './writes.ts';
@@ -82,7 +83,7 @@ export class LinearService {
   async handle(input: unknown): Promise<unknown> {
     const request = validateLinearRequest(input);
     switch (request.op) {
-      case 'linear_info': return { schema: 1, features: { durable_write_outcomes: true }, write_history_limit: LINEAR_WRITE_HISTORY_LIMIT, write_history_retention: 'store_lifetime' };
+      case 'linear_info': return { schema: 1, features: { durable_write_outcomes: true, exact_issue_resolution: true, workspace_links: true, typed_rate_limits: true }, write_history_limit: LINEAR_WRITE_HISTORY_LIMIT, write_history_retention: 'store_lifetime' };
       case 'linear_get_write': return this.getWriteOutcome(String(request.request_id));
       case 'linear_auth_status': return this.authStatus();
       case 'linear_set_key': return this.setKey(validateLinearKey(request.key));
@@ -102,12 +103,17 @@ export class LinearService {
         cursor: typeof request.cursor === 'string' ? request.cursor : undefined,
         refresh: request.refresh === true,
       });
+      case 'linear_resolve_issue': return this.resolveIssue(String(request.checkout), String(request.reference), request.refresh === true);
+      case 'linear_get_linked_issue': return this.getLinkedIssue(String(request.thread_id),
+        typeof request.comments_cursor === 'string' ? request.comments_cursor : undefined, request.refresh === true);
       case 'linear_get_issue': return this.getIssue({
+        workspaceId: typeof request.workspace_id === 'string' ? request.workspace_id : undefined,
         issueId: String(request.issue_id),
         commentsCursor: typeof request.comments_cursor === 'string' ? request.comments_cursor : undefined,
         refresh: request.refresh === true,
       });
       case 'linear_link_thread': return this.linkThread({
+        workspaceId: typeof request.workspace_id === 'string' ? request.workspace_id : undefined,
         threadId: String(request.thread_id),
         issueId: String(request.issue_id),
         identifier: String(request.identifier),
@@ -212,6 +218,7 @@ export class LinearService {
 
   async listTeams(refresh = false): Promise<{
     teams: LinearTeam[];
+    teams_complete: boolean | null;
     cached: boolean;
     stale: boolean;
     cached_at: number;
@@ -224,7 +231,8 @@ export class LinearService {
     const cached = this.store.linear.getTeams();
     if (!refresh && cached && now - cached.cached_at < LINEAR_CACHE_TEAMS_TTL_MS) {
       return {
-        teams: cached.teams,
+        teams: cached.teams.map(team => ({ ...team, states_complete: team.states_complete ?? null })),
+        teams_complete: cached.complete,
         cached: true,
         stale: false,
         cached_at: cached.cached_at,
@@ -243,10 +251,11 @@ export class LinearService {
       this.keyRejected = false;
       const fetchedAt = this.now();
       if (!fresh.partial && this.canPopulateCache(scope, seq, authGen, cacheGen)) {
-        this.store.linear.saveTeams(fresh.data, fetchedAt);
+        this.store.linear.saveTeams(fresh.data, fetchedAt, fresh.complete);
       }
       return {
         teams: fresh.data,
+        teams_complete: fresh.complete,
         cached: false,
         stale: false,
         cached_at: fetchedAt,
@@ -258,7 +267,8 @@ export class LinearService {
       if (error instanceof LinearError && error.kind === 'offline' && cached && this.authGeneration === authGen) {
         const at = this.now();
         return {
-          teams: cached.teams,
+          teams: cached.teams.map(team => ({ ...team, states_complete: team.states_complete ?? null })),
+          teams_complete: cached.complete,
           cached: true,
           stale: true,
           cached_at: cached.cached_at,
@@ -366,6 +376,7 @@ export class LinearService {
           fresh.data.has_more,
           fresh.data.next_cursor,
           fetchedAt,
+          auth.workspace_id,
         );
       }
       return {
@@ -400,10 +411,12 @@ export class LinearService {
 
   async getIssue(params: {
     issueId: string;
+    workspaceId?: string;
     commentsCursor?: string;
     refresh: boolean;
   }): Promise<{
     issue: LinearIssueDetail;
+    workspace_id: string;
     cached: boolean;
     stale: boolean;
     cached_at: number;
@@ -413,11 +426,21 @@ export class LinearService {
   }> {
     const { auth, authGen, cacheGen } = await this.requireAuth();
     const now = this.now();
+    if (params.workspaceId !== undefined && params.workspaceId !== auth.workspace_id) {
+      fail('conflict', 'Linear issue belongs to another workspace.');
+    }
+    const validateWorkspace = (issue: LinearIssueDetail) => {
+      if (params.workspaceId && !matchesIssueUrl(issue.url, issue.identifier, auth.workspace_url_key)) {
+        fail('not_found', 'Linear issue does not match the requested workspace.');
+      }
+    };
     const isFirstPage = params.commentsCursor === undefined;
     const cached = isFirstPage ? this.store.linear.getIssueDetail(params.issueId, now) : null;
+    if (cached) validateWorkspace(cached.issue);
     if (!params.refresh && cached && now - cached.cached_at < LINEAR_CACHE_DETAIL_TTL_MS) {
       return {
         issue: cached.issue,
+        workspace_id: auth.workspace_id,
         cached: true,
         stale: false,
         cached_at: cached.cached_at,
@@ -438,13 +461,15 @@ export class LinearService {
       }
       this.keyRejected = false;
       if (!fresh.data) fail('not_found', 'Linear issue not found.');
+      validateWorkspace(fresh.data);
       const fetchedAt = this.now();
       if (isFirstPage && !fresh.partial && this.canPopulateCache(scope, seq, authGen, cacheGen)) {
         if (fresh.data.team_id) this.nextQuery(`team-issues:${fresh.data.team_id}`);
-        this.store.linear.saveIssueDetail(fresh.data, fetchedAt);
+        this.store.linear.saveIssueDetail(fresh.data, fetchedAt, auth.workspace_id);
       }
       return {
         issue: fresh.data,
+        workspace_id: auth.workspace_id,
         cached: false,
         stale: false,
         cached_at: fetchedAt,
@@ -457,6 +482,7 @@ export class LinearService {
         const at = this.now();
         return {
           issue: cached.issue,
+          workspace_id: auth.workspace_id,
           cached: true,
           stale: true,
           cached_at: cached.cached_at,
@@ -469,26 +495,91 @@ export class LinearService {
     }
   }
 
-  /** Persists a local link between a thread and a Linear issue. Never writes to Linear. */
-  linkThread(params: {
-    threadId: string;
-    issueId: string;
-    identifier: string;
-    url: string;
-    title: string;
-  }): { link: LinearThreadLink } {
+  async resolveIssue(rawCheckout: string, reference: string, refresh = false) {
+    const { auth, authGen, cacheGen } = await this.requireAuth();
+    const root = await checkout(rawCheckout);
+    const identity = await rootIdentity(root);
+    const binding = this.store.linear.getProjectBinding(root, identity);
+    if (!binding || binding.workspace_id !== auth.workspace_id) {
+      fail('invalid_request', 'Bind this project to a team in the signed-in Linear workspace first.');
+    }
+    const parsed = issueReference(reference);
+    if (parsed.workspaceKey !== null && parsed.workspaceKey !== auth.workspace_url_key) {
+      fail('conflict', 'Linear issue URL belongs to another workspace.');
+    }
+    const current = () => {
+      if (this.authGeneration !== authGen) {
+        throw new LinearError('not_signed_in', 'Linear sign-in changed while the request was in flight.');
+      }
+      const latest = this.store.linear.getProjectBinding(root, identity);
+      if (!latest || latest.workspace_id !== binding.workspace_id || latest.team_id !== binding.team_id
+          || latest.updated_at !== binding.updated_at) fail('conflict', 'Linear project binding changed while the request was in flight.');
+    };
+    const validate = (issue: LinearIssueSummary) => {
+      if (issue.identifier !== parsed.identifier || issue.team_id !== binding.team_id
+          || !matchesIssueUrl(issue.url, parsed.identifier, auth.workspace_url_key)) {
+        fail('not_found', 'No exact Linear issue matches this project team and workspace.');
+      }
+    };
+    current();
+    const cached = this.store.linear.getIssueAlias(auth.workspace_id, binding.team_id, parsed.identifier);
+    const reply = (issue: LinearIssueSummary, cachedAt: number, fromCache: boolean, stale: boolean, partial: boolean, warning: string | null) => ({
+      issue, workspace_id: auth.workspace_id, cached: fromCache, stale, cached_at: cachedAt,
+      cache_age_seconds: fromCache ? cacheAgeSeconds(cachedAt, this.now()) : 0, partial, warning,
+    });
+    if (cached && !refresh && this.now() - cached.cached_at < LINEAR_CACHE_ISSUES_TTL_MS) {
+      validate(cached.issue);
+      return reply(cached.issue, cached.cached_at, true, false, false, null);
+    }
+    const scope = `resolve:${auth.workspace_id}:${binding.team_id}:${parsed.identifier}`;
+    const seq = this.nextQuery(scope);
+    try {
+      const fresh = await this.client.getIssue(auth.api_key, { issueId: parsed.identifier });
+      current();
+      if (!fresh.data) fail('not_found', 'Linear issue not found.');
+      const issue = issueSummary(fresh.data);
+      validate(issue);
+      const fetchedAt = this.now();
+      if (!fresh.partial && this.canPopulateCache(scope, seq, authGen, cacheGen)) {
+        this.nextQuery(`team-issues:${binding.team_id}`);
+        this.store.linear.saveIssueDetail(fresh.data, fetchedAt, auth.workspace_id);
+      }
+      this.keyRejected = false;
+      return reply(issue, fetchedAt, false, false, fresh.partial, fresh.warning);
+    } catch (error) {
+      current();
+      if (error instanceof LinearError && error.kind === 'offline' && cached) {
+        validate(cached.issue);
+        return reply(cached.issue, cached.cached_at, true, true, false, OFFLINE_ISSUE_WARNING);
+      }
+      this.noteError(error, authGen);
+    }
+  }
+
+  /** Links are local history. Unscoped old requests stay accepted without inventing a workspace. */
+  async linkThread(params: {
+    threadId: string; issueId: string; identifier: string; url: string; title: string; workspaceId?: string;
+  }) {
     if (!this.store.linear.hasThread(params.threadId)) fail('not_found', 'Thread not found.');
+    const gen = this.authGeneration;
+    const auth = await this.authStore.read();
+    if (auth && [params.threadId, params.issueId, params.identifier, params.url, params.title, params.workspaceId ?? '']
+      .some(value => value.includes(auth.api_key) || value.includes(encodeURIComponent(auth.api_key)))) {
+      fail('invalid_request', 'Linear link input must not contain the API key.');
+    }
     const safeUrl = safeLinearUrl(params.url);
     if (!safeUrl) fail('invalid_request', 'url must be a valid https URL.');
+    const matchesWorkspace = auth && gen === this.authGeneration
+      && matchesIssueUrl(safeUrl, params.identifier, auth.workspace_url_key);
+    if (params.workspaceId !== undefined && (!matchesWorkspace || params.workspaceId !== auth?.workspace_id)) {
+      fail('conflict', 'Linear link does not match the signed-in workspace and issue identifier.');
+    }
     const link = this.store.linear.setThreadLink({
-      thread_id: params.threadId,
-      issue_id: params.issueId,
-      identifier: params.identifier,
-      url: safeUrl,
-      title: boundLinearText(params.title.trim(), FIELD_LIMITS.title),
-      linked_at: this.now(),
+      thread_id: params.threadId, workspace_id: matchesWorkspace ? auth.workspace_id : null,
+      issue_id: params.issueId, identifier: params.identifier, url: safeUrl,
+      title: boundLinearText(params.title.trim(), FIELD_LIMITS.title), linked_at: this.now(),
     });
-    return { link };
+    return { link: this.linkView(link, gen === this.authGeneration ? auth : null) };
   }
 
   unlinkThread(threadId: string): { thread_id: string; removed: boolean } {
@@ -496,13 +587,37 @@ export class LinearService {
     return { thread_id: threadId, removed: this.store.linear.removeThreadLink(threadId) };
   }
 
-  getThreadLink(threadId: string): { thread_id: string; link: LinearThreadLink | null } {
-    if (!this.store.linear.hasThread(threadId)) fail('not_found', 'Thread not found.');
-    return { thread_id: threadId, link: this.store.linear.getThreadLink(threadId) };
+  private linkView(link: LinearThreadLink, auth: StoredLinearAuth | null) {
+    return { ...link, historical: !auth || this.keyRejected || link.workspace_id === null || link.workspace_id !== auth.workspace_id };
   }
 
-  listThreadLinks(limit: number, cursor?: string) {
-    return this.store.linear.listThreadLinks(limit, cursor ? parseLinkCursor(cursor) : undefined);
+  async getThreadLink(threadId: string) {
+    if (!this.store.linear.hasThread(threadId)) fail('not_found', 'Thread not found.');
+    const gen = this.authGeneration;
+    const auth = await this.authStore.read();
+    const link = this.store.linear.getThreadLink(threadId);
+    return { thread_id: threadId, link: link ? this.linkView(link, gen === this.authGeneration ? auth : null) : null };
+  }
+
+  async listThreadLinks(limit: number, cursor?: string) {
+    const gen = this.authGeneration;
+    const auth = await this.authStore.read();
+    const page = this.store.linear.listThreadLinks(limit, cursor ? parseLinkCursor(cursor) : undefined);
+    return { ...page, links: page.links.map(link => this.linkView(link, gen === this.authGeneration ? auth : null)) };
+  }
+
+  async getLinkedIssue(threadId: string, commentsCursor?: string, refresh = false) {
+    const { link } = await this.getThreadLink(threadId);
+    if (!link) fail('not_found', 'Thread has no Linear issue link.');
+    if (link.historical || !link.workspace_id) fail('conflict', 'This Linear link is historical. Link an issue in the signed-in workspace before reading live state.');
+    const result = await this.getIssue({ issueId: link.issue_id, workspaceId: link.workspace_id, commentsCursor, refresh });
+    if (result.issue.id !== link.issue_id) fail('not_found', 'Linear issue does not match the linked issue ID.');
+    const current = this.store.linear.getThreadLink(threadId);
+    const { historical: _historical, ...saved } = link;
+    if (!current || JSON.stringify(current) !== JSON.stringify(saved)) {
+      fail('conflict', 'Linear thread link changed while the request was in flight.');
+    }
+    return result;
   }
 
   private async withWriteOutcome(requestId: string, work: () => Promise<WriteReceipt>): Promise<WriteReceipt> {

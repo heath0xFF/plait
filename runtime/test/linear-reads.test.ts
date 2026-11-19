@@ -404,13 +404,24 @@ test('migration: store written by current main gains Linear tables idempotently 
     'thread-legacy',
     JSON.stringify({ id: 'thread-legacy', checkout: '/repo', model: { provider: 'p', model_id: 'm' }, status: 'idle', messages: [], live_text: '', tools: [], pending_approval: null, error: null, truncated: false }),
   );
+  // Also retain rows in the Linear tables that today's host already writes.
+  pre.exec(`CREATE TABLE linear_thread_links(thread_id TEXT PRIMARY KEY, issue_id TEXT NOT NULL,
+    identifier TEXT NOT NULL, url TEXT NOT NULL, title TEXT NOT NULL, linked_at INTEGER NOT NULL);
+    CREATE TABLE linear_cache_meta(key TEXT PRIMARY KEY, cached_at INTEGER NOT NULL);
+    INSERT INTO linear_thread_links VALUES ('thread-legacy','issue-142','PLA-142','https://linear.app/acme/issue/PLA-142','Legacy',1);
+    INSERT INTO linear_cache_meta VALUES ('teams',1);`);
   pre.close();
 
   // Open with Store -> adds Linear tables without disturbing existing rows.
   const store1 = new Store(dir);
   const tables = store1.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'linear_%'").all().map(r => String(r.name)).sort();
-  assert.deepEqual(tables, ['linear_cache_details', 'linear_cache_issues', 'linear_cache_meta', 'linear_cache_pages', 'linear_cache_teams', 'linear_projects', 'linear_thread_links', 'linear_write_intents', 'linear_writes']);
+  assert.deepEqual(tables, ['linear_cache_aliases', 'linear_cache_details', 'linear_cache_issues', 'linear_cache_meta', 'linear_cache_pages', 'linear_cache_teams', 'linear_projects', 'linear_thread_links', 'linear_write_intents', 'linear_writes']);
   assert.equal(store1.get('thread-legacy').id, 'thread-legacy');
+  assert.equal(store1.linear.getThreadLink('thread-legacy')?.workspace_id, null);
+  assert.equal(store1.linear.getTeams()?.complete, null);
+  const service = new LinearService(store1, dir);
+  const historical = await service.getThreadLink('thread-legacy');
+  assert.equal(historical.link?.historical, true);
   store1.close();
 
   // Re-opening is idempotent.
@@ -768,4 +779,125 @@ test('getIssuesPage fetches a 50-issue cached page in one SQLite query without N
   assert.equal(loaded!.issues[0].id, 'issue-q-0');
   assert.equal(loaded!.issues[49].id, 'issue-q-49');
   assert.equal(issueSelects, 1, `expected 1 batched query for 50 issues, got ${issueSelects}`);
+});
+
+test('exact identifier and URL resolution is bound to the project team and workspace, with offline aliases', async t => {
+  const h = await setupHarness(t);
+  const root = await makeRepo(h.dir, 'exact-repo');
+  await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+  const request = { op: 'linear_resolve_issue', checkout: root, reference: 'PLA-142' };
+  assert.equal((await h.call(request)).error.code, 'invalid_request');
+  await h.call({ op: 'linear_bind_project', checkout: root, team_id: 'team-pla' });
+  // The same number in another team and a matching title must never influence resolution.
+  h.fake.issues.unshift({ ...h.fake.issues[0], id: 'ops-142', identifier: 'OPS-142', teamId: 'team-ops',
+    url: 'https://linear.app/acme/issue/OPS-142', stateId: 'state-ops-todo', title: 'PLA-142' });
+  const resolved = await h.call(request);
+  assert.equal(resolved.result.issue.id, 'issue-142');
+  assert.equal(resolved.result.workspace_id, 'org-1');
+  assert.equal(resolved.result.issue.description, undefined);
+  assert.equal(h.fake.requests.at(-1)?.variables.id, 'PLA-142');
+  assert.equal((await h.call({ ...request, reference: 'OPS-142' })).error.code, 'not_found');
+  const before = h.fake.requests.length;
+  const pasted = await h.call({ ...request, reference: 'https://linear.app/acme/issue/PLA-142/a-slug#comment' });
+  assert.equal(pasted.result.cached, true);
+  assert.equal(h.fake.requests.length, before);
+  for (const reference of ['https://linear.app/other/issue/PLA-142', 'https://linear.app/acme/issue/OPS-142']) {
+    const result = await h.call({ ...request, reference });
+    assert.equal(result.ok, false);
+  }
+  for (const reference of ['142', '#142', 'https://evil.invalid/acme/issue/PLA-142', 'https://u:p@linear.app/acme/issue/PLA-142',
+    'https://linear.app/acme/issue/PLA-142/slug/extra', 'https://linear.app/acme/issue/PLA%2D142', 'PLA-142\nBAD']) {
+    assert.equal((await h.call({ ...request, reference })).error.code, 'invalid_request');
+  }
+  // A list-known issue also resolves offline even without a saved detail.
+  await h.call({ op: 'linear_list_issues', team_id: 'team-pla', filter: 'all' });
+  h.advance(LINEAR_CACHE_ISSUES_TTL_MS + 1);
+  await h.fake.close();
+  const cached = await h.call(request);
+  assert.equal(cached.result.issue.id, 'issue-142');
+  assert.equal(cached.result.stale, true);
+  assert.equal(cached.result.cached, true);
+  assert.equal((await h.call({ ...request, reference: 'PLA-143' })).result.issue.id, 'issue-143');
+  assert.equal((await h.call({ ...request, reference: 'PLA-999' })).error.code, 'linear_offline');
+});
+
+test('exact lookup validates returned identity, rejects stale bindings and auth, and persists aliases across restart', async t => {
+  const h = await setupHarness(t);
+  const root = await makeRepo(h.dir, 'guarded-repo');
+  await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+  await h.call({ op: 'linear_bind_project', checkout: root, team_id: 'team-pla' });
+  const request = { op: 'linear_resolve_issue', checkout: root, reference: 'PLA-142', refresh: true };
+  h.fake.issues[0].url = 'https://linear.app/other/issue/PLA-142';
+  assert.equal((await h.call(request)).error.code, 'not_found');
+  assert.equal(h.runtime.store.linear.getIssueAlias('org-1', 'team-pla', 'PLA-142'), null);
+  h.fake.issues[0].url = 'https://linear.app/acme/issue/PLA-142';
+  await h.call(request);
+  h.runtime.store.close();
+  h.runtime.store = new Store(h.storeDir);
+  h.runtime.linear = new LinearService(h.runtime.store, h.storeDir, { endpoint: h.fake.url, now: () => h.now });
+  const count = h.fake.requests.length;
+  assert.equal((await h.call({ ...request, refresh: false })).result.cached, true);
+  assert.equal(h.fake.requests.length, count);
+  let release!: () => void;
+  const started = new Promise<void>(resolve => h.fake.enqueueFault(async () => {
+    resolve(); await new Promise<void>(done => { release = done; }); return false;
+  }));
+  const pending = h.call(request);
+  await started;
+  await h.call({ op: 'linear_bind_project', checkout: root, team_id: 'team-ops' });
+  release();
+  assert.equal((await pending).error.code, 'conflict');
+  await h.call({ op: 'linear_bind_project', checkout: root, team_id: 'team-pla' });
+  const authStarted = new Promise<void>(resolve => h.fake.enqueueFault(async () => {
+    resolve(); await new Promise<void>(done => { release = done; }); return false;
+  }));
+  const authPending = h.call(request);
+  await authStarted;
+  await h.call({ op: 'linear_sign_out' });
+  release();
+  assert.equal((await authPending).error.code, 'linear_not_signed_in');
+  assert.equal(h.runtime.store.linear.getIssueAlias('org-1', 'team-pla', 'PLA-142'), null);
+  h.fake.organization = { id: 'org-2', name: 'Other', urlKey: 'other' };
+  await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+  assert.equal(h.runtime.store.linear.getIssueAlias('org-1', 'team-pla', 'PLA-142'), null);
+  assert.equal((await h.call(request)).error.code, 'invalid_request');
+  assert.equal((await h.call({ op: 'linear_get_issue', issue_id: 'issue-142', workspace_id: 'org-1' })).error.code, 'conflict');
+});
+
+test('Linear rate-limit replies carry bounded wait seconds without changing other failures', async t => {
+  const h = await setupHarness(t);
+  await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+  h.fake.enqueueFault((_req, res) => { res.writeHead(429, { 'Retry-After': '12' }); res.end(); return true; });
+  const limited = await h.call({ op: 'linear_list_teams' });
+  assert.deepEqual(limited, { ok: false, error: { code: 'linear_rate_limited', message: 'Linear rate limit reached. Retry in 12 seconds.', retry_after_seconds: 12 } });
+  h.fake.enqueueFault((_req, res) => {
+    res.writeHead(200, { 'X-RateLimit-Requests-Reset': String(h.now + 32_000) });
+    res.end(JSON.stringify({ errors: [{ extensions: { code: 'RATELIMITED' } }] })); return true;
+  });
+  const gql = await h.call({ op: 'linear_list_teams' });
+  assert.equal(gql.error.retry_after_seconds, 32);
+  assert.deepEqual(await h.call({ op: 'nonexistent' }), { ok: false, error: { code: 'invalid_request', message: 'Unknown operation or field.' } });
+  assert.equal((await h.call({ op: 'linear_get_issue', issue_id: 'absent' })).error.retry_after_seconds, undefined);
+});
+
+test('team and workflow completeness survives caching and reports caps honestly', async t => {
+  const h = await setupHarness(t);
+  await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+  const complete = await h.call({ op: 'linear_list_teams' });
+  assert.equal(complete.result.teams_complete, true);
+  assert(complete.result.teams.every((team: any) => team.states_complete === true));
+  h.fake.teams[0].states = Array.from({ length: 51 }, (_, i) => ({ id: `state-${i}`, name: `S${i}`, type: 'started', position: i }));
+  h.fake.teams = Array.from({ length: 51 }, (_, i) => ({ ...h.fake.teams[0], id: `team-${i}`, key: `T${i}` }));
+  const capped = await h.call({ op: 'linear_list_teams', refresh: true });
+  assert.equal(capped.result.teams.length, 50);
+  assert.equal(capped.result.teams_complete, false);
+  assert.equal(capped.result.teams[0].states.length, 50);
+  assert.equal(capped.result.teams[0].states_complete, false);
+  const cached = await h.call({ op: 'linear_list_teams' });
+  assert.equal(cached.result.teams_complete, false);
+  assert.equal(cached.result.teams[0].states_complete, false);
+  h.runtime.store.linear.saveTeams([{ id: 'old', key: 'OLD', name: 'Old cache', states: [] }], h.now);
+  const legacy = await h.call({ op: 'linear_list_teams' });
+  assert.equal(legacy.result.teams_complete, null);
+  assert.equal(legacy.result.teams[0].states_complete, null);
 });

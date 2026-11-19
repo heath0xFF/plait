@@ -1941,7 +1941,9 @@ bounded team and issue data through a local SQLite cache, persist local
 thread-to-issue links, and perform two explicit person-initiated writes. Like
 [Recorded turn review](#recorded-turn-review), they omit `protocol_version`:
 versions 1–6 retain their existing request, `ThreadSummary`, and `Snapshot`
-shapes unchanged. An older host rejects these operation names with
+shapes unchanged. New result fields and typed error fields apply only to Linear
+operations, which the current desktop does not call; existing desktop reply
+shapes remain unchanged, so no protocol version bump is required. An older host rejects these operation names with
 `invalid_request`. Unknown fields (including `protocol_version`) are refused.
 
 No agent, model tool, or MCP server can call these operations, and nothing runs
@@ -1960,8 +1962,7 @@ local client asks over the owner-only host socket.
   permissions are restored to `0600` on read. The key is never written to
   `host.sqlite`. `linear_sign_out` deletes `linear-auth.json` and clears all
   Linear caches, project bindings, and full write receipts; retry tombstones and
-  local thread links remain. Switching to a key
-  for another workspace likewise clears caches, project bindings, and full
+  local thread links remain. Switching to a key for another workspace likewise clears caches, project bindings, and full
   receipts so data from a previous workspace is never served as live. Changing
   a key in the same workspace clears caches and full receipts too, but retains
   project bindings. Every key change retains retry tombstones.
@@ -1990,7 +1991,9 @@ local client asks over the owner-only host socket.
 {"op":"linear_get_project_binding","checkout":"/absolute/checkout"}
 {"op":"linear_list_issues","team_id":"TEAM_ID","filter":"active","search":"retry","cursor":"CURSOR","refresh":false}
 {"op":"linear_get_issue","issue_id":"ISSUE_ID","comments_cursor":"CURSOR","refresh":false}
-{"op":"linear_link_thread","thread_id":"THREAD_ID","issue_id":"ISSUE_ID","identifier":"PLA-142","url":"https://linear.app/org/issue/PLA-142","title":"Fix retry backoff"}
+{"op":"linear_resolve_issue","checkout":"/absolute/checkout","reference":"PLA-142","refresh":false}
+{"op":"linear_get_linked_issue","thread_id":"THREAD_ID","refresh":false}
+{"op":"linear_link_thread","thread_id":"THREAD_ID","workspace_id":"ORG_ID","issue_id":"ISSUE_ID","identifier":"PLA-142","url":"https://linear.app/acme/issue/PLA-142","title":"Fix retry backoff"}
 {"op":"linear_unlink_thread","thread_id":"THREAD_ID"}
 {"op":"linear_get_thread_link","thread_id":"THREAD_ID"}
 {"op":"linear_list_thread_links","limit":200,"cursor":"1763400000000:THREAD_ID"}
@@ -1999,7 +2002,7 @@ local client asks over the owner-only host socket.
 ```
 
 - **`linear_info`** is local and read-only. Returns
-  `{"schema":1,"features":{"durable_write_outcomes":true},"write_history_limit":10000,"write_history_retention":"store_lifetime"}`.
+  `{"schema":1,"features":{"durable_write_outcomes":true,"exact_issue_resolution":true,"workspace_links":true,"typed_rate_limits":true},"write_history_limit":10000,"write_history_retention":"store_lifetime"}`.
   Clients gate write UI on `features.durable_write_outcomes`, not a release
   number. Older hosts reject this operation with `invalid_request`.
 - **`linear_get_write`** is local and read-only, including while signed out.
@@ -2020,8 +2023,15 @@ local client asks over the owner-only host socket.
   `signed_in` is `false` and metadata fields are `null`. `key` must be
   printable ASCII without whitespace or control characters, at most 4,096 bytes.
 - **`linear_list_teams`** (`refresh` optional, default `false`) returns
-  `{"teams":[{"id":"TEAM_ID","key":"PLA","name":"Plait","states":[{"id":"STATE_ID","name":"In Progress","type":"started","position":3}]}],"cached":false,"stale":false,"cached_at":1763300000000,"cache_age_seconds":0,"partial":false,"warning":null}`.
-  Bounded to 50 teams and 50 workflow states per team.
+  `{"teams":[{"id":"TEAM_ID","key":"PLA","name":"Plait","states":[{"id":"STATE_ID","name":"In Progress","type":"started","position":3}],"states_complete":true}],"teams_complete":true,"cached":false,"stale":false,"cached_at":1763300000000,"cache_age_seconds":0,"partial":false,"warning":null}`.
+  Bounded to 50 teams and 50 workflow states per team. The result also has
+  `teams_complete:boolean|null`; each team has `states_complete:boolean|null`.
+  `true` means the returned connection was complete at fetch time; `false`
+  means more rows, a cap, partial/malformed data, or an unusable continuation
+  prevented establishing completeness. `null` means an older cached entry has
+  no completeness evidence. Cached/offline replies retain that evidence and
+  their normal age/stale fields. There is no team/state continuation operation;
+  these lists stop at the cap.
 - **`linear_bind_project`** and **`linear_get_project_binding`** bind a
   canonical Git checkout (checked by canonical path, device, and inode, as in
   [Command policy](#command-policy)) to a team ID (pass `"team_id":null` to
@@ -2032,23 +2042,75 @@ local client asks over the owner-only host socket.
   `assigned`, `backlog`, `completed`, or `all`), optional `search` (at most 200
   characters), optional `cursor` (at most 512 bytes), and optional `refresh`.
   Returns 50 summary rows per page (never descriptions, attachments, or
-  comments):
+  comments). Search remains a broad title/number match inside the supplied
+  team, including for identifier-shaped input; it is **not exact lookup**.
+  Use `linear_resolve_issue` for a typed identifier or pasted URL.
   ```json
   {"issues":[{"id":"ISSUE_ID","identifier":"PLA-142","title":"Fix retry backoff","url":"https://linear.app/acme/issue/PLA-142","priority":2,"updated_at":"2026-11-18T12:00:00.000Z","team_id":"TEAM_ID","state":{"id":"STATE_ID","name":"In Progress","type":"started"},"assignee":{"name":"Alex"},"labels":[{"id":"LABEL_ID","name":"host"}]}],"has_more":true,"next_cursor":"CURSOR","cached":false,"stale":false,"cached_at":1763300000000,"cache_age_seconds":0,"partial":false,"warning":null}
   ```
-- **`linear_get_issue`** takes `issue_id`, optional `comments_cursor`, and
-  optional `refresh`. Returns the issue summary fields plus `description` (at
+- **`linear_get_issue`** takes `issue_id`, optional `comments_cursor`, optional
+  `refresh`, and optional `workspace_id`. The latter must match the current
+  signed-in workspace or returns `conflict`, and verifies the issue URL before
+  returning or caching data. The reply adds `workspace_id` for the authenticated
+  workspace. Unscoped old requests still work. `issue_id` accepts UUIDs or
+  identifiers; Linear's [GraphQL guide](https://linear.app/developers/graphql)
+  shows `issue(id: "BLA-123")`. This operation does not enforce the project's
+  team or consult aliases for offline identifier resolution; use
+  `linear_resolve_issue` for that. Complete fresh reads do populate aliases.
+  Returns the issue summary fields plus `description` (at
   most 64 KiB), `attachments` (at most 20 `{id,title,url}` metadata records,
   never fetched), and paged `comments` (at most 25 per page, 16 KiB body each,
   with `comments_has_more` and `comments_next_cursor`), alongside `cached`,
   `stale`, `cached_at`, `cache_age_seconds`, `partial`, and `warning`.
+  Comments have **no declared order or total**; the first page is not promised
+  to contain the latest comments. Text, labels, and attachments are bounded
+  without per-field truncation flags. A partial reply or a clipped field must
+  not be presented as a complete issue history.
+- **`linear_resolve_issue`** takes a bound project's `checkout`, `reference`,
+  and optional `refresh` (default false). `reference` is a full identifier
+  (`PLA-142`, case-insensitive) or a standard
+  `https://linear.app/WORKSPACE/issue/PLA-142[/slug]` URL (optional query/fragment;
+  no credentials, nondefault port, encoded identifier, or extra path segments).
+  It is trimmed and bounded to 2,048 characters. Numeric-only input is refused.
+  The project binding must have the current workspace ID; otherwise returns
+  `invalid_request`. A URL from another workspace returns `conflict` before
+  fetching. One `issue(id:identifier)` query resolves identity; the returned
+  identifier, team ID, and URL workspace must all match exactly or returns
+  `not_found`. No first numeric/title-search hit is selected. A changed binding
+  or sign-in while the request is pending invalidates the result.
+  Returns `{"issue":SUMMARY,"workspace_id":"ORG_ID","cached":false,"stale":false,"cached_at":1763300000000,"cache_age_seconds":0,"partial":false,"warning":null}`.
+  Complete list/detail/resolve reads populate workspace/team/identifier→ID
+  aliases with a bounded summary, so a known issue can resolve offline without
+  its detail cache. The alias cap is 500 recent entries per team, with a
+  3-minute freshness TTL; stale aliases are served only on an offline failure.
+  An uncached offline identifier returns `linear_offline`. Sign-out and every
+  key change clear aliases. Accepted writes mark matching aliases stale until
+  their issue is refreshed. Legacy caches gain aliases on their next fresh read.
+- **`linear_get_linked_issue`** takes `thread_id`, optional `comments_cursor`,
+  and optional `refresh`, and returns the `linear_get_issue` shape. It refuses
+  null-workspace, signed-out, rejected-key, and other-workspace historical links
+  with `conflict` **before any network request**, and returns `not_found` for
+  absent threads/links. It verifies the stable issue ID and workspace and
+  discards replies if the link or authentication changes in flight. Use this
+  operation for live state/team on a link; never hydrate a historical label
+  with an unscoped `linear_get_issue` call. Explicitly relinking an issue in the
+  signed-in workspace is required to establish identity for a legacy link.
 - **`linear_link_thread`, `linear_unlink_thread`, `linear_get_thread_link`, and
   `linear_list_thread_links`** manage local thread-to-issue links in
   `host.sqlite`. Links never write to Linear.
-  - `linear_link_thread` persists `{thread_id,issue_id,identifier,url,title,linked_at}`
+  - `linear_link_thread` persists `{thread_id,workspace_id,issue_id,identifier,url,title,linked_at}`
     for an existing thread (`identifier` matches `^[A-Z][A-Z0-9]{0,15}-\d{1,9}$`,
     `url` is an `https:` URL without credentials, `title` is at most 512
-    characters) and returns `{"link":LINK}`.
+    characters) and returns `{"link":LINK}`. Optional `workspace_id` must match
+    the authenticated workspace and the URL's workspace/identifier or returns
+    `conflict`. New callers should provide the resolver's workspace ID. Old
+    requests omitting it still work: matching URLs get the current workspace
+    ID; signed-out or mismatched URLs get null. Each returned link adds
+    `historical:boolean`, true when workspace identity is absent, different
+    from the current workspace, or authentication is signed out/rejected.
+    Legacy rows migrate with null workspace; sign-out never deletes links.
+    Link metadata contains no live state or team, and a project rebind never
+    retargets a saved link.
   - `linear_unlink_thread` returns `{"thread_id":"THREAD_ID","removed":true}`.
   - `linear_get_thread_link` returns `{"thread_id":"THREAD_ID","link":LINK|null}`.
   - `linear_list_thread_links` returns every link in stable order
@@ -2101,8 +2163,10 @@ issue and fixed warning. Nothing retries writes on startup, reconnect, or timers
   overwriting another person's later change.
 
 Only explicit requests for `not_sent` or `rejected` records may send again.
-Write errors retain `code` and `message`, adding `outcome` once the request has
-passed validation. A conflict describes the existing request's outcome.
+Write operations still require sign-in; use `linear_get_write` to inspect
+receipts while signed out. Classified write errors retain `code` and `message`, adding `outcome` once the
+request has passed validation; an unclassified `internal` failure requires
+reconciling with `linear_get_write`. A conflict describes the existing request's outcome.
 Malformed requests have no recorded outcome. Full receipts remain capped at
 500, but compact accepted/rejected tombstones and uncertain intents are retained
 for the lifetime of the store across eviction, key changes, and sign-out. Exact
@@ -2123,14 +2187,17 @@ non-replay rule, not remote compare-and-swap. No live API behavior is claimed.
 
 - **SQLite tables (`host.sqlite`, additive):** `linear_projects`,
   `linear_cache_meta`, `linear_cache_teams`, `linear_cache_issues`,
-  `linear_cache_pages`, `linear_cache_details`, `linear_thread_links`, and
-  `linear_writes`, plus `linear_write_intents`. Existing stores gain these
+  `linear_cache_pages`, `linear_cache_details`, `linear_cache_aliases`,
+  `linear_thread_links`, `linear_writes`, and `linear_write_intents`. Existing stores gain these
   tables idempotently on open; existing full receipts migrate to accepted
-  tombstones without inventing a workspace or issue ID.
+  tombstones without inventing a workspace or issue ID. Additive columns on
+  `linear_thread_links` and `linear_cache_meta` preserve old rows, with null
+  workspace identity/completeness until explicitly established.
 - **TTLs and bounds:**
   - Teams and workflow states: 15-minute TTL (50 teams, 50 states/team).
   - Issue list summaries: 3-minute page TTL; `linear_cache_issues` holds at
     most 500 rows per team; `linear_cache_pages` holds at most 100 pages (LRU).
+    Exact aliases: 500 recent entries per workspace/team, 3-minute freshness TTL.
   - Issue details (first comments page): 2-minute TTL, LRU cap of 200 issues.
   - Full write receipts: latest 500 writes; permanent retry identities: 10,000
     (new writes refused at capacity). Uncertain bodies remain bounded to 16 KiB
@@ -2153,7 +2220,12 @@ non-replay rule, not remote compare-and-swap. No live API behavior is claimed.
   beside usable `data` succeed with `"partial":true` and a fixed `warning`, and
   are not cached as complete responses. A mutation `success:true` is accepted
   even when errors affect its selected fields; an ambiguous write response
-  remains unknown.
+  remains unknown. Rate-limit errors add `retry_after_seconds` (positive integer
+  seconds, 1–86,400; default 60 when no usable header is present), alongside the
+  existing fixed-template `code` and `message`. For example:
+  `{"ok":false,"error":{"code":"linear_rate_limited","message":"Linear rate limit reached. Retry in 12 seconds.","retry_after_seconds":12}}`.
+  Write refusals also include their `outcome`. Other operations' errors retain
+  their existing two-field shape; clients need not parse the message for a wait.
 
 ### Not built in this stage
 

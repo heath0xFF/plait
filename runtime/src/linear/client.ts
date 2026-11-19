@@ -55,6 +55,7 @@ const TEAMS_QUERY = `query PlaitTeams($after: String) {
       name
       states(first: 50) {
         nodes { id name type position }
+        pageInfo { hasNextPage endCursor }
       }
     }
     pageInfo { hasNextPage endCursor }
@@ -398,13 +399,15 @@ export class LinearClient {
   }
 
   /** Lists teams with their workflow states, bounded to LINEAR_MAX_TEAMS. */
-  async listTeams(apiKey: string, signal?: AbortSignal): Promise<LinearQueryResult<LinearTeam[]>> {
+  async listTeams(apiKey: string, signal?: AbortSignal): Promise<LinearQueryResult<LinearTeam[]> & { complete: boolean }> {
     const sanitize = makeSanitizer(apiKey);
     const teams: LinearTeam[] = [];
     const seenTeamIds = new Set<string>();
     const seenCursors = new Set<string>();
     let after: string | null = null;
     let partial = false;
+    let complete = false;
+    let allRowsValid = true;
     for (let page = 0; page < MAX_TEAM_PAGES && teams.length < LINEAR_MAX_TEAMS; page++) {
       const response = await this.graphql(apiKey, TEAMS_QUERY, { after }, 'read', signal);
       const container = asObject(response.data?.teams);
@@ -414,6 +417,7 @@ export class LinearClient {
           ?? new LinearError('offline', 'Linear returned an unexpected teams response.');
       }
       if (response.errors.length > 0) partial = true;
+      const countBefore = teams.length;
       for (const rawTeam of container.nodes) {
         if (teams.length >= LINEAR_MAX_TEAMS) break;
         const obj = asObject(rawTeam);
@@ -429,14 +433,18 @@ export class LinearClient {
           .map(item => parseState(item, sanitize))
           .filter((state): state is LinearWorkflowState => state !== null)
           .sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
-        teams.push({ id, key, name, states });
+        const statesComplete = Array.isArray(statesObj?.nodes) && asObject(statesObj?.pageInfo)?.hasNextPage === false
+          && states.length === asArray(statesObj?.nodes).length && !response.errors.length;
+        teams.push({ id, key, name, states, states_complete: statesComplete });
       }
       const info = parsePageInfo(container.pageInfo, sanitize);
+      allRowsValid = allRowsValid && teams.length - countBefore === container.nodes.length;
+      complete = !partial && allRowsValid && asObject(container.pageInfo)?.hasNextPage === false;
       if (!info.hasMore || !info.nextCursor || seenCursors.has(info.nextCursor)) break;
       seenCursors.add(info.nextCursor);
       after = info.nextCursor;
     }
-    return { data: teams, partial, warning: partial ? PARTIAL_DATA_WARNING : null };
+    return { data: teams, complete, partial, warning: partial ? PARTIAL_DATA_WARNING : null };
   }
 
   /** Lists one page of up to 50 issue summaries. Never requests descriptions or comments. */

@@ -219,7 +219,7 @@ export class FakeLinearServer {
       res.end(JSON.stringify({
         data: {
           teams: {
-            nodes: slice.map(team => ({ id: team.id, key: team.key, name: team.name, states: { nodes: team.states } })),
+            nodes: slice.map(team => ({ id: team.id, key: team.key, name: team.name, states: { nodes: team.states.slice(0, 50), pageInfo: { hasNextPage: team.states.length > 50, endCursor: team.states.length > 50 ? "50" : null } } })),
             pageInfo: { hasNextPage: next !== null, endCursor: next },
           },
         },
@@ -270,7 +270,7 @@ export class FakeLinearServer {
     }
 
     if (parsed.query.includes('PlaitIssueDetail')) {
-      const issue = this.issues.find(item => item.id === parsed.variables.id);
+      const issue = this.issues.find(item => item.id === parsed.variables.id || item.identifier === parsed.variables.id);
       if (!issue) {
         res.writeHead(200, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ data: { issue: null } }));

@@ -34,8 +34,8 @@ forgetting old requests. Existing saved receipts migrate on store open; already
 forgotten effects from older hosts cannot be reconstructed.
 
 Linear's [public SDK schema](https://github.com/linear/linear/blob/2ca00918e3ae699a0aa1a6b07330b433397cd201/packages/sdk/src/schema.graphql)
-describes `CommentCreateInput.id`: “The identifier in UUID v4 format. If none
-is provided, the backend will generate one.” The host supplies a deterministic
+documents an optional `CommentCreateInput.id` in UUID v4 format, with a
+server-generated default. The host supplies a deterministic
 UUID-shaped ID derived from workspace and request ID. This is additional
 protection, not a reason to replay an unknown write. That schema's
 `issueUpdate(id,input)` and `IssueUpdateInput` expose no conditional state or
@@ -45,6 +45,24 @@ Tests simulate dropped replies, crash windows by reopening stores, concurrent
 requests, receipt eviction, and credential changes against the loopback fake
 server. Nothing here has been tried against Linear itself, including duplicate
 comment-ID refusal or mutation response/error semantics.
+
+## Exact identity and local link history
+
+`linear_resolve_issue` is the exact identifier/URL entry point for a bound
+project. It checks the returned identifier, team, and workspace and caches
+aliases for offline resolution; the existing list search remains broad.
+The [GraphQL guide](https://linear.app/developers/graphql) demonstrates
+`issue(id: "BLA-123")`; the published SDK schema explicitly accepts either a
+UUID or an issue identifier. This documents support, while fake
+server tests do not establish live behavior, including moved/renamed issues.
+
+Links now carry a workspace ID and historical status. Old links keep null
+workspace identity, sign-out keeps local history, and `linear_get_linked_issue`
+refuses to combine a historical link with another workspace's current data.
+Rate-limit replies include typed wait seconds. Teams and states expose nullable
+completeness evidence, but remain capped at 50 each without a continuation API;
+comments still have no declared order or total. These are additive host
+contracts: there is still no desktop UI or automatic Linear activity.
 
 ## Using Linear's MCP server from an agent
 

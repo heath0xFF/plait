@@ -1,3 +1,4 @@
+import { issueSummary } from './identity.ts';
 import { LinearWriteJournal } from './writes.ts';
 import type { DatabaseSync } from 'node:sqlite';
 import type { FileIdentity } from '../safety.ts';
@@ -15,7 +16,7 @@ import type {
   LinearThreadLink,
 } from './types.ts';
 
-export type CachedTeams = { teams: LinearTeam[]; cached_at: number };
+export type CachedTeams = { teams: LinearTeam[]; cached_at: number; complete: boolean | null };
 export type CachedIssuesPage = {
   issues: LinearIssueSummary[];
   has_more: boolean;
@@ -90,6 +91,16 @@ export class LinearCache {
         accessed_at INTEGER NOT NULL,
         touched_seq INTEGER NOT NULL DEFAULT 0
       );
+      CREATE TABLE IF NOT EXISTS linear_cache_aliases(
+        workspace_id TEXT NOT NULL,
+        team_id TEXT NOT NULL,
+        identifier TEXT NOT NULL,
+        issue_id TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        cached_at INTEGER NOT NULL,
+        touched_seq INTEGER NOT NULL,
+        PRIMARY KEY(workspace_id, team_id, identifier)
+      );
       CREATE TABLE IF NOT EXISTS linear_thread_links(
         thread_id TEXT PRIMARY KEY,
         issue_id TEXT NOT NULL,
@@ -120,12 +131,19 @@ export class LinearCache {
         this.db.exec(`ALTER TABLE ${table} ADD COLUMN touched_seq INTEGER NOT NULL DEFAULT 0`);
       }
     }
+    if (!this.db.prepare('PRAGMA table_info(linear_cache_meta)').all().some(row => row.name === 'complete')) {
+      this.db.exec('ALTER TABLE linear_cache_meta ADD COLUMN complete INTEGER');
+    }
+    if (!this.db.prepare('PRAGMA table_info(linear_thread_links)').all().some(row => row.name === 'workspace_id')) {
+      this.db.exec('ALTER TABLE linear_thread_links ADD COLUMN workspace_id TEXT');
+    }
     const maxSeq = this.db.prepare(`
       SELECT MAX(seq) AS m FROM (
         SELECT MAX(touched_seq) AS seq FROM linear_cache_issues
         UNION ALL SELECT MAX(touched_seq) FROM linear_cache_pages
         UNION ALL SELECT MAX(touched_seq) FROM linear_cache_details
         UNION ALL SELECT MAX(touched_seq) FROM linear_writes
+        UNION ALL SELECT MAX(touched_seq) FROM linear_cache_aliases
       )
     `).get();
     this.touchSeq = Number(maxSeq?.m ?? 0);
@@ -177,12 +195,13 @@ export class LinearCache {
   }
 
   getTeams(): CachedTeams | null {
-    const meta = this.db.prepare('SELECT cached_at FROM linear_cache_meta WHERE key=?').get(TEAMS_META_KEY);
+    const meta = this.db.prepare('SELECT cached_at, complete FROM linear_cache_meta WHERE key=?').get(TEAMS_META_KEY);
     if (!meta) return null;
     const rows = this.db.prepare('SELECT payload FROM linear_cache_teams ORDER BY rowid ASC').all();
     return {
       teams: rows.map(row => JSON.parse(String(row.payload)) as LinearTeam),
       cached_at: Number(meta.cached_at),
+      complete: meta.complete === null ? null : meta.complete === 1,
     };
   }
 
@@ -191,7 +210,7 @@ export class LinearCache {
     return row ? JSON.parse(String(row.payload)) as LinearTeam : null;
   }
 
-  saveTeams(teams: LinearTeam[], cachedAt: number): void {
+  saveTeams(teams: LinearTeam[], cachedAt: number, complete: boolean | null = null): void {
     this.transaction(() => {
       this.db.prepare('DELETE FROM linear_cache_teams').run();
       const insert = this.db.prepare(`
@@ -200,8 +219,8 @@ export class LinearCache {
         ON CONFLICT(team_id) DO UPDATE SET payload=excluded.payload, cached_at=excluded.cached_at
       `);
       for (const team of teams) insert.run(team.id, JSON.stringify(team), cachedAt);
-      this.db.prepare('INSERT INTO linear_cache_meta(key, cached_at) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET cached_at=excluded.cached_at')
-        .run(TEAMS_META_KEY, cachedAt);
+      this.db.prepare('INSERT INTO linear_cache_meta(key, cached_at, complete) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET cached_at=excluded.cached_at, complete=excluded.complete')
+        .run(TEAMS_META_KEY, cachedAt, complete === null ? null : complete ? 1 : 0);
     });
   }
 
@@ -245,6 +264,7 @@ export class LinearCache {
     hasMore: boolean,
     nextCursor: string | null,
     cachedAt: number,
+    workspaceId?: string,
   ): void {
     this.transaction(() => {
       const seq = ++this.touchSeq;
@@ -259,6 +279,7 @@ export class LinearCache {
       `);
       for (const issue of issues) {
         upsertIssue.run(teamId, issue.id, issue.updated_at, cachedAt, seq, JSON.stringify(issue));
+        if (workspaceId) this.saveIssueAlias(workspaceId, issue, cachedAt);
       }
       // Strictly bound cached summaries to LINEAR_CACHE_MAX_ISSUES_PER_TEAM per team.
       this.db.prepare(`
@@ -303,8 +324,9 @@ export class LinearCache {
     };
   }
 
-  saveIssueDetail(issue: LinearIssueDetail, cachedAt: number): void {
+  saveIssueDetail(issue: LinearIssueDetail, cachedAt: number, workspaceId?: string): void {
     this.transaction(() => {
+      if (workspaceId) this.saveIssueAlias(workspaceId, issueSummary(issue), cachedAt);
       const seq = ++this.touchSeq;
       this.db.prepare(`
         INSERT INTO linear_cache_details(issue_id, team_id, payload, cached_at, accessed_at, touched_seq)
@@ -348,6 +370,24 @@ export class LinearCache {
     });
   }
 
+  getIssueAlias(workspaceId: string, teamId: string, identifier: string): { issue: LinearIssueSummary; cached_at: number } | null {
+    const row = this.db.prepare(`SELECT payload, cached_at FROM linear_cache_aliases
+      WHERE workspace_id=? AND team_id=? AND identifier=?`).get(workspaceId, teamId, identifier);
+    return row ? { issue: JSON.parse(String(row.payload)), cached_at: Number(row.cached_at) } : null;
+  }
+
+  saveIssueAlias(workspaceId: string, issue: LinearIssueSummary, cachedAt: number): void {
+    this.db.prepare(`INSERT INTO linear_cache_aliases
+      (workspace_id, team_id, identifier, issue_id, payload, cached_at, touched_seq) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(workspace_id, team_id, identifier) DO UPDATE SET issue_id=excluded.issue_id,
+        payload=excluded.payload, cached_at=excluded.cached_at, touched_seq=excluded.touched_seq`)
+      .run(workspaceId, issue.team_id, issue.identifier, issue.id, JSON.stringify(issue), cachedAt, ++this.touchSeq);
+    this.db.prepare(`DELETE FROM linear_cache_aliases WHERE workspace_id=? AND team_id=? AND identifier NOT IN (
+      SELECT identifier FROM linear_cache_aliases WHERE workspace_id=? AND team_id=?
+      ORDER BY cached_at DESC, touched_seq DESC LIMIT ?)`)
+      .run(workspaceId, issue.team_id, workspaceId, issue.team_id, LINEAR_CACHE_MAX_ISSUES_PER_TEAM);
+  }
+
   /** Looks up the cached team_id for an issue, checking detail cache then summary cache. */
   findIssueTeamId(issueId: string): string | null {
     const detail = this.db.prepare('SELECT team_id FROM linear_cache_details WHERE issue_id=?').get(issueId);
@@ -362,6 +402,8 @@ export class LinearCache {
     this.transaction(() => {
       const resolvedTeam = teamId ?? this.findIssueTeamId(issueId);
       this.db.prepare('DELETE FROM linear_cache_details WHERE issue_id=?').run(issueId);
+      // Keep exact identity for offline lookup, but never present its pre-write summary as fresh.
+      this.db.prepare('UPDATE linear_cache_aliases SET cached_at=0 WHERE issue_id=?').run(issueId);
       if (resolvedTeam) {
         this.db.prepare('DELETE FROM linear_cache_pages WHERE team_id=?').run(resolvedTeam);
       } else {
@@ -381,6 +423,7 @@ export class LinearCache {
       this.db.prepare('DELETE FROM linear_cache_issues').run();
       this.db.prepare('DELETE FROM linear_cache_pages').run();
       this.db.prepare('DELETE FROM linear_cache_details').run();
+      this.db.prepare('DELETE FROM linear_cache_aliases').run();
       this.db.prepare('DELETE FROM linear_writes').run();
     });
   }
@@ -418,22 +461,23 @@ export class LinearCache {
 
   getThreadLink(threadId: string): LinearThreadLink | null {
     const row = this.db.prepare(
-      'SELECT thread_id, issue_id, identifier, url, title, linked_at FROM linear_thread_links WHERE thread_id=?',
+      'SELECT thread_id, workspace_id, issue_id, identifier, url, title, linked_at FROM linear_thread_links WHERE thread_id=?',
     ).get(threadId);
     return row ? rowToThreadLink(row) : null;
   }
 
   setThreadLink(link: LinearThreadLink): LinearThreadLink {
     this.db.prepare(`
-      INSERT INTO linear_thread_links(thread_id, issue_id, identifier, url, title, linked_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO linear_thread_links(thread_id, workspace_id, issue_id, identifier, url, title, linked_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(thread_id) DO UPDATE SET
+        workspace_id=excluded.workspace_id,
         issue_id=excluded.issue_id,
         identifier=excluded.identifier,
         url=excluded.url,
         title=excluded.title,
         linked_at=excluded.linked_at
-    `).run(link.thread_id, link.issue_id, link.identifier, link.url, link.title, link.linked_at);
+    `).run(link.thread_id, link.workspace_id, link.issue_id, link.identifier, link.url, link.title, link.linked_at);
     return link;
   }
 
@@ -446,14 +490,14 @@ export class LinearCache {
   listThreadLinks(limit: number, cursor?: { linkedAt: number; threadId: string }): ThreadLinksPage {
     const rows = cursor
       ? this.db.prepare(`
-          SELECT thread_id, issue_id, identifier, url, title, linked_at
+          SELECT thread_id, workspace_id, issue_id, identifier, url, title, linked_at
           FROM linear_thread_links
           WHERE linked_at < ? OR (linked_at = ? AND thread_id > ?)
           ORDER BY linked_at DESC, thread_id ASC
           LIMIT ?
         `).all(cursor.linkedAt, cursor.linkedAt, cursor.threadId, limit + 1)
       : this.db.prepare(`
-          SELECT thread_id, issue_id, identifier, url, title, linked_at
+          SELECT thread_id, workspace_id, issue_id, identifier, url, title, linked_at
           FROM linear_thread_links
           ORDER BY linked_at DESC, thread_id ASC
           LIMIT ?
@@ -464,7 +508,8 @@ export class LinearCache {
     let truncatedByBytes = false;
     for (const row of rows.slice(0, limit)) {
       const link = rowToThreadLink(row);
-      const itemBytes = Buffer.byteLength(JSON.stringify(link)) + 1;
+      // Reserve the service's historical field before enforcing the page byte budget.
+      const itemBytes = Buffer.byteLength(JSON.stringify(link)) + 32;
       if (links.length > 0 && bytes + itemBytes > LINKS_PAGE_BYTE_BUDGET) {
         truncatedByBytes = true;
         break;
@@ -484,6 +529,7 @@ export class LinearCache {
 function rowToThreadLink(row: Record<string, unknown>): LinearThreadLink {
   return {
     thread_id: String(row.thread_id),
+    workspace_id: typeof row.workspace_id === 'string' ? row.workspace_id : null,
     issue_id: String(row.issue_id),
     identifier: String(row.identifier),
     url: String(row.url),

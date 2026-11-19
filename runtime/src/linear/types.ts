@@ -103,6 +103,7 @@ export type LinearTeam = {
   key: string;
   name: string;
   states: LinearWorkflowState[];
+  states_complete?: boolean | null;
 };
 
 export type LinearLabel = {
@@ -155,6 +156,7 @@ export type LinearProjectBinding = {
 
 export type LinearThreadLink = {
   thread_id: string;
+  workspace_id: string | null;
   issue_id: string;
   identifier: string;
   url: string;
