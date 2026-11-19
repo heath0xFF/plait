@@ -22,7 +22,10 @@ pub struct DraftSettings {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DraftTabCreation {
     pub request_id: String,
+    /// Never `Wait` in a saved file; `wait` carries it. See `Placement::journaled`.
     pub placement: crate::host::admission::Placement,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wait: bool,
     pub harness: HarnessId,
     pub model: ModelChoice,
     pub mode: Option<String>,
@@ -61,6 +64,7 @@ impl DraftTabCreation {
         Some(Self {
             request_id: request_id.clone(),
             placement: *placement,
+            wait: saved.wait,
             harness: *harness,
             model: ModelChoice {
                 provider: provider.clone(),
@@ -449,6 +453,7 @@ mod tests {
             request: request.clone(),
             approval: Some(ApprovalMode::Ask),
             choice: None,
+            wait: false,
         });
         let mut session = Session::empty("/host".into());
         session.set_new_draft("/project".into(), draft);
@@ -717,6 +722,7 @@ mod tests {
         sent.creation = Some(DraftTabCreation {
             request_id: "keep-this-request".into(),
             placement: crate::host::admission::Placement::Worktree,
+            wait: false,
             harness: HarnessId::Pi,
             model: ModelChoice {
                 provider: "provider".into(),

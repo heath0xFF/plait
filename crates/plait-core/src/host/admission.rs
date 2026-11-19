@@ -47,6 +47,24 @@ pub enum Placement {
     Worktree,
     Wait,
 }
+impl Placement {
+    /// Saved files name Wait as an in-place placement plus a flag, because
+    /// released builds reject the whole workspace on a placement they do not know.
+    pub fn journaled(self) -> (Self, bool) {
+        if self == Self::Wait {
+            (Self::Project, true)
+        } else {
+            (self, false)
+        }
+    }
+    pub fn from_journal(self, wait: bool) -> Self {
+        if wait && self == Self::Project {
+            Self::Wait
+        } else {
+            self
+        }
+    }
+}
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Info {

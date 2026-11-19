@@ -38,8 +38,15 @@ impl Draft {
             return None;
         }
         matches!(&pending.request, Request::CreateAdmittedThread { request_id, .. } if request_id == &sending.request_id)
-            .then(|| plait_core::session::DraftCreation {
-                request: pending.request.clone(), approval: sending.approval, choice: sending.choice,
+            .then(|| {
+                let mut request = pending.request.clone();
+                let mut wait = false;
+                if let Request::CreateAdmittedThread { placement, .. } = &mut request {
+                    (*placement, wait) = placement.journaled();
+                }
+                plait_core::session::DraftCreation {
+                    request, approval: sending.approval, choice: sending.choice, wait,
+                }
             })
     }
 
@@ -60,9 +67,11 @@ impl Draft {
         else {
             return None;
         };
+        let (placement, wait) = placement.journaled();
         Some(DraftTabCreation {
             request_id: request_id.clone(),
-            placement: *placement,
+            placement,
+            wait,
             harness: *harness,
             model: host::ModelChoice {
                 provider: provider.clone(),
@@ -94,7 +103,7 @@ impl Draft {
             request: Request::CreateAdmittedThread {
                 request_id: saved.request_id.clone(),
                 checkout,
-                placement: saved.placement,
+                placement: saved.placement.from_journal(saved.wait),
                 harness: saved.harness,
                 provider: saved.model.provider,
                 model_id: saved.model.model_id,

@@ -44,6 +44,9 @@ pub struct DraftCreation {
     pub approval: Option<crate::host::ApprovalMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub choice: Option<crate::host::ApprovalMode>,
+    /// The request's placement was Wait; see `Placement::journaled`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wait: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

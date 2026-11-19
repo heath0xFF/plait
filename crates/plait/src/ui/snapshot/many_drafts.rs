@@ -1137,7 +1137,7 @@ fn waiting_first_send_binds_only_its_draft_with_images_and_exact_retry() {
             choice: Some(ApprovalMode::Auto),
         });
         let saved = p.draft.saved_creation().unwrap();
-        assert_eq!(saved.placement, Placement::Wait);
+        assert_eq!(saved.placement.from_journal(saved.wait), Placement::Wait);
         assert_eq!(saved.message.images, vec![image.clone()]);
         p.open_draft(w, cx);
         p.draft.composer.clone().unwrap().update(cx, |c, cx| {
@@ -1167,6 +1167,104 @@ fn waiting_first_send_binds_only_its_draft_with_images_and_exact_retry() {
             pending.request("waiting-new-thread"),
             plait_core::host::Request::SubmitCheckout { .. }
         ));
+    });
+    drop(h);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn waiting_first_send_journal_stays_readable_by_the_released_build() {
+    if !isolated("many_drafts::waiting_first_send_journal_stays_readable_by_the_released_build") {
+        return;
+    }
+    // The placement shapes v0.1.0-preview.22 decodes. It refuses the whole
+    // workspace on an unknown variant, so only these paths matter.
+    #[derive(serde::Deserialize, Debug, PartialEq)]
+    #[serde(rename_all = "snake_case")]
+    enum ReleasedPlacement {
+        Project,
+        Worktree,
+    }
+    #[derive(serde::Deserialize)]
+    struct ReleasedRequest {
+        placement: ReleasedPlacement,
+    }
+    #[derive(serde::Deserialize)]
+    struct ReleasedCreation {
+        request: ReleasedRequest,
+    }
+    #[derive(serde::Deserialize)]
+    struct ReleasedDraft {
+        creation: Option<ReleasedCreation>,
+    }
+    #[derive(serde::Deserialize)]
+    struct ReleasedTabCreation {
+        placement: ReleasedPlacement,
+    }
+    #[derive(serde::Deserialize)]
+    struct ReleasedTab {
+        creation: Option<ReleasedTabCreation>,
+        draft: ReleasedDraft,
+    }
+    #[derive(serde::Deserialize)]
+    struct Released {
+        draft_tabs: std::collections::BTreeMap<String, ReleasedTab>,
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-wait-journal-{}", std::process::id()));
+    let repo = fixture_repository(&scratch);
+    let mut h = Harness::new(&repo, None, 900., 600.);
+    h.connect(&repo, false);
+    h.update(|p, w, cx| {
+        p.admission.queue = true;
+        p.open_draft(w, cx);
+        set_pending(p, "wait-journal");
+        if let Request::CreateAdmittedThread { placement, .. } =
+            &mut p.draft.pending.as_mut().unwrap().request
+        {
+            *placement = Placement::Wait;
+        }
+        p.draft.sending = Some(crate::ui::new_thread::Sending {
+            generation: p.draft.generation,
+            request_id: "wait-journal".into(),
+            text: "Wait for the checkout".into(),
+            revision: 3,
+            images: Vec::new(),
+            approval: Some(ApprovalMode::Ask),
+            choice: None,
+        });
+        let creation = p.draft.saved_creation().unwrap();
+        let mut draft = creation.message.clone();
+        draft.creation = p.draft.legacy_creation();
+        assert!(draft.creation.is_some(), "the legacy mirror is written too");
+        let mut session = plait_core::session::Session::empty("/host".into());
+        session.set_draft_tab(
+            "waiting".into(),
+            plait_core::session::DraftTab {
+                legacy: false,
+                creation: Some(creation),
+                checkout: repo.clone(),
+                draft,
+                settings: Default::default(),
+            },
+        );
+        let bytes = serde_json::to_vec(&session).unwrap();
+        let released: Released = serde_json::from_slice(&bytes).unwrap();
+        let tab = &released.draft_tabs["waiting"];
+        assert_eq!(
+            tab.creation.as_ref().unwrap().placement,
+            ReleasedPlacement::Project
+        );
+        assert_eq!(
+            tab.draft.creation.as_ref().unwrap().request.placement,
+            ReleasedPlacement::Project
+        );
+        // This build still reads the choice back as Wait, from either copy.
+        let restored: plait_core::session::Session = serde_json::from_slice(&bytes).unwrap();
+        let tab = &restored.draft_tabs["waiting"];
+        let saved = tab.creation.as_ref().unwrap();
+        assert_eq!(saved.placement.from_journal(saved.wait), Placement::Wait);
+        let legacy = plait_core::session::DraftTabCreation::from_legacy(&tab.draft, &repo).unwrap();
+        assert_eq!(legacy.placement.from_journal(legacy.wait), Placement::Wait);
     });
     drop(h);
     std::fs::remove_dir_all(scratch).unwrap();
