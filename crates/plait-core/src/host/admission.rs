@@ -140,6 +140,7 @@ impl Admission {
                 .as_ref()
                 .is_some_and(|tree| tree.parent.root != *checkout)
             || self.worktree.is_none() && self.checkout != *checkout
+            || *placement == Placement::Wait && self.worktree.is_some()
             || self.state == Stage::Ready
                 && *placement == Placement::Worktree
                 && self.worktree.is_none()
@@ -318,6 +319,20 @@ mod tests {
             .is_err()
         );
         assert!(serde_json::from_value::<Placement>(json!("queue")).is_err());
+        assert_eq!(
+            serde_json::from_value::<Placement>(json!("wait")).unwrap(),
+            Placement::Wait
+        );
+    }
+    #[test]
+    fn explicit_wait_cannot_be_rebound_to_a_worktree() {
+        let request: Request = serde_json::from_value(json!({"op":"create_admitted_thread","request_id":"r","checkout":"/repo","placement":"wait","harness":"pi","provider":"p","model_id":"m","approval":"ask"})).unwrap();
+        let mut receipt: Admission = serde_json::from_value(json!({"request_id":"r","state":"ready","thread_id":"t","checkout":"/repo","worktree":null,"source_thread_id":null,"error":null})).unwrap();
+        assert!(receipt.verify_request(&request).is_ok());
+        let identity = json!({"dev":"1","ino":"2"});
+        receipt.worktree = Some(serde_json::from_value(json!({"thread_id":"t","parent":{"root":"/repo","identity":identity,"main":"/repo","main_identity":identity,"common":"/repo/.git","common_identity":identity,"base":"a".repeat(40)},"path":"/other","branch":"plait/t","identity":identity,"stage":"ready","error":null})).unwrap());
+        receipt.checkout = "/other".into();
+        assert!(receipt.verify_request(&request).is_err());
     }
 }
 
