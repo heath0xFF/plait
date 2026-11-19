@@ -58,6 +58,7 @@ impl Plait {
             .gap_2()
             .child(
                 button("checkout-wait-state", queue.label())
+                    .aria_description(queue.detail().to_owned())
                     .text_color(rgb(if queue.state == checkout_queue::State::Held {
                         colors().amber
                     } else {
@@ -72,6 +73,7 @@ impl Plait {
                     .aria_description(
                         "Resume all held messages for this checkout in their original order.",
                     )
+                    .tooltip(|_, cx| cx.new(|_| TextTooltip("Resume all held messages for this checkout in their original order.".into())).into())
                     .on_activate(cx, move |this, window, cx| {
                         this.change_checkout_wait(resume.clone(), window, cx)
                     }),
@@ -85,6 +87,7 @@ impl Plait {
                         .aria_description(
                             "Cancel this waiting message. If it just started, stop its run.",
                         )
+                        .tooltip(|_, cx| cx.new(|_| TextTooltip("Cancel this waiting message. If it just started, stop its run.".into())).into())
                         .on_activate(cx, move |this, window, cx| {
                             this.change_checkout_wait(cancel.clone(), window, cx)
                         }),
