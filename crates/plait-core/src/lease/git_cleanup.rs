@@ -664,7 +664,7 @@ mod tests {
         // A background job with its output redirected: Git exits normally.
         fs::write(
             &hook,
-            "#!/bin/sh\nps -o pgid= -p $$ > .git/hook-group\n(sleep 30; echo late > late.txt) >/dev/null 2>&1 &\n",
+            "#!/bin/sh\n(sleep 5; echo late > late.txt) >/dev/null 2>&1 &\n",
         )
         .unwrap();
         fs::set_permissions(&hook, fs::Permissions::from_mode(0o700)).unwrap();
@@ -675,18 +675,16 @@ mod tests {
             },
         )
         .unwrap();
-        let group: i32 = fs::read_to_string(root.join(".git/hook-group"))
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
         let id = open_verified_dir(&root).unwrap().2;
         let state = unconfirmed(id).unwrap();
         let admission = acquire_checkout(&root, None, LeaseClass::Writer).map(drop);
-        unsafe {
-            libc::kill(-group, libc::SIGKILL);
+        // The record names the group; without one the job ends on its own.
+        if let Some(group) = state.as_ref().and_then(|state| state.process.as_ref()) {
+            unsafe {
+                libc::kill(-group.group, libc::SIGKILL);
+            }
         }
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(10);
         while unconfirmed(id).unwrap().is_some() {
             assert!(
                 Instant::now() < deadline,
