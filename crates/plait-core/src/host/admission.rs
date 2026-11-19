@@ -202,18 +202,46 @@ pub fn admission(client: &Client, request: &Request) -> Result<Admission, Error>
     }
     reply.admission.verified()
 }
-pub fn origin(client: &Client, thread_id: String) -> Result<Option<Admission>, Error> {
-    let reply: Origin = client.send(&Request::ThreadOrigin { thread_id })?;
-    if reply.schema != 1 {
-        return Err(invalid());
+impl Origin {
+    fn verified(self, thread_id: &str) -> Result<Option<Admission>, Error> {
+        if self.schema != 1
+            || self
+                .admission
+                .as_ref()
+                .is_some_and(|receipt| receipt.thread_id.as_deref() != Some(thread_id))
+        {
+            return Err(invalid());
+        }
+        self.admission.map(Admission::verified).transpose()
     }
-    reply.admission.map(Admission::verified).transpose()
+}
+pub fn origin(client: &Client, thread_id: String) -> Result<Option<Admission>, Error> {
+    let reply: Origin = client.send(&Request::ThreadOrigin {
+        thread_id: thread_id.clone(),
+    })?;
+    reply.verified(&thread_id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn origin_rejects_a_receipt_for_another_thread() {
+        let reply = json!({"schema":1,"admission":{"request_id":"r1","state":"ready","thread_id":"new","checkout":"/repo","worktree":null,"source_thread_id":"original","error":null}});
+        assert!(
+            serde_json::from_value::<Origin>(reply.clone())
+                .unwrap()
+                .verified("new")
+                .is_ok()
+        );
+        assert!(
+            serde_json::from_value::<Origin>(reply)
+                .unwrap()
+                .verified("other")
+                .is_err()
+        );
+    }
     #[test]
     fn admission_rejects_unknown_and_inconsistent_replies() {
         let good = json!({"request_id":"r1","state":"choice","thread_id":null,"checkout":"/repo","worktree":null,"source_thread_id":null,"error":null});
