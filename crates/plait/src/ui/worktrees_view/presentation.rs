@@ -8,6 +8,34 @@ pub(super) struct LabelStyle {
     pub code: Range<usize>,
 }
 
+pub(super) fn head_label(
+    title: &str,
+    state: &str,
+    branch: &str,
+    facts: &[String],
+) -> (String, LabelStyle) {
+    let mut text = String::new();
+    let title = part(&mut text, title, "");
+    let state = part(&mut text, state, "  ");
+    let code = part(&mut text, branch, " · ");
+    for fact in facts {
+        part(&mut text, fact, " · ");
+    }
+    (text, LabelStyle { title, state, code })
+}
+
+fn part(text: &mut String, value: &str, separator: &str) -> Range<usize> {
+    if value.is_empty() {
+        return text.len()..text.len();
+    }
+    if !text.is_empty() {
+        text.push_str(separator);
+    }
+    let start = text.len();
+    text.push_str(value);
+    start..text.len()
+}
+
 pub(super) struct Stroke {
     pub lane: usize,
     pub x: f32,
@@ -93,4 +121,65 @@ pub(super) fn strokes(item: &Item, graph: &Graph) -> Vec<Stroke> {
         });
     }
     strokes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn head_labels_omit_missing_parts_without_empty_slots() {
+        for (title, state, branch, facts, expected) in [
+            (
+                "Main checkout",
+                "",
+                "main",
+                vec!["Clean"],
+                "Main checkout · main · Clean",
+            ),
+            (
+                "External worktree",
+                "",
+                "topic",
+                vec!["3 changed"],
+                "External worktree · topic · 3 changed",
+            ),
+            (
+                "Thread unavailable",
+                "",
+                "topic",
+                vec![],
+                "Thread unavailable · topic",
+            ),
+            (
+                "Review files",
+                "Ready",
+                "Detached",
+                vec![],
+                "Review files  Ready · Detached",
+            ),
+            (
+                "External worktree",
+                "",
+                "Detached",
+                vec![],
+                "External worktree · Detached",
+            ),
+            (
+                "Réparer",
+                "Working",
+                "sujet-é",
+                vec!["", "2 not pushed"],
+                "Réparer  Working · sujet-é · 2 not pushed",
+            ),
+            ("Thread unavailable", "", "", vec![], "Thread unavailable"),
+        ] {
+            let facts: Vec<_> = facts.into_iter().map(str::to_owned).collect();
+            let (label, style) = head_label(title, state, branch, &facts);
+            assert_eq!(label, expected);
+            assert_eq!(&label[style.title], title);
+            assert_eq!(&label[style.state], state);
+            assert_eq!(&label[style.code], branch);
+        }
+    }
 }

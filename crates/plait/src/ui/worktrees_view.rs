@@ -630,7 +630,7 @@ impl Plait {
                 })
             });
         }
-        self.worktrees.head_labels = self
+        (self.worktrees.head_labels, self.worktrees.head_styles) = self
             .worktrees
             .rows
             .iter()
@@ -654,33 +654,14 @@ impl Plait {
                 } else if self.worktrees.graph.lanes[i].detached {
                     facts.push("Detached".into());
                 }
-                format!(
-                    "{}  {} · {} · {}",
-                    self.worktrees.titles[i],
+                presentation::head_label(
+                    &self.worktrees.titles[i],
                     self.worktrees.words[i],
-                    safe_text(row.branch.as_deref().unwrap_or("Detached")),
-                    facts.join(" · ")
+                    &safe_text(row.branch.as_deref().unwrap_or("Detached")),
+                    &facts,
                 )
             })
-            .collect();
-        self.worktrees.head_styles = self
-            .worktrees
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(i, row)| {
-                let title = self.worktrees.titles[i].len();
-                let state_end = title + 2 + self.worktrees.words[i].len();
-                let branch_start = state_end + " · ".len();
-                presentation::LabelStyle {
-                    title: 0..title,
-                    state: title + 2..state_end,
-                    code: branch_start
-                        ..branch_start
-                            + safe_text(row.branch.as_deref().unwrap_or("Detached")).len(),
-                }
-            })
-            .collect();
+            .unzip();
     }
     fn measure_worktrees(&mut self, stamp: ReadStamp, generation: u64, cx: &mut Context<Self>) {
         let pending: Vec<_> = self
