@@ -404,7 +404,8 @@ permit at least one confirmation choice. Hover explains a refusal in the host's
 words. Removal asks once, shows the known counts and retained branch, and offers
 **Remove if pushed**, **Keep local commits only**, or **Cancel**. Only choices
 the host permits are offered. **Keep local commits only** explicitly accepts
-unpushed or unknown publication status; other safety checks still apply.
+unpushed or unknown publication status, and is offered only when that status
+is what blocks removal; other safety checks still apply.
 The view then reports the result. A later refusal is preserved;
 a lost reply says unconfirmed and **Refresh** recovers the same request.
 Branches, thread history and private build caches remain. Removed records retain

@@ -789,7 +789,6 @@ fn removal_prompt_freezes_choices_and_identity_across_resort_and_refresh() {
     });
     for (published, choice) in [
         (true, Some(Choice::RemoveIfPushed)),
-        (true, Some(Choice::KeepLocal)),
         (false, Some(Choice::KeepLocal)),
         (false, None),
     ] {
@@ -829,7 +828,7 @@ fn removal_prompt_freezes_choices_and_identity_across_resort_and_refresh() {
         let (prompt, title, detail, buttons) = captured.borrow_mut().take().unwrap();
         assert_eq!(title, "Remove this worktree?");
         let expected = if published {
-            vec!["Remove if pushed", "Keep local commits only", "Cancel"]
+            vec!["Remove if pushed", "Cancel"]
         } else {
             vec!["Keep local commits only", "Cancel"]
         };

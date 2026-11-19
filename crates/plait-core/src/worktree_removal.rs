@@ -37,9 +37,16 @@ impl Choices {
         {
             return Self::default();
         }
+        let if_pushed = row.preservation.refusal.is_none() && row.preservation.unpushed == Some(0);
+        // Keeping local commits waives publication, so it is offered only when
+        // publication is what refuses: then the confirmation states unpushed
+        // or unknown commits. A published worktree needs no waiver, and one
+        // sent anyway would remove commits made after this read without asking.
         Self {
-            if_pushed: row.preservation.refusal.is_none() && row.preservation.unpushed == Some(0),
-            keep_local: row.preservation.can_keep_local,
+            if_pushed,
+            keep_local: row.preservation.can_keep_local
+                && !if_pushed
+                && row.preservation.unpushed != Some(0),
         }
     }
     pub fn any(self) -> bool {
@@ -306,7 +313,7 @@ mod tests {
             let choices = Choices::for_checkout(&row);
             let expected: Vec<_> = [
                 published.then_some(Choice::RemoveIfPushed),
-                local.then_some(Choice::KeepLocal),
+                (local && !published).then_some(Choice::KeepLocal),
             ]
             .into_iter()
             .flatten()
@@ -328,6 +335,43 @@ mod tests {
                 }
             }
         }
+    }
+    /// `allow_unpushed:true` only ever follows a confirmation that stated
+    /// unpushed commits or unknown publication.
+    #[test]
+    fn keeping_local_commits_is_offered_only_beside_the_words_that_need_it() {
+        for unpushed in [Some(0), Some(1), Some(3), None] {
+            for refused in [false, true] {
+                for local in [false, true] {
+                    let mut row = row();
+                    row.preservation.unpushed = unpushed;
+                    row.preservation.refusal = refused.then(|| "Publication refusal.".into());
+                    row.preservation.can_keep_local = local;
+                    let detail = confirmation_detail(
+                        &row.path,
+                        row.branch.as_deref().unwrap(),
+                        Some(&row.preservation),
+                    );
+                    let offered = Choices::for_checkout(&row).offered();
+                    if offered.contains(&Choice::KeepLocal) {
+                        assert!(
+                            detail.contains("not pushed")
+                                || detail.contains("Publication is unknown"),
+                            "{unpushed:?} {refused} {local}: {detail}"
+                        );
+                    }
+                    assert!(
+                        !(offered.contains(&Choice::KeepLocal)
+                            && offered.contains(&Choice::RemoveIfPushed)),
+                        "two choices that both remove a published worktree"
+                    );
+                }
+            }
+        }
+        let mut removal = Removal::default();
+        assert!(removal.ask(&row(), host(), "id".into()));
+        assert!(removal.answer(Some(Choice::KeepLocal)).is_none());
+        assert!(removal.pending.is_none());
     }
     #[test]
     fn local_choice_never_bypasses_ownership_or_preservation_guards() {
