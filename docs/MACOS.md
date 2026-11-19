@@ -822,22 +822,29 @@ message. Type a one-line message and press Return or **Commit** (Cmd-Shift-C
 moves to the message). Only staged changes are committed. Plait runs your
 repository's own Git configuration for these: clean filters such as LFS run when
 staging, and commit hooks run when committing; a failing hook's output is shown
-and nothing is committed. One write runs at a time, and every Plait Git mutation (staging, unstaging,
-hunk staging, committing, discarding, restoring a discard, creating or switching
-branches, pushing, publishing, fetching, pulling, turn undo/redo, and worktree
-removal) runs off the UI thread under the checkout's OS lease so it cannot race
-an active agent run or another Plait write, including across symlink aliases or a
-second host store. If a thread is running in the same checkout, Changes says so,
-since its edits may be unfinished, and attempting a Git write or worktree
-removal there is **refused immediately** with a specific message under the commit
-box (or in the sidebar for worktree removal), leaving working files, the index,
-and `HEAD` untouched. Operations that update shared repository metadata across
-linked worktrees (commit, push, publish, fetch, pull, branch create/switch, and
-adding or removing a worktree) **wait briefly** (up to five seconds) to serialize
-behind another linked worktree's metadata update and report a refusal if that
-operation is still busy; creating a new worktree from a busy parent checkout is
-allowed while a thread runs there, waiting only on shared metadata, and
-unrelated repositories are never blocked. During a merge, an unmerged file offers **Mark resolved** instead of **Stage**; Commit
+and nothing is committed. One write runs at a time.
+
+Every Git write Plait makes (staging and unstaging, by file or hunk, committing,
+discarding and restoring a discard, creating or switching a branch, pushing,
+publishing, fetching, pulling, undoing or redoing a turn, and removing a
+worktree) takes the checkout's lease off the UI thread, the same lease a run
+holds; a symlink or another host store does not get around it. While a thread
+is running in the checkout, Changes says so and such a write is **refused at
+once**: "This checkout is in use by an active run or another Plait write. Wait
+until it finishes, then try again." appears under the commit box (in the
+sidebar for removing a worktree), and the files, the index and `HEAD` are left
+as they were. The other way round, a message sent while one of these writes is
+still running (a slow push, say) is refused, saying the checkout is busy with
+another Plait operation. Writes that change what linked worktrees of one repository
+share (commit, push, publish, fetch, pull, creating or switching a branch, adding
+or removing a worktree) wait up to five seconds for another worktree's such write
+to finish, then are refused with a message that says so. Creating a worktree
+from a checkout where a thread is running is allowed; it is refused only while
+a Plait Git write runs there. Repositories never wait for each other. Plait
+does not know when a harness has stopped yet: if Codex or Claude Code keeps
+running after its run has ended, a write here is not refused.
+
+During a merge, an unmerged file offers **Mark resolved** instead of **Stage**; Commit
 stays unavailable until every conflict is marked resolved. If a hook or filter
 takes longer than its limit (60 seconds for staging, 120 for a commit), Plait
 stops it and says so.

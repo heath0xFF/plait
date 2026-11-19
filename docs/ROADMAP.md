@@ -520,16 +520,20 @@ Tab order, active identity and bookmarks are saved separately in `tabs.json`,
 with debounced atomic writes and total decoding after host and checkout
 verification. Drafts and submissions remain in the existing recovery journal.
 
-**Built for concurrency foundation (Stage 6a — authoritative write exclusion):**
-every Plait Git mutation (staging, unstaging, hunk staging, committing,
-discarding, restoring a discard, creating and switching branches, pushing,
-publishing, fetching, pulling, turn undo/redo, and adding or removing a
-worktree) and every host run now share one ordered OS lease boundary: a private
-per-user checkout lifecycle lock (supporting a future reader class, tested with
-a fake reader), the existing canonical directory-inode writer lock, and a shared
-Git common-directory metadata lock across linked worktrees. Nothing is visible
-in the desktop app yet, no new control or Git verb was added, and starting a
-second run in a busy checkout is still refused.
+**Built (Stage 6a, write exclusion):** every Git write Plait makes (staging
+and unstaging by file or hunk, committing, discarding and restoring a discard,
+creating and switching branches, pushing, publishing, fetching, pulling, turn
+undo and redo, adding and removing a worktree) and every run take one ordered
+set of OS locks: a per-user lifecycle lock for each checkout (with a reader
+class tested with a fake reader, no reader run shipped), the existing writer
+lock on the checkout directory, and a lock on the repository's shared Git
+metadata so linked worktrees take turns. One change is visible: a desktop Git
+write while a thread is running in the same checkout is now refused with a
+note (staging and committing used to go ahead with a warning; branch controls
+were already locked), and a message sent during such a write is refused as
+busy. No control or Git verb was added, and a second run
+in a busy checkout is still refused. Not yet excluded: a Codex or Claude Code
+process that keeps running after its run has ended (Stage 6b).
 
 **Still planned:** other tab content kinds, harness stop/cleanup quiescence and
 quarantine (Stage 6b), host-owned worktree creation (Stage 7), busy-checkout

@@ -600,17 +600,17 @@ write operation is `write(root, op)`: stage, unstage, stage all, unstage all,
 commit, push, publish, fetch, pull, a hunk, discard, restore, create a branch,
 or switch branches. Each returns data or a user-facing error.
 
-Every Plait Git write, worktree mutation (`add_worktree`, `remove_worktree`),
-host turn undo/redo (`plait-host undo`), and runtime run participates in the
-same `plait_core::lease` lock hierarchy on the background executor (never in
-render): Level 1 checkout lifecycle lock (`LOCK_SH` for runs and future readers,
-`LOCK_EX` for exclusive checkout mutations and worktree removal) in a private
-per-user directory (`~/.local/share/plait-leases`), Level 2 canonical checkout
-directory-inode writer lock (`LOCK_EX`, omitted for readers), and Level 3 shared
-Git `--git-common-dir` metadata lock (`LOCK_EX`, with a short bounded wait for
-shared ref/config/worktree-registry writes across linked worktrees). `RepositoryJob`
-verifies `CheckoutKey` identity under the acquired lease before running `git::write`.
-Existing hardened Git functions remain unchanged underneath this lease boundary.
+`write`, `add_worktree` and `remove_worktree` take a `plait_core::lease`
+checkout lease before any Git runs, always on the background executor: the
+lifecycle lock (exclusive for a write or removal, shared on the parent for
+adding a worktree), the checkout directory's writer lock, and, for writes to
+shared refs, configuration or the worktree list, the common-directory lock,
+in that order. The root and common directory come from the root's `.git`
+entry, so a lease starts no process. `RepositoryJob` passes the checkout's
+verified identity, which the lease checks under the lock. Turn undo takes the
+same exclusive lease in the runtime, and `plait-host undo` accepts it only if it
+is already exclusive; a run takes the writer class. The hardened Git functions
+underneath are unchanged.
 
 Branches are read with `for-each-ref` over `refs/heads/`, newest committer
 date first, at most 500, when the branch palette opens, never on a status

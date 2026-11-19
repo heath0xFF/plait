@@ -1471,14 +1471,54 @@ the normal shell process group on Stop, host/Node death, timeout, or shell exit.
 An intentionally detached descendant can evade group cleanup, but still cannot
 write the checkout or outside that command's scratch and thread cache. This is
 not a general process container.
-The guardian holds the store lock and both checkout leases (writer and lifecycle) until exit, marking inherited lease descriptors close-on-exec before starting any untrusted command so no child process sees them while the guardian retains them.
-Checkout exclusion uses three OS `flock` layers acquired in one strict order (never upgraded in place):
+The guardian holds the store lock and both checkout leases (writer and
+lifecycle) until it exits, and marks every inherited descriptor close-on-exec
+before it starts a command, so no command holds them.
 
-1. **Checkout lifecycle lock** (`~/.local/share/plait-leases/checkout-<dev>-<ino>.lock`, inside an owner-only `0700` directory with `0600` single-link regular files opened with `O_NOFOLLOW`, independent of host store and `TMPDIR`): taken shared (`LOCK_SH`) by active runs and future host-enforced readers, and exclusive (`LOCK_EX`) by desktop Git writes, turn undo/redo, and worktree removal.
-2. **Checkout writer lock** (an OS `flock(LOCK_EX)` on the canonical checkout root directory inode itself): taken by writing runs, turn undo/redo, desktop Git writes, and worktree removal; omitted for readers so a future enforced reader can coexist with a writer while older hosts that only take the directory lock remain mutually excluded.
-3. **Shared Git common-directory metadata lock** (`common-<dev>-<ino>.lock` keyed by the canonical `--git-common-dir` inode in the same per-user directory): taken exclusive (`LOCK_EX`) around operations that update shared refs, upstream configuration, or the worktree registry (`commit`, `push`, `publish`, `fetch`, `pull`, branch create/switch, `worktree add`/`remove`), serializing linked worktrees even when their checkout directories differ.
+Checkout exclusion uses three OS `flock` layers, always taken in this order and
+never converted in place:
 
-Symlink aliases and subdirectories resolve to the canonical working-tree root inode before locking. A process crash releases its leases when the kernel closes its open file descriptions; an uncertain descendant that still holds inherited lease descriptors keeps those leases held until it exits. All shipped runs are still writers (at most one active run per checkout and eight active checkouts per host); the reader class is reserved in the lease layer and exercised only by tests. External editors and unrelated same-user processes remain outside this cooperating lock protocol.
+1. **Checkout lifecycle lock**: `checkout-<dev>-<ino>.lock` in
+   `~/.local/share/plait-leases`, keyed by the canonical root's device and
+   inode. The directory must be the user's own, mode `0700`; each lock file
+   must be the user's own, mode `0600`, a regular file with one link, opened
+   without following symlinks. It does not depend on the host store or
+   `TMPDIR`. Runs take it shared. Desktop Git writes, turn undo and redo, and
+   worktree removal take it exclusive. Creating a worktree takes it shared on
+   the checkout it starts from, so it can proceed beside a run there. Lock
+   files are never removed: a holder may still use one.
+2. **Checkout writer lock**: `flock(LOCK_EX)` on the canonical root directory
+   itself, as hosts did before the lifecycle lock, so an older host is still
+   excluded. Runs, turn undo and redo, desktop Git writes and worktree removal
+   take it. A future enforced reader would not.
+3. **Shared Git metadata lock**: `common-<dev>-<ino>.lock` in the same
+   directory, keyed by the repository's common Git directory. It is taken
+   exclusive, waiting at most five seconds, around writes to refs, upstream
+   configuration or the worktree list (commit, push, publish, fetch, pull,
+   creating or switching a branch, adding or removing a worktree), so linked
+   worktrees of one repository take turns even though their checkouts differ.
+   Unrelated repositories never wait for each other.
+
+The checkout and the common directory are found from the root's `.git` entry
+(`gitdir:` and `commondir`, as Git reads them), asking Git only when the path
+is not a checkout root. Symlinks, `/private` and other aliases, a different
+letter case on a case-insensitive volume, and subdirectories all resolve to the
+same root directory, so they share one lease.
+
+A lease is held by the runtime and by the helpers and command guardians it
+starts with the descriptors. When all of them have exited, by a crash
+included, the kernel releases it. Harness processes do not hold it: the Codex
+app-server, Claude Code and anything they start run without the descriptors, so
+if one keeps running after its run has ended (a Stop whose interrupt times out,
+or the runtime killed), the checkout is free while it may still write. A Pi
+command that detaches from its process group is the same. Proving that a
+harness has stopped, and keeping the checkout busy until it has, is planned
+work (Stage 6b in `ROADMAP.md`).
+
+All shipped runs are writers: one active run per checkout and eight active
+checkouts per host, as before. No reader run ships; the reader class exists in
+the lease layer for later stages. Editors and other programs outside Plait do
+not take these locks.
 File edits use a synced temporary file and atomic rename, with original mode and
 identity/content checks before replacement. The original is opened read-only:
 a write-capable open can change macOS provenance metadata before any write. Root replacement is rejected by its
