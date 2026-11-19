@@ -1333,9 +1333,10 @@ runner has a display. These are scripted checks, not live-model acceptance or
 validation on your Mac. See [verification](VERIFICATION.md) for results.
 
 Branch builds upload a `plait-macos-arm64-…` workflow artifact, which expires
-after 14 days. Version tags run the complete Mac checks again, then a separate
-publish job creates an immutable GitHub prerelease with the DMG, packages,
-installer script, and checksums. A failed build or installer test publishes
+after 14 days. A version tag's run builds and checks the release once, then a
+separate publish job creates an immutable GitHub prerelease with the DMG,
+packages, installer script, and checksums; pushing that commit to `main`
+afterwards does not build it again. A failed build or installer test publishes
 nothing. The job's only secret is the update signing key, which signs
 `update.json` for in-app updates (see [Releasing](RELEASING.md)); the app and
 packages are not Developer ID signed. [Issue #6](https://github.com/heath0xFF/plait/issues/6)

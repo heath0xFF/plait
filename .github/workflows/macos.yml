@@ -18,8 +18,33 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # A release is built once. Its tag's run builds, checks and publishes the
+  # commit, so the push of that same commit to main skips both macOS jobs.
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+    steps:
+      - id: decide
+        env:
+          REPOSITORY: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          build=true
+          if [[ $GITHUB_EVENT_NAME == push && $GITHUB_REF == refs/heads/main ]]; then
+            # A failed lookup leaves build=true: building twice is the safe mistake.
+            if git ls-remote --tags "https://github.com/$REPOSITORY" 'v*' | awk -v commit="$COMMIT" '$1 == commit' | grep -q .; then
+              build=false
+              echo "A release tag names $COMMIT; that tag's run built and checked it." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
   # Checks and packaging run side by side; publishing needs both.
   check:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
     runs-on: macos-26
     timeout-minutes: 45
     env:
@@ -64,6 +89,8 @@ jobs:
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   package:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
     runs-on: macos-26
     timeout-minutes: 45
     env:
@@ -124,14 +151,33 @@ jobs:
             target/release-inputs
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
-      # Reuse this runner and its finished package. These final steps are
-      # advisory on main only; tags neither execute nor wait for them.
+  # The real-window check drives the package this run built. It is advisory:
+  # publishing does not wait for it, and its failures do not fail the run.
+  acceptance:
+    needs: package
+    if: github.event_name == 'push'
+    runs-on: macos-26
+    timeout-minutes: 20
+    continue-on-error: true
+    permissions:
+      actions: read
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      ARTIFACT: plait-macos-arm64-${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/macos-tools
+      - name: Download the package this run built
+        run: gh run download "$GITHUB_RUN_ID" -n "$ARTIFACT" -D dist
       - name: Native acceptance (advisory)
         id: native-acceptance
         env:
           # The virtual display can stall presentation and AX updates until a capture forces a frame.
           PLAIT_ACCEPTANCE_FORCE_FRAMES: '1'
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         timeout-minutes: 8
         continue-on-error: true
         run: |
@@ -146,7 +192,7 @@ jobs:
               --host "${host[0]}" --artifacts acceptance-results
           } 2>&1 | tee acceptance-output.log
       - name: Upload native observations and failure captures
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.native-acceptance.outcome != 'skipped'
+        if: always() && steps.native-acceptance.outcome != 'skipped'
         timeout-minutes: 2
         continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

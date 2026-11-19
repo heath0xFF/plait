@@ -730,10 +730,12 @@ and executables are not copied. Failures and skips retain the disposable folder.
 A completely passing run removes it. An all-skipped native run exits zero with
 explicit skips unless interrupted.
 
-CI uploads these files and the console log. The final package-job steps remain
-advisory (`continue-on-error`), run only on pushes to `main`, and reuse the
-finished package without installing it. Tagged releases skip both steps; there
-is no additional macOS job or Rust build.
+CI uploads these files and the console log. The check runs in a job of its
+own after packaging, for release tags and for other pushes to `main`, on the
+package that run built, without installing it. It is advisory
+(`continue-on-error`): publishing does not wait for it, and its failures do
+not fail the run. A release commit is built once, by its tag's run; pushing
+that commit to `main` afterwards starts no second macOS build.
 
 Verified without a window: Swift compilation and pure selector, flag decoding,
 tab-row empty-right-end geometry (recorded one-tab, full-row and wide trees,

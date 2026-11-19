@@ -8,17 +8,13 @@ manifest, and publishes.
 
 1. Keep the Cargo version for `plait` and `plait-host` the same
    (`MAJOR.MINOR.PATCH`). A preview tag adds `-preview.N`, counting from 1.
-2. Merge to `main` with local checks passing (`scripts/check.sh`).
-   Once [native acceptance](VERIFICATION.md#native-acceptance-check) has passed
-   its first real-window run, run `bash scripts/acceptance-macos.sh` when the
-   computer is free **before tagging**, and inspect failures, screenshots and
-   skips alongside the remaining manual acceptance list. The script has not
-   yet been run against a window; its current evidence is windowless only.
-   Its advisory steps on pushes to `main` may skip for missing macOS permissions
-   and cannot gate a release. An all-skipped run is not native acceptance.
-3. Tag the merged commit and push the tag. There is no need to wait for
-   `main`'s macOS build first: the tag's build runs the same checks on the same
-   commit and publishes nothing unless they pass.
+2. Get the release commit ready on a branch. The tests for what changed pass,
+   and a change that writes a person's files, or a file an older build reads,
+   has been read by someone who did not write it. A release is built and
+   checked once, by its tag's run: a full local `scripts/check.sh` before
+   tagging is not required, and repeats what that run does. Render the scenes
+   and measure frame cost only when the change touches drawing.
+3. Tag that commit and push the tag alone.
 
    ```sh
    git tag v0.1.0-preview.7
@@ -26,10 +22,18 @@ manifest, and publishes.
    ```
 
 4. The **macOS build** workflow builds from that tag. Its check job (format,
-   lint, tests, and the real command sandbox) and package job run side by side;
-   the package job builds the installers and runs the installer
-   smoke test, including migration to the prebuilt per-user install. Its publish job writes `update.json`, signs it, and publishes the
-   release with the app archive, host archive, packages, DMG, and checksums.
+   lint, tests, and the real command sandbox) and package job run side by
+   side; the package job builds the installers and runs the installer smoke
+   test, including migration to the prebuilt per-user install. Its publish job
+   writes `update.json`, signs it, and publishes the release with the app
+   archive, host archive, packages, DMG, and checksums. The
+   [native acceptance check](VERIFICATION.md#native-acceptance-check) drives
+   the same package in a job of its own; it is advisory, and publishing does
+   not wait for it.
+5. When the release is published, push the commit to `main`. That push does
+   not build or check on macOS again, because the tag's run did both for this
+   commit; the Linux check runs. If the tag's run fails, nothing is published
+   and the tag stays as it is: fix the branch and tag the next number.
 
 Installed apps see the release on their next launch or **Check for Updates…**.
 The updater compares the signed version, so each release needs a newer tag.
