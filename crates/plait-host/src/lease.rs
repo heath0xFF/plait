@@ -199,7 +199,7 @@ pub fn acquire_or_verify_exclusive(
 
     // Level 1: lifecycle exclusive (reuse inherited fd 7 if it matches the lock file).
     if verify_inherited_lock_fd(7, expected_lock_id).is_ok() {
-        if !try_flock_fd(7, libc::LOCK_EX).map_err(|e| io::Error::other(e.to_string()))? {
+        if !inherited_exclusive(7, &lifecycle_file)? {
             return Err(io::Error::other(format!("busy: {CHECKOUT_BUSY}")));
         }
     } else {
@@ -228,6 +228,26 @@ pub fn acquire_or_verify_exclusive(
     verify_dir_still(&canonical, expected)
         .map_err(|_| io::Error::other("Checkout identity changed"))?;
     Ok(guard)
+}
+
+/// Whether the inherited lifecycle descriptor `fd` already holds `LOCK_EX`.
+///
+/// The inherited description belongs to the runtime, so it is never converted:
+/// a shared lock upgraded here would stay exclusive after this helper exits, and
+/// on Linux a refused conversion removes the shared lock first. `probe` is a
+/// fresh description of the same lock file. It can take a shared lock only when
+/// nobody holds an exclusive one; when it cannot, re-asserting `LOCK_EX` on `fd`
+/// is a no-op if `fd` is that holder and a refusal otherwise.
+fn inherited_exclusive(fd: i32, probe: &File) -> io::Result<bool> {
+    let lock =
+        |fd, operation| try_flock_fd(fd, operation).map_err(|e| io::Error::other(e.to_string()));
+    if lock(probe.as_raw_fd(), libc::LOCK_SH)? {
+        unsafe {
+            libc::flock(probe.as_raw_fd(), libc::LOCK_UN);
+        }
+        return Ok(false);
+    }
+    lock(fd, libc::LOCK_EX)
 }
 
 fn fstat_fd(fd: i32) -> io::Result<libc::stat> {

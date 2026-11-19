@@ -952,3 +952,101 @@ fn lease_prepare_rejects_hard_linked_lock_file() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("single-link"), "{stderr}");
 }
+
+/// Runs `plait-host undo` with `lifecycle` as fd 7 and `writer` as fd 4, as the runtime passes them.
+fn undo_with_inherited(request: &Value, lifecycle: &fs::File, writer: &fs::File) -> (bool, String) {
+    use std::os::{fd::AsRawFd, unix::process::CommandExt};
+    let (l, w) = (lifecycle.as_raw_fd(), writer.as_raw_fd());
+    let mut command = Command::new(env!("CARGO_BIN_EXE_plait-host"));
+    command
+        .arg("undo")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    unsafe {
+        command.pre_exec(move || {
+            let a = libc::fcntl(l, libc::F_DUPFD_CLOEXEC, 10);
+            let b = libc::fcntl(w, libc::F_DUPFD_CLOEXEC, 10);
+            if a < 0 || b < 0 || libc::dup2(a, 7) < 0 || libc::dup2(b, 4) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(request.to_string().as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn undo_never_converts_an_inherited_shared_lifecycle_lock() {
+    use plait_core::lease::{LeaseClass, acquire_checkout, prepare_checkout_lock};
+    use std::os::fd::AsRawFd;
+    let base = Scratch::new();
+    let root = repository(&base.0);
+    let store = base.0.join("store");
+    fs::create_dir(&store).unwrap();
+    let (ok, before, error) = helper("record", &json!({"checkout":root,"store":store,"id":"b"}));
+    assert!(ok, "{error}");
+    fs::write(root.join("notes.txt"), "after run\n").unwrap();
+    let (ok, after, error) = helper(
+        "record",
+        &json!({"checkout":root,"store":store,"id":"a","before":before["commit"]}),
+    );
+    assert!(ok, "{error}");
+    let meta = fs::metadata(&root).unwrap();
+    let request = |id: &str| {
+        json!({
+            "checkout": root, "store": store, "before": before["commit"], "after": after["commit"],
+            "before_id": format!("ub-{id}"), "id": format!("ua-{id}"),
+            "identity": {"dev": meta.dev().to_string(), "ino": meta.ino().to_string()}
+        })
+    };
+    let prepared = prepare_checkout_lock(&root).unwrap();
+    let open = || {
+        let lifecycle = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&prepared.lock_path)
+            .unwrap();
+        (lifecycle, fs::File::open(&prepared.root).unwrap())
+    };
+    let flock = |file: &fs::File, operation| unsafe {
+        libc::flock(file.as_raw_fd(), operation | libc::LOCK_NB) == 0
+    };
+
+    // A writer-class pair (lifecycle shared): undo is refused and the run's lock is left shared.
+    let (lifecycle, writer) = open();
+    assert!(flock(&lifecycle, libc::LOCK_SH) && flock(&writer, libc::LOCK_EX));
+    let (ok, stderr) = undo_with_inherited(&request("shared"), &lifecycle, &writer);
+    assert!(!ok && stderr.contains("busy"), "{stderr}");
+    assert_eq!(
+        fs::read_to_string(root.join("notes.txt")).unwrap(),
+        "after run\n"
+    );
+    let reader = acquire_checkout(&root, None, LeaseClass::Reader)
+        .expect("the inherited lifecycle lock must still be shared");
+    drop(reader);
+    drop((lifecycle, writer));
+
+    // An exclusive pair, as turn undo passes it: the helper reuses it and restores the file.
+    let (lifecycle, writer) = open();
+    assert!(flock(&lifecycle, libc::LOCK_EX) && flock(&writer, libc::LOCK_EX));
+    let (ok, stderr) = undo_with_inherited(&request("exclusive"), &lifecycle, &writer);
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        fs::read_to_string(root.join("notes.txt")).unwrap(),
+        "before\n"
+    );
+    // The runtime still holds its lease after the helper exits.
+    assert!(acquire_checkout(&root, None, LeaseClass::Reader).is_err());
+}
