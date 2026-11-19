@@ -142,6 +142,16 @@ impl Plait {
                     thread_id: operation.thread_id.clone(),
                     protocol_version: Some(host::PROTOCOL_VERSION),
                 })?;
+                let tree = operation.worktree.as_ref().ok_or_else(|| host::Error::Protocol("Host omitted the created worktree.".into()))?;
+                let matches_choice = match &request {
+                    Request::CreateWorktreeThread { harness, provider, model_id, .. } =>
+                        super::harnesses::harness_of(&reply.thread) == *harness
+                            && reply.thread.model.provider == *provider && reply.thread.model.model_id == *model_id,
+                    _ => false,
+                };
+                if reply.thread.id != operation.thread_id || reply.thread.checkout != tree.path || !matches_choice {
+                    return Err(host::Error::Protocol("Host returned a different thread, checkout, or harness. Creation remains unconfirmed.".into()));
+                }
                 Some(ThreadSummary::from(&reply.thread))
             } else {
                 None
@@ -325,6 +335,13 @@ fn await_operation(client: &Client, request: &Request) -> Result<Operation, host
     {
         return Err(host::Error::Protocol(
             "Host returned a different worktree operation.".into(),
+        ));
+    }
+    if let Request::RemoveWorktree { creation_id, .. } = request
+        && operation.request_id != *creation_id
+    {
+        return Err(host::Error::Protocol(
+            "Host returned a different removal operation.".into(),
         ));
     }
     Ok(operation)

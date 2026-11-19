@@ -939,6 +939,85 @@ mod managed_tests {
         );
     }
     #[test]
+    fn publication_checks_refuse_ahead_commits_ignored_files_and_unfinished_git() {
+        let repo = repository();
+        fs::write(repo.0.join(".gitignore"), "target/\n").unwrap();
+        repo.git(&["add", ".gitignore"]);
+        repo.git(&["commit", "-qm", "ignore cache"]);
+        let remote = repo.0.join(".git/test-remote.git");
+        repo.git(&["init", "--bare", remote.to_str().unwrap()]);
+        repo.git(&["remote", "add", "origin", remote.to_str().unwrap()]);
+        let tree = create(&repo);
+        let identity = tree.identity.as_ref().unwrap();
+        let command = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&tree.path)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        command(&["push", "-u", "origin", &tree.branch]);
+        fs::create_dir(tree.path.join("target")).unwrap();
+        fs::write(tree.path.join("target/cache"), "ignored").unwrap();
+        assert!(
+            remove_managed_worktree(tree.clone(), identity, false, |_| Ok(()))
+                .unwrap_err()
+                .contains("ignored")
+        );
+        fs::remove_dir_all(tree.path.join("target")).unwrap();
+        let git_dir = text_read(&tree.path, &["rev-parse", "--absolute-git-dir"]).unwrap();
+        fs::write(Path::new(&git_dir).join("MERGE_HEAD"), &tree.parent.base).unwrap();
+        assert!(
+            remove_managed_worktree(tree.clone(), identity, false, |_| Ok(()))
+                .unwrap_err()
+                .contains("unfinished")
+        );
+        fs::remove_file(Path::new(&git_dir).join("MERGE_HEAD")).unwrap();
+        fs::write(tree.path.join("file"), "new commit\n").unwrap();
+        command(&["add", "file"]);
+        command(&["commit", "-qm", "unpushed"]);
+        assert!(
+            remove_managed_worktree(tree.clone(), identity, false, |_| Ok(()))
+                .unwrap_err()
+                .contains("unpushed commits")
+        );
+        command(&["push"]);
+        let removed = remove_managed_worktree(tree.clone(), identity, false, |_| Ok(())).unwrap();
+        assert_eq!(removed.stage, ManagedStage::Removed);
+        let mut lost = removed;
+        lost.stage = ManagedStage::Removing;
+        assert_eq!(
+            remove_managed_worktree(lost, identity, false, |_| Ok(()))
+                .unwrap()
+                .stage,
+            ManagedStage::Removed
+        );
+        clean(&tree);
+    }
+    #[test]
+    fn busy_parent_can_create_but_a_symlinked_destination_is_refused() {
+        let repo = repository();
+        let parent = worktree_parent(&repo.0).unwrap();
+        let writer =
+            crate::lease::acquire_checkout(&repo.0, None, crate::lease::LeaseClass::Writer)
+                .unwrap();
+        let tree = create_managed_worktree(&parent, ID, None, |_| Ok(())).unwrap();
+        assert_eq!(tree.stage, ManagedStage::Ready);
+        drop(writer);
+        clean(&tree);
+        let base = worktree_base(&repo.0).unwrap();
+        let _ = fs::remove_dir(&base);
+        std::os::unix::fs::symlink(&repo.0, &base).unwrap();
+        assert!(create_managed_worktree(&parent, ID, None, |_| Ok(())).is_err());
+        fs::remove_file(base).unwrap();
+    }
+    #[test]
     fn substituted_path_and_forged_removal_identity_are_refused() {
         let repo = repository();
         let tree = create(&repo);
