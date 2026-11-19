@@ -25,6 +25,27 @@ pub struct Worktree {
 /// Check out HEAD of the repository at `root` on a new `plait/<name>` branch
 /// in a new folder beside it. Blocking: call on a background thread.
 pub fn add_worktree(root: &Path) -> Result<Worktree> {
+    add_worktree_with_common_wait(root, crate::lease::COMMON_METADATA_WAIT)
+}
+
+pub(crate) fn add_worktree_with_common_wait(
+    root: &Path,
+    common_wait: Duration,
+) -> Result<Worktree> {
+    // Hold a shared lifecycle lease on the parent checkout (allowing an active
+    // writer or reader there to continue) and serialize shared repository
+    // metadata (refs and the worktree registry) exclusively on common_dir.
+    let lease = crate::lease::acquire_git_checkout(
+        root,
+        None,
+        crate::lease::LeaseClass::Reader,
+        Some(common_wait),
+    )
+    .map_err(String::from)?;
+    add_worktree_unlocked(lease.root())
+}
+
+fn add_worktree_unlocked(root: &Path) -> Result<Worktree> {
     if !head_exists(root)? {
         return Err("Make a first commit before starting a thread in its own worktree.".into());
     }
@@ -61,6 +82,35 @@ pub fn add_worktree(root: &Path) -> Result<Worktree> {
 /// Remove a worktree of the repository at `main`. Git refuses one with
 /// modified or untracked files; its branch and commits are kept.
 pub fn remove_worktree(main: &Path, path: &Path) -> Result<()> {
+    remove_worktree_with_common_wait(main, path, crate::lease::COMMON_METADATA_WAIT)
+}
+
+pub(crate) fn remove_worktree_with_common_wait(
+    main: &Path,
+    path: &Path,
+    common_wait: Duration,
+) -> Result<()> {
+    let main_paths = crate::lease::resolve_git_checkout(main).map_err(String::from)?;
+    let target_paths = crate::lease::resolve_git_checkout(path).map_err(String::from)?;
+    if main_paths.root == target_paths.root {
+        return Err("Cannot remove the main repository checkout as a worktree.".into());
+    }
+    if main_paths.common_dir != target_paths.common_dir {
+        return Err("This folder is not a worktree of the selected repository.".into());
+    }
+    // Hold exclusive lifecycle + writer leases on the target worktree before
+    // taking the shared common-directory metadata lock.
+    let _lease = crate::lease::acquire_git_checkout(
+        &target_paths.root,
+        None,
+        crate::lease::LeaseClass::Exclusive,
+        Some(common_wait),
+    )
+    .map_err(String::from)?;
+    remove_worktree_unlocked(&main_paths.root, &target_paths.root)
+}
+
+fn remove_worktree_unlocked(main: &Path, path: &Path) -> Result<()> {
     let target = path
         .to_str()
         .ok_or("The worktree folder path is not UTF-8.")?;

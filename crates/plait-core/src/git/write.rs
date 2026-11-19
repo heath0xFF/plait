@@ -102,8 +102,55 @@ pub struct WriteOutcome {
     pub backup: Option<Backup>,
 }
 
-/// Run one write in the repository at `root`. Blocking: call on a background thread.
+/// Whether this write updates shared repository metadata (refs, upstream config,
+/// or branch checkout state) stored under `--git-common-dir`.
+pub fn needs_common_metadata_lock(op: &WriteOp) -> bool {
+    matches!(
+        op,
+        WriteOp::Commit { .. }
+            | WriteOp::Push
+            | WriteOp::Publish
+            | WriteOp::Fetch
+            | WriteOp::Pull
+            | WriteOp::CreateBranch(_)
+            | WriteOp::SwitchBranch(_)
+    )
+}
+
+/// Run one write in the repository at `root` under authoritative checkout
+/// lifecycle and writer leases. Blocking: call on a background thread.
 pub fn write(root: &Path, op: &WriteOp) -> Result<WriteOutcome> {
+    write_checked(root, None, op)
+}
+
+/// Run one write after verifying `expected` directory identity under the
+/// acquired checkout leases so root swaps cannot race admission.
+pub fn write_checked(
+    root: &Path,
+    expected: Option<crate::lease::DirIdentity>,
+    op: &WriteOp,
+) -> Result<WriteOutcome> {
+    write_with_common_wait(root, expected, op, crate::lease::COMMON_METADATA_WAIT)
+}
+
+pub(crate) fn write_with_common_wait(
+    root: &Path,
+    expected: Option<crate::lease::DirIdentity>,
+    op: &WriteOp,
+    common_wait: Duration,
+) -> Result<WriteOutcome> {
+    let common = needs_common_metadata_lock(op).then_some(common_wait);
+    let lease = crate::lease::acquire_git_checkout(
+        root,
+        expected,
+        crate::lease::LeaseClass::Exclusive,
+        common,
+    )
+    .map_err(String::from)?;
+    write_unlocked(lease.root(), op)
+}
+
+fn write_unlocked(root: &Path, op: &WriteOp) -> Result<WriteOutcome> {
     match op {
         WriteOp::Stage(paths) => {
             let input = pathspec_input(paths)?;

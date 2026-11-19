@@ -1881,3 +1881,215 @@ fn branch_records_are_validated() {
     );
     assert!(parse_branches(b"").unwrap().is_empty());
 }
+
+#[test]
+fn writer_lease_blocks_every_desktop_git_write_including_via_alias() {
+    use crate::lease::{CHECKOUT_BUSY, LeaseClass, acquire_checkout};
+    let repo = Repo::new();
+    repo.write("a.txt", "base\n");
+    repo.commit();
+    repo.git(&["branch", "other"]);
+    repo.write("a.txt", "staged\n");
+    stage(&repo, &["a.txt"]).unwrap();
+    repo.write("a.txt", "working\n");
+    let unstaged = diff(
+        &repo.0,
+        &status(&repo.0).unwrap().changes[0],
+        DiffMode::Unstaged,
+    )
+    .unwrap();
+    let backup = write(&repo.0, &discard_op("a.txt", false, None))
+        .unwrap()
+        .backup
+        .unwrap();
+    write(&repo.0, &WriteOp::Restore(backup.clone())).unwrap();
+    let alias = repo.0.parent().unwrap().join(format!(
+        "plait-alias-{}",
+        repo.0.file_name().unwrap().to_string_lossy()
+    ));
+    let _ = fs::remove_file(&alias);
+    std::os::unix::fs::symlink(&repo.0, &alias).unwrap();
+
+    let writer = acquire_checkout(&repo.0, None, LeaseClass::Writer).unwrap();
+    let ops = [
+        WriteOp::Stage(paths(&["a.txt"])),
+        WriteOp::Unstage(paths(&["a.txt"])),
+        WriteOp::StageAll,
+        WriteOp::UnstageAll,
+        WriteOp::Commit {
+            message: "should not commit".into(),
+        },
+        WriteOp::Push,
+        WriteOp::Publish,
+        WriteOp::Fetch,
+        WriteOp::Pull,
+        hunk_op(&unstaged, DiffMode::Unstaged, 0),
+        discard_op("a.txt", false, None),
+        WriteOp::Restore(backup),
+        WriteOp::CreateBranch("blocked".into()),
+        WriteOp::SwitchBranch("other".into()),
+    ];
+    for op in &ops {
+        assert_eq!(write(&repo.0, op).unwrap_err(), CHECKOUT_BUSY, "{op:?}");
+        assert_eq!(
+            write(&alias, op).unwrap_err(),
+            CHECKOUT_BUSY,
+            "alias {op:?}"
+        );
+    }
+    // Working tree, branch, and commit history were untouched.
+    assert_eq!(
+        fs::read_to_string(repo.0.join("a.txt")).unwrap(),
+        "working\n"
+    );
+    assert_eq!(repo.head_branch(), "main");
+    assert_eq!(log(&repo.0, None, 0, 10).unwrap().commits.len(), 1);
+    drop(writer);
+
+    // Once released, desktop Git mutations proceed normally.
+    write(
+        &repo.0,
+        &WriteOp::Commit {
+            message: "after release".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(log(&repo.0, None, 0, 10).unwrap().commits.len(), 2);
+    let _ = fs::remove_file(&alias);
+}
+
+#[test]
+fn fake_reader_lease_blocks_desktop_git_writes_and_worktree_removal_while_allowing_worktree_add() {
+    use crate::lease::{CHECKOUT_BUSY, LeaseClass, acquire_checkout};
+    let repo = Repo::new();
+    repo.write("a.txt", "base\n");
+    repo.commit();
+    repo.git(&["branch", "side"]);
+    repo.write("a.txt", "edited\n");
+
+    let reader_main = acquire_checkout(&repo.0, None, LeaseClass::Reader).unwrap();
+    // Desktop mutations on main are refused while a reader holds lifecycle-shared.
+    assert_eq!(
+        write(&repo.0, &WriteOp::StageAll).unwrap_err(),
+        CHECKOUT_BUSY
+    );
+    assert_eq!(
+        write(&repo.0, &WriteOp::SwitchBranch("side".into())).unwrap_err(),
+        CHECKOUT_BUSY
+    );
+    assert_eq!(
+        write(&repo.0, &discard_op("a.txt", false, None)).unwrap_err(),
+        CHECKOUT_BUSY
+    );
+    // Creating a new worktree from main only takes shared lifecycle + common_dir,
+    // so it succeeds even while a reader (or writer) is active in main.
+    let tree = add_worktree(&repo.0).unwrap();
+    drop(reader_main);
+
+    // Holding a reader lease on the worktree itself refuses removing that worktree.
+    let reader_wt = acquire_checkout(&tree.path, None, LeaseClass::Reader).unwrap();
+    assert_eq!(
+        remove_worktree(&repo.0, &tree.path).unwrap_err(),
+        CHECKOUT_BUSY
+    );
+    assert!(tree.path.is_dir());
+    drop(reader_wt);
+    remove_worktree(&repo.0, &tree.path).unwrap();
+    assert!(!tree.path.exists());
+}
+
+#[test]
+fn writer_lease_blocks_worktree_removal_while_unrelated_checkout_progresses() {
+    use crate::lease::{CHECKOUT_BUSY, LeaseClass, acquire_checkout};
+    let repo = Repo::new();
+    repo.write("a.txt", "base\n");
+    repo.commit();
+    let other = Repo::new();
+    other.write("b.txt", "base\n");
+    other.commit();
+
+    let tree = add_worktree(&repo.0).unwrap();
+    let alias = repo.0.parent().unwrap().join(format!(
+        "plait-wt-alias-{}",
+        repo.0.file_name().unwrap().to_string_lossy()
+    ));
+    let _ = fs::remove_file(&alias);
+    std::os::unix::fs::symlink(&tree.path, &alias).unwrap();
+
+    let writer = acquire_checkout(&tree.path, None, LeaseClass::Writer).unwrap();
+    assert_eq!(
+        remove_worktree(&repo.0, &tree.path).unwrap_err(),
+        CHECKOUT_BUSY
+    );
+    assert_eq!(remove_worktree(&repo.0, &alias).unwrap_err(), CHECKOUT_BUSY);
+    assert!(tree.path.is_dir());
+
+    // An unrelated checkout continues committing and switching branches freely.
+    other.write("b.txt", "updated\n");
+    write(&other.0, &WriteOp::StageAll).unwrap();
+    write(
+        &other.0,
+        &WriteOp::Commit {
+            message: "unrelated commit".into(),
+        },
+    )
+    .unwrap();
+    write(&other.0, &WriteOp::CreateBranch("unrelated-branch".into())).unwrap();
+    assert_eq!(other.head_branch(), "unrelated-branch");
+
+    drop(writer);
+    let _ = fs::remove_file(&alias);
+    remove_worktree(&repo.0, &tree.path).unwrap();
+    assert!(!tree.path.exists());
+}
+
+#[test]
+fn shared_metadata_lock_serializes_linked_worktree_ops_and_times_out_truthfully() {
+    use crate::lease::{COMMON_METADATA_BUSY, acquire_common_metadata};
+    let repo = Repo::new();
+    repo.write("a.txt", "base\n");
+    repo.commit();
+    let tree = add_worktree(&repo.0).unwrap();
+
+    // While common_dir metadata is held, short-wait ops refuse truthfully.
+    let held = acquire_common_metadata(&repo.0, Duration::ZERO).unwrap();
+    let short = Duration::from_millis(20);
+    assert_eq!(
+        super::write::write_with_common_wait(
+            &tree.path,
+            None,
+            &WriteOp::CreateBranch("delayed".into()),
+            short
+        )
+        .unwrap_err(),
+        COMMON_METADATA_BUSY
+    );
+    assert_eq!(
+        super::worktree::add_worktree_with_common_wait(&repo.0, short).unwrap_err(),
+        COMMON_METADATA_BUSY
+    );
+    assert_eq!(
+        super::worktree::remove_worktree_with_common_wait(&repo.0, &tree.path, short).unwrap_err(),
+        COMMON_METADATA_BUSY
+    );
+    // Non-metadata per-worktree staging in the sibling worktree does not need common_dir.
+    fs::write(tree.path.join("local.txt"), "hi\n").unwrap();
+    write(&tree.path, &WriteOp::Stage(paths(&["local.txt"]))).unwrap();
+    write(&tree.path, &WriteOp::UnstageAll).unwrap();
+    fs::remove_file(tree.path.join("local.txt")).unwrap();
+
+    // Bounded wait serializes a sibling worktree branch creation behind the holder.
+    let started = Instant::now();
+    let releaser = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(120));
+        drop(held);
+    });
+    write(&tree.path, &WriteOp::CreateBranch("serialized".into())).unwrap();
+    assert!(
+        started.elapsed() >= Duration::from_millis(90),
+        "sibling worktree metadata write did not wait for shared metadata lock"
+    );
+    releaser.join().unwrap();
+
+    remove_worktree(&repo.0, &tree.path).unwrap();
+}

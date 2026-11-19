@@ -71,7 +71,17 @@ impl RepositoryJob {
                 reply: self.job.failure(error),
             };
         }
-        let mut reply = self.job.run();
+        let mut reply = match (&self.job, &self.expected) {
+            (Job::Write { root, op }, Some(key)) => Reply::Write(git::write_checked(
+                root,
+                Some(crate::lease::DirIdentity {
+                    dev: key.device,
+                    ino: key.inode,
+                }),
+                op,
+            )),
+            _ => self.job.run(),
+        };
         let identity = match &reply {
             Reply::Status(Ok(snapshot)) => {
                 match CheckoutKey::resolve(self.host.clone(), &snapshot.root) {

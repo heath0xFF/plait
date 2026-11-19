@@ -756,7 +756,7 @@ pub use counts::{LineCount, line_counts};
 pub use log::{Commit, History, log, show};
 pub use worktree::{Worktree, add_worktree, remove_worktree};
 use write::BUSY;
-pub use write::{Backup, WriteOp, WriteOutcome, write};
+pub use write::{Backup, WriteOp, WriteOutcome, write, write_checked};
 #[cfg(test)]
 use write::{hunk_patch, network_hint};
 
