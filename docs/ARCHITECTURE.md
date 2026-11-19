@@ -565,8 +565,12 @@ Host inventory, the single hardened Git history read and storage walks run on
 background executors. Read stamps include tab lifetime, activation and host
 connection; a separate generation and cancellation flag retire in-flight work
 on refresh, hiding or closing. Completed old reads never install or start a
-measurement. Host activity events and explicit Refresh initiate reads; there
-is no polling. Hidden tabs retain only bookmarks and bounded size cache entries.
+measurement. Activation, explicit Refresh and a summary change (status, title,
+pending approval, model or recorded activity) of a thread in one of the listed
+checkouts initiate reads; there is no polling. One inventory runs at a time: a
+retired read's host helper still runs to the end, so a refresh asked for during
+a read waits and runs once after it. Hidden tabs retain only bookmarks and
+bounded size cache entries.
 
 `git/worktree/inventory.rs` supplies live host preservation facts using the
 same function as removal: changed/untracked/ignored paths, hidden index edits,
@@ -578,16 +582,23 @@ mutation replies settle their original operation even after navigation.
 
 `git::log::graph` reads at most 300 commits and parents from all checkout heads
 in one command. Pure `worktree_graph::layout` follows the trunk's first parents,
-assigns worktree segments, preserves merge-parent edges and leaves unavailable
-ancestry detached. Layout and labels are prepared on changes, never during
+gives each worktree its head's first-parent chain down to its base, puts merged-in
+commits on lanes of their own, preserves merge-parent edges and leaves
+unavailable ancestry detached. An edge whose column holds another commit between
+its ends is routed through a column with no commits, so no line reads as a parent
+link it is not. Layout and labels are prepared on changes, never during
 render. A uniform list draws only visible commit/head rows, with stable semantic
 IDs and keyboard selection. More lanes widen the scrollable graph. The frame
 suite's fifty-worktree case measures cached graph rendering, layout, prepaint
 and paint with no host, Git or storage work; it does not measure GPU presentation.
 
-`worktree_size` bounds each no-follow walk to 50,000 entries and 250 ms between
-filesystem calls, including private build cache. It excludes `.git`, deduplicates
-hard links within a walk and classifies conventional top-level output directories.
+`worktree_size` bounds each walk, including the private build cache, to 50,000
+entries and a 250 ms deadline checked between entries. It reaches every entry
+from its parent's open directory descriptor, opens folders without following a
+link and requires the folder it listed, so a folder swapped for a symlink mid-walk
+cannot lead it outside. It stays on each root's device, leaves the project's other
+checkouts to be measured as themselves, excludes `.git`, deduplicates hard links
+within a walk and classifies conventional top-level output directories.
 Values are logical bytes, not exclusive physical allocation. A 256-entry cache
 keys directory identity, head, changed count, last use and removed state.
 Refresh clears it; removed worktrees retain cache-only accounting. Partial

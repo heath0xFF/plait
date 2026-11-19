@@ -413,8 +413,9 @@ later. A stopped walk says **over** its measured lower bound.
 Sizes are logical file bytes, not a promise of reclaimed disk space. Source
 excludes Git metadata and top-level `target`, `build`, `dist`, `.next` and
 `node_modules`; those directories and the thread's private cache count as build
-output. Symlinks are not followed, and hard links within a measurement count
-once. Copy-on-write sharing and caches shared across checkouts cannot be
+output. Symlinks are not followed, a walk stays on its checkout's disk and does
+not enter another checkout nested inside it, and hard links within a measurement
+count once. Copy-on-write sharing and caches shared across checkouts cannot be
 apportioned reliably. The neutral split bar compares the selected checkout to
 the largest measured checkout; the header totals the available measurements.
 
