@@ -199,7 +199,9 @@ export class Worktrees {
     if (operation.state === 'preparing' || operation.state === 'removing') fail('busy', 'A worktree operation is still in progress.');
     this.store.db.prepare('INSERT INTO worktree_removals VALUES (?,?,?,NULL)').run(request.request_id, canonical(request), request.creation_id);
     this.startRemoval(request);
-    return { schema: 1, operation: this.get(request.creation_id) };
+    // An immediate refusal is already in the removal receipt.
+    const done = this.store.db.prepare('SELECT result FROM worktree_removals WHERE request_id=?').get(request.request_id);
+    return { schema: 1, operation: done?.result ? JSON.parse(String(done.result)) : this.get(request.creation_id) };
   }
   private startRemoval(request: Extract<Request, { op: 'remove_worktree' }>) {
     const key = `remove:${request.request_id}`;
@@ -208,6 +210,7 @@ export class Worktrees {
   }
   private async finishRemoval(request: Extract<Request, { op: 'remove_worktree' }>) {
     const operation = this.get(request.creation_id);
+    let receipt = operation;
     try {
       const root = operation.worktree!.path;
       // UI summaries are advisory. In-process work and OS leases both exclude removal.
@@ -215,8 +218,15 @@ export class Worktrees {
       operation.state = 'removing'; this.put(operation);
       operation.worktree = await worktreeHelper<Managed>({ action: 'remove', store: this.directory, thread_id: operation.thread_id, identity: request.identity, allow_unpushed: request.allow_unpushed });
       operation.state = 'removed'; operation.error = null; this.put(operation);
-    } catch (error) { operation.state = operation.worktree?.stage === 'ready' ? 'ready' : 'failed'; operation.error = failure(error); this.put(operation); }
-    this.store.db.prepare('UPDATE worktree_removals SET result=? WHERE request_id=?').run(JSON.stringify(operation), request.request_id);
+    } catch (error) {
+      // The refusal answers the removal. The creation keeps its own state and
+      // error: ready only when its worktree is ready and its thread was admitted.
+      const admitted = this.store.db.prepare('SELECT 1 FROM threads WHERE id=?').get(operation.thread_id);
+      operation.state = operation.worktree?.stage === 'ready' && admitted ? 'ready' : 'failed';
+      this.put(operation);
+      receipt = { ...operation, error: failure(error) };
+    }
+    this.store.db.prepare('UPDATE worktree_removals SET result=? WHERE request_id=?').run(JSON.stringify(receipt), request.request_id);
   }
   async close() { this.closing = true; await Promise.allSettled([...this.admitting.values()]); await Promise.allSettled([...this.pending.values()]); }
 }

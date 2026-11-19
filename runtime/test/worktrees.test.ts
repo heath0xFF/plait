@@ -98,6 +98,30 @@ test('host removal refuses uncommitted, unpushed and stale busy summaries and ke
   await exec('/usr/bin/git', ['-C', h.root, 'show-ref', '--verify', `refs/heads/${tree.branch}`]);
 });
 
+test('refused removal leaves the creation receipt as it was', async t => {
+  const h = await codex(t); await chmod(h.store, 0o700); await commit(h.root);
+  const info: any = await h.runtime.reply({ op: 'worktree_info', checkout: h.root });
+  await h.runtime.reply({ op: 'create_worktree_thread', request_id: 'create', parent: info.result.parent, harness: 'codex', provider: 'codex', model_id: 'gpt-fake', approval: 'ask' });
+  const ready = await done(h.runtime, 'create'); assert.equal(ready.state, 'ready', JSON.stringify(ready));
+  const tree = ready.worktree!;
+  await writeFile(join(tree.path, 'source.txt'), 'preserve');
+  const remove = async (id: string) => {
+    const result: any = await h.runtime.reply({ op: 'remove_worktree', request_id: id, creation_id: 'create', identity: tree.identity, allow_unpushed: true });
+    assert.equal(result.ok, true, JSON.stringify(result)); return done(h.runtime, id);
+  };
+  // The refusal is the removal's answer, not a new fact about the creation.
+  assert.match((await remove('dirty')).error!.message, /uncommitted/);
+  const creation = await done(h.runtime, 'create');
+  assert.equal(creation.state, 'ready'); assert.equal(creation.error, null, JSON.stringify(creation));
+  // A creation whose thread was never admitted stays failed after a refused removal.
+  const failed = { ...ready, state: 'failed', error: { code: 'internal', message: 'admission failed' } };
+  h.runtime.store.db.prepare('UPDATE worktree_operations SET result=? WHERE request_id=?').run(JSON.stringify(failed), 'create');
+  h.runtime.store.db.prepare('UPDATE threads SET id=? WHERE id=?').run('00000000-0000-4000-8000-000000000000', ready.thread_id);
+  assert.match((await remove('dirty-again')).error!.message, /uncommitted/);
+  const kept = await done(h.runtime, 'create');
+  assert.equal(kept.state, 'failed', JSON.stringify(kept)); assert.equal(kept.error?.message, 'admission failed');
+});
+
 test('worktree operation validation rejects unknown fields, malformed identities and lengths', () => {
   const identity = { dev: '1', ino: '2' };
   const request = { op: 'create_worktree_thread', request_id: 'create', parent: { root: '/repo', main: '/repo', common: '/repo/.git', identity, main_identity: identity, common_identity: identity, base: 'a'.repeat(40) }, harness: 'codex', provider: 'codex', model_id: 'model', approval: 'ask' };
