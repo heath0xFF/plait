@@ -36,7 +36,7 @@ export async function runGuardian(command: GuardianCommand, signal: AbortSignal,
     while (stdio.length < 8) stdio.push('ignore');
     stdio.push('pipe');
     const child = spawn(executable, args, {
-      cwd: command.root, env: command.isolateEnvironment ? { ...GUARDIAN_ENV, PLAIT_COMMAND_ENV_FD: '6' } : command.env,
+      cwd: command.root, env: { ...(command.isolateEnvironment ? { ...GUARDIAN_ENV, PLAIT_COMMAND_ENV_FD: '6' } : command.env), PLAIT_CLEANUP_RECEIPT_FD: '8' },
       stdio,
     });
     command.cleanup?.track(guardianProof(child), 'The command guardian did not confirm its process group stopped.');

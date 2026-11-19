@@ -49,6 +49,7 @@ export function helper<T>(operation: 'record' | 'prune' | 'undo' | 'review', inp
     // cannot start while one still writes the store. Its own process group lets a
     // timeout stop the sandboxed copy it starts as well.
     const child = spawn(executable, [operation], {
+      env: { ...process.env, PLAIT_CLEANUP_RECEIPT_FD: '8' },
       stdio: ['pipe', 'pipe', 'pipe', process.env.PLAIT_LOCK_FD ? Number(process.env.PLAIT_LOCK_FD) : 'ignore', writerFd ?? 'ignore',
         'ignore', 'ignore', lifecycleFd ?? 'ignore', 'pipe'],
       detached: true,

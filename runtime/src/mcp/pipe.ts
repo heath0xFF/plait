@@ -31,7 +31,7 @@ export function guardianPipe(root: string, policy: string, program: string, args
   const executable = process.env.PLAIT_HOST_EXE;
   if (!executable) throw new Error('MCP guardian is unavailable.');
   const child = spawn(executable, ['mcp-server', root, policy, program, ...args], {
-    cwd: root, env: GUARDIAN_ENV,
+    cwd: root, env: { ...GUARDIAN_ENV, PLAIT_CLEANUP_RECEIPT_FD: '8' },
     stdio: ['pipe', 'pipe', 'pipe', process.env.PLAIT_LOCK_FD ? Number(process.env.PLAIT_LOCK_FD) : 'ignore', state.lease?.fd ?? 'ignore', 'pipe', 'pipe',
       state.lease?.lifecycleFd ?? 'ignore', 'pipe'],
   });

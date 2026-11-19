@@ -58,9 +58,7 @@ pub(crate) fn supervise(operation: &str, budget: Duration) -> io::Result<()> {
 }
 
 fn supervise_command(mut command: Command, value: Value, budget: Duration) -> io::Result<()> {
-    unsafe {
-        libc::fcntl(8, libc::F_SETFD, libc::FD_CLOEXEC);
-    }
+    command.env_remove("PLAIT_CLEANUP_RECEIPT_FD");
     let mut child = command
         .process_group(0)
         .stdin(Stdio::piped())

@@ -2,10 +2,27 @@ use std::{
     io::{self, Read},
     os::unix::process::CommandExt,
     process::{Command, ExitStatus, Stdio},
-    sync::mpsc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::Duration,
 };
+
+static CLEANUP_RECEIPT: AtomicBool = AtomicBool::new(false);
+
+/// Only the runtime opts a helper into this private inherited channel.
+pub(crate) fn initialize_cleanup_receipt() -> io::Result<()> {
+    let Some(fd) = std::env::var_os("PLAIT_CLEANUP_RECEIPT_FD") else {
+        return Ok(());
+    };
+    if fd != "8" || unsafe { libc::fcntl(8, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+        return Err(io::Error::other("Invalid cleanup receipt descriptor."));
+    }
+    CLEANUP_RECEIPT.store(true, Ordering::Relaxed);
+    Ok(())
+}
 
 pub fn run(args: Vec<String>) -> io::Result<()> {
     if args.len() != 3 {
@@ -54,6 +71,7 @@ pub(crate) fn guard(
     mut lifetime: impl Read + Send + 'static,
     stdin: Stdio,
 ) -> io::Result<()> {
+    command.env_remove("PLAIT_CLEANUP_RECEIPT_FD");
     let mut child = match command.stdin(stdin).process_group(0).spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -141,6 +159,9 @@ pub(crate) fn wait_group_gone(group: i32, timeout: std::time::Duration) -> bool 
 
 /// Optional private receipt channel. Never put a cleanup claim in tool output.
 pub(crate) fn cleanup_receipt(text: &str) {
+    if !CLEANUP_RECEIPT.load(Ordering::Relaxed) {
+        return;
+    }
     unsafe {
         libc::write(8, text.as_ptr().cast(), text.len());
     }

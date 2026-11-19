@@ -1,11 +1,32 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { resolve } from 'node:path';
+import type { Readable } from 'node:stream';
 import { test } from 'node:test';
 import { CleanupProof, groupExited, guardianProof, NEVER } from '../src/cleanup.ts';
 import type { ChildProcess } from 'node:child_process';
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 5));
+
+test('a cleanup receipt needs explicit opt-in even when descriptor eight is open', async () => {
+  for (const enabled of [false, true]) {
+    const env = { ...process.env };
+    delete env.PLAIT_CLEANUP_RECEIPT_FD;
+    if (enabled) env.PLAIT_CLEANUP_RECEIPT_FD = '8';
+    const child = spawn(process.env.PLAIT_HOST_BINARY ?? resolve('../target/debug/plait-host'), ['record'], {
+      env, stdio: ['pipe', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'ignore', 'pipe'],
+    });
+    let receipt = '';
+    (child.stdio as (Readable | null | undefined)[])[8]!.setEncoding('utf8').on('data', data => { receipt += data; });
+    child.stdin!.end('{');
+    const code = await new Promise<number | null>((done, reject) => {
+      child.once('error', reject); child.once('close', done);
+    });
+    assert.equal(code, 1);
+    assert.equal(receipt, enabled ? 'clean\n' : '');
+  }
+});
 
 test('a close call and a failed exit check never count as cleanup proof', async () => {
   const proof = new CleanupProof();

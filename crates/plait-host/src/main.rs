@@ -30,6 +30,7 @@ fn main() {
 }
 
 fn run() -> io::Result<()> {
+    command::initialize_cleanup_receipt()?;
     let mut args = env::args().skip(1);
     let operation = args.next().unwrap_or_default();
     if operation == "file" {

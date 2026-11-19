@@ -272,7 +272,8 @@ for (const scenario of ['effect', 'error']) {
     }
     await eventually(async () => stored(f.store), pairs => pairs[0]?.after?.state === 'ready');
     recorded(stored(f.store)[0], 'submit-1', scenario === 'effect' ? ['attempts.txt', 'notes.txt'] : []);
-    assert.equal((await f.watch(thread.id)).status, scenario === 'effect' ? 'stopped' : 'error');
+    // The after record is saved before cleanup publishes the final status.
+    await eventually(() => f.watch(thread.id), value => value.status === (scenario === 'effect' ? 'stopped' : 'error'));
   });
 }
 

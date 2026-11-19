@@ -1574,6 +1574,12 @@ processes stopped. Plait checks the process groups it starts and retains a
 checkout-scoped cleanup obligation until it has positive evidence. Ordinary
 completion and a clean Stop need no additional action.
 
+Cleanup receipts use a private inherited descriptor, explicitly enabled by
+`PLAIT_CLEANUP_RECEIPT_FD=8` when the runtime launches a guardian or record
+helper. Without that marker, an open descriptor 8 is never treated as a receipt
+channel. The descriptor is close-on-exec and the marker is removed before
+launching commands, servers, or record workers.
+
 | Path | Ordinary finish | Stop or timeout | Harness/helper crash | Host restart mid-run |
 | --- | --- | --- | --- | --- |
 | Pi model and file tools | Pi closes; an admitted atomic file helper exits; recording finishes | Authorization is revoked; Pi closes; any admitted atomic edit finishes before release | A closed helper has no writer descendants; failed cleanup remains blocked | Durable marker blocks the checkout; no effect is replayed |
