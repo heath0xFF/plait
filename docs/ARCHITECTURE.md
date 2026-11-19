@@ -22,6 +22,7 @@ crates/plait/src/
 main.rs                 native app lifecycle, window, startup
 ui/                     GPUI layout, actions, focus, lists, theme
   mod.rs                UI state and background-task dispatch
+  a11y.rs               explicit-ID accessible text helper and debug-test prepaint collector
   actions.rs            every application action: ID, title, menu, default key
   commands.rs           command palette sources and the overlay above the workspace
   branches.rs           the branch control and its palette: switch to or create a branch
@@ -72,6 +73,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
   theme.rs              the current palette and the small original controls
   appearance.rs         light and dark themes, the themes folder, and their settings
   snapshot.rs           headless scene snapshots of the root view (tests only)
+  snapshot/a11y.rs      headless accessibility duplicate and steady-frame guards (tests only)
   snapshot/showcase.rs  README screenshots over a sample project (tests only)
   snapshot/ways_out.rs  which file and line the ways out pick; Settings → Editor (tests only)
   snapshot/find.rs      find in the conversation: scenes and tests (tests only)
@@ -1371,7 +1373,10 @@ Neither is the native window. The images do **not** show or check:
   directly. The reading scenes deliver pointer and key events through GPUI's
   own dispatch to check text selection, copy, and link hover; that exercises
   hit-testing and handlers, not the operating system's event path;
-- the accessibility tree, which the harness never reads;
+- the native accessibility tree: GPUI's `TestWindow` does not activate
+  `Window::a11y`, so headless tests check node ID uniqueness and steady-frame
+  presence through Plait's debug-test prepaint collector rather than AccessKit
+  or macOS `NSAccessibility`;
 - animation, frame timing, or latency. Each image is one frame.
 
 Host data in these scenes is injected sample state held in small functions in
@@ -1392,6 +1397,23 @@ event, an input method, the caret, or pointer input.
 The harness needs GPUI's `test-support` feature. It is a dev-dependency feature
 for macOS and Linux test builds; `cargo build` and release builds do not
 compile it.
+
+### Accessibility identities
+
+GPUI assigns an accessibility node to every `Text` element that carries an
+element ID, hashing its `GlobalElementId` path to an `accesskit::NodeId`. Two
+elements with the same ID under the same id-bearing ancestors panic in debug
+builds when an accessibility client is attached and silently discard the second
+node in release builds.
+
+To prevent text collisions by construction, Plait's accessible text helpers
+(`a11y_text`, `tag`, and `section_label` in `ui/a11y.rs` and `ui/theme.rs`)
+require an explicit place-based `ElementId` (scoped to the setting, row, or
+region) instead of deriving IDs from rendered text. Raw `text!()` calls are
+disallowed in `ui/`. Under `cfg(all(test, debug_assertions))`, `Audited<E>`
+wraps audited controls and text elements transparently to record each node's
+`GlobalElementId` hash, role, label, and value during `Element::prepaint`. In
+non-test and release builds `Audited<E>` compiles to a zero-cost type alias.
 
 ## Dependency decision
 

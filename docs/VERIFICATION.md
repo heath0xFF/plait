@@ -107,7 +107,10 @@ The response labels the scripted provider. No sample-view code ships in the app.
   guards with injected test state, on macOS and Linux. Exported macOS images use
   the app's Metal renderer and Core Text offscreen; Linux images use Linux fonts
   and software rendering. Neither validates the native window, input, focus
-  that follows input, the accessibility tree, or latency. Conversation text
+  that follows input, VoiceOver, or latency. Debug test builds run a prepaint
+  accessibility collector over headless scenes to catch duplicate node IDs and
+  missing required nodes across frames; that checks Plait's element identities,
+  not the native AccessKit or macOS accessibility bridge. Conversation text
   selection, copy, link hover, and the jump to the newest row are exercised by
   pointer and key events sent through GPUI's dispatch in these scenes, not by
   a native pointer.
@@ -2004,15 +2007,60 @@ thread row at all, and saw the tabs only on frames that redrew them. Both are
 ordinary views again. Every scene rendered byte for byte the same before and
 after that change.
 
-One defect it found is not fixed. On a debug build the check stops at Settings
-→ Editor: the framework's debug assertion reports a duplicate accessibility
-node id and the app exits, so the items after it do not run. A release build
-drops the duplicate node and carries on, which is how the run above passed
-that page. The two elements have not been identified. Text elements take their
-accessibility id from their own text, so two identical strings under the same
-ancestors collide. Until it is fixed, the check on CI, which drives a debug
-build, will fail from that item on.
+One defect it found in debug builds was identified and fixed afterward. On a
+debug build the check stopped at Settings → Editor: the framework's debug
+assertion reported a duplicate accessibility node id and the app exited, so the
+items after it did not run. The two colliding elements were the custom-command
+notes under **Open files with** and **Open terminals with** (`Runs <program>
+directly, not through a shell.`): the acceptance fixture configures both
+settings to run the same recorder script, and `tag()` derived each text
+element's accessibility id from its own text under the shared `settings-page`
+ancestor. A release build drops the duplicate node and carries on, which is how
+both the local release run above and the packaged release build tested on CI
+passed that page.
 
 Not exercised: a live model in more than one tab at once; VoiceOver itself;
 dragging a tab and middle-click on a tab; a host that reconnects under several
 tabs; and the installed app.
+
+## Headless accessibility guard
+
+Accessible text helpers (`a11y_text`, `tag`, and `section_label`) now require
+explicit place-based element IDs instead of deriving IDs from rendered text, and
+duplicate IDs found across the scene suite (the Editor custom-command notes,
+repeated harness states on Settings → Agents, queued follow-up labels, repeated
+skill badges, and the colliding title/button ID on Project settings agent rows)
+have been fixed.
+
+Because the pinned GPUI test window never activates `Window::a11y`, the headless
+test suite uses a debug-only prepaint collector (`crates/plait/src/ui/a11y.rs`)
+that compiles out to a zero-cost alias in release and non-test builds. It
+records every audited control and text element's GPUI `GlobalElementId` hash
+(the same hash GPUI uses for `accesskit::NodeId`), role, label, and value during
+`Element::prepaint`.
+
+What the guard covers:
+
+- **Duplicate IDs across all scenes:** every scene in `every_view_draws` runs
+  with the collector active and fails if two elements in a frame produce the
+  same node ID.
+- **Steady-frame reachability:** a dedicated guard test draws two consecutive
+  frames of a workspace with sidebar and tabs, a streaming reply, an approval,
+  the open tab overflow list, Changes/History/Files views, every Settings modal
+  page (including Editor in both default and both-Custom states), and Project
+  settings as a modal. On frame 2 it asserts zero duplicates and verifies that
+  each sidebar thread row, each visible tab and its close control, all four
+  views, and each message remain present and named — catching `.cached()` views
+  whose child prepaint is skipped on steady frames.
+- **Helper discipline:** a source check fails if UI code calls raw `text!()`
+  instead of the explicit-ID helpers.
+
+What the guard cannot cover:
+
+- It is not VoiceOver and does not run against a real window.
+- It does not exercise GPUI's `Window::a11y` tree builder, AccessKit's tree
+  updates, or macOS `NSAccessibility` bridging, focus announcements, or
+  assistive actions.
+- Only elements drawn through Plait's audited control and text helpers are
+  recorded; a raw `.role(...)` without `.audited()` would not be observed by the
+  collector.
