@@ -84,7 +84,9 @@ pub fn with_lease<T>(
     work()
 }
 
-pub(crate) struct Running(Arc<Scope>);
+/// Dropped without `finish` (an early return or a panic while Git may run),
+/// the record is marked unconfirmed, never left hidden behind a live desktop.
+pub(crate) struct Running(Arc<Scope>, std::cell::Cell<bool>);
 fn save(file: &File, bytes: &[u8], offset: i64) -> Result<(), String> {
     lock(file).map_err(String::from)?;
     let wrote =
@@ -114,7 +116,7 @@ pub(crate) fn prepare(label: &str) -> Result<Option<Running>, String> {
         let size = label.len().min(95);
         record[64..64 + size].copy_from_slice(&label[..size]);
         save(&scope.file, &record, 0)?;
-        Ok(Some(Running(scope)))
+        Ok(Some(Running(scope, std::cell::Cell::new(false))))
     })
 }
 impl Running {
@@ -152,9 +154,18 @@ impl Running {
         let error = io::Error::last_os_error();
         unlock(&self.0.file);
         if result == 0 {
+            self.1.set(true);
             Ok(())
         } else {
             Err(format!("Git cleanup could not be saved: {error}"))
+        }
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        if !self.1.get() {
+            let _ = self.finish(false);
         }
     }
 }
@@ -568,6 +579,38 @@ mod tests {
         );
         resolve(id, &state.token).unwrap();
         drop(acquire_checkout(&root, None, LeaseClass::Writer).unwrap());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn an_unfinished_git_write_is_not_hidden_behind_a_live_desktop() {
+        let root = root();
+        let lease = acquire_checkout(&root, None, LeaseClass::Exclusive).unwrap();
+        let id = lease.identity();
+        let mut child = with_lease(&lease, || {
+            let mut command = Command::new("/bin/sleep");
+            command.arg("30").process_group(0);
+            let running = prepare("git commit")?.unwrap();
+            let child = command.spawn().map_err(|e| e.to_string())?;
+            running.started(child.id());
+            // An early return or unwind skips finish while Git still runs.
+            drop(running);
+            Ok(child)
+        })
+        .unwrap();
+        drop(lease);
+        let state = unconfirmed(id).unwrap();
+        let admission = acquire_checkout(&root, None, LeaseClass::Writer).map(drop);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(
+            state.is_some(),
+            "a live desktop hid its unfinished Git write"
+        );
+        assert_eq!(
+            admission.unwrap_err().kind,
+            LeaseErrorKind::CleanupUncertain
+        );
+        assert!(unconfirmed(id).unwrap().is_none());
         fs::remove_dir_all(root).unwrap();
     }
     fn crash_case(lent: bool) {
