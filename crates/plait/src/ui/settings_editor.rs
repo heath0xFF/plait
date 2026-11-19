@@ -41,6 +41,13 @@ impl Opens {
         }
     }
 
+    fn note_id(self) -> &'static str {
+        match self {
+            Self::Files => "open-files-note",
+            Self::Terminals => "open-terminals-note",
+        }
+    }
+
     fn purpose(self) -> Purpose {
         match self {
             Self::Files => Purpose::Editor,
@@ -303,7 +310,7 @@ impl Plait {
                         .child(div().h(px(16.)).flex().items_center().child(dot(tint)))
                         // A long program path wraps rather than running off.
                         .child(
-                            tag(note, colors().subtle)
+                            tag(opens.note_id(), note, colors().subtle)
                                 .flex_1()
                                 .min_w_0()
                                 .line_height(px(16.)),
@@ -338,7 +345,7 @@ impl Plait {
             ))
             .when_some(
                 self.preference_note(Some(PreferenceGroup::Editor)),
-                |el, note| el.child(tag(note, colors().subtle)),
+                |el, note| el.child(tag("editor-preference-note", note, colors().subtle)),
             )
     }
 }

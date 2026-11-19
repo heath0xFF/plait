@@ -465,11 +465,13 @@ impl Plait {
             refresh,
         ));
         if let Some(note) = &self.project_agent().note {
-            page = page.child(tag(note.clone(), colors().amber).line_height(px(16.)));
+            page = page
+                .child(tag("agent-setup-note", note.clone(), colors().amber).line_height(px(16.)));
         }
         let Some(view) = self.project_agent().view.as_ref() else {
             let page = page.when(self.project_agent().note.is_none(), |el| {
                 el.child(tag(
+                    "agent-setup-status",
                     if self.host.connection.connected {
                         "Reading your agent setup…"
                     } else {
@@ -482,6 +484,7 @@ impl Plait {
         };
         if !view.trusted {
             page = page.child(tag(
+                "agent-setup-untrusted",
                 "Skills and templates inside this project load only when its commands are trusted, above.",
                 colors().subtle,
             ).line_height(px(16.)));
@@ -489,6 +492,7 @@ impl Plait {
         let instructions = match &view.instructions {
             Some(row) => self.rows("agent-instructions", std::slice::from_ref(row), true, cx),
             None => column().child(tag(
+                "agent-instructions-empty",
                 "No AGENTS.md or CLAUDE.md in the Pi agent folder.",
                 colors().subtle,
             )),
@@ -521,6 +525,7 @@ impl Plait {
 
     fn mcp_settings(&self, servers: &[McpRow], cx: &mut Context<Self>) -> Div {
         let mut section = settings::section("MCP servers").child(tag(
+            "mcp-intro",
             "Pi finds tools on demand. Each server stops when the run ends.",
             colors().subtle,
         ));
@@ -556,8 +561,8 @@ impl Plait {
                             .truncate()
                             .child(server.name.clone()),
                     )
-                    .child(tag(server.transport, colors().subtle).flex_shrink_0())
-                    .child(tag(server.state.clone(), colors().muted).flex_shrink_0())
+                    .child(tag("mcp-transport", server.transport, colors().subtle).flex_shrink_0())
+                    .child(tag("mcp-state", server.state.clone(), colors().muted).flex_shrink_0())
                     .when_some(server.file.clone(), |el, path| {
                         el.child(button(("mcp-open-file", index), "Open file").on_activate(
                             cx,
@@ -615,7 +620,13 @@ impl Plait {
         let all = self.project_agent().expanded || rows.len() <= FOLDED;
         let shown = if all { rows } else { &rows[..FOLDED] };
         settings::section(title)
-            .when(rows.is_empty(), |el| el.child(tag(empty, colors().subtle)))
+            .when(rows.is_empty(), |el| {
+                el.child(tag(
+                    (ElementId::from("agent-empty"), SharedString::from(id)),
+                    empty,
+                    colors().subtle,
+                ))
+            })
             .child(self.rows(id, shown, false, cx))
             .when(!all, |el| {
                 el.child(div().child(
@@ -638,17 +649,38 @@ impl Plait {
                 div()
                     .text_size(px(12.))
                     .text_color(rgb(if quiet { colors().muted } else { colors().text }))
-                    .child(text!(id = (id, index), item.title.clone()).audited()),
+                    .child(a11y_text((id, index), item.title.clone())),
             );
             if !item.detail.is_empty() {
-                text = text.child(tag(item.detail.clone(), colors().muted).truncate());
+                text = text.child(
+                    tag(
+                        SharedString::from(format!("{id}-detail-{index}")),
+                        item.detail.clone(),
+                        colors().muted,
+                    )
+                    .truncate(),
+                );
             }
             let mut place = row().gap_2().min_w_0();
             if !item.tag.is_empty() {
-                place = place.child(tag(item.tag.clone(), colors().subtle).flex_shrink_0());
+                place = place.child(
+                    tag(
+                        SharedString::from(format!("{id}-tag-{index}")),
+                        item.tag.clone(),
+                        colors().subtle,
+                    )
+                    .flex_shrink_0(),
+                );
             }
             if !item.path.is_empty() {
-                place = place.child(tag(item.path.clone(), colors().subtle).truncate());
+                place = place.child(
+                    tag(
+                        SharedString::from(format!("{id}-path-{index}")),
+                        item.path.clone(),
+                        colors().subtle,
+                    )
+                    .truncate(),
+                );
             }
             list = list.child(
                 row()

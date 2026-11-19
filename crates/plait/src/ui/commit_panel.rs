@@ -468,11 +468,18 @@ impl Plait {
             )
             .when(self.running_here(), |el| {
                 el.child(tag(
+                    "commit-running-warning",
                     "A thread is running in this checkout; its edits may be unfinished.",
                     colors().amber,
                 ))
             })
-            .when(busy, |el| el.child(tag("Git is working…", colors().subtle)))
+            .when(busy, |el| {
+                el.child(tag(
+                    "commit-git-working",
+                    "Git is working…",
+                    colors().subtle,
+                ))
+            })
             .when_some(note.filter(|_| !busy), |el, (note, failed)| {
                 el.child(
                     row()

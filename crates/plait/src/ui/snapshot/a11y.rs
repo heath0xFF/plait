@@ -40,13 +40,19 @@ fn editor_page_a11y_tree_is_observable_headlessly() {
         plait.show_editor_commands(cx);
     });
     let custom_frame = harness.draw_a11y();
-    assert_eq!(custom_frame.duplicates.len(), 1);
+    custom_frame.assert_no_duplicates("settings-editor-both-custom");
+    let expected_note = "Runs /private/tmp/plait-acceptance-bx6m5w3v/record-arguments directly, not through a shell.";
+    let note_nodes: Vec<_> = custom_frame
+        .nodes
+        .iter()
+        .filter(|node| node.role == Role::Label && node.value.as_deref() == Some(expected_note))
+        .collect();
     assert_eq!(
-        custom_frame.duplicates[0].duplicate.value.as_deref(),
-        Some(
-            "Runs /private/tmp/plait-acceptance-bx6m5w3v/record-arguments directly, not through a shell."
-        )
+        note_nodes.len(),
+        2,
+        "both Open files with and Open terminals with notes must stay in the a11y tree"
     );
+    assert_ne!(note_nodes[0].node_id, note_nodes[1].node_id);
 
     drop(harness);
     let _ = std::fs::remove_dir_all(&scratch);

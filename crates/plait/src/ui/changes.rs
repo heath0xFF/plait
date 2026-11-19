@@ -281,6 +281,7 @@ impl Plait {
                 ),
         )
         .child(tag(
+            "file-change-location",
             if change.staged() && change.unstaged() {
                 "index + worktree"
             } else if change.staged() {
@@ -359,6 +360,11 @@ impl Plait {
                                     .child(self.branch_control(compact, &snapshot.branch, cx))
                                     .child(div().flex_1())
                                     .child(tag(
+                                        if compact {
+                                            "inspector-changed-count"
+                                        } else {
+                                            "changes-changed-count"
+                                        },
                                         format!(
                                             "{} changed {}",
                                             count,
@@ -431,13 +437,29 @@ impl Plait {
                             cx.listener(|this, _, window, cx| this.refresh(&Refresh, window, cx)),
                         ),
                     )
-                    .child(tag("⌘R", colors().subtle))
+                    .child(tag(
+                        if compact {
+                            "inspector-refresh-shortcut"
+                        } else {
+                            "changes-refresh-shortcut"
+                        },
+                        "⌘R",
+                        colors().subtle,
+                    ))
                     .child(div().flex_1())
                     .when_some(read, |el, elapsed| {
                         el.child(
-                            tag(format!("Read in {elapsed} ms"), colors().subtle)
-                                .pr_1()
-                                .truncate(),
+                            tag(
+                                if compact {
+                                    "inspector-read-elapsed"
+                                } else {
+                                    "changes-read-elapsed"
+                                },
+                                format!("Read in {elapsed} ms"),
+                                colors().subtle,
+                            )
+                            .pr_1()
+                            .truncate(),
                         )
                     }),
             )
@@ -476,6 +498,7 @@ impl Plait {
                     .when_some(change.original.as_ref(), |el, original| {
                         el.child(
                             tag(
+                                "diff-renamed-from",
                                 format!("Renamed from {}", original.to_string_lossy()),
                                 colors().subtle,
                             )

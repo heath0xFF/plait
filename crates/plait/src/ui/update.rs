@@ -129,6 +129,6 @@ impl Plait {
         column()
             .gap_1()
             .child(row().gap_2().child(action))
-            .child(tag(note, color))
+            .child(tag("update-status-note", note, color))
     }
 }

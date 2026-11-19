@@ -1023,7 +1023,7 @@ impl Render for TextField {
             )
             .child(div().flex_1().min_w_0().child(LineElement(cx.entity())))
             .when_some(self.paint_error.clone(), |el, error| {
-                el.child(tag(error, colors().red).flex_shrink_0())
+                el.child(tag("text-field-error", error, colors().red).flex_shrink_0())
             })
     }
 }

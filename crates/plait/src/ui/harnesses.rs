@@ -762,6 +762,7 @@ impl Plait {
         ));
         if !self.host.connection.connected {
             return page.child(tag(
+                "harnesses-disconnected",
                 "Connect the host to list agent harnesses.",
                 colors().subtle,
             ));
@@ -769,6 +770,7 @@ impl Plait {
         if self.host.protocol() < 4 {
             return page.child(
                 tag(
+                    "harnesses-older-host",
                     "This host runs every thread in Pi. Update the host to choose another harness.",
                     colors().subtle,
                 )
@@ -776,12 +778,17 @@ impl Plait {
             );
         }
         if let Some(note) = &self.harnesses.note {
-            page = page.child(tag(note.clone(), colors().amber).line_height(px(16.)));
+            page = page
+                .child(tag("harnesses-note", note.clone(), colors().amber).line_height(px(16.)));
         }
         let rows = self.harness_rows();
         if rows.is_empty() {
             return page.when(self.harnesses.note.is_none(), |el| {
-                el.child(tag("Checking agent harnesses…", colors().subtle))
+                el.child(tag(
+                    "harnesses-checking",
+                    "Checking agent harnesses…",
+                    colors().subtle,
+                ))
             });
         }
         let mut list = column().gap_4();
@@ -817,23 +824,27 @@ impl Plait {
                         div()
                             .text_size(px(12.))
                             .text_color(rgb(colors().text))
-                            .child(
-                                text!(id = ("harness-name", index), harness.name.clone()).audited(),
-                            ),
+                            .child(a11y_text(("harness-name", index), harness.name.clone())),
                     )
-                    .child(
-                        row()
-                            .child(dot(tint))
-                            .child(tag(harness.state.clone(), tint)),
-                    ),
+                    .child(row().child(dot(tint)).child(tag(
+                        ("harness-state", index),
+                        harness.state.clone(),
+                        tint,
+                    ))),
             )
-            .child(tag(harness.version.clone(), colors().muted));
+            .child(tag(
+                ("harness-version", index),
+                harness.version.clone(),
+                colors().muted,
+            ));
         if let Some(path) = &harness.path {
-            text = text.child(tag(path.clone(), colors().subtle).truncate());
+            text = text
+                .child(tag(("harness-path-text", index), path.clone(), colors().subtle).truncate());
         }
         if let Some(note) = &harness.note {
             text = text.child(
                 tag(
+                    ("harness-note", index),
                     note.clone(),
                     if harness.ready {
                         colors().muted
@@ -845,8 +856,14 @@ impl Plait {
             );
         }
         if !harness.protection.is_empty() {
-            text =
-                text.child(tag(harness.protection.clone(), colors().subtle).line_height(px(16.)));
+            text = text.child(
+                tag(
+                    ("harness-protection", index),
+                    harness.protection.clone(),
+                    colors().subtle,
+                )
+                .line_height(px(16.)),
+            );
         }
         let mut entry = row().items_start().gap_3().child(text);
         let modes = (!harness.setup)

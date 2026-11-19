@@ -755,7 +755,7 @@ impl Plait {
             )
             .when(!meta.word.is_empty(), |el| {
                 el.child(
-                    tag(meta.word, tint(meta.state, meta.active))
+                    tag("tab-state", meta.word, tint(meta.state, meta.active))
                         .text_size(px(11.))
                         .flex_shrink_0(),
                 )
@@ -878,16 +878,20 @@ impl Plait {
                                 .child(meta.title.clone()),
                         )
                         .child(
-                            tag(meta.project.clone(), colors().subtle)
+                            tag("tab-list-project", meta.project.clone(), colors().subtle)
                                 .max_w(px(70.))
                                 .truncate(),
                         )
                         .child(
-                            tag(meta.state.word(true), tint(meta.state, meta.active))
-                                .text_size(px(11.)),
+                            tag(
+                                "tab-list-state",
+                                meta.state.word(true),
+                                tint(meta.state, meta.active),
+                            )
+                            .text_size(px(11.)),
                         )
                         .when_some(meta.shortcut, |el, n| {
-                            el.child(tag(format!("⌘{n}"), colors().subtle))
+                            el.child(tag("tab-list-shortcut", format!("⌘{n}"), colors().subtle))
                         })
                         .child(self.tab_close_control(
                             id,

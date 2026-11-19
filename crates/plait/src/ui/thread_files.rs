@@ -403,10 +403,10 @@ fn file_row(index: usize, count: &LineCount, cx: &mut Context<Plait>) -> Control
                 .child(directory),
         )
         .when(count.untracked, |el| {
-            el.child(tag("New", colors().subtle).flex_shrink_0())
+            el.child(tag("thread-file-new", "New", colors().subtle).flex_shrink_0())
         })
         .when(binary, |el| {
-            el.child(tag("Binary", colors().subtle).flex_shrink_0())
+            el.child(tag("thread-file-binary", "Binary", colors().subtle).flex_shrink_0())
         })
         .child(counts(count.added, count.removed))
         .on_click(

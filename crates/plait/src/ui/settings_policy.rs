@@ -248,10 +248,14 @@ impl Plait {
                 ))
             })
             .when(self.project_policy().busy, |el| {
-                el.child(tag("Loading command policy…", colors().muted))
+                el.child(tag(
+                    "policy-loading",
+                    "Loading command policy…",
+                    colors().muted,
+                ))
             })
             .when_some(self.project_policy().note.clone(), |el, note| {
-                el.child(tag(note, colors().amber))
+                el.child(tag("policy-note", note, colors().amber))
             })
             .when(current.is_none() && enabled, |el| {
                 el.child(
@@ -272,12 +276,13 @@ impl Plait {
                                 .font_weight(FontWeight::MEDIUM)
                                 .child("Trust commands in this checkout?"),
                         )
-                        .children(
-                            policy::TRUSTED_CONSEQUENCES
-                                .iter()
-                                .map(|line| tag(*line, colors().muted).line_height(px(18.))),
-                        )
-                        .child(tag(policy::TRUSTED_SCOPE, colors().subtle))
+                        .children(policy::TRUSTED_CONSEQUENCES.iter().enumerate().map(
+                            |(index, line)| {
+                                tag(("trusted-consequence", index), *line, colors().muted)
+                                    .line_height(px(18.))
+                            },
+                        ))
+                        .child(tag("trusted-scope", policy::TRUSTED_SCOPE, colors().subtle))
                         .child(
                             row()
                                 .gap_2()

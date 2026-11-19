@@ -648,11 +648,12 @@ impl Plait {
             .border_b_1()
             .border_color(rgb(colors().border))
             .text_size(px(12.))
-            .child(div().flex_1().min_w_0().text_color(rgb(colors().muted)).child(text!(
+            .child(div().flex_1().min_w_0().text_color(rgb(colors().muted)).child(a11y_text(
+                "inspector-note-detail",
                 format!(
                     "The Git inspector needs a window wider than {WIDE_WINDOW} points. Git status and diffs are in Changes."
-                )
-            ).audited()))
+                ),
+            )))
             .child(
                 toned_button("inspector-note-changes", "Show Changes", Tone::Filled).on_activate(
                     cx,
@@ -951,7 +952,7 @@ impl Plait {
                 .gap(px(5.))
                 .min_w_0()
                 .child(icon(glyph).size(px(12.)).text_color(rgb(colors().subtle)))
-                .child(div().truncate().child(text!(id = id, label).audited()))
+                .child(div().truncate().child(a11y_text(id, label)))
         };
         row()
             .w_full()
@@ -972,12 +973,16 @@ impl Plait {
                         .min_w_0()
                         .truncate()
                         .text_color(rgb(colors().subtle))
-                        .child(text!(id = "environment-model", model).audited()),
+                        .child(a11y_text("environment-model", model)),
                 )
             })
             .child(div().flex_1())
             .when_some(note, |el, (note, tint)| {
-                el.child(tag(note, tint).flex_shrink_0().whitespace_nowrap())
+                el.child(
+                    tag("environment-note", note, tint)
+                        .flex_shrink_0()
+                        .whitespace_nowrap(),
+                )
             })
     }
 
@@ -992,16 +997,16 @@ impl Plait {
             .border_color(rgb(colors().border))
             .text_size(px(11.))
             .text_color(rgb(colors().subtle))
-            .child(
-                text!(format!(
+            .child(a11y_text(
+                "diagnostics-summary",
+                format!(
                     "UI {} µs · peak {} µs · switch {} µs · first {} ms",
                     self.last_render_us,
                     self.max_render_us,
                     self.switch_us,
                     self.first_render_ms.unwrap_or(0)
-                ))
-                .audited(),
-            )
+                ),
+            ))
     }
 }
 

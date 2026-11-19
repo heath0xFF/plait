@@ -251,9 +251,14 @@ impl Plait {
                         .text_color(rgb(colors().text))
                         .font_weight(FontWeight::MEDIUM),
                 )
-                .when(unavailable, |el| el.child(tag("Missing", colors().amber)))
+                .when(unavailable, |el| {
+                    el.child(tag("project-missing", "Missing", colors().amber))
+                })
                 .when_some(folded, |el, count| {
-                    el.child(tag(count.to_string(), colors().subtle).flex_shrink_0())
+                    el.child(
+                        tag("project-folded-count", count.to_string(), colors().subtle)
+                            .flex_shrink_0(),
+                    )
                 })
                 .on_activate(cx, move |this, _, cx| {
                     if !this.navigation.collapsed.remove(&checkout) {
@@ -504,6 +509,7 @@ impl Plait {
                 })
                 .child(
                     tag(
+                        "thread-status",
                         if thread.archived == Some(true) {
                             "Archived"
                         } else {
@@ -518,7 +524,7 @@ impl Plait {
                     .flex_shrink_0(),
                 )
                 .when(!age.is_empty() && !thread.status.busy(), |el| {
-                    el.child(tag(age, colors().subtle).flex_shrink_0())
+                    el.child(tag("thread-age", age, colors().subtle).flex_shrink_0())
                 })
                 .on_activate(cx, move |this, window, cx| {
                     this.select_host_thread(id.clone(), window, cx)
@@ -553,7 +559,7 @@ impl Plait {
             .px_2()
             .py_2()
             .when(empty, |el| {
-                el.child(tag("No matching threads.", colors().muted).p_2())
+                el.child(tag("navigation-empty", "No matching threads.", colors().muted).p_2())
             })
             .when(!empty, |el| {
                 el.child(
@@ -648,20 +654,25 @@ impl Plait {
                     ),
             )
             .when(self.navigation.managing.is_some(), |el| {
-                el.child(tag("Saving thread…", colors().subtle))
+                el.child(tag("navigation-saving", "Saving thread…", colors().subtle))
             })
             .when(self.navigation.loading, |el| {
-                el.child(tag("Loading threads…", colors().subtle))
+                el.child(tag(
+                    "navigation-loading",
+                    "Loading threads…",
+                    colors().subtle,
+                ))
             })
             .when(self.host.connection.threads.len() > 200, |el| {
                 el.child(tag(
+                    "navigation-limit",
                     "Newest 200 live · Refresh older threads",
                     colors().subtle,
                 ))
             })
             .when_some(self.navigation.error.clone(), |el, error| {
                 el.child(
-                    tag(error, colors().amber)
+                    tag("navigation-error-text", error, colors().amber)
                         .id("navigation-error")
                         .role(Role::Alert)
                         .audited()
@@ -688,7 +699,7 @@ impl Plait {
             let select = checkout.clone();
             let configure = checkout.clone();
             let hide = checkout.clone();
-            panel = panel.child(tag("Project", colors().muted))
+            panel = panel.child(tag("project-menu-heading", "Project", colors().muted))
                 .child(button("project-open", "Open project").on_activate(cx, move |this, window, cx| { this.navigation.menu = None; this.change_checkout(select.clone(), window, cx); }))
                 .child(button("project-settings", "Project settings…").on_activate(cx, move |this, window, cx| {
                     this.navigation.menu = None;
@@ -699,7 +710,7 @@ impl Plait {
                     else { let mut value = this.preferences.value.clone(); value.navigation.hide(&hide); this.set_preferences(value, PreferenceGroup::View, cx); this.rebuild_projects(cx); }
                     this.navigation.menu = None; cx.notify();
                 }))
-                .child(tag("Removing a project keeps its host threads.", colors().subtle));
+                .child(tag("project-menu-note", "Removing a project keeps its host threads.", colors().subtle));
         } else if let Some(thread) = self
             .host
             .connection
@@ -714,7 +725,7 @@ impl Plait {
             let branch = tree.map(|tree| tree.branch.clone());
             let remove = thread.checkout.clone();
             panel = panel
-                .child(tag(self.thread_title(id), colors().text).truncate())
+                .child(tag("thread-menu-title", self.thread_title(id), colors().text).truncate())
                 .child(
                     button("thread-rename", "Rename thread…")
                         .on_activate(cx, move |this, window, cx| {
@@ -735,14 +746,21 @@ impl Plait {
                     }),
                 )
                 .when_some(branch, |el, branch| {
-                    el.child(tag(format!("Worktree on {branch}"), colors().subtle).truncate())
-                        .child(
-                            button("thread-remove-worktree", "Remove worktree…")
-                                .disabled(self.worktree_busy)
-                                .on_activate(cx, move |this, window, cx| {
-                                    this.remove_worktree(remove.clone(), window, cx)
-                                }),
+                    el.child(
+                        tag(
+                            "thread-menu-worktree",
+                            format!("Worktree on {branch}"),
+                            colors().subtle,
                         )
+                        .truncate(),
+                    )
+                    .child(
+                        button("thread-remove-worktree", "Remove worktree…")
+                            .disabled(self.worktree_busy)
+                            .on_activate(cx, move |this, window, cx| {
+                                this.remove_worktree(remove.clone(), window, cx)
+                            }),
+                    )
                 });
         }
         panel
@@ -949,7 +967,7 @@ impl Plait {
                 .pl(px(RAIL_X + 5.))
                 .child(icon("plus").size(px(12.)).text_color(rgb(colors().mint)))
                 .child(title(super::session::UNTITLED).text_color(rgb(colors().text)))
-                .child(tag("Draft", colors().subtle).flex_shrink_0())
+                .child(tag("draft-badge", "Draft", colors().subtle).flex_shrink_0())
                 .on_activate(cx, |this, window, cx| this.open_draft(window, cx)),
             )
             .child(
@@ -1014,7 +1032,11 @@ impl Plait {
                     .aria_keyshortcuts(self.shortcut_aria("repository.open"))
                     .child(icon("folder"))
                     .child(title("Open repository…").text_color(rgb(colors().text)))
-                    .child(tag(self.shortcut_label("repository.open"), colors().subtle))
+                    .child(tag(
+                        "open-repository-shortcut",
+                        self.shortcut_label("repository.open"),
+                        colors().subtle,
+                    ))
                     .on_activate(cx, |this, window, cx| {
                         this.open_repository(&OpenRepository, window, cx)
                     }),
@@ -1042,7 +1064,7 @@ impl Plait {
                 pill()
                     .min_w_0()
                     .child(dot(tint))
-                    .child(tag(label, colors().muted).truncate()),
+                    .child(tag("host-footer-status", label, colors().muted).truncate()),
             )
             .child(
                 row()

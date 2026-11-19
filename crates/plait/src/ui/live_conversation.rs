@@ -763,7 +763,7 @@ impl Plait {
                         .text_size(px(11.))
                         .text_color(rgb(colors().muted))
                         .truncate()
-                        .child(text!(id = "link-destination", format!("Opens {url}")).audited()),
+                        .child(a11y_text("link-destination", format!("Opens {url}"))),
                 )
             })
             .into_any_element()
@@ -879,7 +879,13 @@ impl Plait {
     /// A control's shortcut as the keymap binds it now. Nothing when unbound.
     fn shortcut_hint(&self, id: &str) -> Option<Div> {
         let label = self.shortcut_label(id);
-        (!label.is_empty()).then(|| tag(label, colors().subtle))
+        (!label.is_empty()).then(|| {
+            tag(
+                SharedString::from(format!("shortcut-hint-{id}")),
+                label,
+                colors().subtle,
+            )
+        })
     }
 
     /// Exact arguments and a one-call decision. Nothing runs without it.
@@ -1003,7 +1009,7 @@ impl Plait {
     fn live_banners(&self, pending: bool, cx: &mut Context<Self>) -> Vec<Div> {
         let mut banners = Vec::new();
         if let Some(error) = self.host.connection.error.clone() {
-            banners.push(banner(colors().red).child(text!(error).audited()));
+            banners.push(banner(colors().red).child(a11y_text("host-connection-error", error)));
         }
         if !self.host.connection.connected {
             let connecting = self.host.connection.connecting;
@@ -1117,6 +1123,7 @@ Tone::Filled,
                             .py_1()
                             .when(joined, |el| el.child(strand_line(0.)))
                             .child(tag(
+                                "conversation-truncated",
                                 "Bounded preview · older messages or tool output have been clipped by the host.",
                                 colors().amber,
                             )),

@@ -580,6 +580,7 @@ impl Plait {
                         .gap_1()
                         .child(
                             tag(
+                                "recorded-file-status",
                                 match file.label {
                                     "Added" => "A",
                                     "Deleted" => "D",
@@ -599,7 +600,10 @@ impl Plait {
                                 .text_size(px(11.))
                                 .child(file.directory.clone()),
                         )
-                        .child(tag(file.counts.clone(), colors().subtle).flex_shrink_0())
+                        .child(
+                            tag("recorded-file-counts", file.counts.clone(), colors().subtle)
+                                .flex_shrink_0(),
+                        )
                         .tooltip(move |_, cx| cx.new(|_| TextTooltip(detail.clone())).into())
                         .on_activate(cx, move |this, window, cx| {
                             this.select_recorded_file(index, window, cx)
@@ -659,7 +663,7 @@ impl Plait {
                                 this.refresh(&super::Refresh, window, cx)
                             }),
                     )
-                    .child(tag("⌘R", colors().subtle)),
+                    .child(tag("recorded-refresh-shortcut", "⌘R", colors().subtle)),
             )
     }
     pub(super) fn recorded_header(&self, cx: &mut Context<Self>) -> Div {
@@ -743,7 +747,7 @@ impl Plait {
                             .id("recorded-offline")
                             .px_4()
                             .py_1()
-                            .child(tag("Offline", colors().amber))
+                            .child(tag("recorded-offline-label", "Offline", colors().amber))
                             .aria_description("Reconnect to read turn changes.")
                             .tooltip(|_, cx| {
                                 cx.new(|_| TextTooltip("Reconnect to read turn changes.".into()))

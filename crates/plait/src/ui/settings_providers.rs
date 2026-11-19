@@ -539,7 +539,7 @@ impl Plait {
         match self.providers.form.as_ref() {
             Some(Form::Key { provider, field }) => {
                 panel = panel.child(div().child(format!("API key for {provider}")))
-                    .child(tag("An API key replaces this provider's subscription sign-in. A new sign-in replaces the key.", colors().muted))
+                    .child(tag("provider-key-note", "An API key replaces this provider's subscription sign-in. A new sign-in replaces the key.", colors().muted))
                     .child(self.secret_control(field, cx))
                     .child(button("save-provider-key", "Save key").disabled(!enabled || field.read(cx).text().is_empty()).when(enabled, |el| el.on_activate(cx, |this, _, cx| {
                         let Some(Form::Key { provider, field }) = &this.providers.form else { return; };
@@ -553,16 +553,17 @@ impl Plait {
                 panel = panel
                     .child(div().font_weight(FontWeight::MEDIUM).child(view.status))
                     .when_some(view.detail, |el, detail| {
-                        el.child(tag(detail, colors().muted))
+                        el.child(tag("provider-flow-detail", detail, colors().muted))
                     })
                     .when_some(view.remaining, |el, remaining| {
-                        el.child(tag(remaining, colors().subtle))
+                        el.child(tag("provider-flow-remaining", remaining, colors().subtle))
                     });
                 if let Some(destination) = view.destination {
                     let url = destination.url;
                     let copy = url.clone();
                     panel = panel
                         .child(tag(
+                            "provider-flow-destination",
                             format!("Browser destination: {}", destination.host),
                             colors().muted,
                         ))
@@ -585,6 +586,7 @@ impl Plait {
                 }
                 if view.unusable_address {
                     panel = panel.child(tag(
+                        "provider-flow-unusable-address",
                         "The host returned an unsupported sign-in address.",
                         colors().amber,
                     ));
@@ -612,6 +614,7 @@ impl Plait {
                         } => {
                             panel = panel
                                 .child(tag(
+                                    "provider-flow-prompt-label",
                                     if optional {
                                         format!("{label} (optional)")
                                     } else {
@@ -631,7 +634,11 @@ impl Plait {
                                 );
                         }
                         sign_in::Prompt::Choice { label, choices } => {
-                            panel = panel.child(tag(label, colors().muted));
+                            panel = panel.child(tag(
+                                "provider-flow-choice-label",
+                                label,
+                                colors().muted,
+                            ));
                             for (index, choice) in choices.into_iter().enumerate() {
                                 panel = panel.child(
                                     button(("provider-sign-in-choice", index), choice.label)
@@ -659,16 +666,20 @@ impl Plait {
             }
             Some(Form::Endpoint(form)) => {
                 panel = panel.child(div().font_weight(FontWeight::MEDIUM).child(if form.id.is_some() { "Edit endpoint" } else { "Add OpenAI-compatible endpoint" }))
-                    .child(tag("Name", colors().muted)).child(form.name.clone())
-                    .child(tag("Base URL", colors().muted)).child(form.url.clone())
-                    .child(tag("Model IDs", colors().muted)).child(form.models.clone())
-                    .child(tag("Optional API key. Leave blank to keep a saved key. A connection check uses the entered key once; paste it again before saving.", colors().subtle))
+                    .child(tag("endpoint-name-label", "Name", colors().muted)).child(form.name.clone())
+                    .child(tag("endpoint-url-label", "Base URL", colors().muted)).child(form.url.clone())
+                    .child(tag("endpoint-models-label", "Model IDs", colors().muted)).child(form.models.clone())
+                    .child(tag("endpoint-key-label", "Optional API key. Leave blank to keep a saved key. A connection check uses the entered key once; paste it again before saving.", colors().subtle))
                     .child(self.secret_control(&form.key, cx))
                     .child(row().gap_2()
                         .child(button("check-endpoint", "Check connection").disabled(!enabled).when(enabled, |el| el.on_activate(cx, |this, _, cx| this.check_endpoint_form(cx))))
                         .child(button("save-endpoint", "Save endpoint").disabled(!enabled).when(enabled, |el| el.on_activate(cx, |this, _, cx| this.save_endpoint(cx)))));
                 if let Some(check) = form.current_check(cx) {
-                    panel = panel.child(tag(check.summary(), colors().muted));
+                    panel = panel.child(tag(
+                        "endpoint-check-summary",
+                        check.summary(),
+                        colors().muted,
+                    ));
                     let selected = providers::parse_model_ids(form.models.read(cx).text());
                     for (index, id) in check.model_ids.iter().enumerate() {
                         let chosen = selected.contains(id);
@@ -704,7 +715,7 @@ impl Plait {
             }
             Some(Form::Remove { id, name }) => {
                 let id = id.clone();
-                panel = panel.child(tag(format!("Remove {name} and its saved key from this host? Existing threads remain."), colors().muted))
+                panel = panel.child(tag("provider-remove-confirm-note", format!("Remove {name} and its saved key from this host? Existing threads remain."), colors().muted))
                     .child(button("remove-endpoint-confirm", "Remove endpoint").disabled(!enabled).when(enabled, |el| el.on_activate(cx, move |this, _, cx| this.provider_mutation::<providers::RemovedReply>(Request::RemoveEndpoint { id: id.clone() }, cx))));
             }
             None => return column(),
@@ -726,15 +737,23 @@ impl Plait {
         if self.providers.form.is_some() {
             return settings::section("Providers")
                 .when(self.providers.busy, |el| {
-                    el.child(tag("Waiting for the host…", colors().muted))
+                    el.child(tag(
+                        "providers-form-busy",
+                        "Waiting for the host…",
+                        colors().muted,
+                    ))
                 })
                 .when_some(self.providers.note.clone(), |el, note| {
-                    el.child(tag(note, colors().amber).line_height(px(18.)))
+                    el.child(tag("providers-form-note", note, colors().amber).line_height(px(18.)))
                 })
                 .child(self.provider_form(cx));
         }
         let mut section = settings::section("Providers")
-            .child(tag("Sign in with a subscription, use an API key, or connect your own model server. Credentials are stored by the host.", colors().muted))
+            .child(tag(
+                "providers-intro",
+                "Sign in with a subscription, use an API key, or connect your own model server. Credentials are stored by the host.",
+                colors().muted,
+            ))
             .when_some(self.providers.search.clone(), |el, search| el.child(search));
         let enabled =
             self.host.connection.connected && !self.providers.busy && !self.providers.unsupported;
@@ -779,6 +798,7 @@ impl Plait {
                                 .min_w_0()
                                 .child(div().text_size(px(13.)).child(provider.name.clone()))
                                 .child(tag(
+                                    ("provider-summary", index),
                                     format!(
                                         "{} · {}",
                                         provider.credential_label(),
@@ -828,15 +848,20 @@ impl Plait {
             )
             .when(!self.host.connection.connected, |el| {
                 el.child(tag(
+                    "providers-disconnected",
                     "Connect to the host to manage providers.",
                     colors().amber,
                 ))
             })
             .when(self.providers.busy, |el| {
-                el.child(tag("Waiting for the host…", colors().muted))
+                el.child(tag(
+                    "providers-busy",
+                    "Waiting for the host…",
+                    colors().muted,
+                ))
             })
             .when_some(self.providers.note.clone(), |el, note| {
-                el.child(tag(note, colors().amber).line_height(px(18.)))
+                el.child(tag("providers-note", note, colors().amber).line_height(px(18.)))
             })
             .when(self.providers.form.is_some(), |el| {
                 el.child(self.provider_form(cx))

@@ -164,6 +164,7 @@ impl Plait {
                             .when_some(project, |el, project| {
                                 el.child(
                                     tag(
+                                        "project-settings-checkout",
                                         project.checkout.to_string_lossy().into_owned(),
                                         colors().subtle,
                                     )

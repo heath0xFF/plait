@@ -145,6 +145,7 @@ impl Plait {
                     .h(px(ROW_HEIGHT))
                     .justify_between()
                     .child(tag(
+                        SharedString::from(format!("code-lang-{key}")),
                         if language.is_empty() {
                             SharedString::from("Code")
                         } else {

@@ -337,7 +337,7 @@ impl Plait {
                         div()
                             .min_w_0()
                             .truncate()
-                            .child(text!(model_name).audited()),
+                            .child(a11y_text("thread-model-name", model_name)),
                     )
                     .on_activate(cx, |this, window, cx| this.open_thread_models(window, cx)),
                 reason,
@@ -392,7 +392,8 @@ impl Plait {
             .map(|mode| mode.note.clone())
             .or_else(|| self.run_differs(snapshot).filter(|_| pi))
         {
-            content = content.child(tag(differs, colors().amber).line_height(px(16.)));
+            content = content
+                .child(tag("thread-mode-differs", differs, colors().amber).line_height(px(16.)));
         }
         if self.workspace.thread_controls.usage_open
             && let Some(usage) = usage
@@ -523,6 +524,7 @@ impl Plait {
             .text_size(px(12.));
         if !snapshot.status.busy() && !snapshot.queued.is_empty() {
             stack = stack.child(tag(
+                "queued-held",
                 "Queue held · next send resumes from the first message",
                 colors().amber,
             ));
@@ -558,7 +560,11 @@ impl Plait {
                     .gap_2()
                     .w_full()
                     .min_w_0()
-                    .child(tag(mode, colors().subtle))
+                    .child(tag(
+                        SharedString::from(format!("queued-mode-{request_id}")),
+                        mode,
+                        colors().subtle,
+                    ))
                     .child(
                         div()
                             .flex_1()

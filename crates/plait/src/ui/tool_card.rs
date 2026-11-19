@@ -218,7 +218,7 @@ impl Plait {
                         .child(run.summary.clone()),
                 )
                 .when_some(failed, |el, failed| {
-                    el.child(tag(failed, colors().red).flex_shrink_0())
+                    el.child(tag("tool-group-failed", failed, colors().red).flex_shrink_0())
                 })
                 .on_activate(cx, move |this, _, cx| this.toggle_tool_group(&key, cx)),
             )
@@ -291,14 +291,17 @@ impl Plait {
                     })
                     .when_some(facts, |el, facts| {
                         el.child(
-                            tag(facts, colors().subtle)
+                            tag("tool-facts", facts, colors().subtle)
                                 .flex_shrink_0()
                                 .whitespace_nowrap(),
                         )
                     })
                     // Completion is the normal case; only call out the others.
                     .when(tool.status != ToolStatus::Done, |el| {
-                        el.child(tag(tool.status.label(), tool_tint(tool.status)).flex_shrink_0())
+                        el.child(
+                            tag("tool-status", tool.status.label(), tool_tint(tool.status))
+                                .flex_shrink_0(),
+                        )
                     })
                     .on_activate(cx, move |this, _, cx| this.toggle_live_tool(&id, cx)),
                 ),
@@ -338,6 +341,7 @@ impl Plait {
             .children(body.collect::<Vec<_>>())
             .when(sections.is_empty(), |el| {
                 el.child(tag(
+                    SharedString::from(format!("tool-empty-{}", tool.id)),
                     if tool.status == ToolStatus::Running {
                         "No result yet."
                     } else {
@@ -426,10 +430,20 @@ impl Plait {
             .w_full()
             .min_w_0()
             .gap_1()
-            .when_some(caption, |el, (caption, tint)| el.child(tag(caption, tint)))
+            .when_some(caption, |el, (caption, tint)| {
+                el.child(tag(
+                    SharedString::from(format!("{key}-caption")),
+                    caption,
+                    tint,
+                ))
+            })
             .child(body)
             .when_some(section.note.clone(), |el, note| {
-                el.child(tag(note, colors().subtle))
+                el.child(tag(
+                    SharedString::from(format!("{key}-note")),
+                    note,
+                    colors().subtle,
+                ))
             })
             .into_any_element()
     }

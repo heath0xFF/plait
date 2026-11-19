@@ -687,7 +687,7 @@ impl Palette {
             .pb(px(5.))
             .flex()
             .items_end()
-            .child(section_label(text.clone()))
+            .child(section_label("palette-heading-label", text.clone()))
             .into_any_element()
     }
 
@@ -761,7 +761,7 @@ impl Palette {
                     .child(emphasized(&item.detail, detail)),
             )
             .when_some(item.badge.clone(), |el, (badge, tint)| {
-                el.child(tag(badge, tint).flex_shrink_0())
+                el.child(tag("palette-row-badge", badge, tint).flex_shrink_0())
             })
             .when_some(item.aside.clone(), |el, label| {
                 el.child(self.aside_button(row, label, cx))
@@ -770,7 +770,9 @@ impl Palette {
                 el.child(self.toggle(row, item, on, cx))
             })
             .when(!item.hint.is_empty(), |el| {
-                el.child(tag(item.hint.clone(), colors().subtle).flex_shrink_0())
+                el.child(
+                    tag("palette-row-hint", item.hint.clone(), colors().subtle).flex_shrink_0(),
+                )
             })
             .when(item.enabled, |el| {
                 el.cursor_pointer()
@@ -860,14 +862,11 @@ impl Palette {
             .justify_between()
             .border_t_1()
             .border_color(rgb(colors().border))
+            .child(div().min_w_0().truncate().when_some(status, |el, status| {
+                el.child(tag("palette-footer-status", status, colors().muted))
+            }))
             .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .when_some(status, |el, status| el.child(tag(status, colors().muted))),
-            )
-            .child(
-                tag(keys, colors().subtle)
+                tag("palette-footer-keys", keys, colors().subtle)
                     .flex_shrink_0()
                     .whitespace_nowrap(),
             )
@@ -900,7 +899,7 @@ fn message(text: SharedString) -> AnyElement {
         .text_size(px(12.))
         .line_height(px(19.))
         .text_color(rgb(colors().muted))
-        .child(text!(text).audited())
+        .child(a11y_text("palette-empty-message", text))
         .into_any_element()
 }
 

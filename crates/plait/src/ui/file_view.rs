@@ -545,8 +545,13 @@ impl Plait {
                     .text_color(rgb(colors().subtle))
                     .child(directory),
             )
-            .children(viewer.note.clone().map(|note| tag(note, colors().amber)))
-            .children(summary.map(|summary| tag(summary, colors().subtle)))
+            .children(
+                viewer
+                    .note
+                    .clone()
+                    .map(|note| tag("file-viewer-note", note, colors().amber)),
+            )
+            .children(summary.map(|summary| tag("file-viewer-summary", summary, colors().subtle)))
             .child(
                 button("file-find", "Find")
                     .disabled(viewer.opened.is_none())

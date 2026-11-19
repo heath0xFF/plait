@@ -286,7 +286,6 @@ pub type Audited<E> = E;
 
 /// Accessible static text element with an explicit `ElementId`.
 #[inline]
-#[allow(dead_code)]
 pub fn text(id: impl Into<ElementId>, text: impl Into<SharedString>) -> Audited<Text> {
     let element = Text::new(id.into(), text.into());
     #[cfg(all(test, debug_assertions))]

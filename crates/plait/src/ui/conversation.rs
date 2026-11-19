@@ -17,7 +17,7 @@ impl Plait {
                     .h(px(36.))
                     .px_3()
                     .flex_shrink_0()
-                    .child(section_label("Working tree")),
+                    .child(section_label("inspector-working-tree", "Working tree")),
             )
             .child(self.file_panel(true, cx))
             .child(self.resize_handle(Panel::Inspector, cx))

@@ -114,7 +114,13 @@ pub(super) fn section(title: &'static str) -> Div {
                 .text_size(px(13.))
                 .font_weight(FontWeight::MEDIUM)
                 // Several section headings can appear in one accessibility tree.
-                .child(text!(id = title, title).audited()),
+                .child(a11y_text(
+                    (
+                        ElementId::from("settings-section-heading"),
+                        SharedString::from(title),
+                    ),
+                    title,
+                )),
         )
 }
 
@@ -151,12 +157,12 @@ pub(super) fn setting(
 }
 
 /// A state in words beside its dot, so the color is never the only signal.
-fn state_line(text: impl Into<SharedString>, tint: u32) -> Div {
+fn state_line(id: impl Into<ElementId>, text: impl Into<SharedString>, tint: u32) -> Div {
     row()
         .items_start()
         .child(dot(tint).mt(px(5.)))
         // Long host errors wrap; they are never cut off.
-        .child(tag(text, tint).flex_1().min_w_0().line_height(px(17.)))
+        .child(tag(id, text, tint).flex_1().min_w_0().line_height(px(17.)))
 }
 
 impl Plait {
@@ -183,7 +189,7 @@ impl Plait {
             .child(
                 row()
                     .justify_between()
-                    .child(row().child(dot(tint)).child(tag(label, tint)))
+                    .child(row().child(dot(tint)).child(tag("settings-host-status", label, tint)))
                     .child(
                         row()
                             .gap_1()
@@ -213,7 +219,7 @@ impl Plait {
                     div()
                         .text_size(px(12.))
                         .text_color(rgb(colors().red))
-                        .child(text!(error).audited()),
+                        .child(a11y_text("settings-host-error", error)),
                 )
             })
             .when(!self.host.connection.connected, |el| {
@@ -260,7 +266,7 @@ impl Plait {
                     .child(self.default_harness_setting(cx))
                     .when_some(
                         self.preference_note(Some(PreferenceGroup::Agent)),
-                        |el, note| el.child(tag(note, colors().subtle)),
+                        |el, note| el.child(tag("defaults-agent-note", note, colors().subtle)),
                     )
                     .child(self.default_model_setting(cx))
                     .child(self.default_thinking_setting(cx))
@@ -273,15 +279,22 @@ impl Plait {
     fn catalog_settings(&self) -> Div {
         section("Models")
             .when_some(self.catalog_summary(), |el, summary| {
-                el.child(tag(summary, colors().subtle))
+                el.child(tag("catalog-summary", summary, colors().subtle))
             })
             .child(tag(
+                "catalog-auth-note",
                 "Authentication stays on the host. Keys and sign-in answers entered here are sent once and never saved in desktop preferences.",
                 colors().subtle,
             ))
             .when_some(
                 self.preference_note(Some(PreferenceGroup::Models)),
-                |el, note| el.child(tag(format!("Favorites and recent models: {note}"), colors().subtle)),
+                |el, note| {
+                    el.child(tag(
+                        "catalog-preference-note",
+                        format!("Favorites and recent models: {note}"),
+                        colors().subtle,
+                    ))
+                },
             )
     }
 
@@ -320,16 +333,17 @@ impl Plait {
                 control,
             ))
             .when_some(saved, |el, choice| {
-                el.child(tag(model_label(choice), colors().muted))
+                el.child(tag("default-model-label", model_label(choice), colors().muted))
             })
             .when(!usable && self.host.connection.connected, |el| {
                 el.child(state_line(
+                    "default-model-unusable",
                     "The saved default is not signed in on this host. New threads ask for a model until it is.",
                     colors().amber,
                 ))
             })
             .when_some(self.default_model_state(), |el, (state, tint)| {
-                el.child(state_line(state, tint))
+                el.child(state_line("default-model-state", state, tint))
             })
     }
 
@@ -400,6 +414,7 @@ impl Plait {
             .children(title)
             .when_some(self.preference_note(None), |el, note| {
                 el.child(state_line(
+                    "settings-preference-note",
                     format!("Desktop preferences: {note}"),
                     colors().amber,
                 ))
@@ -474,10 +489,11 @@ impl Plait {
                 column()
                     .gap_1()
                     .child(tag(
+                        "about-desktop-version",
                         format!("Desktop {} · {revision}{built}", env!("CARGO_PKG_VERSION")),
                         colors().muted,
                     ))
-                    .child(tag(host, colors().subtle)),
+                    .child(tag("about-host-protocol", host, colors().subtle)),
             )
             .child(self.update_controls(cx))
     }
@@ -509,7 +525,7 @@ impl Plait {
             ))
             .when_some(
                 self.preference_note(Some(PreferenceGroup::View)),
-                |el, note| el.child(tag(note, colors().subtle)),
+                |el, note| el.child(tag("appearance-preference-note", note, colors().subtle)),
             )
     }
 
@@ -560,18 +576,23 @@ impl Plait {
             .gap_3()
             .child(setting("Default for edits and commands", detail, choices))
             .child(tag(
+                "approval-thread-override-note",
                 "A thread can choose its own from the run settings under its message box.",
                 colors().subtle,
             ))
             .when(harness_modes, |el| {
-                el.child(tag(
-                    "These apply to Pi threads. A thread in another harness uses that harness's own permissions, chosen under its message box and in Settings → Agents.",
-                    colors().subtle,
-                ).line_height(px(16.)))
+                el.child(
+                    tag(
+                        "approval-harness-scope-note",
+                        "These apply to Pi threads. A thread in another harness uses that harness's own permissions, chosen under its message box and in Settings → Agents.",
+                        colors().subtle,
+                    )
+                    .line_height(px(16.)),
+                )
             })
             .when_some(
                 self.preference_note(Some(PreferenceGroup::Approvals)),
-                |el, note| el.child(tag(note, colors().subtle)),
+                |el, note| el.child(tag("approval-preference-note", note, colors().subtle)),
             )
     }
 }

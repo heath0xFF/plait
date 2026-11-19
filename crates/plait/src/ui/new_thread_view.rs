@@ -277,11 +277,10 @@ impl Plait {
                 return Some(
                     line()
                         .child(dot(colors().blue))
-                        .child(
-                            div()
-                                .text_color(rgb(colors().muted))
-                                .child(text!(format!("Creating thread with {model}…")).audited()),
-                        )
+                        .child(div().text_color(rgb(colors().muted)).child(a11y_text(
+                            "draft-creating",
+                            format!("Creating thread with {model}…"),
+                        )))
                         .into_any_element(),
                 );
             }
@@ -300,7 +299,10 @@ impl Plait {
                             .flex_1()
                             .min_w_0()
                             .text_color(rgb(colors().amber))
-                            .child(text!(format!("Thread not confirmed. {detail}")).audited()),
+                            .child(a11y_text(
+                                "draft-unconfirmed",
+                                format!("Thread not confirmed. {detail}"),
+                            )),
                     )
                     .child(if connected {
                         toned_button("draft-retry", "Retry", Tone::Filled)
@@ -322,7 +324,7 @@ impl Plait {
                             .flex_1()
                             .min_w_0()
                             .text_color(rgb(colors().red))
-                            .child(text!(error.clone()).audited()),
+                            .child(a11y_text("draft-error", error.clone())),
                     )
                     .into_any_element(),
             );
@@ -336,7 +338,7 @@ impl Plait {
         let protection = row.protection.clone();
         (!protection.is_empty()).then(|| {
             line()
-                .child(tag(protection, colors().subtle).line_height(px(16.)))
+                .child(tag("draft-protection", protection, colors().subtle).line_height(px(16.)))
                 .into_any_element()
         })
     }

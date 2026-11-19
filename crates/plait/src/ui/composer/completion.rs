@@ -6,7 +6,7 @@
 //! `selected_value` when the user accepts. Rows report clicks and wheel
 //! scrolling through one callback. The owner positions the returned element.
 
-use crate::ui::theme::{self, AuditA11y, Control, ROW_HEIGHT, colors};
+use crate::ui::theme::{self, AuditA11y, Control, ROW_HEIGHT, a11y_text, colors};
 use gpui::{prelude::*, *};
 use std::{ops::Range, rc::Rc};
 
@@ -173,7 +173,7 @@ impl<T> Completion<T> {
                         .truncate()
                         .text_size(px(11.))
                         .text_color(rgb(colors().subtle))
-                        .child(text!(id = (id, usize::MAX), note).audited()),
+                        .child(a11y_text((id, usize::MAX), note)),
                 )
             });
         Some(list)

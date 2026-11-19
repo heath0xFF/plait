@@ -479,7 +479,7 @@ impl Plait {
                     .gap(px(6.))
                     .items_start()
                     .child(div().h(px(16.)).flex().items_center().child(dot(tint)))
-                    .child(tag(note, colors().subtle).line_height(px(16.))),
+                    .child(tag("code-font-note", note, colors().subtle).line_height(px(16.))),
             )
             .when(!offered.is_empty(), |el| {
                 el.child(row().flex_wrap().gap(px(4.)).children(
@@ -599,7 +599,10 @@ impl Plait {
             .child(
                 column()
                     .gap_2()
-                    .child(tag(folder_note, colors().subtle).line_height(px(16.)))
+                    .child(
+                        tag("themes-folder-note", folder_note, colors().subtle)
+                            .line_height(px(16.)),
+                    )
                     .child(
                         row()
                             .gap_2()
@@ -612,12 +615,10 @@ impl Plait {
                                     .on_activate(cx, |this, _, cx| this.load_themes(cx)),
                             ),
                     )
-                    .children(
-                        self.themes
-                            .errors
-                            .iter()
-                            .map(|error| tag(error.clone(), colors().amber).line_height(px(16.))),
-                    ),
+                    .children(self.themes.errors.iter().enumerate().map(|(index, error)| {
+                        tag(("theme-error", index), error.clone(), colors().amber)
+                            .line_height(px(16.))
+                    })),
             )
             .child(self.code_font_setting(cx))
     }
@@ -644,7 +645,14 @@ impl Plait {
             .role(Role::RadioGroup)
             .aria_label(label)
             .audited()
-            .child(section_label(label))
+            .child(section_label(
+                if light {
+                    "themes-light-heading"
+                } else {
+                    "themes-dark-heading"
+                },
+                label,
+            ))
             .children(self.themes.of(light).enumerate().map(|(index, theme)| {
                 let selected = theme.name == chosen;
                 let name = theme.name.clone();

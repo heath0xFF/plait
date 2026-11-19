@@ -267,7 +267,7 @@ impl Plait {
             .child(self.shortcut_editor(cx))
             .when_some(
                 self.preference_note(Some(PreferenceGroup::Keyboard)),
-                |el, note| el.child(tag(note, colors().subtle)),
+                |el, note| el.child(tag("keyboard-preference-note", note, colors().subtle)),
             )
     }
 }

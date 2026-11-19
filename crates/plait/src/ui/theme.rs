@@ -2,7 +2,7 @@ use gpui::{prelude::*, *};
 use plait_core::host;
 use std::borrow::Cow;
 
-pub use super::a11y::{AuditA11y, Audited};
+pub use super::a11y::{AuditA11y, Audited, text as a11y_text};
 pub use plait_core::theme::{Palette, mix};
 
 /// Interactive control element: audited in debug tests, zero-cost `Stateful<Div>` otherwise.
@@ -307,12 +307,14 @@ impl<E: StatefulInteractiveElement + Styled + FluentBuilder> DisabledControl for
     }
 }
 
-pub fn tag(text: impl Into<SharedString>, color: u32) -> Div {
-    let text = text.into();
+/// Accessible secondary label with a caller-supplied, place-based element ID.
+/// Never derives its ID from `text`, so identical strings at the same level
+/// cannot collide in the accessibility tree.
+pub fn tag(id: impl Into<ElementId>, text: impl Into<SharedString>, color: u32) -> Div {
     div()
         .text_size(px(11.))
         .text_color(rgb(color))
-        .child(text!(id = text.clone(), text).audited())
+        .child(a11y_text(id, text))
 }
 
 /// Rounded, outlined label for metadata: a machine, a state. Callers add children.
@@ -341,8 +343,8 @@ pub fn host_status_color(status: host::ThreadStatus) -> u32 {
 }
 
 /// Small uppercase-free heading above a group, in the manner of a list label.
-pub fn section_label(text: impl Into<SharedString>) -> Div {
-    tag(text, colors().subtle).font_weight(FontWeight::MEDIUM)
+pub fn section_label(id: impl Into<ElementId>, text: impl Into<SharedString>) -> Div {
+    tag(id, text, colors().subtle).font_weight(FontWeight::MEDIUM)
 }
 
 /// Two-option switch. The caller supplies tab buttons with `aria_selected`.
