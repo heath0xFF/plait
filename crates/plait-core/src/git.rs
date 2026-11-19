@@ -202,6 +202,10 @@ fn run_recorded(
         Stdio::null()
     };
     let shared_group = record::has_deadline();
+    if shared_group && recording.is_some() {
+        // A recorded group must be Git's own, never the helper's.
+        return Err("Git cleanup recording needs its own process group.".into());
+    }
     let mut child = command
         .stdin(stdin)
         .stdout(Stdio::piped())
@@ -220,6 +224,9 @@ fn run_recorded(
             }
             format!("Cannot start Git: {e}")
         })?;
+    if let Some(recording) = &recording {
+        recording.started(child.id());
+    }
     let stdout = child.stdout.take().ok_or("Git stdout is unavailable")?;
     let stderr = child.stderr.take().ok_or("Git stderr is unavailable")?;
     let feed = child.stdin.take().zip(input).map(|(mut pipe, bytes)| {

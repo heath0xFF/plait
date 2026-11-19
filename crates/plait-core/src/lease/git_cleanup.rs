@@ -85,9 +85,21 @@ pub fn with_lease<T>(
 }
 
 pub(crate) struct Running(Arc<Scope>);
-/// Before exec, the child writes its own identity. There is no spawn-to-record
-/// gap in which a dead desktop could leave an unrecorded Git writer behind.
-pub(crate) fn prepare(command: &mut Command, label: &str) -> Result<Option<Running>, String> {
+fn save(file: &File, bytes: &[u8], offset: i64) -> Result<(), String> {
+    lock(file).map_err(String::from)?;
+    let wrote =
+        unsafe { libc::pwrite(file.as_raw_fd(), bytes.as_ptr().cast(), bytes.len(), offset) };
+    let error = io::Error::last_os_error();
+    unlock(file);
+    if wrote == bytes.len() as isize {
+        Ok(())
+    } else {
+        Err(format!("Git cleanup could not be saved: {error}"))
+    }
+}
+/// Saved before spawn, so a crash before the child is known still holds the
+/// checkout. No `pre_exec`: that would fork the whole desktop for every write.
+pub(crate) fn prepare(label: &str) -> Result<Option<Running>, String> {
     CURRENT.with(|slot| {
         let Some(scope) = slot.borrow().clone() else {
             return Ok(None);
@@ -101,37 +113,26 @@ pub(crate) fn prepare(command: &mut Command, label: &str) -> Result<Option<Runni
         let label = label.as_bytes();
         let size = label.len().min(95);
         record[64..64 + size].copy_from_slice(&label[..size]);
-        let held = scope.clone();
-        // SAFETY: the child uses fixed stack buffers and kernel calls only;
-        // no allocation, Rust lock, or destructor runs before exec.
-        unsafe {
-            command.pre_exec(move || {
-                let child = process::inspect(libc::getpid())?;
-                if child.group != child.pid {
-                    return Err(io::Error::from_raw_os_error(libc::EINVAL));
-                }
-                let mut record = record;
-                put(&mut record, 40, child.pid as u64);
-                put(&mut record, 48, child.birth[0]);
-                put(&mut record, 56, child.birth[1]);
-                let fd = held.file.as_raw_fd();
-                if libc::flock(fd, libc::LOCK_EX) != 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                let wrote = libc::pwrite(fd, record.as_ptr().cast(), LEN, 0);
-                let result = if wrote != LEN as isize {
-                    Err(io::Error::last_os_error())
-                } else {
-                    Ok(())
-                };
-                libc::flock(fd, libc::LOCK_UN);
-                result
-            });
-        }
+        save(&scope.file, &record, 0)?;
         Ok(Some(Running(scope)))
     })
 }
 impl Running {
+    /// The child is not reaped yet, so its PID cannot have been reused. A
+    /// failed save leaves the starting record, which also holds the checkout.
+    pub(crate) fn started(&self, pid: u32) {
+        let Ok(child) = process::inspect(pid as i32) else {
+            return;
+        };
+        if child.group != child.pid {
+            return;
+        }
+        let mut fields = [0u8; 24];
+        put(&mut fields, 0, child.pid as u64);
+        put(&mut fields, 8, child.birth[0]);
+        put(&mut fields, 16, child.birth[1]);
+        let _ = save(&self.0.file, &fields, 40);
+    }
     pub(crate) fn finish(&self, acknowledged: bool) -> Result<(), String> {
         lock(&self.0.file).map_err(String::from)?;
         let fd = self.0.file.as_raw_fd();
@@ -160,7 +161,8 @@ impl Running {
 
 struct Record {
     owner: process::Process,
-    child: process::Process,
+    /// None while starting: the desktop ended before the child was known.
+    child: Option<process::Process>,
     boot: u64,
     command: String,
     uncertain: bool,
@@ -171,7 +173,7 @@ fn decode(bytes: &[u8]) -> Option<Record> {
     }
     let owner = i32::try_from(get(bytes, 16)).ok()?;
     let child = i32::try_from(get(bytes, 40)).ok()?;
-    if owner <= 0 || child <= 0 {
+    if owner <= 0 || child < 0 {
         return None;
     }
     let label = &bytes[64..160];
@@ -186,11 +188,11 @@ fn decode(bytes: &[u8]) -> Option<Record> {
             group: 0,
             birth: [get(bytes, 24), get(bytes, 32)],
         },
-        child: process::Process {
+        child: (child > 0).then(|| process::Process {
             pid: child,
             group: child,
             birth: [get(bytes, 48), get(bytes, 56)],
-        },
+        }),
         boot: get(bytes, 8),
         command,
         uncertain: get(bytes, 160) != 0,
@@ -199,26 +201,36 @@ fn decode(bytes: &[u8]) -> Option<Record> {
 fn same(expected: process::Process) -> bool {
     process::inspect(expected.pid).is_ok_and(|now| now.birth == expected.birth)
 }
-fn leader(record: &Record) -> bool {
-    process::inspect(record.child.pid)
-        .is_ok_and(|now| now.birth == record.child.birth && now.group == record.child.pid)
+fn leader(child: process::Process) -> bool {
+    process::inspect(child.pid).is_ok_and(|now| now.birth == child.birth && now.group == child.pid)
 }
 fn live_owner(record: &Record) -> bool {
     !record.uncertain && same(record.owner)
 }
 fn describe(bytes: &[u8], record: Option<&Record>) -> Cleanup {
     match record {
-        Some(record) => Cleanup {
+        Some(Record {
+            child: Some(child),
+            command,
+            ..
+        }) => Cleanup {
             token: token(bytes),
             reason: format!(
-                "Plait could not confirm {} stopped. Process group {} may still use this checkout.",
-                record.command, record.child.pid
+                "Plait could not confirm {command} stopped. Process group {} may still use this checkout.",
+                child.pid
             ),
             process: Some(CleanupProcess {
-                group: record.child.pid,
-                command: record.command.clone(),
-                can_stop: leader(record),
+                group: child.pid,
+                command: command.clone(),
+                can_stop: leader(*child),
             }),
+        },
+        Some(Record { command, .. }) => Cleanup {
+            token: token(bytes),
+            reason: format!(
+                "Plait ended while starting {command}, so its process group is unknown. It may still use this checkout."
+            ),
+            process: None,
         },
         None => Cleanup {
             token: token(bytes),
@@ -241,7 +253,11 @@ pub fn unconfirmed(id: DirIdentity) -> Result<Option<Cleanup>, LeaseError> {
         if same_boot && live_owner(record) {
             return Ok(None);
         }
-        if !same_boot || process::group_gone(record.child.pid) {
+        if !same_boot
+            || record
+                .child
+                .is_some_and(|child| process::group_gone(child.pid))
+        {
             file.set_len(0).map_err(io_error)?;
             return Ok(None);
         }
@@ -284,10 +300,14 @@ pub fn stop(id: DirIdentity, expected: &str) -> Result<(), LeaseError> {
             "Git cleanup state changed. Refresh before stopping.",
         ));
     }
-    let record = decode(&bytes).ok_or_else(|| {
-        LeaseError::io("The Git process identity could not be verified. No signal was sent.")
-    })?;
-    if process::boot().map_err(io_error)? != record.boot || process::group_gone(record.child.pid) {
+    let unverified =
+        || LeaseError::io("The Git process identity could not be verified. No signal was sent.");
+    let record = decode(&bytes).ok_or_else(unverified)?;
+    if process::boot().map_err(io_error)? != record.boot {
+        return file.set_len(0).map_err(io_error);
+    }
+    let child = record.child.ok_or_else(unverified)?;
+    if process::group_gone(child.pid) {
         return file.set_len(0).map_err(io_error);
     }
     if live_owner(&record) {
@@ -296,17 +316,15 @@ pub fn stop(id: DirIdentity, expected: &str) -> Result<(), LeaseError> {
         ));
     }
     for signal in [libc::SIGTERM, libc::SIGKILL] {
-        if !leader(&record) {
+        if !leader(child) {
             return Err(LeaseError::io(
                 "The recorded Git leader no longer has the same identity. No further signal was sent; inspect the remaining processes before confirming.",
             ));
         }
-        if unsafe { libc::kill(-record.child.pid, signal) } != 0
-            && !process::group_gone(record.child.pid)
-        {
+        if unsafe { libc::kill(-child.pid, signal) } != 0 && !process::group_gone(child.pid) {
             return Err(io_error(io::Error::last_os_error()));
         }
-        if wait_gone(record.child.pid) {
+        if wait_gone(child.pid) {
             return file.set_len(0).map_err(io_error);
         }
     }
@@ -372,8 +390,9 @@ mod tests {
                 .args(["-c", script])
                 .process_group(0)
                 .stdout(Stdio::piped());
-            let running = prepare(&mut command, "git commit")?.unwrap();
+            let running = prepare("git commit")?.unwrap();
             let child = command.spawn().map_err(|e| e.to_string())?;
+            running.started(child.id());
             Ok((child, running))
         })
         .unwrap();
@@ -437,8 +456,9 @@ mod tests {
         with_lease(&lease, || {
             let mut command = Command::new("/usr/bin/true");
             command.process_group(0);
-            let running = prepare(&mut command, "git add")?.unwrap();
+            let running = prepare("git add")?.unwrap();
             let mut child = command.spawn().unwrap();
+            running.started(child.id());
             assert!(unconfirmed(lease.identity()).unwrap().is_none());
             assert!(child.wait().unwrap().success());
             running.finish(true)?;
@@ -480,8 +500,10 @@ mod tests {
                     .current_dir(&root)
                     .process_group(0);
                 lease.lend_to(&mut command);
-                let running = prepare(&mut command, "git worktree remove")?.unwrap();
-                let status = command.spawn().unwrap().wait().unwrap();
+                let running = prepare("git worktree remove")?.unwrap();
+                let mut child = command.spawn().unwrap();
+                running.started(child.id());
+                let status = child.wait().unwrap();
                 running.finish(true)?;
                 assert!(status.success());
                 Ok(())
@@ -496,6 +518,57 @@ mod tests {
             )
             .unwrap();
         }
+    }
+    #[test]
+    fn dying_before_spawn_fixture() {
+        let Some(root) = std::env::var_os("PLAIT_GIT_START_FIXTURE") else {
+            return;
+        };
+        let lease = acquire_checkout(Path::new(&root), None, LeaseClass::Exclusive).unwrap();
+        with_lease(&lease, || -> Result<(), String> {
+            let _running = prepare("git commit")?;
+            // The desktop dies after saving the record, before Git is known.
+            std::process::abort()
+        })
+        .unwrap();
+    }
+    #[test]
+    fn a_desktop_that_dies_before_its_git_child_is_known_still_holds_the_checkout() {
+        let root = root();
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "lease::git_cleanup::tests::dying_before_spawn_fixture",
+            ])
+            .env("PLAIT_GIT_START_FIXTURE", &root)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(!status.success());
+        let id = open_verified_dir(&root).unwrap().2;
+        let state = unconfirmed(id)
+            .unwrap()
+            .expect("the start gap must hold the checkout");
+        assert!(
+            state.process.is_none(),
+            "an unknown group is never offered a signal"
+        );
+        assert!(
+            state.reason.contains("process group is unknown"),
+            "{}",
+            state.reason
+        );
+        assert!(stop(id, &state.token).is_err());
+        assert_eq!(
+            acquire_checkout(&root, None, LeaseClass::Writer)
+                .unwrap_err()
+                .kind,
+            LeaseErrorKind::CleanupUncertain
+        );
+        resolve(id, &state.token).unwrap();
+        drop(acquire_checkout(&root, None, LeaseClass::Writer).unwrap());
+        fs::remove_dir_all(root).unwrap();
     }
     fn crash_case(lent: bool) {
         use std::os::unix::fs::PermissionsExt;

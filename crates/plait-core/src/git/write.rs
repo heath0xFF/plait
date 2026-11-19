@@ -863,7 +863,7 @@ fn run_write(
     timeout: Duration,
     label: &str,
 ) -> Result<super::Raw> {
-    let recording = crate::lease::git_cleanup::prepare(command, label)?;
+    let recording = crate::lease::git_cleanup::prepare(label)?;
     super::run_recorded(command, input, limit, timeout, recording)
 }
 

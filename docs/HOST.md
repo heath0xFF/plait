@@ -1631,10 +1631,14 @@ inputs are not automatically replayed by a confirmation.
 Desktop Git uses a separate fixed-size crash record beside the locks, so a
 worktree command on a parent can coexist with that parent's run marker. The
 record contains the owner and child PID, their kernel birth identities, the
-boot identity where needed, and a short Git command label. The child writes it
-before exec, closing the spawn/record crash gap. This adds no subprocess or
-fsync: one small write starts the record and one truncate clears an acknowledged
-completion. Git reads do not create child records. Power-loss durability is
+boot identity where needed, and a short Git command label. The desktop saves
+the owner part before it starts Git and the child's identity right after, so
+Git keeps the ordinary `posix_spawn` path instead of forking the whole desktop.
+If the desktop dies between those two saves, the record names the command but
+no process group: the checkout stays blocked and only the person can confirm
+it, since Plait cannot check or stop a group it never learned. This adds no
+subprocess or fsync: two small writes save the record and one truncate clears
+an acknowledged completion. Git reads do not create child records. Power-loss durability is
 required for run markers, not for these process-crash records.
 
 A live desktop's record is hidden. After owner death or uncertain termination,
