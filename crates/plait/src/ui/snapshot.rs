@@ -2084,7 +2084,14 @@ fn keys_drive_the_palette_and_picker() {
 
 /// Every view at the default size and at the minimum window size.
 fn walk(output: Option<&Path>) {
-    // Render jobs run serially so visible fixture paths stay the same.
+    // Renders share one fixture path so it reads the same in every PNG. Another
+    // render process would delete it mid-walk, so wait for that one to finish.
+    let _render_lock = output.map(|_| {
+        let lock = std::fs::File::create(std::env::temp_dir().join("plait-snapshot-render.lock"))
+            .expect("render lock file");
+        lock.lock().expect("render lock");
+        lock
+    });
     let name = if output.is_some() {
         "plait-snapshot-render".to_owned()
     } else {
