@@ -107,21 +107,16 @@ pub struct TabMetadata {
 /// Activation does not mark a conversation read: Files is not an approval view.
 /// The UI updates navigation.unread only once it actually presents the content.
 pub fn metadata(window: &WindowTabs, context: &RowContext<'_>) -> Vec<TabMetadata> {
+    let summaries = tab_summaries(window, context);
     window
         .tabs
         .iter()
+        .zip(summaries)
         .enumerate()
-        .map(|(index, tab)| {
+        .map(|(index, (tab, summary))| {
             let target = &tab.thread().target;
             let checkout = target.checkout();
             let same_host = &checkout.host == context.host;
-            let summary = match target {
-                ThreadTarget::Existing { id, .. } if same_host => context
-                    .threads
-                    .iter()
-                    .find(|t| &t.id == id && t.checkout == checkout.root),
-                _ => None,
-            };
             let active = window.active == Some(tab.id);
             let unread = summary.is_some_and(|t| context.navigation.unread.contains(&t.id));
             let state = if !same_host || !tab.thread().connected() {
@@ -174,6 +169,40 @@ pub fn metadata(window: &WindowTabs, context: &RowContext<'_>) -> Vec<TabMetadat
             }
         })
         .collect()
+}
+
+/// One pass over the catalog, which may hold thousands of threads, rather than
+/// one scan per tab. The first summary with the tab's ID and checkout wins.
+fn tab_summaries<'a>(
+    window: &WindowTabs,
+    context: &RowContext<'a>,
+) -> Vec<Option<&'a ThreadSummary>> {
+    let mut found = vec![None; window.tabs.len()];
+    let wanted = window
+        .tabs
+        .iter()
+        .enumerate()
+        .filter_map(|(i, tab)| match &tab.thread().target {
+            ThreadTarget::Existing { id, checkout } if &checkout.host == context.host => {
+                Some((id.as_str(), (i, checkout.root.as_path())))
+            }
+            _ => None,
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut remaining = wanted.len();
+    for thread in context.threads {
+        if remaining == 0 {
+            break;
+        }
+        if let Some(&(i, root)) = wanted.get(thread.id.as_str())
+            && found[i].is_none()
+            && thread.checkout == root
+        {
+            found[i] = Some(thread);
+            remaining -= 1;
+        }
+    }
+    found
 }
 
 pub fn summary_state(thread: &ThreadSummary, unread: bool) -> TabState {
@@ -613,6 +642,65 @@ mod tests {
             }
         }
         assert!(layout(&[], widths(100.0), usize::MAX, 2).visible.is_empty());
+    }
+
+    #[test]
+    fn metadata_matches_each_tab_with_one_catalog_pass() {
+        let navigation = navigation::Preferences::default();
+        let host = host();
+        // The first summary with the tab's ID and checkout wins, as before.
+        let mut w = window();
+        open(&mut w, "a");
+        let mut other_checkout = summary("a", ThreadStatus::Running);
+        other_checkout.checkout = "/elsewhere".into();
+        let mut second = summary("a", ThreadStatus::Error);
+        second.title = Some("Second".into());
+        let threads = [other_checkout, summary("a", ThreadStatus::Idle), second];
+        let context = RowContext {
+            host: &host,
+            threads: &threads,
+            navigation: &navigation,
+            machine: "Mac",
+        };
+        let rows = metadata(&w, &context);
+        assert_eq!(
+            (rows[0].title.as_str(), rows[0].state),
+            ("Thread a", TabState::Idle)
+        );
+        // Cost must not scale with tabs × catalog: compare 100 tabs with 1 tab
+        // whose summaries sit at the catalog's end, so each lookup scans it all.
+        let mut threads = (0..50_000)
+            .map(|i| summary(&format!("x{i}"), ThreadStatus::Idle))
+            .collect::<Vec<_>>();
+        threads.extend((0..MAX_TABS).map(|i| summary(&format!("t{i}"), ThreadStatus::Idle)));
+        let mut one = window();
+        open(&mut one, "t0");
+        let mut full = window();
+        for i in 0..MAX_TABS {
+            open(&mut full, &format!("t{i}"));
+        }
+        let fastest = |w: &WindowTabs| {
+            (0..5)
+                .map(|_| {
+                    let start = std::time::Instant::now();
+                    let rows = metadata(
+                        w,
+                        &RowContext {
+                            threads: &threads,
+                            ..context
+                        },
+                    );
+                    assert!(rows.iter().all(|r| r.state == TabState::Idle));
+                    start.elapsed()
+                })
+                .min()
+                .unwrap()
+        };
+        let (one, full) = (fastest(&one), fastest(&full));
+        assert!(
+            full < one * 10,
+            "100 tabs took {full:?}; 1 tab took {one:?}"
+        );
     }
 
     #[test]
