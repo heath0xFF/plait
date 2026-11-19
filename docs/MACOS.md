@@ -822,9 +822,22 @@ message. Type a one-line message and press Return or **Commit** (Cmd-Shift-C
 moves to the message). Only staged changes are committed. Plait runs your
 repository's own Git configuration for these: clean filters such as LFS run when
 staging, and commit hooks run when committing; a failing hook's output is shown
-and nothing is committed. One write runs at a time. If a thread is running in
-the same checkout, Changes says so, since its edits may be unfinished. During a
-merge, an unmerged file offers **Mark resolved** instead of **Stage**; Commit
+and nothing is committed. One write runs at a time, and every Plait Git mutation (staging, unstaging,
+hunk staging, committing, discarding, restoring a discard, creating or switching
+branches, pushing, publishing, fetching, pulling, turn undo/redo, and worktree
+removal) runs off the UI thread under the checkout's OS lease so it cannot race
+an active agent run or another Plait write, including across symlink aliases or a
+second host store. If a thread is running in the same checkout, Changes says so,
+since its edits may be unfinished, and attempting a Git write or worktree
+removal there is **refused immediately** with a specific message under the commit
+box (or in the sidebar for worktree removal), leaving working files, the index,
+and `HEAD` untouched. Operations that update shared repository metadata across
+linked worktrees (commit, push, publish, fetch, pull, branch create/switch, and
+adding or removing a worktree) **wait briefly** (up to five seconds) to serialize
+behind another linked worktree's metadata update and report a refusal if that
+operation is still busy; creating a new worktree from a busy parent checkout is
+allowed while a thread runs there, waiting only on shared metadata, and
+unrelated repositories are never blocked. During a merge, an unmerged file offers **Mark resolved** instead of **Stage**; Commit
 stays unavailable until every conflict is marked resolved. If a hook or filter
 takes longer than its limit (60 seconds for staging, 120 for a commit), Plait
 stops it and says so.

@@ -107,6 +107,7 @@ session/blobs.rs        bounded private bookmark and parked-editor records
 transcript.rs           stable row identity and incremental list-change plans
 history.rs              stored/live merging, text parts, memory limits, run wording
 history/records.rs      complete record pages, run membership and closing-line projection
+lease.rs                authoritative checkout lifecycle, writer, and common-dir OS leases
 local_socket.rs         owner-only paths and OS peer-identity checks
 state.rs                application state, repository job coordinator, and accessors
 model.rs                plain Rust data, no GPUI
@@ -598,6 +599,18 @@ Read operations are `status(path)`, `diff(root, change, mode)`, `files(root)`,
 write operation is `write(root, op)`: stage, unstage, stage all, unstage all,
 commit, push, publish, fetch, pull, a hunk, discard, restore, create a branch,
 or switch branches. Each returns data or a user-facing error.
+
+Every Plait Git write, worktree mutation (`add_worktree`, `remove_worktree`),
+host turn undo/redo (`plait-host undo`), and runtime run participates in the
+same `plait_core::lease` lock hierarchy on the background executor (never in
+render): Level 1 checkout lifecycle lock (`LOCK_SH` for runs and future readers,
+`LOCK_EX` for exclusive checkout mutations and worktree removal) in a private
+per-user directory (`~/.local/share/plait-leases`), Level 2 canonical checkout
+directory-inode writer lock (`LOCK_EX`, omitted for readers), and Level 3 shared
+Git `--git-common-dir` metadata lock (`LOCK_EX`, with a short bounded wait for
+shared ref/config/worktree-registry writes across linked worktrees). `RepositoryJob`
+verifies `CheckoutKey` identity under the acquired lease before running `git::write`.
+Existing hardened Git functions remain unchanged underneath this lease boundary.
 
 Branches are read with `for-each-ref` over `refs/heads/`, newest committer
 date first, at most 500, when the branch palette opens, never on a status

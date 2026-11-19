@@ -1471,9 +1471,14 @@ the normal shell process group on Stop, host/Node death, timeout, or shell exit.
 An intentionally detached descendant can evade group cleanup, but still cannot
 write the checkout or outside that command's scratch and thread cache. This is
 not a general process container.
-The guardian holds both store and canonical-checkout writer leases until exit.
-The checkout lease is an OS flock on the canonical root directory inode itself,
-not a pathname under TMPDIR; different stores and environments share the lease.
+The guardian holds the store lock and both checkout leases (writer and lifecycle) until exit, marking inherited lease descriptors close-on-exec before starting any untrusted command so no child process sees them while the guardian retains them.
+Checkout exclusion uses three OS `flock` layers acquired in one strict order (never upgraded in place):
+
+1. **Checkout lifecycle lock** (`~/.local/share/plait-leases/checkout-<dev>-<ino>.lock`, inside an owner-only `0700` directory with `0600` single-link regular files opened with `O_NOFOLLOW`, independent of host store and `TMPDIR`): taken shared (`LOCK_SH`) by active runs and future host-enforced readers, and exclusive (`LOCK_EX`) by desktop Git writes, turn undo/redo, and worktree removal.
+2. **Checkout writer lock** (an OS `flock(LOCK_EX)` on the canonical checkout root directory inode itself): taken by writing runs, turn undo/redo, desktop Git writes, and worktree removal; omitted for readers so a future enforced reader can coexist with a writer while older hosts that only take the directory lock remain mutually excluded.
+3. **Shared Git common-directory metadata lock** (`common-<dev>-<ino>.lock` keyed by the canonical `--git-common-dir` inode in the same per-user directory): taken exclusive (`LOCK_EX`) around operations that update shared refs, upstream configuration, or the worktree registry (`commit`, `push`, `publish`, `fetch`, `pull`, branch create/switch, `worktree add`/`remove`), serializing linked worktrees even when their checkout directories differ.
+
+Symlink aliases and subdirectories resolve to the canonical working-tree root inode before locking. A process crash releases its leases when the kernel closes its open file descriptions; an uncertain descendant that still holds inherited lease descriptors keeps those leases held until it exits. All shipped runs are still writers (at most one active run per checkout and eight active checkouts per host); the reader class is reserved in the lease layer and exercised only by tests. External editors and unrelated same-user processes remain outside this cooperating lock protocol.
 File edits use a synced temporary file and atomic rename, with original mode and
 identity/content checks before replacement. The original is opened read-only:
 a write-capable open can change macOS provenance metadata before any write. Root replacement is rejected by its

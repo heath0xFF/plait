@@ -520,11 +520,38 @@ Tab order, active identity and bookmarks are saved separately in `tabs.json`,
 with debounced atomic writes and total decoding after host and checkout
 verification. Drafts and submissions remain in the existing recovery journal.
 
-**Still planned:** other tab content kinds, many concurrent threads in one
-checkout, authoritative checkout write exclusion, host-owned
-worktree creation, independent multi-checkout capacity, a durable checkout
-queue, and optional storage, seeding and read-only extensions. Tabs do not
-change the host's current execution admission or single-writer rules.
+**Built for concurrency foundation (Stage 6a — authoritative write exclusion):**
+every Plait Git mutation (staging, unstaging, hunk staging, committing,
+discarding, restoring a discard, creating and switching branches, pushing,
+publishing, fetching, pulling, turn undo/redo, and adding or removing a
+worktree) and every host run now share one ordered OS lease boundary: a private
+per-user checkout lifecycle lock (supporting a future reader class, tested with
+a fake reader), the existing canonical directory-inode writer lock, and a shared
+Git common-directory metadata lock across linked worktrees. Nothing is visible
+in the desktop app yet, no new control or Git verb was added, and starting a
+second run in a busy checkout is still refused.
+
+**Still planned:** other tab content kinds, harness stop/cleanup quiescence and
+quarantine (Stage 6b), host-owned worktree creation (Stage 7), busy-checkout
+admission and independent multi-checkout capacity (Stage 8), a durable checkout
+queue (Stage 9), enforced Pi read-in-place (Stage 10), copy-on-write artifact
+seeding (Stage 11), and worktree storage accounting and cleanup (Stage 12).
+
+**Agreed concurrency decisions (built in the stages named below):**
+
+- **Busy-project choice (Stages 8 and 9):** when a project is busy and a new
+  thread is started there, Plait offers a choice between its own worktree or
+  waiting in a checkout queue; a per-project switch can make the worktree
+  automatic, never automatic everywhere.
+- **Reading in place (Stage 10):** sharing a busy checkout to read while another
+  thread writes comes later, and only as a host-enforced mode for Pi. Until
+  then, all runs are writers (with the lifecycle lease prepared and tested for a
+  reader class, shipping none).
+- **Worktree build artifacts, cleanup, and returning work (Stages 11 and 12):**
+  a new worktree's build output is cloned copy-on-write only from a per-project
+  approved list; worktree cleanup is manual first (Stage 12a), then an opt-in
+  rule (Stage 12b); work returns by commit, push, and pull request, with no
+  merge, rebase, or cherry-pick added.
 
 The agreed v2 recovery index/blob layout remains planned, with its own
 compatibility review and retained v1 backup. The shipped v1 journal is limited
