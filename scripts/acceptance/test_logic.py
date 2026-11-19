@@ -306,23 +306,6 @@ class HarnessTests(unittest.TestCase):
                 self.assertEqual([line.split(':')[0] for line in diag], ['t+0.0s', 't+1.5s-passive', 'after-screenshot', 'after-front'])
                 self.assertTrue(runner.prev_select_failed)
 
-    def test_recorded_ci_dump_selection_and_tab_bar_geometry(self):
-        # Verify against real recorded CI AX dump lines (1-tab and 4-tab full row).
-        recorded_ci_4tab = (
-            'AXWindow/AXStandardWindow title="Plait" label="" value="" frame=20.0 51.0 984.0 639.0\n'
-            '  AXButton/AXUnknown title="Toggle sidebar" label="" value="" frame=104.0 56.0 28.0 28.0\n'
-            '  AXTabGroup/AXUnknown title="Open tabs" label="" value="" frame=136.0 51.0 788.0 39.0\n'
-            '  AXButton/AXUnknown title="New thread tab" label="" value="" frame=928.0 56.0 28.0 28.0\n'
-            '  AXRadioButton/AXTabButton title="Conversation" label="" value="" frame=668.0 96.0 93.0 24.0\n'
-            '    state: AXRadioButton/AXTabButton Conversation; AXSelected=unavailable(AXError=-25212); AXValue=true(1)\n'
-            '  AXRadioButton/AXTabButton title="Files" label="" value="" frame=908.0 96.0 45.0 24.0\n'
-            '    state: AXRadioButton/AXTabButton Files; AXSelected=unavailable(AXError=-25212); AXValue=false(0)\n'
-        )
-        # Confirm recorded CI window bar controls end at 956.0 with 48.0 pt empty end before 1004.0.
-        self.assertIn('frame=928.0 56.0 28.0 28.0', recorded_ci_4tab)
-        self.assertIn('Conversation; AXSelected=unavailable(AXError=-25212); AXValue=true(1)', recorded_ci_4tab)
-        self.assertIn('Files; AXSelected=unavailable(AXError=-25212); AXValue=false(0)', recorded_ci_4tab)
-
     def test_tab_and_thread_selection_use_idempotent_driver_operation(self):
         with tempfile.TemporaryDirectory() as directory:
             runner = self.runner(directory)

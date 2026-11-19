@@ -242,6 +242,23 @@ func tabBarDragPoint(
     return .point(CGPoint(x: (left + right) / 2, y: window.minY + barHeight / 2), left: left, right: right)
 }
 
+/// Reads an `axdrive dump` back into window and element frames, so the drag
+/// point can be checked against trees recorded from real runs.
+func barElements(dump: String) -> (window: CGRect, elements: [BarElement])? {
+    var window: CGRect?
+    var elements: [BarElement] = []
+    for line in dump.split(separator: "\n") {
+        let text = line.trimmingCharacters(in: .whitespaces)
+        guard let range = text.range(of: " frame=", options: .backwards) else { continue }
+        let values = text[range.upperBound...].split(separator: " ").compactMap { Double($0) }
+        guard values.count == 4 else { continue }
+        let box = CGRect(x: values[0], y: values[1], width: values[2], height: values[3])
+        let role = String(text.prefix { $0 != "/" && $0 != " " })
+        if role == "AXWindow" { window = window ?? box } else { elements.append(BarElement(role: role, frame: box)) }
+    }
+    return window.map { ($0, elements) }
+}
+
 /// Deduplicated wait trace so timed-out selection checks show what was observed
 /// at every distinct state transition without flooding logs.
 struct WaitTrace {
@@ -884,6 +901,79 @@ func selfTest() {
     ]
     check(tabBarDragPoint(window: ciWindow, elements: noRoomBar) == .noEmptyEnd(rightmost: 996, windowRight: 1004, available: 8), "crowded tab bar reports no empty end instead of returning a point")
     check(tabBarDragPoint(window: ciWindow, elements: secondRow) == .noControls, "missing top-bar controls reported separately from crowded bar")
+    // Unedited excerpts of recorded trees: the filter must reject the light
+    // group, sidebar, splitter and second row on its own.
+    let recordedOneTab =     """
+    AXWindow/AXStandardWindow title="Plait" label="" value="" frame=20.0 51.0 984.0 639.0
+      AXFullScreen=false(0); AXMinimized=false(0)
+      AXGroup/AXUnknown title="" label="" value="" frame=20.0 51.0 984.0 639.0
+      AXButton/AXCloseButton title="" label="" value="" frame=33.0 62.0 16.0 16.0
+      AXButton/AXFullScreenButton title="" label="" value="" frame=79.0 62.0 16.0 16.0
+      AXButton/AXMinimizeButton title="" label="" value="" frame=56.0 62.0 16.0 16.0
+        AXGroup/AXUnknown title="Plait" label="" value="" frame=20.0 51.0 984.0 639.0
+        AXGroup title="" label="" value="" frame=80.0 63.0 14.0 14.0
+          AXButton/AXUnknown title="Toggle sidebar" label="" value="" frame=104.0 56.0 28.0 28.0
+          AXTabGroup/AXUnknown title="Open tabs" label="" value="" frame=136.0 51.0 240.0 39.0
+          AXButton/AXUnknown title="New thread tab" label="" value="" frame=380.0 56.0 28.0 28.0
+          AXButton/AXUnknown title="New thread: choose a model…" label="" value="" frame=28.0 97.0 194.0 28.0
+          AXButton/AXUnknown title="New thread with another model…" label="" value="" frame=223.0 97.0 28.0 28.0
+          AXButton/AXUnknown title="Open repository…" label="" value="" frame=28.0 126.0 223.0 28.0
+          AXTextField/AXSearchField title="Filter projects and threads" label="" value="" frame=28.0 166.0 223.0 28.0
+          AXCheckBox/AXToggle title="Show only threads needing attention" label="" value="" frame=28.0 203.0 73.0 22.0
+          AXCheckBox/AXToggle title="Include archived threads" label="" value="" frame=105.0 203.0 67.0 22.0
+          AXButton/AXUnknown title="Alerts on: mute notifications and attention requests" label="" value="" frame=199.0 202.0 24.0 24.0
+          AXButton/AXUnknown title="Refresh threads and folders" label="" value="" frame=227.0 202.0 24.0 24.0
+          AXOutline/AXUnknown title="Projects, machines, and threads" label="" value="" frame=20.0 226.0 239.0 424.0
+          AXStaticText/AXUnknown title="" label="" value="Local host connected" frame=55.0 661.0 113.0 18.0
+          AXButton/AXUnknown title="Update available. Open Settings to install." label="" value="" frame=184.0 656.0 68.0 28.0
+          AXButton/AXUnknown title="Settings…" label="" value="" frame=256.0 656.0 28.0 28.0
+          AXSplitter/AXUnknown title="Resize sidebar" label="" value="" frame=253.0 91.0 6.0 599.0
+          AXRadioButton/AXTabButton title="Conversation" label="" value="" frame=668.0 96.0 93.0 24.0
+            state: AXRadioButton/AXTabButton Conversation; AXSelected=unavailable(AXError=-25212); AXValue=true(1)
+          AXRadioButton/AXTabButton title="Changes" label="" value="" frame=763.0 96.0 82.0 24.0
+            state: AXRadioButton/AXTabButton Changes; AXSelected=unavailable(AXError=-25212); AXValue=false(0)
+          AXRadioButton/AXTabButton title="History" label="" value="" frame=847.0 96.0 59.0 24.0
+            state: AXRadioButton/AXTabButton History; AXSelected=unavailable(AXError=-25212); AXValue=false(0)
+          AXRadioButton/AXTabButton title="Files" label="" value="" frame=908.0 96.0 45.0 24.0
+            state: AXRadioButton/AXTabButton Files; AXSelected=unavailable(AXError=-25212); AXValue=false(0)
+          AXButton/AXUnknown title="Git inspector (needs a wider window)" label="" value="" frame=964.0 94.0 28.0 28.0
+    """
+    let recordedFullRow =     """
+    AXWindow/AXStandardWindow title="Plait" label="" value="" frame=20.0 51.0 984.0 639.0
+      AXFullScreen=false(0); AXMinimized=false(0)
+      AXGroup/AXUnknown title="" label="" value="" frame=20.0 51.0 984.0 639.0
+      AXButton/AXCloseButton title="" label="" value="" frame=33.0 62.0 16.0 16.0
+      AXButton/AXFullScreenButton title="" label="" value="" frame=79.0 62.0 16.0 16.0
+      AXButton/AXMinimizeButton title="" label="" value="" frame=56.0 62.0 16.0 16.0
+        AXGroup/AXUnknown title="Plait" label="" value="" frame=20.0 51.0 984.0 639.0
+        AXGroup title="" label="" value="" frame=80.0 63.0 14.0 14.0
+          AXButton/AXUnknown title="Toggle sidebar" label="" value="" frame=104.0 56.0 28.0 28.0
+          AXTabGroup/AXUnknown title="Open tabs" label="" value="" frame=136.0 51.0 788.0 39.0
+          AXButton/AXUnknown title="New thread tab" label="" value="" frame=928.0 56.0 28.0 28.0
+    """
+    let recordedWide =     """
+    AXWindow/AXStandardWindow title="Plait" label="" value="" frame=10.0 39.0 1790.0 1129.0
+      AXFullScreen=false(0); AXMinimized=false(0)
+      AXGroup/AXUnknown title="" label="" value="" frame=10.0 39.0 1790.0 1129.0
+      AXButton/AXCloseButton title="" label="" value="" frame=23.0 50.0 16.0 16.0
+      AXButton/AXFullScreenButton title="" label="" value="" frame=69.0 50.0 16.0 16.0
+      AXButton/AXMinimizeButton title="" label="" value="" frame=46.0 50.0 16.0 16.0
+        AXGroup/AXUnknown title="Plait" label="" value="" frame=10.0 39.0 1790.0 1129.0
+        AXGroup title="" label="" value="" frame=70.0 51.0 14.0 14.0
+          AXButton/AXUnknown title="Toggle sidebar" label="" value="" frame=94.0 44.5 28.0 28.0
+          AXTabGroup/AXUnknown title="Open tabs" label="" value="" frame=126.0 39.0 240.0 39.0
+          AXButton/AXUnknown title="New thread tab" label="" value="" frame=370.0 44.5 28.0 28.0
+    """
+    let recorded: [(String, String, TabBarEnd)] = [
+        ("one tab (CI)", recordedOneTab, .point(CGPoint(x: 706, y: 71), left: 416, right: 996)),
+        ("full row (CI)", recordedFullRow, .point(CGPoint(x: 980, y: 71), left: 964, right: 996)),
+        ("wide window", recordedWide, .point(CGPoint(x: 1099, y: 59), left: 406, right: 1792)),
+    ]
+    for (what, dump, expected) in recorded {
+        if let (window, elements) = barElements(dump: dump) {
+            check(elements.count > 4 && tabBarDragPoint(window: window, elements: elements) == expected, "recorded \(what) tree drag point")
+        } else { check(false, "recorded \(what) tree parsed") }
+    }
     // Verify selection decoding against recorded CI dump states (AXRadioButton tabs and AXRow threads).
     let recordedStates: [(role: String, selected: Bool?, value: Bool?, expected: Bool?)] = [
         ("AXRadioButton", nil, true, true),    // Conversation AXSelected=unavailable, AXValue=true(1)
