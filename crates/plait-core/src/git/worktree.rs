@@ -836,6 +836,8 @@ pub enum HelperRequest {
     Inventory {
         root: PathBuf,
         records: Vec<ManagedWorktree>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        only: Option<PathBuf>,
     },
     Parent {
         root: PathBuf,

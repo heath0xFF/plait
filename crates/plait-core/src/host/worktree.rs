@@ -10,6 +10,8 @@ pub const OLDER_HOST: &str = "Host-owned worktrees need a newer host.";
 pub enum Request {
     ProjectWorktrees {
         checkout: PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        only: Option<PathBuf>,
     },
     WorktreeInfo {
         checkout: PathBuf,
@@ -335,6 +337,18 @@ pub struct Checkout {
 }
 impl Inventory {
     pub fn verified(self) -> Result<Self, Error> {
+        self.verified_with(|index| index == 0)
+    }
+    /// A reply to `only` names exactly that checkout, once, as main or not
+    /// as the caller already knows it to be.
+    fn verified_row(self, only: &std::path::Path, main: bool) -> Result<Checkout, Error> {
+        let mut rows = self.verified_with(|_| main)?.checkouts;
+        if rows.len() != 1 || rows[0].path != only {
+            return Err(invalid());
+        }
+        Ok(rows.remove(0))
+    }
+    fn verified_with(self, main_at: impl Fn(usize) -> bool) -> Result<Self, Error> {
         let mut paths = std::collections::HashSet::new();
         if self.schema != 1
             || !self.worktree_inventory_v1
@@ -346,7 +360,7 @@ impl Inventory {
         for (index, row) in self.checkouts.iter().enumerate() {
             if !path(&row.path)
                 || !paths.insert(&row.path)
-                || row.main != (index == 0)
+                || row.main != main_at(index)
                 || row.identity.as_ref().is_some_and(|id| !identity(id))
                 || [&row.head, &row.base].into_iter().flatten().any(|s| {
                     !matches!(s.len(), 40 | 64)
@@ -395,9 +409,25 @@ impl Inventory {
 }
 pub fn inventory(client: &Client, checkout: PathBuf) -> Result<Inventory, Error> {
     let reply: Inventory = client
-        .send(&Request::ProjectWorktrees { checkout })
+        .send(&Request::ProjectWorktrees {
+            checkout,
+            only: None,
+        })
         .map_err(compatibility)?;
     reply.verified()
+}
+/// One checkout's live row. Every host with `project_worktrees` knows `only`.
+pub fn inventory_row(
+    client: &Client,
+    checkout: PathBuf,
+    only: PathBuf,
+    main: bool,
+) -> Result<Checkout, Error> {
+    let reply: Inventory = client.send(&Request::ProjectWorktrees {
+        checkout,
+        only: Some(only.clone()),
+    })?;
+    reply.verified_row(&only, main)
 }
 
 #[cfg(test)]
@@ -445,6 +475,47 @@ mod inventory_tests {
         removed["checkouts"][1]["removed"] = json!(true);
         removed["checkouts"][1]["preservation"]["refusal"] = json!("This worktree was removed.");
         assert!(read(removed).unwrap().checkouts[1].removed);
+    }
+    /// A one-row reply must be exactly the checkout asked for, main or not as known.
+    #[test]
+    fn a_one_row_reply_names_only_the_checkout_asked_for() {
+        let row = |rows: serde_json::Value, only: &str, main: bool| {
+            serde_json::from_value::<Inventory>(
+                json!({"schema":1,"worktree_inventory_v1":true,"checkouts":rows}),
+            )
+            .unwrap()
+            .verified_row(std::path::Path::new(only), main)
+            .map(|row| row.path)
+            .map_err(|e| e.to_string())
+        };
+        let all = recorded()["checkouts"].clone();
+        let owned = json!([all[1]]);
+        assert_eq!(
+            row(owned.clone(), "/repo.worktrees/owned", false).unwrap(),
+            PathBuf::from("/repo.worktrees/owned")
+        );
+        assert_eq!(
+            row(json!([all[0]]), "/repo", true).unwrap(),
+            PathBuf::from("/repo")
+        );
+        for (rows, only, main) in [
+            (owned.clone(), "/repo.worktrees/owned", true),
+            (owned.clone(), "/external", false),
+            (json!([all[0]]), "/repo", false),
+            (json!([all[1], all[2]]), "/repo.worktrees/owned", false),
+            (json!([all[1], all[1]]), "/repo.worktrees/owned", false),
+            (json!([]), "/repo.worktrees/owned", false),
+        ] {
+            assert!(row(rows.clone(), only, main).is_err(), "{rows} {only}");
+        }
+        let request = Request::ProjectWorktrees {
+            checkout: "/repo".into(),
+            only: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&request).unwrap(),
+            json!({"op":"project_worktrees","checkout":"/repo"})
+        );
     }
     #[test]
     fn inventory_rejects_unknown_fields_capabilities_and_false_safe_decisions() {

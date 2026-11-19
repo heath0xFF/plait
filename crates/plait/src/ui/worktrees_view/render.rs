@@ -296,8 +296,11 @@ impl Plait {
             .thread_id
             .clone()
             .filter(|_| self.worktrees.openable[n]);
+        let busy = self.run_in_worktree(tree);
         let remove_reason = if facts.refusal.is_some() {
             reason.clone()
+        } else if busy {
+            "This worktree still has active, queued, or recovering work.".into()
         } else if self.worktrees.removal.pending.is_some() && !self.removal_here() {
             "Another project's removal is unconfirmed. Refresh its Worktrees tab first.".into()
         } else if self.worktrees.removal.pending.is_some() {
@@ -314,7 +317,7 @@ impl Plait {
                 .when_some(thread,|el,id|el.child(button("worktrees-open","Open").tooltip(|_,cx|hover("Bring this worktree’s thread forward.".into(),cx)).on_activate(cx,move |this,window,cx|this.select_host_thread(id.clone(),window,cx))))
                 .child(button("worktrees-finder","Finder").disabled(tree.missing).tooltip(|_,cx|hover("Show this checkout in Finder.".into(),cx)).on_activate(cx,move |this,_,cx| { if !missing { this.hand_off(plait_core::handoff::show_in_finder(&finder),cx); } }))
                 .child(button("worktrees-terminal","Terminal").disabled(tree.missing).tooltip(|_,cx|hover("Open Terminal Here using Settings → Editor.".into(),cx)).on_activate(cx,move |this,_,cx| { if !missing { this.hand_off(plait_core::handoff::open_terminal(&this.preferences.value.open_terminals_with,&terminal),cx); } }))
-                .when(tree.creation_id.is_some()&&!tree.main&&!tree.removed,|el|el.child(button("worktrees-remove","Remove").when(cfg!(test), |el| el.tooltip_show_delay(std::time::Duration::ZERO)).disabled(facts.refusal.is_some() || self.worktrees.removal.pending.is_some() || self.worktree_busy || !self.host.connection.connected || self.worktrees.loading || self.worktrees.error.is_some()).text_color(rgb(if facts.refusal.is_some(){colors().subtle}else{colors().text})).tooltip(move |_,cx|hover(remove_reason.clone(),cx)).on_activate(cx,move |this,window,cx|this.ask_remove_view_worktree(&drawn.0,drawn.1.as_ref(),window,cx)))))
+                .when(tree.creation_id.is_some()&&!tree.main&&!tree.removed,|el|el.child(button("worktrees-remove","Remove").when(cfg!(test), |el| el.tooltip_show_delay(std::time::Duration::ZERO)).disabled(facts.refusal.is_some() || busy || self.worktrees.removal.pending.is_some() || self.worktree_busy || !self.host.connection.connected || self.worktrees.loading || self.worktrees.error.is_some()).text_color(rgb(if facts.refusal.is_some(){colors().subtle}else{colors().text})).tooltip(move |_,cx|hover(remove_reason.clone(),cx)).on_activate(cx,move |this,window,cx|this.ask_remove_view_worktree(&drawn.0,drawn.1.as_ref(),window,cx)))))
             .child(div().text_size(px(12.)).text_color(rgb(colors().muted)).child(a11y_text("worktrees-detail-branch",format!("{} · from {base}",safe_text(tree.branch.as_deref().unwrap_or("Detached"))))))
             .child(div().text_size(px(11.)).text_color(rgb(colors().subtle)).child(a11y_text("worktrees-detail-path",safe_text(&path.display().to_string()))))
             .child(a11y_text("worktrees-detail-facts",format!("{} changed · {} not pushed · {} kept only here",count(facts.changed),count(facts.unpushed),count(facts.exclusive))))

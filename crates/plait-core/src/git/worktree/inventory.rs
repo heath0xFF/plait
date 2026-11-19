@@ -108,9 +108,22 @@ pub struct Checkout {
 /// All registered checkouts, including ones created outside Plait. Never infer ownership.
 /// One configuration read per checkout serves the whole pass.
 pub fn inventory(root: &Path, records: &[ManagedWorktree]) -> Result<Vec<Checkout>> {
-    crate::git::sharing_config(|| read_inventory(root, records))
+    inventory_of(root, records, None)
 }
-fn read_inventory(root: &Path, records: &[ManagedWorktree]) -> Result<Vec<Checkout>> {
+/// With `only`, just that checkout's row, or none when it is not one of this
+/// repository's: a run ending re-reads its own checkout, not every one.
+pub fn inventory_of(
+    root: &Path,
+    records: &[ManagedWorktree],
+    only: Option<&Path>,
+) -> Result<Vec<Checkout>> {
+    crate::git::sharing_config(|| read_inventory(root, records, only))
+}
+fn read_inventory(
+    root: &Path,
+    records: &[ManagedWorktree],
+    only: Option<&Path>,
+) -> Result<Vec<Checkout>> {
     let paths = crate::lease::resolve_git_checkout(root).map_err(String::from)?;
     let raw = read_worktree(&paths.root, &["worktree", "list", "--porcelain", "-z"])?;
     let text = std::str::from_utf8(&raw).map_err(|_| "Worktree paths must be UTF-8.")?;
@@ -172,11 +185,15 @@ fn read_inventory(root: &Path, records: &[ManagedWorktree]) -> Result<Vec<Checko
         .ok_or("Git returned no checkouts.")?
         .path
         .clone();
+    if let Some(only) = only {
+        rows.retain(|row| row.path == only);
+    }
     // Removal keeps private build output. Keep its attribution visible afterwards.
-    for record in records
-        .iter()
-        .filter(|r| r.stage == ManagedStage::Removed && r.parent.common == paths.common_dir)
-    {
+    for record in records.iter().filter(|r| {
+        r.stage == ManagedStage::Removed
+            && r.parent.common == paths.common_dir
+            && only.is_none_or(|only| only == r.path)
+    }) {
         if rows.iter().any(|row| row.path == record.path) {
             continue;
         }
@@ -339,22 +356,24 @@ mod tests {
         );
         let text = fs::read_to_string(&log).unwrap();
         let _ = fs::remove_dir_all(&dir);
-        // Only what the pass started, not the repository's setup.
-        let lines: Vec<_> = text.lines().map(str::to_owned).collect();
-        let start = lines
-            .iter()
-            .rposition(|l| l == "PASS")
-            .expect("pass marker");
-        Some(lines[start + 1..].to_vec())
+        Some(text.lines().map(str::to_owned).collect())
     }
-    pub(crate) fn mark_pass(log: &Path) {
+    /// The Git commands between the child's `PASS` and `END` notes: what the
+    /// measured pass started, not the repository's setup or later checks.
+    pub(crate) fn pass(lines: &[String]) -> Vec<String> {
+        let start = lines.iter().position(|l| l == "PASS").expect("pass note");
+        let end = lines.iter().position(|l| l == "END").expect("end note");
+        lines[start + 1..end].to_vec()
+    }
+    /// Writes `line` into the log a counted child shares with its Git.
+    pub(crate) fn note(log: &Path, line: &str) {
         use std::io::Write;
         let mut file = fs::OpenOptions::new()
             .append(true)
             .create(true)
             .open(log)
             .unwrap();
-        writeln!(file, "PASS").unwrap();
+        writeln!(file, "{line}").unwrap();
     }
     /// Each checkout's filter configuration is read once per inventory, not
     /// once per Git command; every read still carries the hardened flags.
@@ -372,13 +391,15 @@ mod tests {
                 ));
                 repo.git(&["worktree", "add", "-q", "-b", name, path.to_str().unwrap()]);
             }
-            mark_pass(log);
+            note(log, "PASS");
             let rows = inventory(&repo.0, std::slice::from_ref(&tree)).unwrap();
+            note(log, "END");
             assert_eq!(rows.len(), 4);
             clean(&tree);
         }) else {
             return;
         };
+        let lines = pass(&lines);
         let config: Vec<_> = lines
             .iter()
             .filter(|l| l.ends_with("config --null --name-only --list"))
@@ -405,6 +426,79 @@ mod tests {
         }
         eprintln!(
             "inventory, main + 3 worktrees: {} Git processes",
+            lines.len()
+        );
+    }
+    /// A run ending re-reads its own checkout: one row, and no Git command in
+    /// any other worktree. The main checkout lists worktrees and holds the
+    /// refs that decide which commits are kept only here.
+    #[test]
+    fn a_one_checkout_pass_reads_only_that_checkout() {
+        let test = "git::worktree::inventory::tests::a_one_checkout_pass_reads_only_that_checkout";
+        let Some(log) = counted_git(test, |log| {
+            let (repo, tree) = repository();
+            let other = repo.0.with_file_name(format!(
+                "{}-other",
+                repo.0.file_name().unwrap().to_string_lossy()
+            ));
+            repo.git(&[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "other",
+                other.to_str().unwrap(),
+            ]);
+            note(log, &format!("ROOT {}", repo.0.display()));
+            note(log, &format!("ROOT {}", tree.path.display()));
+            let heads: Vec<_> = inventory(&repo.0, std::slice::from_ref(&tree))
+                .unwrap()
+                .into_iter()
+                .filter_map(|row| row.head)
+                .collect();
+            note(log, "PASS");
+            let rows =
+                inventory_of(&repo.0, std::slice::from_ref(&tree), Some(&tree.path)).unwrap();
+            // The desktop then draws the graph again from every row's head.
+            crate::git::log::graph(&repo.0, &heads).unwrap();
+            note(log, "END");
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].path, tree.path);
+            assert_eq!(rows[0].thread_id.as_deref(), Some(ID));
+            assert_eq!(rows[0].preservation.changed, Some(0));
+            let main = inventory_of(&repo.0, &[], Some(&repo.0)).unwrap();
+            assert!(main.len() == 1 && main[0].main);
+            let stranger = repo.0.with_file_name("not-a-checkout");
+            assert!(
+                inventory_of(&repo.0, &[], Some(&stranger))
+                    .unwrap()
+                    .is_empty()
+            );
+            clean(&tree);
+        }) else {
+            return;
+        };
+        let roots: Vec<_> = log.iter().filter_map(|l| l.strip_prefix("ROOT ")).collect();
+        let lines = pass(&log);
+        for line in &lines {
+            let root = line
+                .split(" -C ")
+                .nth(1)
+                .unwrap()
+                .split(' ')
+                .next()
+                .unwrap();
+            assert!(roots.contains(&root), "a read outside the checkout: {line}");
+        }
+        // Worktree list and main's configuration, this checkout's nine checks
+        // (two more when it has an upstream), and the graph's two.
+        assert!(
+            lines.len() <= 13,
+            "a run's end costs more than its own checkout:\n{}",
+            lines.join("\n")
+        );
+        eprintln!(
+            "one checkout's row and the graph: {} Git processes",
             lines.len()
         );
     }

@@ -233,6 +233,14 @@ test('project inventory lists main, owned and external worktrees with live remov
   assert.equal(removed.ok, true);
   const refusal = await done(h.runtime, 'inventory-remove');
   assert.equal(owned.preservation.refusal, refusal.error!.message);
+  const one: any = await h.runtime.reply({ op: 'project_worktrees', checkout: h.root, only: owned.path });
+  assert.equal(one.ok, true, JSON.stringify(one));
+  assert.deepEqual(one.result.checkouts.map((r: any) => [r.path, r.main, r.creation_id]), [[owned.path, false, 'inventory']]);
+  assert.equal(one.result.checkouts[0].preservation.refusal, owned.preservation.refusal);
+  const main: any = await h.runtime.reply({ op: 'project_worktrees', checkout: h.root, only: rows[0].path });
+  assert.deepEqual(main.result.checkouts.map((r: any) => [r.path, r.main]), [[rows[0].path, true]]);
+  const stranger: any = await h.runtime.reply({ op: 'project_worktrees', checkout: h.root, only: join(h.root, '..', 'stranger') });
+  assert.equal(stranger.ok, false); assert.equal(stranger.error.code, 'invalid_request');
   const foreign = rows.find((r: any) => r.path === external);
   assert.equal(foreign.creation_id, null); assert.match(foreign.preservation.refusal, /did not create/);
   await writeFile(join(ready.worktree!.path, 'source.txt'), 'committed\n');
@@ -251,5 +259,6 @@ test('project inventory lists main, owned and external worktrees with live remov
 
 test('project inventory validates its additive request strictly', () => {
   assert.deepEqual(validateWorktree({ op: 'project_worktrees', checkout: '/repo' }), { op: 'project_worktrees', checkout: '/repo' });
-  for (const request of [{ op: 'project_worktrees', checkout: '/repo', protocol_version: 6 }, { op: 'project_worktrees', checkout: '/repo/../other' }, { op: 'project_worktrees', checkout: 4 }, { op: 'project_worktrees' }]) assert.throws(() => validateWorktree(request));
+  assert.deepEqual(validateWorktree({ op: 'project_worktrees', checkout: '/repo', only: '/repo.worktrees/a' }), { op: 'project_worktrees', checkout: '/repo', only: '/repo.worktrees/a' });
+  for (const request of [{ op: 'project_worktrees', checkout: '/repo', only: 'relative' }, { op: 'project_worktrees', checkout: '/repo', only: null }, { op: 'project_worktrees', checkout: '/repo', only: '/repo/../x' }, { op: 'project_worktrees', checkout: '/repo', protocol_version: 6 }, { op: 'project_worktrees', checkout: '/repo/../other' }, { op: 'project_worktrees', checkout: 4 }, { op: 'project_worktrees' }]) assert.throws(() => validateWorktree(request));
 });

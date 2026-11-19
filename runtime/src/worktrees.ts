@@ -11,7 +11,7 @@ export type Parent = { root: string; identity: FileIdentity; main: string; main_
 export type Create = { op: 'create_worktree_thread'; request_id: string; parent: Parent; harness: HarnessId; provider: string; model_id: string; thinking?: ThinkingLevel; mode?: string; approval: ApprovalMode };
 export type Managed = { thread_id: string; parent: Parent; path: string; branch: string; identity: FileIdentity | null; stage: 'reserved' | 'creating' | 'ready' | 'failed' | 'removing' | 'removed'; error: string | null };
 export type Operation = { request_id: string; thread_id: string; state: 'preparing' | 'ready' | 'failed' | 'removing' | 'removed'; worktree: Managed | null; error: Failure | null };
-type Request = Create | { op: 'project_worktrees'; checkout: string } | { op: 'worktree_info'; checkout: string } | { op: 'worktree_status'; request_id: string } | { op: 'list_worktrees' } | { op: 'remove_worktree'; request_id: string; creation_id: string; identity: FileIdentity; allow_unpushed: boolean };
+type Request = Create | { op: 'project_worktrees'; checkout: string; only?: string } | { op: 'worktree_info'; checkout: string } | { op: 'worktree_status'; request_id: string } | { op: 'list_worktrees' } | { op: 'remove_worktree'; request_id: string; creation_id: string; identity: FileIdentity; allow_unpushed: boolean };
 const fields = {
   project_worktrees: ['checkout'], worktree_info: ['checkout'], create_worktree_thread: ['request_id', 'parent', 'harness', 'provider', 'model_id', 'approval'],
   worktree_status: ['request_id'], list_worktrees: [], remove_worktree: ['request_id', 'creation_id', 'identity', 'allow_unpushed'],
@@ -33,10 +33,11 @@ export function validateWorktree(input: unknown): Request {
   if (!handlesWorktrees(input)) fail('invalid_request', 'Unknown worktree operation.');
   const value = input as Record<string, unknown>;
   const required: string[] = fields[value.op as keyof typeof fields];
-  const optional = value.op === 'create_worktree_thread' ? ['thinking', 'mode'] : [];
+  const optional = value.op === 'create_worktree_thread' ? ['thinking', 'mode'] : value.op === 'project_worktrees' ? ['only'] : [];
   if (required.some(key => !Object.hasOwn(value, key)) || Object.keys(value).some(key => key !== 'op' && !required.includes(key) && !optional.includes(key)) || Buffer.byteLength(JSON.stringify(value)) > 65000) fail('invalid_request', 'Unknown or missing worktree field.');
   for (const field of ['request_id', 'creation_id']) if (value[field] !== undefined && (typeof value[field] !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(value[field]))) fail('invalid_request', 'Invalid worktree request ID.');
   if (value.op === 'worktree_info' || value.op === 'project_worktrees') path(value.checkout);
+  if (value.op === 'project_worktrees' && value.only !== undefined) path(value.only);
   if (value.op === 'remove_worktree') {
     identity(value.identity);
     if (typeof value.allow_unpushed !== 'boolean') fail('invalid_request', 'allow_unpushed must be boolean.');
@@ -112,7 +113,7 @@ export class Worktrees {
     const request = validateWorktree(input);
     if (request.op === 'worktree_info') return { schema: 1, worktree_threads_v1: true, parent: await worktreeHelper<Parent>({ action: 'parent', root: request.checkout }) };
     if (request.op === 'list_worktrees') return this.list();
-    if (request.op === 'project_worktrees') return this.inventory(request.checkout);
+    if (request.op === 'project_worktrees') return this.inventory(request.checkout, request.only);
     if (request.op === 'worktree_status') {
       const removed = this.store.db.prepare('SELECT result,creation_id FROM worktree_removals WHERE request_id=?').get(request.request_id);
       return { schema: 1, operation: removed ? (removed.result ? JSON.parse(String(removed.result)) : this.get(String(removed.creation_id))) : this.get(request.request_id) };
@@ -125,7 +126,8 @@ export class Worktrees {
     this.admitting.set(request.request_id, admission);
     try { return await admission; } finally { if (this.admitting.get(request.request_id) === admission) this.admitting.delete(request.request_id); }
   }
-  private async inventory(checkout: string) {
+  // With `only`, exactly that checkout's row: a run ending re-reads its own checkout.
+  private async inventory(checkout: string, only?: string) {
     const operations: Operation[] = []; let bytes = 0;
     for (const row of this.store.db.prepare('SELECT result FROM worktree_operations').iterate()) {
       const raw = String(row.result); bytes += Buffer.byteLength(raw);
@@ -133,7 +135,8 @@ export class Worktrees {
       operations.push(JSON.parse(raw) as Operation);
     }
     const records = operations.flatMap(op => op.worktree ? [op.worktree] : []);
-    const checkouts = await worktreeHelper<Array<{ path: string; thread_id: string | null; preservation: { refusal: string | null } }>>({ action: 'inventory', root: checkout, records });
+    const checkouts = await worktreeHelper<Array<{ path: string; thread_id: string | null; preservation: { refusal: string | null } }>>({ action: 'inventory', root: checkout, records, ...(only === undefined ? {} : { only }) });
+    if (only !== undefined && (checkouts.length !== 1 || checkouts[0].path !== only)) fail('invalid_request', 'That folder is not one of this project’s checkouts.');
     const rows = checkouts.map(row => {
       const operation = operations.find(op => op.thread_id === row.thread_id);
       if (this.busy(row.path) || this.store.db.prepare("SELECT 1 FROM requests JOIN threads ON threads.id=requests.scope WHERE threads.checkout=? AND requests.state='queued' LIMIT 1").get(row.path)) row.preservation.refusal = 'This worktree still has active, queued, or recovering work.';

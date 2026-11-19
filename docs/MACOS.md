@@ -404,7 +404,8 @@ cache accounting and say **Removed**. Nothing is removed automatically.
 
 **Last used** and **Size** sort lanes, keeping the main checkout first. Last used
 is recorded thread activity, not a filesystem access time. **Refresh** rereads
-state and measures again. Measurements run only while this tab is visible,
+state and measures again. When a thread's run ends, its checkout is read again
+by itself. **Remove** waits while a run works in that checkout. Measurements run only while this tab is visible,
 without polling, and are cached until the head, directory identity, recorded
 activity or change count changes. Each walk stops after 50,000 entries or a
 250 ms deadline checked between entries; a blocked filesystem call can finish

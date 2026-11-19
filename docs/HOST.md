@@ -2475,7 +2475,11 @@ fields, including `protocol_version`, and unknown lifecycle states are refused.
   branch/history/cache attribution with no deletion action. The result is
   bounded to 256 rows and 750,000 bytes; reading creation records is bounded
   to 4096 records and 900,000 bytes across the host store. Excess is an explicit
-  error. This
+  error. Optional `only`, an absolute path, returns exactly that checkout's row
+  with the same fields and checks (`main:true` when it is the main checkout), so
+  a run's end re-reads one checkout, not all of them. An `only` that is not one
+  of the project's checkouts is `invalid_request`. Every host with this
+  operation accepts `only`. This
   operation probes its own capability, preserving all previous reply shapes.
 - `remove_worktree {request_id,creation_id,identity,allow_unpushed}` requires a
   recorded host-owned checkout and explicit confirmation. `allow_unpushed:false`

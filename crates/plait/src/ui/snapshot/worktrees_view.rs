@@ -1,4 +1,5 @@
 //! Branch graph fixtures are confined to scenes and tests.
+use super::super::worktrees_view::Again;
 use super::*;
 use plait_core::{
     git::{
@@ -215,6 +216,10 @@ fn remove_asks_for_the_worktree_that_was_drawn() {
     h.connect(&repo, false);
     install(&mut h, 4);
     h.update(|p, window, cx| {
+        // No run is working here: Remove waits for one.
+        for t in &mut p.host.connection.threads {
+            t.status = ThreadStatus::Idle;
+        }
         let row = &mut p.worktrees.rows[1];
         row.preservation.refusal = None;
         row.preservation.unpushed = Some(0);
@@ -280,11 +285,159 @@ fn refreshes_during_a_read_run_once_after_it() {
             generation + 1,
             "inventories overlapped"
         );
-        assert_eq!(p.worktrees.again, Some(true));
+        assert_eq!(p.worktrees.again, Some(Again::Full { force: true }));
     });
     h.update(|p, _, _| {
         assert!(!p.worktrees.reading);
         assert_eq!(p.worktrees.again, None);
+    });
+    drop(h);
+    let _ = std::fs::remove_dir_all(scratch);
+}
+/// A summary costs no Git: the title and state word come from it. Only a
+/// run's end reads again, and then only that checkout's row.
+#[core::prelude::v1::test]
+fn a_summary_reads_nothing_and_a_run_end_reads_one_row() {
+    if !isolated("worktrees_view::a_summary_reads_nothing_and_a_run_end_reads_one_row") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-worktree-ended-{}", std::process::id()));
+    let repo = fixture_repository(&scratch);
+    let mut h = Harness::new(&repo, None, 1380., 860.);
+    h.connect(&repo, false);
+    install(&mut h, 4);
+    h.update(|p, _, cx| {
+        let generation = p.worktrees.generation;
+        let summary = |p: &Plait, i: usize| {
+            p.host
+                .connection
+                .threads
+                .iter()
+                .find(|t| t.id == format!("worktree-scene-{i}"))
+                .unwrap()
+                .clone()
+        };
+        let paths: Vec<_> = p.worktrees.rows.iter().map(|r| r.path.clone()).collect();
+        let sample = |i: usize| paths[i].clone();
+        let one = sample(1);
+        let apply = |p: &mut Plait, live: Vec<ThreadSummary>, cx: &mut Context<Plait>| {
+            let (relabel, ended) = p.worktree_summaries(&live);
+            plait_core::navigation::merge_threads(&mut p.host.connection.threads, live).unwrap();
+            p.worktrees_after_summaries(relabel, ended, cx);
+        };
+        // Mid-run: a new title and still working.
+        let mut running = summary(p, 1);
+        assert_eq!(running.status, ThreadStatus::Running);
+        running.title = Some("Retry after the limit resets".into());
+        running.updated_at = running.updated_at.map(|t| t + 1);
+        apply(p, vec![running.clone()], cx);
+        assert_eq!(
+            p.worktrees.generation, generation,
+            "a summary started a read"
+        );
+        assert!(!p.worktrees.reading && p.worktrees.again.is_none());
+        let at = p.worktrees.rows.iter().position(|r| r.path == one).unwrap();
+        assert_eq!(p.worktrees.titles[at], "Retry after the limit resets");
+        assert_eq!(p.worktrees.words[at], "Working");
+        // An idle thread changing is not a run ending either.
+        let mut idle = summary(p, 3);
+        idle.title = Some("Keep every attachment".into());
+        apply(p, vec![idle], cx);
+        assert_eq!(p.worktrees.generation, generation);
+        // The run ends: one row read for that checkout.
+        running.status = ThreadStatus::Idle;
+        apply(p, vec![running.clone()], cx);
+        assert_eq!(p.worktrees.generation, generation + 1);
+        assert!(p.worktrees.reading);
+        // Ends arriving during that read wait for it; two checkouts become one full read.
+        let mut waiting = summary(p, 2);
+        assert!(waiting.status.busy());
+        waiting.status = ThreadStatus::Idle;
+        apply(p, vec![waiting], cx);
+        assert_eq!(p.worktrees.generation, generation + 1);
+        assert_eq!(
+            p.worktrees.again,
+            Some(Again::Only(sample(2))),
+            "queued the one checkout"
+        );
+        p.reread_worktree(sample(2), cx);
+        assert_eq!(p.worktrees.again, Some(Again::Only(sample(2))));
+        p.reread_worktree(sample(3), cx);
+        assert_eq!(p.worktrees.again, Some(Again::Full { force: false }));
+    });
+    drop(h);
+    let _ = std::fs::remove_dir_all(scratch);
+}
+/// Remove waits for a run in that worktree: its facts were read before the
+/// run started, and the host would refuse it then.
+#[core::prelude::v1::test]
+fn remove_waits_for_a_run_in_that_worktree() {
+    if !isolated("worktrees_view::remove_waits_for_a_run_in_that_worktree") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-worktree-busy-{}", std::process::id()));
+    let repo = fixture_repository(&scratch);
+    let mut h = Harness::new(&repo, None, 1380., 860.);
+    h.connect(&repo, false);
+    install(&mut h, 4);
+    h.update(|p, window, cx| {
+        let at = p
+            .worktrees
+            .rows
+            .iter()
+            .position(|r| r.thread_id.as_deref() == Some("worktree-scene-1"))
+            .unwrap();
+        p.worktrees.rows[at].preservation = Preservation {
+            changed: Some(0),
+            unpushed: Some(0),
+            exclusive: Some(0),
+            refusal: None,
+        };
+        p.worktrees.selected = at;
+        let (path, id) = (
+            p.worktrees.rows[at].path.clone(),
+            p.worktrees.rows[at].identity.clone(),
+        );
+        for status in [ThreadStatus::Running, ThreadStatus::AwaitingApproval] {
+            p.host
+                .connection
+                .threads
+                .iter_mut()
+                .find(|t| t.id == "worktree-scene-1")
+                .unwrap()
+                .status = status;
+            assert!(p.run_in_worktree(&p.worktrees.rows[at]));
+            p.ask_remove_view_worktree(&path, id.as_ref(), window, cx);
+            assert!(
+                p.worktrees.removal.asking.is_none(),
+                "Remove asked during a run"
+            );
+        }
+        // Another thread working in the same folder counts too.
+        p.host
+            .connection
+            .threads
+            .iter_mut()
+            .find(|t| t.id == "worktree-scene-1")
+            .unwrap()
+            .status = ThreadStatus::Idle;
+        p.host.connection.threads.push(ThreadSummary {
+            id: "worktree-scene-guest".into(),
+            checkout: path.clone(),
+            status: ThreadStatus::Running,
+            ..Default::default()
+        });
+        assert!(p.run_in_worktree(&p.worktrees.rows[at]));
+        p.host
+            .connection
+            .threads
+            .retain(|t| t.id != "worktree-scene-guest");
+        assert!(!p.run_in_worktree(&p.worktrees.rows[at]));
+        p.ask_remove_view_worktree(&path, id.as_ref(), window, cx);
+        assert_eq!(
+            p.worktrees.removal.asking.take().map(|a| a.path),
+            Some(path)
+        );
     });
     drop(h);
     let _ = std::fs::remove_dir_all(scratch);

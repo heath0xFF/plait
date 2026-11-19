@@ -565,11 +565,17 @@ Host inventory, the single hardened Git history read and storage walks run on
 background executors. Read stamps include tab lifetime, activation and host
 connection; a separate generation and cancellation flag retire in-flight work
 on refresh, hiding or closing. Completed old reads never install or start a
-measurement. Activation, explicit Refresh and a summary change (status, title,
-pending approval, model or recorded activity) of a thread in one of the listed
-checkouts initiate reads; there is no polling. One inventory runs at a time: a
-retired read's host helper still runs to the end, so a refresh asked for during
-a read waits and runs once after it. Hidden tabs retain only bookmarks and
+measurement. Activation and explicit Refresh read the whole inventory; there is
+no polling. A thread summary for a listed checkout starts no Git or host read:
+titles and state words come from the summary already held. When a run ends (the
+status leaves working or awaiting approval), only that checkout's row is read
+again, through `project_worktrees` with `only`, and the graph is drawn again
+from every row's head. A row reply that is not exactly that checkout is refused,
+and the view reads the whole inventory instead. One read runs at a time: a
+retired read's host helper still runs to the end, so a read asked for during
+another waits and runs once after it; two checkouts waiting become one full read.
+**Remove** waits while a run works in that checkout, in the host's words,
+because the facts shown were read before the run; the host refuses it then too. Hidden tabs retain only bookmarks and
 bounded size cache entries.
 
 `git/worktree/inventory.rs` supplies live host preservation facts using the

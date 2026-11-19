@@ -57,8 +57,26 @@ pub(super) struct View {
     /// One inventory at a time: its helper and Git reads run to the end even
     /// when their result is retired, so overlapping refreshes would stack.
     pub reading: bool,
-    /// A refresh asked for while one was reading, and whether it was forced.
-    pub again: Option<bool>,
+    /// The read asked for while one was reading.
+    pub again: Option<Again>,
+}
+/// A read waiting for the one in flight. Two single checkouts become one full read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum Again {
+    Full { force: bool },
+    Only(PathBuf),
+}
+impl Again {
+    fn and(self, next: Again) -> Again {
+        match (self, next) {
+            (Again::Only(a), Again::Only(b)) if a == b => Again::Only(a),
+            (Again::Full { force: a }, Again::Full { force: b }) => Again::Full { force: a || b },
+            (Again::Full { force }, Again::Only(_)) | (Again::Only(_), Again::Full { force }) => {
+                Again::Full { force }
+            }
+            (Again::Only(_), Again::Only(_)) => Again::Full { force: false },
+        }
+    }
 }
 impl View {
     pub fn park(&mut self) {
@@ -309,7 +327,7 @@ impl Plait {
             return;
         }
         if self.worktrees.reading {
-            self.worktrees.again = Some(self.worktrees.again.unwrap_or(false) || force);
+            self.queue_worktree_read(Again::Full { force });
             return;
         }
         self.worktrees.cancelled.store(true, Ordering::Release);
@@ -371,9 +389,145 @@ impl Plait {
                 if this.accepts_worktrees(stamp, generation) {
                     this.install_worktree_read(result, stamp, generation, cx);
                 }
-                if let Some(force) = this.worktrees.again.take() {
-                    this.refresh_worktrees_view(force, cx);
+                this.run_queued_worktree_read(cx);
+            });
+        })
+        .detach();
+    }
+    fn queue_worktree_read(&mut self, next: Again) {
+        self.worktrees.again = Some(match self.worktrees.again.take() {
+            Some(queued) => queued.and(next),
+            None => next,
+        });
+    }
+    fn run_queued_worktree_read(&mut self, cx: &mut Context<Self>) {
+        match self.worktrees.again.take() {
+            Some(Again::Full { force }) => self.refresh_worktrees_view(force, cx),
+            Some(Again::Only(path)) => self.reread_worktree(path, cx),
+            None => {}
+        }
+    }
+    /// Whether new summaries touch the visible rows, and the checkouts whose
+    /// run just ended. A summary alone costs no Git: only a run's end can
+    /// have moved a checkout's facts.
+    pub(super) fn worktree_summaries(
+        &self,
+        live: &[plait_core::host::ThreadSummary],
+    ) -> (bool, Vec<PathBuf>) {
+        if !self.worktrees_visible() {
+            return (false, Vec::new());
+        }
+        let shown: Vec<_> = live
+            .iter()
+            .filter(|t| self.worktrees.rows.iter().any(|row| row.path == t.checkout))
+            .collect();
+        let mut ended: Vec<PathBuf> = shown
+            .iter()
+            .filter(|t| {
+                !t.status.busy()
+                    && self
+                        .host
+                        .connection
+                        .threads
+                        .iter()
+                        .any(|old| old.id == t.id && old.status.busy())
+            })
+            .map(|t| t.checkout.clone())
+            .collect();
+        ended.dedup();
+        (!shown.is_empty(), ended)
+    }
+    /// Whether a run is working in `row`. Its facts were read before the run
+    /// started, so Remove waits; the host refuses it then too.
+    pub(super) fn run_in_worktree(&self, row: &Checkout) -> bool {
+        self.host.connection.threads.iter().any(|t| {
+            t.status.busy() && (t.checkout == row.path || row.thread_id.as_ref() == Some(&t.id))
+        })
+    }
+    /// After the summaries merged: new words and titles, and a row read for
+    /// each checkout whose run ended.
+    pub(super) fn worktrees_after_summaries(
+        &mut self,
+        relabel: bool,
+        ended: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        if relabel {
+            self.worktree_labels();
+        }
+        for path in ended {
+            self.reread_worktree(path, cx);
+        }
+    }
+    /// A run in `path` ended: only its Git facts can have moved, so only its
+    /// row and the graph are read again. The title and state word come from
+    /// the summary already held. Anything unexpected falls back to a full read.
+    pub(super) fn reread_worktree(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if !self.worktrees_visible() {
+            return;
+        }
+        if self.worktrees.reading {
+            self.queue_worktree_read(Again::Only(path));
+            return;
+        }
+        let Some(main) = self
+            .worktrees
+            .rows
+            .iter()
+            .find(|row| row.path == path && !row.removed)
+            .map(|row| row.main)
+        else {
+            return;
+        };
+        if !self.host.connection.connected || self.worktrees.loading {
+            return;
+        }
+        let Some(stamp) = self
+            .tabs
+            .model
+            .active()
+            .and_then(|id| self.tabs.model.read_stamp(id))
+        else {
+            return;
+        };
+        let root = self.visible_project_checkout().to_owned();
+        self.worktrees.cancelled.store(true, Ordering::Release);
+        self.worktrees.cancelled = Arc::new(AtomicBool::new(false));
+        self.worktrees.generation += 1;
+        let generation = self.worktrees.generation;
+        let cancelled = self.worktrees.cancelled.clone();
+        let mut rows = self.worktrees.rows.clone();
+        self.worktrees.reading = true;
+        let task = cx.background_executor().spawn(async move {
+            let row = worktree::inventory_row(&Client::from_environment()?, root, path, main)?;
+            if cancelled.load(Ordering::Acquire) {
+                return Err(host::Error::Protocol("Read cancelled.".into()));
+            }
+            let place = rows
+                .iter()
+                .position(|old| old.path == row.path)
+                .ok_or_else(|| host::Error::Protocol("The worktree left the list.".into()))?;
+            rows[place] = row;
+            let heads = rows
+                .iter()
+                .filter_map(|row| row.head.clone())
+                .collect::<Vec<_>>();
+            let (commits, more) = plait_core::git::log::graph(&rows[0].path, &heads)
+                .map_err(host::Error::Protocol)?;
+            let graph = worktree_graph::layout(&rows, commits, more);
+            Ok((rows, graph))
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.worktrees.reading = false;
+                if this.accepts_worktrees(stamp, generation) {
+                    match result {
+                        Ok(read) => this.install_worktree_read(Ok(read), stamp, generation, cx),
+                        Err(_) => this.queue_worktree_read(Again::Full { force: false }),
+                    }
                 }
+                this.run_queued_worktree_read(cx);
             });
         })
         .detach();
@@ -613,6 +767,7 @@ impl Plait {
             || tree.identity.as_ref() != identity
             || tree.main
             || tree.preservation.refusal.is_some()
+            || self.run_in_worktree(tree)
             || self.worktree_busy
             || !self.host.connection.connected
             || self.worktrees.loading
