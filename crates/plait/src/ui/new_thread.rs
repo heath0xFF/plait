@@ -14,11 +14,14 @@ use super::{
 use gpui::*;
 use plait_core::{
     compose::thinking_levels,
-    host::{ApprovalMode, Model, ModelChoice, QueueMode, ThinkingLevel, harness::HarnessId},
+    host::{ApprovalMode, Model, ModelChoice, ThinkingLevel, harness::HarnessId},
 };
 
 #[derive(Default)]
 pub(super) struct Draft {
+    pub(super) id: Option<String>,
+    pub(super) saved: plait_core::session::Draft,
+    pub(super) pending: Option<super::draft_tabs::Pending>,
     /// On screen in the conversation area, in place of a thread.
     pub(super) open: bool,
     /// Made when the draft first opens; it becomes the thread's composer once created.
@@ -73,7 +76,7 @@ impl Plait {
     pub(super) fn open_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_tab_target(
             plait_core::tabs::ThreadTarget::Draft {
-                id: "draft".into(),
+                id: plait_core::host_state::request_id(),
                 checkout: self.tab_checkout(self.host.creation.checkout.clone()),
             },
             window,
@@ -120,7 +123,7 @@ impl Plait {
         };
         self.open_tab_target(
             plait_core::tabs::ThreadTarget::Draft {
-                id: "draft".into(),
+                id: plait_core::host_state::request_id(),
                 checkout: self.tab_checkout(root),
             },
             window,
@@ -130,16 +133,17 @@ impl Plait {
 
     fn draft_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<Composer> {
         let composer = cx.new(|cx| Composer::new(window, cx));
-        if let Some(draft) = self
+        let draft = self
             .session
             .data
             .as_ref()
-            .and_then(|data| data.new_draft_for(&self.host.creation.checkout))
-            .cloned()
+            .and_then(|data| {
+                data.draft_tab(self.draft.id.as_deref()?, &self.host.creation.checkout)
+            })
+            .map(|tab| &tab.draft)
+            .unwrap_or(&self.draft.saved)
+            .clone();
         {
-            if let Some(creation) = draft.creation.clone() {
-                self.restore_draft_creation(creation, &draft);
-            }
             composer.update(cx, |composer, cx| {
                 composer.restore_draft(draft.text, draft.revision, draft.submitted, cx);
                 composer.restore_images(draft.images, cx);
@@ -171,6 +175,7 @@ impl Plait {
         window.focus(&self.focus, cx);
         self.clear_new_draft(cx);
         self.draft = super::new_thread::Draft {
+            id: self.draft.id.clone(),
             generation: self.draft.generation + 1,
             ..Default::default()
         };
@@ -298,26 +303,24 @@ impl Plait {
 
     /// The pending creation is the draft's own.
     pub(super) fn draft_pending(&self) -> bool {
-        self.host
-            .creation
-            .pending_create
-            .as_ref()
-            .is_some_and(|(id, _)| self.draft_sent(id))
+        self.draft.pending.is_some()
     }
 
-    /// Why the header chips cannot change now.
+    pub(super) fn draft_creating(&self) -> bool {
+        self.draft
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.creating)
+    }
+
     pub(super) fn draft_locked(&self) -> Option<&'static str> {
-        (self.host.creation.creating || self.host.creation.pending_create.is_some())
-            .then_some(LOCKED)
+        self.draft.pending.as_ref().map(|_| LOCKED)
     }
 
     /// Why the draft cannot be sent now, beyond what disables its composer.
     pub(super) fn draft_blocked(&self) -> Option<String> {
         if !self.tab_identity_current() {
             return Some("Checking the reconnected host…".into());
-        }
-        if self.host.creation.pending_create.is_some() && !self.draft_pending() {
-            return Some("Another new thread is unconfirmed · retry it above first.".into());
         }
         if self.draft_pending() {
             // Sending again retries the same creation.
@@ -362,7 +365,7 @@ impl Plait {
             Some("Restoring saved work…".into())
         } else if !self.host.connection.connected {
             Some("Host disconnected. Reconnect to send.".into())
-        } else if self.host.creation.creating && self.draft_pending() {
+        } else if self.draft_creating() {
             // The text being sent stays as it is until the thread has it.
             Some("Creating thread…".into())
         } else {
@@ -393,71 +396,12 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.host.creation.creating || !self.host.connection.connected || !self.session.ready() {
-            return;
-        }
-        if let Some(reason) = self.draft_blocked() {
-            self.draft.error = Some(reason);
-            cx.notify();
-            return;
-        }
-        if self.host.creation.pending_create.is_none() {
-            let Some(choice) = self.draft_model() else {
-                return;
-            };
-            self.choose_new_harness(self.draft_harness(), &choice, self.draft_mode());
-            self.host.creation.new_model = Some(choice);
-        }
-        let pi = self.draft_harness() == HarnessId::Pi;
-        let approval = (pi && self.host.protocol() >= 2).then(|| self.draft_approval());
-        let choice = self.draft.approval.filter(|_| pi);
-        let thinking = self.draft_thinking();
-        self.draft.error = None;
-        self.new_thread_open = false;
-        // An unconfirmed creation keeps the level it was first sent with.
-        self.create_host_thread_at(thinking, window, cx);
-        let Some((request_id, _)) = self.host.creation.pending_create.clone() else {
-            self.draft.sending = None;
-            self.draft.error = self.host.connection.error.take();
-            self.sync_composer(cx);
-            return;
-        };
-        self.draft.sending = Some(Sending {
-            generation: self.draft.generation,
-            request_id,
-            text,
-            images: self
-                .draft
-                .composer
-                .as_ref()
-                .map(|composer| composer.read(cx).saved_images().to_vec())
-                .unwrap_or_default(),
-            revision,
-            approval,
-            choice,
-        });
-        self.sync_composer(cx);
-        cx.notify();
+        self.send_draft_tab(text, revision, window, cx);
     }
 
-    /// Retry the draft's unconfirmed creation with what its composer holds now.
+    /// Retry only this draft's captured creation and message.
     pub(super) fn retry_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(composer) = self.draft.composer.clone() else {
-            return;
-        };
-        let (text, revision) = {
-            let composer = composer.read(cx);
-            let (text, revision, _) = composer.saved_draft();
-            (text.to_owned(), revision)
-        };
-        if let Some(sending) = self.draft.sending.as_mut()
-            && (!text.trim().is_empty() || !composer.read(cx).saved_images().is_empty())
-        {
-            sending.images = composer.read(cx).saved_images().to_vec();
-            sending.text = text;
-            sending.revision = revision;
-        }
-        self.create_host_thread(window, cx);
+        self.start_draft_creation(window, cx);
     }
 
     /// Retry the pending creation from wherever the person is.
@@ -473,111 +417,6 @@ impl Plait {
     pub(super) fn draft_rejected(&mut self, error: String) {
         self.draft.sending = None;
         self.draft.error = Some(format!("Thread not created. {error}"));
-    }
-
-    /// The draft's thread exists: its composer becomes the thread's, and its
-    /// first message is submitted. The thread opens only if the draft is still
-    /// on screen; otherwise it runs where the person can find it in the sidebar.
-    pub(super) fn deliver_draft(
-        &mut self,
-        id: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(sending) = self.draft.sending.take() else {
-            return;
-        };
-        let visible = self.draft_visible();
-        let draft_tab = self.tabs.model.tabs().iter().find(|tab| {
-            matches!(tab.thread().target(), plait_core::tabs::ThreadTarget::Draft { checkout, .. } if checkout.root == self.host.creation.checkout)
-        }).map(|tab| (tab.id(), tab.thread().target().checkout().clone()));
-        // The draft's tab in front becomes the thread's, whatever view it shows.
-        let in_front = draft_tab
-            .as_ref()
-            .is_some_and(|(tab, _)| self.tabs.model.active() == Some(*tab));
-        let view = self.workspace.tab;
-        let composer = self.draft.composer.take();
-        if composer.is_none()
-            && let Some(data) = &mut self.session.data
-            && let Some(summary) = self.host.connection.threads.iter().find(|t| t.id == id)
-        {
-            let draft = data
-                .new_draft_for(&summary.checkout)
-                .cloned()
-                .unwrap_or_default();
-            let result = data.update_thread(
-                id.clone(),
-                plait_core::session::Thread {
-                    checkout: summary.checkout.clone(),
-                    model: summary.model.clone(),
-                    title: plait_core::session::title(&sending.text),
-                    draft,
-                    pending: None,
-                    pending_submissions: Vec::new(),
-                    queued_submissions: Vec::new(),
-                    approval: sending.choice,
-                },
-            );
-            if let Err(error) = result {
-                self.session.note = Some(error);
-            }
-        }
-        // The next New Thread starts afresh.
-        self.clear_new_draft(cx);
-        self.draft = super::new_thread::Draft {
-            generation: self.draft.generation + 1,
-            ..Default::default()
-        };
-        if let Some(composer) = composer {
-            self.attach_composer(id.clone(), composer, window, cx);
-        }
-        if let Some((tab, source)) = draft_tab {
-            let mut checkout = source.clone();
-            if let Some(summary) = self.host.connection.threads.iter().find(|t| t.id == id) {
-                checkout.root = summary.checkout.clone();
-                checkout.directory = self
-                    .tabs
-                    .identity
-                    .checkouts
-                    .get(&checkout.root)
-                    .copied()
-                    .or(checkout.directory.filter(|_| checkout.root == source.root));
-            }
-            let target = plait_core::tabs::ThreadTarget::Existing {
-                id: id.clone(),
-                checkout: checkout.clone(),
-            };
-            let result = if checkout != source {
-                self.tabs.model.bind_worktree_created(tab, &source, target)
-            } else {
-                self.tabs.model.bind_created(tab, target)
-            };
-            self.tab_error(result);
-            self.refresh_tab_rows();
-        }
-        if sending.choice.is_some() {
-            self.set_thread_approval(id.clone(), sending.choice, cx);
-        }
-        let when_busy = (self.host.protocol() >= 3).then_some(QueueMode::FollowUp);
-        match self.host.submissions.begin_images(
-            &id,
-            sending.text,
-            sending.approval,
-            when_busy,
-            Some(sending.revision),
-            sending.images,
-        ) {
-            Ok(pending) => self.retry_submission_id(&id, &pending.request_id, window, cx),
-            Err(error) => self.set_thread_notice(id.clone(), error, true),
-        }
-        if visible || in_front {
-            self.open_created_thread(id, window, cx);
-            if view != Workspace::Conversation {
-                self.show_tab(view, window, cx);
-            }
-        } else {
-            self.capture_session(cx);
-        }
     }
 
     /// Choose the draft's harness. Its model and permissions return to that
@@ -606,6 +445,7 @@ impl Plait {
         self.draft.error = None;
         self.carry_draft_thinking(shown);
         self.sync_composer(cx);
+        self.capture_session(cx);
         cx.notify();
     }
 
@@ -637,6 +477,7 @@ impl Plait {
         self.draft.error = None;
         self.carry_draft_thinking(shown);
         self.sync_composer(cx);
+        self.capture_session(cx);
         cx.notify();
     }
 
@@ -658,6 +499,7 @@ impl Plait {
         }
         self.draft.harness = Some(harness);
         self.draft.mode = Some(mode);
+        self.capture_session(cx);
         cx.notify();
     }
 
@@ -667,6 +509,7 @@ impl Plait {
             return;
         }
         self.draft.thinking = Some(level);
+        self.capture_session(cx);
         cx.notify();
     }
 
@@ -681,6 +524,7 @@ impl Plait {
         }
         self.draft.harness = Some(HarnessId::Pi);
         self.draft.approval = mode;
+        self.capture_session(cx);
         cx.notify();
     }
 }

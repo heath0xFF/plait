@@ -55,7 +55,7 @@ impl Plait {
                     // the box stays where it is when the first message is sent.
                     .child(self.draft_controls(cx))
                     .children(self.isolation_choice(cx))
-                    .when(!self.admission.choice, |el| {
+                    .when(!self.draft_isolation_choice(), |el| {
                         el.children(self.draft_status(cx))
                     }),
             );
@@ -275,7 +275,7 @@ impl Plait {
                 .text_size(px(11.))
         };
         if self.draft_pending() {
-            if self.host.creation.creating {
+            if self.draft_creating() {
                 let model = self.draft_model_name().unwrap_or_default();
                 return Some(
                     line()
@@ -288,8 +288,7 @@ impl Plait {
                 );
             }
             let detail = self
-                .host
-                .connection
+                .draft
                 .error
                 .clone()
                 .unwrap_or_else(|| "The host did not answer.".into());
@@ -417,10 +416,34 @@ impl Plait {
         if self.draft_locked().is_some() {
             return;
         }
-        if checkout != self.host.creation.checkout {
-            self.change_checkout(checkout, window, cx);
+        if checkout == self.host.creation.checkout {
+            self.close_overlay(true, window, cx);
+            return;
         }
-        self.open_draft(window, cx);
+        let Some(tab) = self.tabs.model.active() else {
+            return;
+        };
+        self.capture_session(cx);
+        let result = self
+            .tabs
+            .model
+            .move_draft(tab, self.tab_checkout(checkout.clone()));
+        if !self.tab_error(result) {
+            return;
+        }
+        let draft = std::mem::take(&mut self.draft);
+        if let Some(id) = &draft.id
+            && let Some(data) = &mut self.session.data
+        {
+            data.clear_draft_tab(id);
+        }
+        self.tabs.lifecycle.presenting = true;
+        self.change_checkout(checkout, window, cx);
+        self.tabs.lifecycle.presenting = false;
+        self.draft = draft;
+        self.open_draft_content(window, cx);
+        self.refresh_tab_rows();
+        self.capture_session(cx);
     }
 
     pub(super) fn open_draft_harnesses(&mut self, window: &mut Window, cx: &mut Context<Self>) {

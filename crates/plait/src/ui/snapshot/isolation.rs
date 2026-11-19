@@ -129,8 +129,10 @@ pub(super) fn walk(
                 cx,
             )
         });
-        plait.admission.choice = true;
-        plait.host.creation.pending_create = Some(("choice".into(), super::choice()));
+        super::many_drafts::set_pending(plait, "choice");
+        let pending = plait.draft.pending.as_mut().unwrap();
+        pending.creating = false;
+        pending.choice = true;
     });
     busy.capture(&format!("isolation-busy-choice-{suffix}"));
     let mut many = Harness::new(repository, output, width, height);

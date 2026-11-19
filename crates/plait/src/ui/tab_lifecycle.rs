@@ -31,6 +31,7 @@ pub(super) struct Lifecycle {
     hydrate_generation: u64,
     pending: std::collections::VecDeque<Intent>,
     pub editors: Vec<(ThreadTarget, EditorRecord)>,
+    pub drafts: std::collections::BTreeMap<String, super::new_thread::Draft>,
 }
 
 impl Lifecycle {
@@ -68,12 +69,7 @@ impl Plait {
         self.tabs.persistence.edited = true;
         self.tabs.identity.opening += 1;
         if self.tabs.lifecycle.busy {
-            if self.tabs.lifecycle.pending.len() < 64 {
-                self.tabs.lifecycle.pending.push_back(intent);
-            } else {
-                self.notice = Some("Tab changes are still saving. Try again shortly.".into());
-                cx.notify();
-            }
+            self.tabs.lifecycle.pending.push_back(intent);
             return;
         }
         if self.host.creation.creating || self.host.creation.pending_create.is_some() {
@@ -273,11 +269,15 @@ impl Plait {
             Intent::Activate(id) => self.tabs.model.activate(id),
             Intent::Close(id) => {
                 let nonempty = self.tabs.model.get(id).is_some_and(|tab| {
-                    let ThreadTarget::Draft { checkout, .. } = tab.thread().target() else {
+                    let ThreadTarget::Draft {
+                        id: draft_id,
+                        checkout,
+                    } = tab.thread().target()
+                    else {
                         return false;
                     };
                     if previous == Some(id) {
-                        self.draft
+                        self.draft.pending.is_some() || self.draft
                             .composer
                             .as_ref()
                             .is_some_and(|c| !c.read(cx).is_empty())
@@ -285,11 +285,17 @@ impl Plait {
                         self.session
                             .data
                             .as_ref()
-                            .and_then(|s| s.new_draft_for(&checkout.root))
-                            .is_some_and(|d| !d.text.is_empty() || !d.images.is_empty())
+                            .and_then(|s| s.draft_tab(draft_id, &checkout.root))
+                            .is_some_and(|tab| tab.creation.is_some() || !tab.draft.text.is_empty() || !tab.draft.images.is_empty())
                     }
                 });
-                self.tabs.model.close(id, nonempty)
+                let draft = self.tabs.model.get(id).and_then(|tab| match tab.thread().target() { ThreadTarget::Draft { id, .. } => Some(id.clone()), _ => None });
+                let result = self.tabs.model.close(id, nonempty);
+                if result.is_ok() && !nonempty && let Some(draft) = draft {
+                    if let Some(data) = &mut self.session.data { data.clear_draft_tab(&draft); }
+                    self.tabs.lifecycle.drafts.remove(&draft);
+                }
+                result
             }
             Intent::Navigate(action) => match action {
                 TabNavigation::Next => self.tabs.model.next_tab(),
@@ -303,15 +309,26 @@ impl Plait {
                         .iter()
                         .any(|t| &t.id == id && t.checkout == checkout.root)
                         .then_some(connection),
-                    ThreadTarget::Draft { checkout, .. } => self
+                    ThreadTarget::Draft {
+                        id: draft_id,
+                        checkout,
+                    } => self
                         .session
                         .data
                         .as_ref()
-                        .and_then(|s| s.new_draft_for(&checkout.root))
+                        .and_then(|s| s.draft_tab(draft_id, &checkout.root))
                         .map(|_| connection),
                 }),
             }
-            .map(|_| ()),
+            .and_then(|opened| {
+                if opened.is_none() && matches!(action, TabNavigation::Reopen) {
+                    let fallback = self.session.data.as_ref().and_then(|data| data.draft_tabs.iter().find(|(id, tab)| {
+                        (tab.creation.is_some() || !tab.draft.text.is_empty() || !tab.draft.images.is_empty()) && !self.tabs.model.tabs().iter().any(|open| matches!(open.thread().target(), ThreadTarget::Draft { id: open_id, .. } if open_id == *id))
+                    }).map(|(id, tab)| ThreadTarget::Draft { id: id.clone(), checkout: self.tab_checkout(tab.checkout.clone()) }));
+                    if let Some(target) = fallback { self.tabs.model.open(target, connection)?; }
+                }
+                Ok(())
+            }),
         };
         if self.tab_error(result) {
             if previous != self.tabs.model.active() {
@@ -332,6 +349,7 @@ impl Plait {
             self.tabs.list_open = false;
             self.refresh_tab_rows();
             self.retire_editor_cache(cx);
+            self.capture_session(cx);
             self.queue_tab_save(cx);
             self.try_restore_tabs(window, cx);
             cx.notify();
@@ -371,8 +389,7 @@ impl Plait {
         self.workspace.turn_review.generation = review_generation;
         self.workspace.thread_controls = controls;
         self.workspace.thread_controls.usage_open = false;
-        self.draft.composer = None;
-        self.draft.open = false;
+        self.park_draft(cx);
         self.conversation_focus = None;
         self.conversation_find_focus = None;
         self.state.repository.park_view();
@@ -484,6 +501,12 @@ impl Plait {
     }
 
     fn retire_editor_cache(&mut self, cx: &mut Context<Self>) {
+        // Closed drafts without an in-flight creation can be restored from the journal.
+        self.tabs.lifecycle.drafts.retain(|id, draft| {
+            draft.pending.is_some() || self.tabs.model.tabs().iter().any(|tab| {
+                matches!(tab.thread().target(), ThreadTarget::Draft { id: open, .. } if open == id)
+            }) || self.session.data.is_none() && (!draft.saved.text.is_empty() || !draft.saved.images.is_empty())
+        });
         let mut removed = Vec::new();
         self.tabs.lifecycle.editors.retain(|(target, editor)| {
             if self.tabs.model.retains_target(target) {

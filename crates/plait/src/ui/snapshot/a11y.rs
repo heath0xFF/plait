@@ -831,8 +831,10 @@ fn assert_admission_controls(harness: &mut Harness) {
     });
     harness.update(|plait, window, cx| {
         plait.open_draft(window, cx);
-        plait.admission.choice = true;
-        plait.host.creation.pending_create = Some(("guard-choice".into(), super::choice()));
+        super::many_drafts::set_pending(plait, "guard-choice");
+        let pending = plait.draft.pending.as_mut().unwrap();
+        pending.creating = false;
+        pending.choice = true;
     });
     let frame = steady_frame(harness, "admission-busy-choice");
     for label in ["Own worktree", "Cancel"] {
@@ -854,8 +856,7 @@ fn assert_admission_controls(harness: &mut Harness) {
         "missing Choose checkout"
     );
     harness.update(|plait, _, cx| {
-        plait.admission.choice = false;
-        plait.host.creation.pending_create = None;
+        plait.draft.pending = None;
         cx.notify();
     });
 }

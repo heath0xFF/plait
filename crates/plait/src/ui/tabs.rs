@@ -55,6 +55,8 @@ pub(super) struct Tabs {
     pub list_open: bool,
     list_cursor: Option<TabId>,
     list_scroll: ScrollHandle,
+    large_list_scroll: UniformListScrollHandle,
+    list_items: Vec<ListItem>,
     drag: Option<Drag>,
 }
 struct TabStrip {
@@ -66,6 +68,12 @@ impl Render for TabStrip {
             .update(cx, |p, cx| p.tab_strip(cx).into_any_element())
             .unwrap_or_else(|_| div().into_any_element())
     }
+}
+
+#[derive(Clone, Copy)]
+enum ListItem {
+    Heading(model::TabGroup),
+    Tab(usize),
 }
 
 struct Drag {
@@ -96,6 +104,8 @@ impl Default for Tabs {
             list_open: false,
             list_cursor: None,
             list_scroll: ScrollHandle::new(),
+            large_list_scroll: UniformListScrollHandle::new(),
+            list_items: Vec::new(),
             drag: None,
         }
     }
@@ -252,6 +262,9 @@ impl Plait {
                 {
                     this.tabs.list_cursor = Some(*id);
                     this.tabs.list_scroll.scroll_to_item(*item);
+                    this.tabs
+                        .large_list_scroll
+                        .scroll_to_item(*item, ScrollStrategy::Nearest);
                 }
                 window.prevent_default();
                 cx.stop_propagation();
@@ -305,9 +318,12 @@ impl Plait {
             return true;
         }
         let target = ThreadTarget::Draft {
-            id: "draft".into(),
+            id: plait_core::host_state::request_id(),
             checkout: self.tab_checkout(self.host.creation.checkout.clone()),
         };
+        if let ThreadTarget::Draft { id, .. } = &target {
+            self.draft.id = Some(id.clone());
+        }
         let result = self.tabs.model.open(
             target,
             self.host
@@ -386,10 +402,11 @@ impl Plait {
                 self.select_host_thread_content(id, window, cx);
                 self.show_tab(view, window, cx);
             }
-            Some((ThreadTarget::Draft { checkout, .. }, view)) => {
+            Some((ThreadTarget::Draft { id, checkout }, view)) => {
                 if checkout.root != self.host.creation.checkout {
                     self.change_checkout(checkout.root, window, cx);
                 }
+                self.restore_draft_tab(id, cx);
                 self.open_draft_content(window, cx);
                 self.show_tab(view, window, cx);
             }
@@ -474,6 +491,20 @@ impl Plait {
                 .filter(|row| layout.hidden.contains(&row.id))
                 .map(|row| row.state),
         );
+        let indices: std::collections::HashMap<_, _> = self
+            .tabs
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.id, i))
+            .collect();
+        self.tabs.list_items.clear();
+        for group in &layout.groups {
+            self.tabs.list_items.push(ListItem::Heading(group.group));
+            for id in &group.tabs {
+                self.tabs.list_items.push(ListItem::Tab(indices[id]));
+            }
+        }
         self.tabs.layout = Some(layout);
         self.tabs.measured = Some((width, fullscreen));
     }
@@ -621,10 +652,17 @@ impl Plait {
             .min_w_0()
             .h_full()
             .items_end();
-        for id in &layout.visible {
-            if let Some(meta) = self.tabs.rows.iter().find(|t| t.id == *id) {
-                strip = strip.child(self.tab_control(meta, layout.tab_width, cx));
-            }
+        for (offset, meta) in self.tabs.rows[layout.first_visible..]
+            .iter()
+            .take(layout.visible.len())
+            .enumerate()
+        {
+            strip = strip.child(self.tab_control(
+                meta,
+                layout.first_visible + offset,
+                layout.tab_width,
+                cx,
+            ));
         }
         strip
     }
@@ -632,6 +670,7 @@ impl Plait {
     fn tab_control(
         &self,
         meta: &TabMetadata,
+        index: usize,
         width: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -644,7 +683,7 @@ impl Plait {
             meta.state,
             TabState::Approve | TabState::Interrupted | TabState::Failed
         );
-        let at = self.tabs.model.tabs().iter().position(|t| t.id() == id);
+        let at = Some(index);
         let insertion = self
             .tabs
             .drag
@@ -843,6 +882,42 @@ impl Plait {
                 this.tabs.list_open = false;
                 cx.notify();
             }));
+        if self.tabs.rows.len() > 32 {
+            let owner = cx.entity().downgrade();
+            return Some(
+                list.child(
+                    uniform_list(
+                        "virtual-tabs",
+                        self.tabs.list_items.len(),
+                        move |range, _, cx| {
+                            owner
+                                .update(cx, |this, cx| {
+                                    range
+                                        .map(|index| match this.tabs.list_items[index] {
+                                            ListItem::Heading(group) => div()
+                                                .h(px(28.))
+                                                .px_2()
+                                                .pt_2()
+                                                .text_size(px(11.))
+                                                .text_color(rgb(colors().subtle))
+                                                .child(group.title())
+                                                .into_any_element(),
+                                            ListItem::Tab(index) => this
+                                                .tab_list_entry(&this.tabs.rows[index], cx)
+                                                .into_any_element(),
+                                        })
+                                        .collect::<Vec<_>>()
+                                })
+                                .unwrap_or_default()
+                        },
+                    )
+                    .track_scroll(&self.tabs.large_list_scroll)
+                    .h(px(328.))
+                    .w_full(),
+                )
+                .into_any_element(),
+            );
+        }
         for group in &layout.groups {
             list = list.child(
                 div()
@@ -857,57 +932,52 @@ impl Plait {
                 let Some(meta) = self.tabs.rows.iter().find(|t| t.id == *id) else {
                     continue;
                 };
-                let id = *id;
-                let hover = meta.hover.clone();
-                let group = format!("list-tab-{}", id.get());
-                list = list.child(
-                    nav_row(("tab-list", id.get()), meta.title.clone(), meta.active)
-                        .role(Role::MenuItem)
-                        .when(self.tabs.list_cursor == Some(id), |el| {
-                            el.bg(rgba(colors().hover))
-                        })
-                        .group(SharedString::from(group.clone()))
-                        .text_size(px(12.))
-                        .tooltip(move |_, cx| tooltip(hover.clone(), cx))
-                        .child(dot(tint(meta.state, meta.active)))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .flex_1()
-                                .text_ellipsis()
-                                .child(meta.title.clone()),
-                        )
-                        .child(
-                            tag("tab-list-project", meta.project.clone(), colors().subtle)
-                                .max_w(px(70.))
-                                .truncate(),
-                        )
-                        .child(
-                            tag(
-                                "tab-list-state",
-                                meta.state.word(true),
-                                tint(meta.state, meta.active),
-                            )
-                            .text_size(px(11.)),
-                        )
-                        .when_some(meta.shortcut, |el, n| {
-                            el.child(tag("tab-list-shortcut", format!("⌘{n}"), colors().subtle))
-                        })
-                        .child(self.tab_close_control(
-                            id,
-                            &meta.title,
-                            meta.close_hover,
-                            false,
-                            group,
-                            cx,
-                        ))
-                        .on_activate(cx, move |this, window, cx| {
-                            this.activate_tab(id, window, cx)
-                        }),
-                );
+                list = list.child(self.tab_list_entry(meta, cx));
             }
         }
         Some(list.into_any_element())
+    }
+    fn tab_list_entry(&self, meta: &TabMetadata, cx: &mut Context<Self>) -> impl IntoElement {
+        let id = meta.id;
+        let hover = meta.hover.clone();
+        let group = format!("list-tab-{}", id.get());
+
+        nav_row(("tab-list", id.get()), meta.title.clone(), meta.active)
+            .role(Role::MenuItem)
+            .when(self.tabs.list_cursor == Some(id), |el| {
+                el.bg(rgba(colors().hover))
+            })
+            .group(SharedString::from(group.clone()))
+            .text_size(px(12.))
+            .tooltip(move |_, cx| tooltip(hover.clone(), cx))
+            .child(dot(tint(meta.state, meta.active)))
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .text_ellipsis()
+                    .child(meta.title.clone()),
+            )
+            .child(
+                tag("tab-list-project", meta.project.clone(), colors().subtle)
+                    .max_w(px(70.))
+                    .truncate(),
+            )
+            .child(
+                tag(
+                    "tab-list-state",
+                    meta.state.word(true),
+                    tint(meta.state, meta.active),
+                )
+                .text_size(px(11.)),
+            )
+            .when_some(meta.shortcut, |el, n| {
+                el.child(tag("tab-list-shortcut", format!("⌘{n}"), colors().subtle))
+            })
+            .child(self.tab_close_control(id, &meta.title, meta.close_hover, false, group, cx))
+            .on_activate(cx, move |this, window, cx| {
+                this.activate_tab(id, window, cx)
+            })
     }
 }
 

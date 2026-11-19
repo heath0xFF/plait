@@ -198,6 +198,7 @@ pub(super) fn walk(
         });
     });
     h.capture(&format!("tabs-recovered-draft-{suffix}"));
+    super::many_drafts::scenes(&mut h, suffix);
 }
 
 pub(super) fn exercise() {
@@ -705,7 +706,16 @@ pub(super) fn created_in_front() {
             choice: None,
         });
         p.show_tab(super::super::Workspace::Changes, w, cx);
-        p.deliver_draft("created-thread".into(), w, cx);
+        super::many_drafts::set_pending(p, "create-1");
+        let reply = plait_core::host::ThreadReply {
+            thread: Snapshot {
+                id: "created-thread".into(),
+                checkout: p.host.creation.checkout.clone(),
+                model: choice(),
+                ..Default::default()
+            },
+        };
+        super::many_drafts::finish(p, "create-1", Ok(reply), w, cx);
         let active = p.tabs.model.get(p.tabs.model.active().unwrap()).unwrap();
         assert!(matches!(
             active.thread().target(),

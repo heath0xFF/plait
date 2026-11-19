@@ -50,6 +50,7 @@ impl Plait {
         roots.extend(self.preferences.value.navigation.opened.iter().cloned());
         roots.push(self.host.creation.checkout.clone());
         if let Some(data) = &self.session.data {
+            roots.extend(data.draft_tabs.values().map(|tab| tab.checkout.clone()));
             roots.extend(data.new_drafts.keys().cloned());
             roots.extend(data.new_draft.as_ref().map(|(root, _)| root.clone()));
         }

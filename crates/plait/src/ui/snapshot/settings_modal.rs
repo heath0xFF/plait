@@ -445,6 +445,7 @@ fn menu_palette_and_sidebar_open_settings() {
 /// A creation reply that the person is waiting for, without a draft.
 fn created(repository: &Path, request: &str, selection_epoch: u64) -> crate::ui::host::Created {
     crate::ui::host::Created {
+        draft_id: None,
         request_id: request.into(),
         choice: choice(),
         harness: plait_core::host::harness::HarnessId::Pi,
@@ -531,8 +532,7 @@ fn a_sent_draft_stays_in_place_and_opens_behind_the_modal() {
             .as_mut()
             .unwrap()
             .protocol_version = 3;
-        plait.host.creation.pending_create = Some(("drafted".into(), choice()));
-        plait.host.creation.creating = true;
+        super::many_drafts::set_pending(plait, "drafted");
         plait.draft.sending = Some(Sending {
             images: Vec::new(),
             generation: plait.draft.generation,
@@ -553,9 +553,9 @@ fn a_sent_draft_stays_in_place_and_opens_behind_the_modal() {
     });
     harness.draw();
     harness.update(|plait, window, cx| {
-        let epoch = plait.host.thread.watch_epoch;
-        plait.finish_create(
-            created(&repository, "drafted", epoch),
+        super::many_drafts::finish(
+            plait,
+            "drafted",
             created_reply(&repository, "thr_drafted"),
             window,
             cx,

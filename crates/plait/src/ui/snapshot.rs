@@ -47,6 +47,7 @@ mod admission;
 mod branches;
 mod find;
 mod isolation;
+mod many_drafts;
 mod mcp;
 mod messages;
 mod settings_modal;
@@ -1249,7 +1250,7 @@ impl Harness {
         let deadline = Instant::now() + Duration::from_secs(10);
         while self
             .window
-            .update(&mut self.cx, |plait, _, _| plait.host.creation.creating)
+            .update(&mut self.cx, |plait, _, _| plait.draft_creating())
             .expect("window update")
         {
             assert!(Instant::now() < deadline, "creation did not finish");
@@ -1295,7 +1296,7 @@ fn a_draft_creates_its_thread_only_when_sent_and_keeps_its_request_id() {
         plait.open_draft(window, cx);
         assert!(plait.draft.open && plait.draft_visible());
         assert!(plait.host.thread.selected.is_none());
-        assert!(plait.host.creation.pending_create.is_none() && !plait.host.creation.creating);
+        assert!(plait.draft.pending.is_none() && !plait.draft_creating());
         let composer = plait.draft.composer.clone().unwrap();
         assert!(
             composer.focus_handle(cx).is_focused(window),
@@ -1308,7 +1309,7 @@ fn a_draft_creates_its_thread_only_when_sent_and_keeps_its_request_id() {
     harness.type_draft("Queue the status refresh");
     harness.keystroke("enter");
     harness.update(|plait, _, cx| {
-        assert!(plait.host.creation.pending_create.is_none() && !plait.host.creation.creating);
+        assert!(plait.draft.pending.is_none() && !plait.draft_creating());
         assert_eq!(draft_text(plait, cx), "Queue the status refresh");
         plait.host.connection.status = Some(status());
         plait.sync_composer(cx);
@@ -1318,23 +1319,20 @@ fn a_draft_creates_its_thread_only_when_sent_and_keeps_its_request_id() {
     let first = harness
         .window
         .update(&mut harness.cx, |plait, _, _| {
-            assert!(
-                plait.host.creation.pending_create.is_some(),
-                "sending creates the thread"
-            );
+            assert!(plait.draft.pending.is_some(), "sending creates the thread");
             let sending = plait.draft.sending.clone().expect("the message waits");
             assert_eq!(sending.text, "Queue the status refresh");
             assert_eq!(sending.approval, Some(ApprovalMode::Auto));
             // The header cannot change what is being created.
             assert!(plait.draft_locked().is_some());
-            plait.host.creation.pending_create.clone().unwrap()
+            many_drafts::pending_choice(plait)
         })
         .expect("window update");
     assert_eq!(first.1, choice());
     // No host runs in this scratch home, so the request fails and stays unconfirmed.
     harness.creation_settles();
     harness.update(|plait, window, cx| {
-        assert_eq!(plait.host.creation.pending_create.as_ref(), Some(&first));
+        assert_eq!(many_drafts::pending_choice(plait), first);
         assert!(plait.draft_pending());
         assert_eq!(draft_text(plait, cx), "Queue the status refresh");
         // The draft shows its own state; the bar above stays for elsewhere.
@@ -1344,16 +1342,22 @@ fn a_draft_creates_its_thread_only_when_sent_and_keeps_its_request_id() {
         assert_eq!(plait.draft_model(), Some(choice()));
         // Sending again retries the same request.
         plait.retry_draft(window, cx);
-        assert!(plait.host.creation.creating);
+        assert!(plait.draft_creating());
     });
     harness.creation_settles();
     harness.update(|plait, window, cx| {
-        assert_eq!(plait.host.creation.pending_create.as_ref(), Some(&first));
-        // Leaving keeps the text; New Thread brings it back.
+        assert_eq!(many_drafts::pending_choice(plait), first);
+        // Leaving keeps the draft in its own tab. New Thread always starts fresh.
+        let draft_tab = plait.tabs.model.active().unwrap();
         plait.select_host_thread(THREAD.into(), window, cx);
         assert!(!plait.draft.open);
-        assert!(plait.creation_bar(cx).is_some(), "the retry is offered");
         plait.open_draft(window, cx);
+        assert_eq!(draft_text(plait, cx), "");
+        plait.request_tab(
+            super::tab_lifecycle::Intent::Activate(draft_tab),
+            window,
+            cx,
+        );
         assert_eq!(draft_text(plait, cx), "Queue the status refresh");
     });
     // Escape clears it.
@@ -1361,8 +1365,7 @@ fn a_draft_creates_its_thread_only_when_sent_and_keeps_its_request_id() {
     harness.update(|plait, _, cx| {
         assert!(!plait.draft.open && plait.draft.sending.is_none());
         assert_eq!(draft_text(plait, cx), "");
-        // A creation already sent stays the host's to answer.
-        assert!(plait.host.creation.pending_create.is_some());
+        assert!(plait.draft.pending.is_none());
     });
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();
@@ -1430,7 +1433,7 @@ fn a_draft_sends_its_thinking_level_and_repeats_it_on_retry() {
     harness.keystroke("enter");
     harness.update(|plait, _, cx| {
         assert!(plait.draft_pending(), "sending creates the thread");
-        assert_eq!(plait.host.creation.pending_thinking, Some(Xhigh));
+        assert_eq!(many_drafts::pending_thinking(plait), Some(Xhigh));
         // The chip cannot change what is being created.
         plait.choose_draft_thinking(Low, cx);
         assert_eq!(plait.draft_thinking(), Some(Xhigh));
@@ -1442,14 +1445,14 @@ fn a_draft_sends_its_thinking_level_and_repeats_it_on_retry() {
     harness.update(|plait, window, cx| {
         assert!(plait.draft_pending());
         // A retry repeats the same request at the same level.
-        let request = plait.host.creation.pending_create.clone();
+        let request = many_drafts::pending_choice(plait);
         plait.retry_draft(window, cx);
-        assert!(plait.host.creation.creating);
-        assert_eq!(plait.host.creation.pending_create, request);
-        assert_eq!(plait.host.creation.pending_thinking, Some(Xhigh));
+        assert!(plait.draft_creating());
+        assert_eq!(many_drafts::pending_choice(plait), request);
+        assert_eq!(many_drafts::pending_thinking(plait), Some(Xhigh));
     });
     harness.creation_settles();
-    harness.update(|plait, _, _| assert_eq!(plait.host.creation.pending_thinking, Some(Xhigh)));
+    harness.update(|plait, _, _| assert_eq!(many_drafts::pending_thinking(plait), Some(Xhigh)));
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();
 }
@@ -1462,20 +1465,13 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
     if !isolated("a_creation_reply_lands_only_on_the_draft_that_sent_it") {
         return;
     }
-    use super::{host::Created, new_thread::Sending};
+    use super::new_thread::Sending;
     use plait_core::host::{Error, HostError, ThreadReply};
     let scratch = std::env::temp_dir().join(format!("plait-draft-reply-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&scratch);
     let repository = fixture_repository(&scratch);
     let mut harness = Harness::new(&repository, None, 900., 600.);
     harness.connect(&repository, false);
-    let created = |request: &str| Created {
-        request_id: request.into(),
-        choice: choice(),
-        harness: HarnessId::Pi,
-        selection_epoch: 0,
-        checkout: Some(repository.clone()),
-    };
     let reply = |id: &str| -> Result<ThreadReply, Error> {
         Ok(ThreadReply {
             thread: Snapshot {
@@ -1495,8 +1491,7 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
             .as_mut()
             .unwrap()
             .protocol_version = 3;
-        plait.host.creation.pending_create = Some((request.into(), choice()));
-        plait.host.creation.creating = true;
+        many_drafts::set_pending(plait, request);
         plait.draft.sending = Some(Sending {
             images: Vec::new(),
             generation: plait.draft.generation,
@@ -1512,15 +1507,15 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
         plait.open_draft(window, cx);
         sent(plait, "discarded", "Gone");
         plait.discard_draft(window, cx);
-        plait.finish_create(created("discarded"), reply("thr_discarded"), window, cx);
-        assert!(plait.host.creation.pending_create.is_none());
+        many_drafts::finish(plait, "discarded", reply("thr_discarded"), window, cx);
+        assert!(plait.draft.pending.is_none());
         assert!(
             plait
                 .host
                 .connection
                 .threads
                 .iter()
-                .any(|t| t.id == "thr_discarded")
+                .all(|t| t.id != "thr_discarded")
         );
         assert!(plait.host.thread.selected.is_none());
         assert!(!plait.workspace.composers.contains_key("thr_discarded"));
@@ -1529,8 +1524,8 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
         // A reply for another request than the pending one changes nothing.
         plait.open_draft(window, cx);
         sent(plait, "current", "Kept");
-        plait.finish_create(created("earlier"), reply("thr_earlier"), window, cx);
-        assert!(plait.host.creation.creating && plait.draft_pending());
+        many_drafts::finish(plait, "earlier", reply("thr_earlier"), window, cx);
+        assert!(plait.draft_creating() && plait.draft_pending());
         assert!(
             !plait
                 .host
@@ -1541,7 +1536,7 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
         );
         // Nor does a reply for a draft from before a discard.
         plait.draft.generation += 1;
-        plait.finish_create(created("current"), reply("thr_stale"), window, cx);
+        many_drafts::finish(plait, "current", reply("thr_stale"), window, cx);
         assert!(
             plait.host.thread.selected.is_none()
                 && !plait.workspace.composers.contains_key("thr_stale")
@@ -1553,7 +1548,7 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
         plait.open_draft(window, cx);
         sent(plait, "left", "Sent while away");
         plait.select_host_thread(THREAD.into(), window, cx);
-        plait.finish_create(created("left"), reply("thr_left"), window, cx);
+        many_drafts::finish(plait, "left", reply("thr_left"), window, cx);
         assert_eq!(plait.host.thread.selected.as_deref(), Some(THREAD));
         assert!(
             !plait.workspace.composers.contains_key("thr_left")
@@ -1576,7 +1571,7 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
         // On screen: the thread opens with its message on the way.
         plait.open_draft(window, cx);
         sent(plait, "visible", "Open it");
-        plait.finish_create(created("visible"), reply("thr_visible"), window, cx);
+        many_drafts::finish(plait, "visible", reply("thr_visible"), window, cx);
         assert_eq!(plait.host.thread.selected.as_deref(), Some("thr_visible"));
         assert_eq!(plait.host.submissions.all("thr_visible")[0].text, "Open it");
         assert!(!plait.draft.open);
@@ -1588,8 +1583,8 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
             code: "invalid".into(),
             message: "Sample refusal.".into(),
         }));
-        plait.finish_create(created("refused"), refused, window, cx);
-        assert!(plait.host.creation.pending_create.is_none() && plait.draft.sending.is_none());
+        many_drafts::finish(plait, "refused", refused, window, cx);
+        assert!(plait.draft.pending.is_none() && plait.draft.sending.is_none());
         assert!(
             plait
                 .draft
@@ -2978,8 +2973,9 @@ fn picker_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
 fn new_thread_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.connect(repository, false);
     harness.update(|plait, _, _| {
-        plait.host.creation.pending_create = Some(("sample-request".into(), choice()));
-        plait.host.connection.error =
+        many_drafts::set_pending(plait, "sample-request");
+        plait.draft.pending.as_mut().unwrap().creating = false;
+        plait.draft.error =
             Some("Sample error. Retry creation to reuse the same request ID.".into());
     });
     harness.capture(&format!("new-thread-unconfirmed-{suffix}"));
@@ -3065,8 +3061,9 @@ fn draft_scenes_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.update(|plait, window, cx| {
         plait.close_overlay(true, window, cx);
         plait.choose_draft_harness(HarnessId::Pi, cx);
-        plait.host.creation.pending_create = Some(("sample-request".into(), choice()));
-        plait.host.connection.error =
+        many_drafts::set_pending(plait, "sample-request");
+        plait.draft.pending.as_mut().unwrap().creating = false;
+        plait.draft.error =
             Some("Sample error. Retry creation to reuse the same request ID.".into());
         plait.draft.sending = Some(super::new_thread::Sending {
             images: Vec::new(),
@@ -3081,8 +3078,8 @@ fn draft_scenes_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     });
     harness.capture(&format!("draft-unconfirmed-{suffix}"));
     harness.update(|plait, window, cx| {
-        plait.host.creation.pending_create = None;
-        plait.host.connection.error = None;
+        plait.draft.pending = None;
+        plait.draft.error = None;
         plait.draft.sending = None;
         plait.sync_composer(cx);
         // Set aside, so the sidebar shows threads without a draft.
@@ -3626,27 +3623,16 @@ fn a_codex_draft_starts_a_codex_thread_in_its_mode() {
     harness.type_draft("Run in Codex");
     harness.keystroke("enter");
     harness.update(|plait, _, _| {
-        assert!(plait.host.creation.pending_create.is_some());
-        assert_eq!(plait.pending_harness(), HarnessId::Codex);
-        assert_eq!(plait.pending_mode().as_deref(), Some("ask"));
-        let mini = plait
-            .host
-            .creation
-            .pending_create
-            .as_ref()
-            .unwrap()
-            .1
-            .clone();
-        assert_eq!(mini.model_id, "sample-codex-mini");
-        // Plait's approvals are Pi's: a Codex message asks for none.
+        assert!(plait.draft.pending.is_some());
+        let request = &plait.draft.pending.as_ref().unwrap().request;
+        assert!(matches!(request, plait_core::host::admission::Request::CreateAdmittedThread { harness: HarnessId::Codex, mode: Some(mode), model_id, .. } if mode == "ask" && model_id == "sample-codex-mini"));
         assert_eq!(plait.draft.sending.as_ref().unwrap().approval, None);
     });
     // No host runs here, so the creation stays unconfirmed; its retry keeps harness and mode.
     harness.creation_settles();
     harness.update(|plait, window, cx| {
         plait.retry_create(window, cx);
-        assert_eq!(plait.pending_harness(), HarnessId::Codex);
-        assert_eq!(plait.pending_mode().as_deref(), Some("ask"));
+        assert!(matches!(&plait.draft.pending.as_ref().unwrap().request, plait_core::host::admission::Request::CreateAdmittedThread { harness: HarnessId::Codex, mode: Some(mode), .. } if mode == "ask"));
     });
     harness.creation_settles();
     harness.update(|plait, window, cx| {
@@ -6121,7 +6107,22 @@ fn image_drafts_stay_with_their_checkout() {
                 );
             });
             plait.capture_session(cx);
-            plait.change_checkout(if index == 0 { b.clone() } else { a.clone() }, window, cx);
+            if index == 0 {
+                plait.change_checkout(b.clone(), window, cx);
+            } else {
+                let id = plait
+                    .tabs
+                    .model
+                    .tabs()
+                    .iter()
+                    .find(|tab| {
+                        tab.thread().target().is_draft()
+                            && tab.thread().target().checkout().root == a
+                    })
+                    .unwrap()
+                    .id();
+                plait.request_tab(super::tab_lifecycle::Intent::Activate(id), window, cx);
+            }
         });
     }
     harness.update(|plait, _, cx| {
@@ -6523,8 +6524,9 @@ fn file_reads_cannot_follow_the_same_name_into_another_checkout() {
     });
     harness.update(|plait, window, cx| {
         plait.open_file("src/review.rs".into(), None, cx);
+        let tab_b = plait.tabs.model.active().unwrap();
         plait.change_checkout(a.clone(), window, cx);
-        plait.change_checkout(b.clone(), window, cx);
+        plait.request_tab(super::tab_lifecycle::Intent::Activate(tab_b), window, cx);
     });
     harness.update(|plait, _, _| {
         // Returning to B restores B's file, never A's retired read.

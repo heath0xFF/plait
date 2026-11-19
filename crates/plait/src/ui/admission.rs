@@ -304,7 +304,14 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let request =
+        let request = if created.draft_id.is_some() {
+            self.draft
+                .pending
+                .as_ref()
+                .expect("draft creation captured")
+                .request
+                .clone()
+        } else {
             self.admission
                 .pending
                 .clone()
@@ -323,12 +330,20 @@ impl Plait {
                     mode: self.pending_mode(),
                     thinking: self.host.creation.pending_thinking,
                     source_thread_id: self.admission.source.clone(),
-                });
-        self.admission.pending = Some(request.clone());
-        self.admission.choice = false;
+                })
+        };
+        if created.draft_id.is_none() {
+            self.admission.pending = Some(request.clone());
+            self.admission.choice = false;
+        }
         let epoch = self.host.connection.epoch;
         let expected = self.state.checkout_key().cloned();
+        let journal = self.session.journal.clone();
+        let polling = cx.background_executor().clone();
         let task = cx.background_executor().spawn(async move {
+            if let Some(journal) = journal {
+                journal.flush().map_err(host::Error::Protocol)?;
+            }
             if let Some(expected) = expected {
                 expected.verify().map_err(host::Error::Protocol)?;
             }
@@ -353,7 +368,7 @@ impl Plait {
                 let reply: host::ThreadReply = client.request(&legacy)?;
                 return Ok((None, Some(reply)));
             }
-            let receipt = await_admission(&client, &request)?;
+            let receipt = await_admission(&client, &request, &polling).await?;
             let reply = if receipt.state == Stage::Ready {
                 let thread = receipt
                     .thread_id
@@ -382,6 +397,10 @@ impl Plait {
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
             let _ = this.update_in(cx, |this, window, cx| {
+                if created.draft_id.is_some() {
+                    this.finish_draft_creation(created, epoch, result, window, cx);
+                    return;
+                }
                 if this.host.connection.epoch != epoch || this.host.creation.pending_create.as_ref().map(|(id,_)| id) != Some(&created.request_id) { return; }
                 match result {
                     Ok((Some(receipt), _)) if receipt.state == Stage::Choice => {
@@ -436,69 +455,11 @@ impl Plait {
             });
         }).detach();
     }
-    /// The draft's admission the host may already have made, for the saved draft.
-    pub(super) fn draft_creation(&self) -> Option<plait_core::session::DraftCreation> {
-        let sending = self.draft.sending.as_ref()?;
-        // A choice records nothing on the host; there is nothing to retransmit.
-        if self.admission.choice || !self.draft_pending() {
-            return None;
-        }
-        let request = self.admission.pending.clone()?;
-        matches!(&request, Request::CreateAdmittedThread { request_id, .. } if *request_id == sending.request_id)
-            .then(|| plait_core::session::DraftCreation {
-                request,
-                approval: sending.approval,
-                choice: sending.choice,
-            })
-    }
-    /// A reopened draft waits on the creation it was sent with, so sending it
-    /// again reaches the thread and worktree the host may already have made.
-    pub(super) fn restore_draft_creation(
-        &mut self,
-        creation: plait_core::session::DraftCreation,
-        draft: &plait_core::session::Draft,
-    ) {
-        let Request::CreateAdmittedThread {
-            request_id,
-            checkout,
-            harness,
-            provider,
-            model_id,
-            mode,
-            thinking,
-            source_thread_id: None,
-            ..
-        } = &creation.request
-        else {
-            return;
-        };
-        if self.host.creation.pending_create.is_some()
-            || self.admission.pending.is_some()
-            || *checkout != self.host.creation.checkout
-        {
-            return;
-        }
-        self.host.creation.pending_create = Some((
-            request_id.clone(),
-            host::ModelChoice {
-                provider: provider.clone(),
-                model_id: model_id.clone(),
-            },
-        ));
-        self.host.creation.pending_thinking = *thinking;
-        self.set_pending_harness(*harness, mode.clone());
-        self.draft.sending = Some(super::new_thread::Sending {
-            generation: self.draft.generation,
-            request_id: request_id.clone(),
-            text: draft.text.clone(),
-            images: draft.images.clone(),
-            revision: draft.revision,
-            approval: creation.approval,
-            choice: creation.choice,
-        });
-        self.admission.pending = Some(creation.request);
-    }
     pub(super) fn accept_isolation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.draft.pending.is_some() {
+            self.accept_draft_isolation(window, cx);
+            return;
+        }
         if !self.admission.choice {
             return;
         }
@@ -510,6 +471,10 @@ impl Plait {
         self.retry_create(window, cx);
     }
     pub(super) fn cancel_isolation(&mut self, cx: &mut Context<Self>) {
+        if self.draft.pending.is_some() {
+            self.cancel_draft_isolation(cx);
+            return;
+        }
         if !self.admission.choice {
             return;
         }
@@ -522,7 +487,7 @@ impl Plait {
         cx.notify();
     }
     pub(super) fn isolation_choice(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.admission.choice {
+        if !self.draft_isolation_choice() {
             return None;
         }
         Some(column().w_full().max_w(px(CONTENT_WIDTH)).mx_auto().gap_2().p_3()
@@ -547,9 +512,10 @@ fn hover(cx: &mut App, text: &'static str) -> AnyView {
     cx.new(|_| super::thread_controls::TextTooltip(text.into()))
         .into()
 }
-fn await_admission(
+async fn await_admission(
     client: &Client,
     request: &Request,
+    executor: &BackgroundExecutor,
 ) -> Result<admission::Admission, host::Error> {
     let Request::CreateAdmittedThread { request_id, .. } = request else {
         unreachable!()
@@ -561,7 +527,7 @@ fn await_admission(
         if receipt.state != Stage::Preparing || Instant::now() >= deadline {
             return Ok(receipt);
         }
-        std::thread::sleep(Duration::from_millis(150));
+        executor.timer(Duration::from_millis(150)).await;
         receipt = admission::admission(
             client,
             &Request::AdmissionStatus {

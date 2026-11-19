@@ -16,7 +16,7 @@ pub struct DraftSettings {
 
 /// A first send that is never replayed on launch; explicit retry reuses this ID.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DraftCreation {
+pub struct DraftTabCreation {
     pub request_id: String,
     pub placement: crate::host::admission::Placement,
     pub harness: HarnessId,
@@ -30,13 +30,56 @@ pub struct DraftCreation {
     pub needs_choice: bool,
 }
 
+impl DraftTabCreation {
+    /// Import the reviewed schema-one creation field without allocating a new request.
+    pub fn from_legacy(draft: &Draft, checkout: &Path) -> Option<Self> {
+        let saved = draft.creation.as_ref()?;
+        let crate::host::admission::Request::CreateAdmittedThread {
+            request_id,
+            checkout: root,
+            placement,
+            harness,
+            provider,
+            model_id,
+            approval,
+            mode,
+            thinking,
+            source_thread_id: None,
+        } = &saved.request
+        else {
+            return None;
+        };
+        if root != checkout {
+            return None;
+        }
+        let mut message = draft.clone();
+        message.creation = None;
+        Some(Self {
+            request_id: request_id.clone(),
+            placement: *placement,
+            harness: *harness,
+            model: ModelChoice {
+                provider: provider.clone(),
+                model_id: model_id.clone(),
+            },
+            mode: mode.clone(),
+            thinking: *thinking,
+            approval: *approval,
+            message_approval: saved.approval,
+            thread_approval: saved.choice,
+            message,
+            needs_choice: false,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DraftTab {
     /// Owns this checkout's backwards-compatible draft snapshot.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub legacy: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub creation: Option<DraftCreation>,
+    pub creation: Option<DraftTabCreation>,
     pub checkout: PathBuf,
     pub draft: Draft,
     #[serde(default)]
@@ -121,7 +164,7 @@ impl Session {
                 id,
                 DraftTab {
                     legacy: true,
-                    creation: None,
+                    creation: DraftTabCreation::from_legacy(&draft, &checkout),
                     checkout,
                     draft,
                     settings: DraftSettings::default(),

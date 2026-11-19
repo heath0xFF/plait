@@ -105,7 +105,7 @@ fn choice_flow() {
         });
         p.send_draft("Keep my first message".into(), 3, w, cx);
     });
-    wait(&mut harness, |p| p.admission.choice);
+    wait(&mut harness, |p| p.draft_isolation_choice());
     harness.update(|p, _, cx| {
         assert!(p.isolation_choice(cx).is_some());
         assert!(p.draft.sending.is_some());
@@ -130,21 +130,20 @@ fn choice_flow() {
         );
     }
     harness.update(|p, w, cx| p.accept_isolation(w, cx));
-    wait(&mut harness, |p| !p.host.creation.creating);
+    wait(&mut harness, |p| !p.draft_creating());
     harness.update(|p, w, cx| {
-        assert!(p.admission.pending.is_some());
-        assert!(p.host.creation.pending_create.is_some());
+        assert!(p.draft.pending.is_some());
         p.retry_draft(w, cx);
         // The person moves away while the retried acknowledgement is in flight.
-        p.draft.open = false;
-        p.host.thread.watch_epoch += 1;
-        let target = plait_core::tabs::ThreadTarget::Existing {
-            id: THREAD.into(),
-            checkout: p.tab_checkout(root.clone()),
-        };
-        p.tabs.model.open(target, None).unwrap();
+        p.select_host_thread(THREAD.into(), w, cx);
     });
-    wait(&mut harness, |p| p.host.creation.pending_create.is_none());
+    wait(&mut harness, |p| {
+        p.host
+            .connection
+            .threads
+            .iter()
+            .any(|t| t.id == "12345678-1234-4abc-8abc-123456789abc")
+    });
     harness.update(|p,_,_|{
         assert!(!p.draft_visible());
         let created=p.host.connection.threads.iter().find(|t|t.id=="12345678-1234-4abc-8abc-123456789abc").unwrap();
@@ -154,7 +153,7 @@ fn choice_flow() {
         assert_eq!(tab.thread().target().checkout().root,created.checkout);
 
         assert!(p.notice.as_deref().unwrap().contains("uncommitted files"));
-        assert!(p.workspace.composers.contains_key(&created.id));
+        assert!(!p.workspace.composers.contains_key(&created.id));
     });
     let seen = requests.lock().unwrap();
     let creates: Vec<_> = seen
@@ -171,7 +170,10 @@ fn choice_flow() {
 }
 fn wait(h: &mut Harness, condition: impl Fn(&Plait) -> bool) {
     let end = Instant::now() + Duration::from_secs(15);
+    let executor = h.cx.update(|cx| cx.background_executor().clone());
     loop {
+        // Advancing can run foreground callbacks, so do it outside an App borrow.
+        executor.advance_clock(Duration::from_millis(150));
         h.settle();
         if h.window.update(&mut h.cx, |p, _, _| condition(p)).unwrap() {
             return;
@@ -179,6 +181,209 @@ fn wait(h: &mut Harness, condition: impl Fn(&Plait) -> bool) {
         assert!(Instant::now() < end, "admission did not settle");
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+#[core::prelude::v1::test]
+fn concurrent_drafts() {
+    if !isolated("admission::concurrent_drafts") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-two-admissions-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let root = repository.canonicalize().unwrap();
+    let store = PathBuf::from(std::env::var_os("PLAIT_HOST_STORE").unwrap());
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let socket = store.join("host.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let seen = requests.clone();
+    let stop = Arc::new(AtomicBool::new(false));
+    let done = stop.clone();
+    let main = root.clone();
+    let server = std::thread::spawn(move || {
+        let parent = plait_core::git::worktree::worktree_parent(&main).unwrap();
+        let mut first = String::new();
+        let mut tree = None;
+        let mut ready = false;
+        let mut snapshots = std::collections::HashMap::new();
+        let mut watches = Vec::new();
+        while !done.load(Ordering::Relaxed) {
+            let (mut stream, _) = match listener.accept() {
+                Ok(v) => v,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(2));
+                    continue;
+                }
+                Err(e) => panic!("{e}"),
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut line = String::new();
+            BufReader::new(&mut stream).read_line(&mut line).unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            seen.lock().unwrap().push(request.clone());
+            let receipt = |request_id: &str,
+                           state: &str,
+                           id: Option<&str>,
+                           checkout: &Path,
+                           worktree: Value| json!({"schema":1,"admission":{"request_id":request_id,"state":state,"thread_id":id,"checkout":checkout,"worktree":worktree,"source_thread_id":null,"error":null}});
+            let result = match request["op"].as_str().unwrap() {
+                "admission_info" => {
+                    json!({"schema":1,"worktree_at_start_v1":true,"linked_continuation_v1":true,"queue":false,"strict_reader":false,"checkout":main,"identity":parent.identity,"project":main,"project_identity":parent.main_identity,"busy":true,"auto_worktree":false,"parent":parent,"refusal":null})
+                }
+                "create_admitted_thread" => {
+                    let request_id = request["request_id"].as_str().unwrap();
+                    if first.is_empty() {
+                        first = request_id.into();
+                    }
+                    if request_id == first && request["placement"] == "project" {
+                        receipt(request_id, "choice", None, &main, Value::Null)
+                    } else {
+                        let id = if request_id == first {
+                            "aaaaaaaa-1234-4abc-8abc-123456789abc"
+                        } else {
+                            "bbbbbbbb-1234-4abc-8abc-123456789abc"
+                        };
+                        if request_id == first && tree.is_none() {
+                            tree = Some(
+                                plait_core::git::worktree::create_managed_worktree(
+                                    &parent,
+                                    id,
+                                    None,
+                                    |_| Ok(()),
+                                )
+                                .unwrap(),
+                            );
+                        }
+                        let checkout = if request_id == first {
+                            tree.as_ref().unwrap().path.clone()
+                        } else {
+                            main.clone()
+                        };
+                        snapshots.insert(id.to_owned(),json!({"id":id,"checkout":checkout,"model":{"provider":request["provider"],"model_id":request["model_id"]},"status":"idle","messages":[],"live_text":"","tools":[],"pending_approval":null,"error":null,"truncated":false}));
+                        if request_id == first {
+                            receipt(
+                                request_id,
+                                "preparing",
+                                Some(id),
+                                &checkout,
+                                serde_json::to_value(tree.as_ref().unwrap()).unwrap(),
+                            )
+                        } else {
+                            receipt(request_id, "ready", Some(id), &checkout, Value::Null)
+                        }
+                    }
+                }
+                "admission_status" => {
+                    assert_eq!(request["request_id"], first);
+                    let tree = tree.as_ref().unwrap();
+                    receipt(
+                        &first,
+                        if ready { "ready" } else { "preparing" },
+                        Some(&tree.thread_id),
+                        &tree.path,
+                        serde_json::to_value(tree).unwrap(),
+                    )
+                }
+                "watch" => json!({"thread":snapshots[request["thread_id"].as_str().unwrap()]}),
+                "submit" => {
+                    if request["thread_id"] == "bbbbbbbb-1234-4abc-8abc-123456789abc" {
+                        assert!(!ready);
+                        ready = true;
+                    }
+                    json!({"thread_id":request["thread_id"],"accepted":true,"request_id":request["request_id"]})
+                }
+                "list_worktrees" => json!({"schema":1,"operations":[]}),
+                _ => Value::Null,
+            };
+            let reply = if result.is_null() {
+                json!({"ok":false,"error":{"code":"invalid_request","message":"not supported"}})
+            } else {
+                json!({"ok":true,"result":result})
+            };
+            let _ = writeln!(stream, "{reply}");
+            if request["op"] == "watch" {
+                watches.push(stream);
+            }
+        }
+    });
+    let mut h = Harness::new(&repository, None, 900., 600.);
+    h.connect(&repository, false);
+    h.update(|p, w, cx| {
+        p.host.connection.status.as_mut().unwrap().protocol_version = 6;
+        p.open_draft(w, cx);
+        p.draft.composer.clone().unwrap().update(cx, |c, cx| {
+            c.restore_draft("First in a worktree".into(), 1, None, cx)
+        });
+        p.send_draft("First in a worktree".into(), 1, w, cx);
+    });
+    wait(&mut h, |p| p.draft_isolation_choice());
+    h.update(|p, w, cx| {
+        p.draft.composer.clone().unwrap().update(cx, |c, cx| {
+            c.restore_draft("First edited for worktree".into(), 2, None, cx)
+        });
+        p.accept_isolation(w, cx);
+        assert!(p.draft_creating());
+        p.open_draft(w, cx);
+        assert!(!p.draft_pending());
+        p.draft.composer.clone().unwrap().update(cx, |c, cx| {
+            c.restore_draft("Second while preparing".into(), 1, None, cx)
+        });
+        p.send_draft("Second while preparing".into(), 1, w, cx);
+    });
+    wait(&mut h, |_| {
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r["op"] == "submit")
+            .count()
+            == 2
+    });
+    wait(&mut h, |p| {
+        p.tabs
+            .model
+            .tabs()
+            .iter()
+            .filter(|t| !t.thread().target().is_draft())
+            .count()
+            == 3
+    });
+    h.update(|p, _, _| {
+        assert_eq!(
+            p.host.thread.selected.as_deref(),
+            Some("bbbbbbbb-1234-4abc-8abc-123456789abc")
+        );
+        assert!(
+            !p.tabs
+                .lifecycle
+                .drafts
+                .values()
+                .any(|d| d.pending.is_some())
+        );
+    });
+    let requests = requests.lock().unwrap();
+    let submits: Vec<_> = requests.iter().filter(|r| r["op"] == "submit").collect();
+    assert_eq!(submits.len(), 2);
+    assert_ne!(submits[0]["request_id"], submits[1]["request_id"]);
+    assert_eq!(submits[0]["text"], "Second while preparing");
+    assert_eq!(submits[1]["text"], "First edited for worktree");
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r["op"] == "create_admitted_thread" && r["placement"] == "worktree")
+            .count(),
+        1
+    );
+    drop(requests);
+    stop.store(true, Ordering::Relaxed);
+    server.join().unwrap();
+    drop(h);
+    std::fs::remove_dir_all(scratch).unwrap();
 }
 
 /// A host that answers a busy choice, then a ready worktree, and records every request.
@@ -293,7 +498,7 @@ fn edited_choice_draft() {
         });
         p.send_draft("First wording".into(), 3, w, cx);
     });
-    wait(&mut harness, |p| p.admission.choice);
+    wait(&mut harness, |p| p.draft_isolation_choice());
     harness.update(|p, w, cx| {
         // The composer stays editable while the person decides.
         let composer = p.draft.composer.clone().unwrap();
@@ -302,7 +507,7 @@ fn edited_choice_draft() {
         });
         p.accept_isolation(w, cx);
     });
-    wait(&mut harness, |p| p.host.creation.pending_create.is_none());
+    wait(&mut harness, |p| !p.draft_pending());
     let end = Instant::now() + Duration::from_secs(10);
     let submitted = loop {
         harness.settle();
@@ -357,10 +562,10 @@ fn reopened_creation() {
             });
             p.send_draft("Only once".into(), 3, w, cx);
         });
-        wait(&mut harness, |p| p.admission.choice);
+        wait(&mut harness, |p| p.draft_isolation_choice());
         harness.update(|p, w, cx| p.accept_isolation(w, cx));
         // The worktree exists on the host; its reply never arrives.
-        wait(&mut harness, |p| !p.host.creation.creating);
+        wait(&mut harness, |p| !p.draft_creating());
         harness.update(|p, _, cx| {
             p.capture_session(cx);
             saved = p.session.data.clone();
@@ -374,9 +579,13 @@ fn reopened_creation() {
     harness.connect(&repository, false);
     harness.update(|p, w, cx| {
         p.host.connection.status.as_mut().unwrap().protocol_version = 6;
+        let (id, tab) = saved.draft_tabs.iter().next().unwrap();
+        let target = plait_core::tabs::ThreadTarget::Draft {
+            id: id.clone(),
+            checkout: p.tab_checkout(tab.checkout.clone()),
+        };
         p.session.data = Some(saved);
-        p.draft.composer = None;
-        p.open_draft(w, cx);
+        p.open_tab_target(target, w, cx);
         assert!(p.draft_pending());
         p.retry_draft(w, cx);
     });

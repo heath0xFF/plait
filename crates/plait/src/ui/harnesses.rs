@@ -455,17 +455,6 @@ impl Plait {
             .map_or(HarnessId::Pi, harness_of)
     }
 
-    /// Remember which harness a new thread's model came from, and the
-    /// harness's own mode to start it in (`None`: the harness default).
-    pub(super) fn choose_new_harness(
-        &mut self,
-        id: HarnessId,
-        choice: &ModelChoice,
-        mode: Option<String>,
-    ) {
-        self.harnesses.chosen = Some((id, choice.clone(), mode));
-    }
-
     /// The harness for a new thread with `choice`: the one it was chosen from, else Pi.
     pub(super) fn new_thread_harness(&self, choice: &ModelChoice) -> HarnessId {
         match &self.harnesses.chosen {

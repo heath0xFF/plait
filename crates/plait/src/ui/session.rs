@@ -93,7 +93,8 @@ impl Plait {
         let checkout_generation = self.host.creation.generation;
         let task = cx.background_executor().spawn(async move {
             let (directory, host) = session::locations()?;
-            let (journal, data) = Journal::open(&directory, host)?;
+            let (journal, mut data) = Journal::open(&directory, host)?;
+            data.import_legacy_drafts();
             let path = requested
                 .or_else(|| data.checkout.clone())
                 .unwrap_or_else(|| PathBuf::from("."));
@@ -344,19 +345,40 @@ impl Plait {
             return;
         };
         let mut next = data.clone();
-        if let Some(composer) = &self.draft.composer {
+        if let Some(composer) = &self.draft.composer
+            && let Some(id) = &self.draft.id
+        {
             let composer = composer.read(cx);
             let (text, revision, submitted) = composer.saved_draft();
-            next.set_new_draft(
-                self.host.creation.checkout.clone(),
-                Draft {
-                    text: text.into(),
-                    revision,
-                    submitted: submitted.clone(),
-                    images: composer.saved_images().to_vec(),
-                    creation: self.draft_creation(),
+            next.set_draft_tab(
+                id.clone(),
+                plait_core::session::DraftTab {
+                    legacy: false,
+                    creation: self.draft.saved_creation(),
+                    checkout: self.host.creation.checkout.clone(),
+                    settings: self.draft.settings(),
+                    draft: Draft {
+                        text: text.into(),
+                        revision,
+                        submitted: submitted.clone(),
+                        images: composer.saved_images().to_vec(),
+                        creation: self.draft.legacy_creation(),
+                    },
                 },
             );
+        }
+        // Discard clears the content, but an open empty tab still survives restart.
+        if self.draft.composer.is_none()
+            && let Some(id) = &self.draft.id
+            && self.tabs.model.tabs().iter().any(|tab| matches!(tab.thread().target(), plait_core::tabs::ThreadTarget::Draft { id: open, .. } if open == id))
+        {
+            next.set_draft_tab(id.clone(), plait_core::session::DraftTab {
+                legacy: false,
+                creation: self.draft.saved_creation(),
+                checkout: self.host.creation.checkout.clone(),
+                settings: self.draft.settings(),
+                draft: self.draft.saved.clone(),
+            });
         }
         if self.host.creation.checkout.is_absolute() {
             next.checkout = Some(self.host.creation.checkout.clone());
@@ -422,6 +444,19 @@ impl Plait {
                 self.session.note = Some(error);
             }
         }
+        // Submission ownership survives parking and a background first-send acknowledgement.
+        for (id, thread) in &mut next.threads {
+            thread.pending = self.host.submissions.pending(id).cloned();
+            thread.pending_submissions = self
+                .host
+                .submissions
+                .all(id)
+                .iter()
+                .skip(1)
+                .cloned()
+                .collect();
+            thread.queued_submissions = self.host.submissions.accepted(id).to_vec();
+        }
         if *data == next {
             return;
         }
@@ -437,7 +472,9 @@ impl Plait {
 
     pub(super) fn clear_new_draft(&mut self, cx: &mut Context<Self>) {
         if let Some(data) = &mut self.session.data {
-            data.clear_new_draft(&self.host.creation.checkout);
+            if let Some(id) = &self.draft.id {
+                data.clear_draft_tab(id);
+            }
             if let Some(journal) = &self.session.journal {
                 journal.queue(data.clone());
             }
@@ -445,7 +482,7 @@ impl Plait {
         }
     }
 
-    fn schedule_session_save(&mut self, immediately: bool, cx: &mut Context<Self>) {
+    pub(super) fn schedule_session_save(&mut self, immediately: bool, cx: &mut Context<Self>) {
         let Some(journal) = self.session.journal.clone() else {
             return;
         };

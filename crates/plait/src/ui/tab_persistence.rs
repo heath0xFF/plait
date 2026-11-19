@@ -176,17 +176,15 @@ impl Plait {
         let Some(data) = &self.session.data else {
             return Vec::new();
         };
-        data.new_draft
+        data.draft_tabs
             .iter()
-            .map(|(root, draft)| (root, draft))
-            .chain(data.new_drafts.iter())
-            .filter(|(_, d)| !d.text.is_empty() || !d.images.is_empty())
-            .map(|(root, _)| ThreadTarget::Draft {
-                id: "draft".into(),
-                checkout: self.tab_checkout(root.clone()),
+            .map(|(id, tab)| ThreadTarget::Draft {
+                id: id.clone(),
+                checkout: self.tab_checkout(tab.checkout.clone()),
             })
             .collect()
     }
+
     fn verified_tab_checkouts(&self) -> Vec<CheckoutKey> {
         self.tabs
             .identity
@@ -272,6 +270,52 @@ impl Plait {
             }
         } else if !self.tabs.persistence.edited {
             self.restore_thread_selection(window, cx);
+        }
+        // Closed drafts and legacy journals have no tab preference record. Keep
+        // their text reachable even after the session-only reopen history expires.
+        let active = self.tabs.model.active();
+        let mut recovered = false;
+        for target in drafts {
+            if !checkouts.contains(target.checkout())
+                || self
+                    .tabs
+                    .model
+                    .tabs()
+                    .iter()
+                    .any(|tab| tab.thread().target() == &target)
+            {
+                continue;
+            }
+            let ThreadTarget::Draft { id, checkout } = &target else {
+                continue;
+            };
+            if !self
+                .session
+                .data
+                .as_ref()
+                .and_then(|s| s.draft_tab(id, &checkout.root))
+                .is_some_and(|tab| {
+                    tab.creation.is_some()
+                        || !tab.draft.text.is_empty()
+                        || !tab.draft.images.is_empty()
+                })
+            {
+                continue;
+            }
+            if self.tabs.model.open(target, connection).is_ok() {
+                recovered = true;
+            }
+        }
+        if let Some(active) = active {
+            let _ = self.tabs.model.activate(active);
+        }
+        if recovered {
+            let covered = self.settings_open;
+            self.park_workspace(cx);
+            self.tabs.lifecycle.presenting = true;
+            self.present_tab(window, cx);
+            self.tabs.lifecycle.presenting = false;
+            self.keep_beneath_settings(covered, window, cx);
         }
         self.queue_tab_save(cx);
         cx.notify();

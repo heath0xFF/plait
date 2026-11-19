@@ -11,6 +11,7 @@ mod commits;
 mod composer;
 mod conversation;
 mod conversation_find;
+mod draft_tabs;
 mod file_view;
 mod harnesses;
 mod history;

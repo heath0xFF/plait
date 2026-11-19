@@ -7,7 +7,7 @@ mod blobs;
 mod drafts;
 use crate::host::ModelChoice;
 use crate::host_state::PendingSubmit;
-pub use drafts::{DraftCreation, DraftSettings, DraftTab};
+pub use drafts::{DraftSettings, DraftTab, DraftTabCreation};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,

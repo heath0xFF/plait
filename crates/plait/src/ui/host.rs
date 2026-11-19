@@ -12,6 +12,7 @@ use serde::de::DeserializeOwned;
 
 /// What a creation request was sent with, to check its reply against.
 pub(super) struct Created {
+    pub(super) draft_id: Option<String>,
     pub(super) request_id: String,
     pub(super) choice: host::ModelChoice,
     pub(super) harness: host::harness::HarnessId,
@@ -143,6 +144,12 @@ impl Plait {
         self.tabs.identity.pending = None;
         self.tabs.model.disconnected(&self.tabs.host);
         self.refresh_tab_rows();
+        for draft in std::iter::once(&mut self.draft).chain(self.tabs.lifecycle.drafts.values_mut())
+        {
+            if let Some(pending) = &mut draft.pending {
+                pending.creating = false;
+            }
+        }
         self.host.reconnect();
         self.sync_composer(cx);
         self.host_request(
@@ -623,6 +630,7 @@ impl Plait {
         .with_mode(self.pending_mode());
         self.create_with_admission(
             Created {
+                draft_id: None,
                 request_id: id,
                 choice,
                 harness,
@@ -647,6 +655,7 @@ impl Plait {
         cx: &mut Context<Self>,
     ) {
         let Created {
+            draft_id: _,
             request_id,
             choice,
             harness,
@@ -672,9 +681,7 @@ impl Plait {
                         .insert(0, host::ThreadSummary::from(&reply.thread));
                     self.rebuild_projects(cx);
                 }
-                if drafted {
-                    self.deliver_draft(id, window, cx);
-                } else if self.new_thread_open && self.host.thread.watch_epoch == selection_epoch {
+                if self.new_thread_open && self.host.thread.watch_epoch == selection_epoch {
                     self.open_created_thread(id, window, cx);
                 }
                 self.record_recent_model(&choice, cx);

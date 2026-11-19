@@ -465,7 +465,7 @@ impl Plait {
                     .into_any_element(),
             );
         }
-        if self.admission.choice {
+        if self.draft_isolation_choice() {
             if self.draft_visible() {
                 return None;
             }
@@ -477,7 +477,9 @@ impl Plait {
                     ))
                     .child(
                         button("admission-return", "Choose checkout")
-                            .on_activate(cx, |this, window, cx| this.open_draft(window, cx)),
+                            .on_activate(cx, |this, window, cx| {
+                                this.open_draft_content(window, cx)
+                            }),
                     )
                     .into_any_element(),
             );
