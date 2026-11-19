@@ -119,6 +119,16 @@ pub(super) fn walk(
     busy.connect(repository, false);
     busy.update(|plait, window, cx| {
         plait.open_draft(window, cx);
+        // The choice follows a Send, so the draft always holds its message.
+        let composer = plait.draft.composer.clone().unwrap();
+        composer.update(cx, |composer, cx| {
+            composer.restore_draft(
+                "Add a retry limit to the status refresh".into(),
+                1,
+                None,
+                cx,
+            )
+        });
         plait.admission.choice = true;
         plait.host.creation.pending_create = Some(("choice".into(), super::choice()));
     });
