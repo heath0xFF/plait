@@ -268,8 +268,12 @@ drafts of the maximum size are not a supported capacity.
 
 Builds before independent drafts (v0.1.0-preview.19 and earlier) show one New
 thread draft per project: the first one opened there. While the journal has
-room, every other draft with text or images is also saved in a form those
-builds keep, image files included, without showing it. Opening this build again
+room, every other draft with text, images or an unanswered first send is also
+saved in a form those builds keep, image files included, without showing it.
+An unanswered first send keeps its request, so retrying it later reaches the
+thread the host may already have made. The one draft an older build shows does
+not carry its unanswered send there; sending it in that build starts a new
+request. Opening this build again
 returns those drafts as tabs at the end. If an older build saved the journal
 in between, their model, harness and permission choices return to the defaults. The copies are left out when they would take
 the journal over 4 MiB, or past 384 saved threads and project drafts, which

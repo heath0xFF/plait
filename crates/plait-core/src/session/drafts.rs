@@ -134,8 +134,8 @@ impl Session {
 
     /// The file form. Older schema-1 builds read only the legacy fields, sweep
     /// images no legacy field names, and rewrite only what they know; so each
-    /// other nonempty draft is also copied into `new_drafts` under a key no
-    /// folder can have. Copies are left out rather than cost the file its size
+    /// other draft with text, images or an unanswered first send is also copied
+    /// into `new_drafts` under a key no folder can have. Copies are left out rather than cost the file its size
     /// limit or an older build its record bound, with room for its own threads.
     pub(super) fn encode(&self) -> Result<Vec<u8>, String> {
         let encode = |session: &Session| {
@@ -145,18 +145,37 @@ impl Session {
         let room = LEGACY_RECORDS.saturating_sub(self.threads.len() + self.new_drafts.len());
         let mut copied = self.clone();
         for (id, tab) in &self.draft_tabs {
-            if copied.new_drafts.len() - self.new_drafts.len() == room {
-                break;
-            }
-            if (tab.draft.text.is_empty() && tab.draft.images.is_empty())
+            if (tab.draft.text.is_empty() && tab.draft.images.is_empty() && tab.creation.is_none())
                 || self.new_draft_for(&tab.checkout) == Some(&tab.draft)
             {
                 continue;
             }
-            let mut key = tab.checkout.clone().into_os_string();
-            key.push("\0");
-            key.push(id);
-            copied.new_drafts.insert(key.into(), tab.draft.clone());
+            // An unanswered first send keeps its request and captured message,
+            // so a retry after a downgrade reaches the thread the host made.
+            let creation = tab.creation.as_ref().and_then(|creation| {
+                let text = serde_json::to_string(creation).ok()?;
+                (text.len() <= 256 * 1024).then(|| Draft {
+                    text,
+                    images: creation.message.images.clone(),
+                    ..Default::default()
+                })
+            });
+            if copied.new_drafts.len() - self.new_drafts.len() + 1 + usize::from(creation.is_some())
+                > room
+            {
+                break;
+            }
+            let key = |suffix: &str| {
+                let mut key = tab.checkout.clone().into_os_string();
+                key.push("\0");
+                key.push(id);
+                key.push(suffix);
+                PathBuf::from(key)
+            };
+            copied.new_drafts.insert(key(""), tab.draft.clone());
+            if let Some(creation) = creation {
+                copied.new_drafts.insert(key("\0creation"), creation);
+            }
         }
         if copied.new_drafts.len() == self.new_drafts.len() {
             return Ok(plain);
@@ -172,24 +191,27 @@ impl Session {
     /// Return copies written by `encode` to `draft_tabs`. Older builds never
     /// edit them, so a live entry with the same id and checkout wins.
     fn import_copies(&mut self) {
-        let keys: Vec<_> = self
+        let copies: Vec<_> = self
             .new_drafts
             .keys()
             .filter(|key| key.as_os_str().as_encoded_bytes().contains(&0))
             .cloned()
             .collect();
-        for key in keys {
+        let mut creations = Vec::new();
+        for key in copies {
             let draft = self.new_drafts.remove(&key).unwrap();
-            let bytes = key.as_os_str().as_encoded_bytes();
-            let split = bytes.iter().position(|b| *b == 0).unwrap();
-            let checkout = PathBuf::from(String::from_utf8_lossy(&bytes[..split]).into_owned());
-            let id = String::from_utf8_lossy(&bytes[split + 1..]).into_owned();
-            if self.draft_tab(&id, &checkout).is_some()
-                || self
-                    .draft_tabs
-                    .values()
-                    .any(|tab| tab.checkout == checkout && tab.draft == draft)
-            {
+            let key = String::from_utf8_lossy(key.as_os_str().as_encoded_bytes()).into_owned();
+            let mut parts = key.splitn(3, '\0');
+            let (Some(checkout), Some(id)) = (parts.next(), parts.next()) else {
+                continue;
+            };
+            let (checkout, id) = (PathBuf::from(checkout), id.to_owned());
+            if parts.next().is_some() {
+                creations.push((checkout, id, draft));
+                continue;
+            }
+            // Equal content is not a duplicate here: two sent drafts can both be empty.
+            if self.draft_tab(&id, &checkout).is_some() {
                 continue;
             }
             let id = if identifier(&id) && !self.draft_tabs.contains_key(&id) {
@@ -207,6 +229,16 @@ impl Session {
                     settings: DraftSettings::default(),
                 },
             );
+        }
+        // Attach only to a draft that came back; one sent or discarded stays gone.
+        for (checkout, id, copy) in creations {
+            if let Ok(creation) = serde_json::from_str::<DraftTabCreation>(&copy.text)
+                && let Some(tab) = self.draft_tabs.get_mut(&id)
+                && tab.checkout == checkout
+                && tab.creation.is_none()
+            {
+                tab.creation = Some(creation);
+            }
         }
     }
 
@@ -667,5 +699,77 @@ mod tests {
         let bytes = large.encode().unwrap();
         assert!(bytes.len() <= super::super::FILE_LIMIT);
         assert_eq!(bytes, serde_json::to_vec(&large).unwrap());
+    }
+    #[test]
+    fn released_build_keeps_an_unanswered_first_send_and_its_request() {
+        if !isolated(
+            "session::drafts::tests::released_build_keeps_an_unanswered_first_send_and_its_request",
+        ) {
+            return;
+        }
+        let root =
+            std::env::temp_dir().join(format!("plait-downgrade-send-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (journal, mut session) = super::super::Journal::open(&root, "/host".into()).unwrap();
+        session.set_draft_tab("owner".into(), tab("Owner text"));
+        // Sent, unanswered, then the composer was emptied: only the capture has work.
+        let mut sent = tab("");
+        sent.creation = Some(DraftTabCreation {
+            request_id: "keep-this-request".into(),
+            placement: crate::host::admission::Placement::Worktree,
+            harness: HarnessId::Pi,
+            model: ModelChoice {
+                provider: "provider".into(),
+                model_id: "model".into(),
+            },
+            mode: None,
+            thinking: None,
+            approval: ApprovalMode::Ask,
+            message_approval: Some(ApprovalMode::Ask),
+            thread_approval: None,
+            message: Draft {
+                text: "Sent text".into(),
+                revision: 7,
+                images: vec![image('e')],
+                ..Default::default()
+            },
+            needs_choice: false,
+        });
+        let expected = sent.creation.clone();
+        session.set_draft_tab("sent".into(), sent);
+        journal.queue(session);
+        journal.flush().unwrap();
+        drop(journal);
+
+        let bytes = std::fs::read(root.join("desktop.json")).unwrap();
+        let mut released: ReleasedSession = serde_json::from_slice(&bytes).unwrap();
+        assert!(released.image_ids().contains(&image('e').id));
+        released.set_new_draft(
+            "/project".into(),
+            ReleasedDraft {
+                images: Vec::new(),
+                text: "Owner edited".into(),
+                revision: 9,
+                submitted: None,
+            },
+        );
+        std::fs::write(
+            root.join("desktop.json"),
+            serde_json::to_vec(&released).unwrap(),
+        )
+        .unwrap();
+
+        let (_, mut restored) = super::super::Journal::open(&root, "/host".into()).unwrap();
+        restored.import_legacy_drafts();
+        let sent = restored.draft_tab("sent", Path::new("/project")).unwrap();
+        assert_eq!(sent.creation, expected, "retry must reuse the request");
+        let owners: Vec<_> = restored
+            .draft_tabs
+            .values()
+            .filter(|t| t.creation.is_none())
+            .map(|t| t.draft.text.as_str())
+            .collect();
+        assert_eq!(owners, ["Owner edited"]);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

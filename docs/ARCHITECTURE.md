@@ -602,7 +602,10 @@ journal imports its single draft and any captured creation; changed legacy text
 from an older build imports as another draft, preserving both versions. Older
 builds ignore `draft_tabs` and collect images only from the legacy fields, so
 each save also copies every other nonempty draft into `new_drafts` under the key
-`<checkout>` NUL `<draft id>`, which no folder can have. Older builds keep,
+`<checkout>` NUL `<draft id>`, which no folder can have. A draft with an
+unanswered first send also gets `<checkout>` NUL `<draft id>` NUL `creation`,
+whose text is the captured request and message as JSON and whose images are the
+message's, so the request ID and images survive an older build's save. Older builds keep,
 validate and retain images for those entries without showing them; this build
 moves them back into `draft_tabs` on open. Copies are omitted when they would
 exceed 4 MiB or 384 legacy records (128 below the older 512-record bound). No first send
