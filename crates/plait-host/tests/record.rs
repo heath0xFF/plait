@@ -925,3 +925,30 @@ fn record_helper_crash_releases_store_writer_and_lifecycle_leases() {
         std::thread::sleep(Duration::from_millis(10));
     }
 }
+
+#[test]
+fn lease_prepare_rejects_hard_linked_lock_file() {
+    use plait_core::lease::{checkout_lock_name, open_lease_dir, open_verified_dir};
+    use std::os::unix::fs::PermissionsExt;
+
+    let base = Scratch::new();
+    let root = repository(&base.0);
+    let lease_dir = base.0.join("leases");
+    let (_, _, id) = open_verified_dir(&root).unwrap();
+    let (canonical_lease_dir, _) = open_lease_dir(&lease_dir).unwrap();
+    let outside = base.0.join("outside.lock");
+    fs::write(&outside, "").unwrap();
+    fs::set_permissions(&outside, fs::Permissions::from_mode(0o600)).unwrap();
+    let lock_path = canonical_lease_dir.join(checkout_lock_name(id));
+    fs::hard_link(&outside, &lock_path).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_plait-host"))
+        .args(["lease-prepare", "checkout"])
+        .arg(&root)
+        .env("PLAIT_LEASE_DIR", &lease_dir)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("single-link"), "{stderr}");
+}

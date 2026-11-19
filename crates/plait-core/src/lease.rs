@@ -915,16 +915,21 @@ mod tests {
             LeaseErrorKind::UnsafeLeaseStore
         );
 
-        // Hard-linked lock file (`nlink > 1`).
+        // Hard-linked lock file (`nlink > 1`). The macOS command sandbox used by
+        // dogfood tests denies `link(2)` even in scratch, so skip only EPERM there;
+        // `crates/plait-host/tests/record.rs` exercises hard-link rejection outside it.
         fs::remove_file(&lock_path).unwrap();
         fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
-        fs::hard_link(&target, &lock_path).unwrap();
-        assert_eq!(
-            acquire_checkout_in(&good_dir, &repo, None, LeaseClass::Writer)
-                .unwrap_err()
-                .kind,
-            LeaseErrorKind::UnsafeLeaseStore
-        );
+        match fs::hard_link(&target, &lock_path) {
+            Ok(()) => assert_eq!(
+                acquire_checkout_in(&good_dir, &repo, None, LeaseClass::Writer)
+                    .unwrap_err()
+                    .kind,
+                LeaseErrorKind::UnsafeLeaseStore
+            ),
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {}
+            Err(error) => panic!("unexpected hard_link failure: {error}"),
+        }
     }
 
     #[test]
