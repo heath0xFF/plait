@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, writeFile, readFile, rm, symlink, link, chmod, stat, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { fileAction, dirtyPaths, identities, safePath, acquireCheckout, acquireCommonMetadata, rootIdentity, checkRoot } from '../src/safety.ts';
+import { fileAction, dirtyPaths, identities, safePath, acquireCheckout, acquireCommonMetadata, checkoutLockName, rootIdentity, checkRoot } from '../src/safety.ts';
 import { prepareBuildCache } from '../src/build-cache.ts';
 import { validate } from '../src/protocol.ts';
 import type { Snapshot } from '../src/protocol.ts';
@@ -245,4 +245,24 @@ test('process crash releases leases while an uncertain descendant holding lease 
   await new Promise(resolve => descendant.once('exit', resolve));
   const recovered = await acquireCheckout(root, 'exclusive');
   await recovered.close();
+});
+
+test('a checkout lease starts one host helper, as before lifecycle locks', async t => {
+  const { root, base } = await setup(t);
+  const log = join(base, 'helpers.log');
+  const wrapper = join(base, 'plait-host');
+  const real = process.env.PLAIT_HOST_EXE!;
+  await writeFile(wrapper, `#!/bin/sh\necho "$1" >> '${log}'\nexec '${real}' "$@"\n`, { mode: 0o700 });
+  process.env.PLAIT_HOST_EXE = wrapper;
+  try {
+    for (const mode of ['writer', 'exclusive', 'reader'] as const) {
+      await writeFile(log, '');
+      const lease = await acquireCheckout(root, mode);
+      await lease.close();
+      assert.deepEqual((await readFile(log, 'utf8')).trim().split('\n'), ['lock-fd'], mode);
+    }
+  } finally { process.env.PLAIT_HOST_EXE = real; }
+  // The lock file the runtime opened is the one plait-host verifies and reports.
+  const prepared = JSON.parse((await exec(real, ['lease-prepare', 'checkout', root])).stdout);
+  assert.equal(prepared.lock_path.split('/').at(-1), checkoutLockName({ dev: prepared.dev, ino: prepared.ino }));
 });

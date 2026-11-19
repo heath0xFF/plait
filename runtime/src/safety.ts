@@ -1,7 +1,8 @@
 import { execFile, spawn } from 'node:child_process';
-import { realpath, lstat, open } from 'node:fs/promises';
+import { realpath, lstat, mkdir, open } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
+import { homedir } from 'node:os';
 import { constants } from 'node:fs';
 import { promisify } from 'node:util';
 import { fail, HostError } from './protocol.ts';
@@ -146,22 +147,51 @@ function lockFailure(stderr: string, fallback: string): HostError {
   return new HostError('permission_denied', 'Checkout lease could not be acquired safely.');
 }
 
+/** The per-user lease directory, as `plait_core::lease::default_lease_dir` finds it. */
+function leaseDirectory(): string {
+  const configured = process.env.PLAIT_LEASE_DIR;
+  if (configured === undefined) return join(homedir(), '.local/share/plait-leases');
+  if (!isAbsolute(configured)) fail('permission_denied', 'PLAIT_LEASE_DIR must be an absolute path.');
+  return configured;
+}
+const lockHex = (value: string) => BigInt(value).toString(16).padStart(16, '0');
+/** `plait_core::lease::checkout_lock_name`; `lock-fd` refuses a descriptor for any other file. */
+export const checkoutLockName = (identity: FileIdentity) => `checkout-${lockHex(identity.dev)}-${lockHex(identity.ino)}.lock`;
+
+/**
+ * Opens (creating if needed) this checkout's lifecycle lock file without a
+ * helper process: one `lock-fd` per lease is the cost a run paid before
+ * lifecycle locks. `lock-fd` still verifies the directory, the file's identity,
+ * owner, mode and link count, so a disagreement here fails closed.
+ */
+async function openLifecycle(root: string): Promise<{ root: string; identity: FileIdentity; lifecycle: FileHandle }> {
+  const canonical = await realpath(root).catch(() => fail('permission_denied', 'Checkout root changed.'));
+  const identity = await rootIdentity(canonical);
+  const directory = leaseDirectory();
+  try {
+    await mkdir(dirname(directory), { recursive: true });
+    await mkdir(directory, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => { if (error.code !== 'EEXIST') throw error; });
+    const lifecycle = await open(join(directory, checkoutLockName(identity)), constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+    return { root: canonical, identity, lifecycle };
+  } catch (error) {
+    fail('permission_denied', `Checkout lease could not be prepared: ${(error as NodeJS.ErrnoException).code ?? 'error'}.`);
+  }
+}
+
 export async function acquireCheckout(root: string, mode: LeaseClass = 'writer'): Promise<CheckoutLease> {
   // Lock both the per-user lifecycle file (keyed by verified dev/ino) and, for
   // writers/exclusive mutations, the checkout directory inode itself.
-  const prepared = await prepareLease('checkout', root);
-  const expected: FileIdentity = { dev: prepared.dev, ino: prepared.ino };
-  const lifecycle = await open(prepared.lock_path, constants.O_RDWR | constants.O_NOFOLLOW);
+  const { root: canonical, identity: expected, lifecycle } = await openLifecycle(root);
   let writer: FileHandle | undefined;
   try {
     if (mode !== 'reader') {
-      writer = await open(prepared.root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      writer = await open(canonical, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     }
     await new Promise<void>((resolve, reject) => {
       const stdio: ('ignore' | 'pipe' | number)[] = writer
         ? ['ignore', 'ignore', 'pipe', lifecycle.fd, writer.fd]
         : ['ignore', 'ignore', 'pipe', lifecycle.fd];
-      const child = spawn(process.env.PLAIT_HOST_EXE!, ['lock-fd', mode, prepared.root], { stdio });
+      const child = spawn(process.env.PLAIT_HOST_EXE!, ['lock-fd', mode, canonical], { stdio });
       let err = '';
       child.stderr!.setEncoding('utf8').on('data', chunk => { err = (err + chunk).slice(-4096); });
       child.once('error', reject);
@@ -171,13 +201,13 @@ export async function acquireCheckout(root: string, mode: LeaseClass = 'writer')
       const held = await writer.stat({ bigint: true });
       if (String(held.dev) !== expected.dev || String(held.ino) !== expected.ino) fail('permission_denied', 'Checkout changed while taking its lease.');
     }
-    await checkRoot(prepared.root, expected);
+    await checkRoot(canonical, expected);
     let closed = false;
     return {
       fd: writer?.fd,
       lifecycleFd: lifecycle.fd,
       class: mode,
-      root: prepared.root,
+      root: canonical,
       identity: expected,
       async close() {
         if (closed) return;
