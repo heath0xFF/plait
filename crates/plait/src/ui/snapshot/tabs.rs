@@ -643,3 +643,39 @@ pub(super) fn unloaded_views() {
     drop(h);
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+/// A parked tab's late line counts never fill the changed-files card in front.
+pub(super) fn parked_counts() {
+    let scratch = std::env::temp_dir().join(format!("plait-tab-counts-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut h = Harness::new(&repository, None, 900., 600.);
+    h.connect(&repository, false);
+    install(&mut h, 3);
+    h.update(|p, w, cx| {
+        p.host.connection.connected = false;
+        p.workspace.thread_files = Default::default();
+        p.workspace
+            .thread_files
+            .inject(THREAD, repository.clone(), Vec::new());
+        p.workspace
+            .thread_files
+            .set_paths(vec!["src/review.rs".into()]);
+        // Counting needs a live host; the reply is Git's, read in the background.
+        p.host.connection.connected = true;
+        p.host.connection.status.as_mut().unwrap().protocol_version = 3;
+        p.thread_files_status(cx);
+        p.host.connection.connected = false;
+        let next = p.tabs.model.tabs()[1].id();
+        p.request_tab(super::super::tab_lifecycle::Intent::Activate(next), w, cx);
+        assert_eq!(p.tabs.model.active(), Some(next));
+        assert_eq!(p.workspace.thread_files.counted().count(), 0);
+    });
+    // Git answers within this; the control without switching sees the count arrive.
+    std::thread::sleep(Duration::from_millis(500));
+    h.settle();
+    h.update(|p, _, _| {
+        assert_eq!(p.workspace.thread_files.counted().count(), 0);
+    });
+    drop(h);
+    std::fs::remove_dir_all(scratch).unwrap();
+}

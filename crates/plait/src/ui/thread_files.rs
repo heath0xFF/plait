@@ -219,15 +219,19 @@ impl Plait {
             return cx.notify();
         }
         let generation = self.workspace.thread_files.generation;
+        let thread = self.workspace.thread_files.thread.clone();
         let root = self.workspace.thread_files.root.clone();
         let paths = self.workspace.thread_files.paths.clone();
+        let counted = root.clone();
         let task = cx
             .background_executor()
-            .spawn(async move { git::line_counts(&root, &paths) });
+            .spawn(async move { git::line_counts(&counted, &paths) });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                if this.workspace.thread_files.generation != generation {
+                // A parked tab's workspace restarts this counter, so the owner must match too.
+                let files = &this.workspace.thread_files;
+                if files.generation != generation || files.thread != thread || files.root != root {
                     return;
                 }
                 // A failed count keeps the last one; Changes reports Git errors.

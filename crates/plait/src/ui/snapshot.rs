@@ -6781,3 +6781,11 @@ fn views_suspend_reads_and_keep_unloaded_bookmarks() {
     }
     tabs::unloaded_views();
 }
+
+#[core::prelude::v1::test]
+fn parked_tab_line_counts_stay_with_their_thread() {
+    if !isolated("parked_tab_line_counts_stay_with_their_thread") {
+        return;
+    }
+    tabs::parked_counts();
+}
