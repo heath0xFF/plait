@@ -154,14 +154,23 @@ fn save(path: &Path, record: &ManagedWorktree) -> io::Result<()> {
 
 // Nested supervision keeps the outer worker's leases alive until hooks and
 // filters are reclaimed. Outer-helper death closes both lifetime pipes.
-fn supervised_git(root: &Path, args: &[&str], _timeout: Duration) -> Result<(), String> {
+fn supervised_git(
+    root: &Path,
+    args: &[&str],
+    _timeout: Duration,
+    leases: &[&plait_core::lease::CheckoutLease],
+) -> Result<(), String> {
     use std::process::{Command, Stdio};
-    let mut child = Command::new(std::env::current_exe().map_err(|e| e.to_string())?)
+    let mut command = Command::new(std::env::current_exe().map_err(|e| e.to_string())?);
+    command
         .arg("worktree-git")
         .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
+        .stdout(Stdio::piped());
+    // A killed worker cannot unlock the checkout while its Git group still lives.
+    for lease in leases {
+        lease.lend_to(&mut command);
+    }
+    let mut child = command.spawn().map_err(|e| e.to_string())?;
     let mut input = child.stdin.take().ok_or("Missing Git helper input.")?;
     serde_json::to_writer(&mut input, &json!({"root":root,"args":args}))
         .map_err(|e| e.to_string())?;

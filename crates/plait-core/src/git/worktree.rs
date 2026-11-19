@@ -4,7 +4,10 @@
 //! Plait creates them beside the repository, in `<name>.worktrees/`, and removes
 //! them only through `git worktree remove`, which refuses uncommitted work.
 
-use super::{Result, head_exists, write::git_holding};
+use super::{
+    Result, head_exists,
+    write::{git, git_holding},
+};
 use std::{
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -363,8 +366,10 @@ pub fn create_managed_worktree(
 ) -> Result<ManagedWorktree> {
     create_managed_with_timeout(parent, thread_id, previous, &mut save, CHECKOUT_TIMEOUT)
 }
-/// The host supplies a supervised mutation whose descendants end before it returns.
-pub type Mutation<'a> = dyn FnMut(&Path, &[&str], Duration) -> Result<()> + 'a;
+/// The host lends the supplied leases to its supervised mutation and reclaims
+/// descendants before returning, so both normal completion and death stay excluded.
+pub type Mutation<'a> =
+    dyn FnMut(&Path, &[&str], Duration, &[&crate::lease::CheckoutLease]) -> Result<()> + 'a;
 
 pub fn create_managed_supervised(
     parent: &Parent,
@@ -395,7 +400,7 @@ fn create_managed_with_timeout(
         previous,
         save,
         timeout,
-        &mut |root, args, timeout| git(root, args, None, timeout),
+        &mut |root, args, timeout, leases| git_holding(root, args, timeout, leases[1]),
     )
 }
 fn create_managed_inner(
@@ -407,7 +412,7 @@ fn create_managed_inner(
     mutate: &mut Mutation<'_>,
 ) -> Result<ManagedWorktree> {
     let hex = uuid_hex(thread_id)?;
-    let _lease = crate::lease::acquire_git_checkout(
+    let parent_lease = crate::lease::acquire_git_checkout(
         &parent.root,
         Some(parent.identity.lease()?),
         crate::lease::LeaseClass::Reader,
@@ -488,7 +493,7 @@ fn create_managed_inner(
     // Release metadata before taking the new root's lower-level locks. The
     // persisted reservation keeps the selected name during this brief gap.
     drop(common);
-    let _target = crate::lease::acquire_checkout(
+    let target_lease = crate::lease::acquire_checkout(
         &record.path,
         Some(
             record
@@ -569,6 +574,7 @@ fn create_managed_inner(
             &parent.base,
         ],
         timeout,
+        &[&parent_lease, &target_lease],
     );
     match result.and_then(|()| verify_managed(&record)) {
         Ok(()) => record.stage = ManagedStage::Ready,
@@ -612,7 +618,7 @@ pub fn remove_managed_worktree(
         expected,
         allow_unpushed,
         save,
-        &mut |root, args, timeout| git(root, args, None, timeout),
+        &mut |root, args, timeout, leases| git_holding(root, args, timeout, leases[0]),
     )
 }
 /// Holds checkout exclusion until the supervisor has reclaimed Git descendants.
@@ -654,7 +660,7 @@ pub fn remove_managed_supervised(
         save(&record)?;
         return Ok(record);
     }
-    let _lease = crate::lease::acquire_git_checkout(
+    let lease = crate::lease::acquire_git_checkout(
         &record.path,
         Some(expected.lease()?),
         crate::lease::LeaseClass::Exclusive,
@@ -716,6 +722,7 @@ pub fn remove_managed_supervised(
             record.path.to_str().ok_or("Worktree path is not UTF-8.")?,
         ],
         CHECKOUT_TIMEOUT,
+        &[&lease],
     )?;
     record.stage = ManagedStage::Removed;
     record.error = None;
@@ -1083,7 +1090,7 @@ mod managed_tests {
             ID,
             Some(saved),
             |_| Ok(()),
-            &mut |root, args, timeout| {
+            &mut |root, args, timeout, leases| {
                 let target = Path::new(args[5]);
                 assert!(
                     crate::lease::acquire_checkout(target, None, crate::lease::LeaseClass::Writer)
@@ -1092,7 +1099,7 @@ mod managed_tests {
                 assert!(
                     crate::lease::acquire_common_metadata(&parent.common, Duration::ZERO).is_err()
                 );
-                git(root, args, None, timeout)
+                git_holding(root, args, timeout, leases[1])
             },
         )
         .unwrap();

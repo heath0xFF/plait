@@ -156,10 +156,15 @@ test('killed worktree worker leaves checkout and common leases with Git descenda
     const [supervisor] = await childPids(worker);
     [gitGroup] = await childPids(supervisor);
     assert.ok(gitGroup, 'nested Git worker has its own process group');
-    // Freeze every Git descendant so its lifetime-pipe cleanup cannot hide an early unlock.
+    // Hold both cleanup supervisors: an orphaned stopped group otherwise receives
+    // SIGHUP/SIGCONT and exits before we can probe the inherited leases.
+    process.kill(helper.pid!, 'SIGSTOP');
+    await until(async () => (await exec('/bin/ps', ['-o', 'stat=', '-p', String(helper.pid)])).stdout, state => state.includes('T'));
     process.kill(-gitGroup, 'SIGSTOP');
+    await until(async () => (await exec('/bin/ps', ['-o', 'stat=', '-p', String(gitGroup)])).stdout, state => state.includes('T'));
     process.kill(worker, 'SIGKILL');
-    await until(async () => helper.exitCode !== null || helper.signalCode !== null, Boolean);
+    await until(async () => (await exec('/bin/ps', ['-o', 'stat=', '-p', String(worker)]).catch(() => ({ stdout: '' }))).stdout, state => !state || state.includes('Z'));
+    assert.match((await exec('/bin/ps', ['-o', 'stat=', '-p', String(gitGroup)])).stdout, /T/);
     const journal = JSON.parse(await readFile(join(h.store, 'worktrees', `${id}.json`), 'utf8'));
     await assert.rejects(async () => {
       const lease = await acquireCheckout(journal.path); await lease.close();
@@ -167,7 +172,9 @@ test('killed worktree worker leaves checkout and common leases with Git descenda
     await assert.rejects(async () => {
       const lease = await acquireCommonMetadata(h.root, 0); await lease.close();
     }, /busy|metadata/);
-    process.kill(-gitGroup, 'SIGCONT');
+    process.kill(helper.pid!, 'SIGCONT');
+    await until(async () => helper.exitCode !== null || helper.signalCode !== null, Boolean);
+    try { process.kill(-gitGroup, 'SIGCONT'); } catch { /* Cleanup already reclaimed it. */ }
     await until(async () => {
       const lease = await acquireCheckout(journal.path);
       await lease.close();
@@ -177,6 +184,8 @@ test('killed worktree worker leaves checkout and common leases with Git descenda
     }, Boolean);
   } finally {
     if (gitGroup) { try { process.kill(-gitGroup, 'SIGKILL'); } catch { /* Already reaped. */ } }
-    if (helper.exitCode === null && helper.signalCode === null) helper.kill('SIGKILL');
+    if (helper.exitCode === null && helper.signalCode === null) {
+      helper.kill('SIGCONT'); helper.kill('SIGKILL');
+    }
   }
 });

@@ -2370,7 +2370,11 @@ refuses queued work, record recovery, uncommitted/untracked/ignored content and
 unfinished merge/rebase/sequencer state. Desktop busy summaries grant no
 permission. Both helper and Git supervisors use lifetime pipes and bounded
 process groups; checkout hooks and filters have a 120-second limit and are
-reclaimed before the outer worker releases its leases.
+reclaimed before the outer worker releases its leases. The worker lends its
+parent, target and common-metadata lease descriptors to the supervised Git
+processes. If that worker is killed, surviving Git descendants retain exclusion
+until they exit. This lending is limited to worktree add/remove; ordinary
+completion still unlocks the lease after supervised cleanup.
 
 A lost reply is recovered by status or the identical request, with the same
 UUID and base. Host restart resumes admitted creation. A verified complete,
