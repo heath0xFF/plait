@@ -2274,3 +2274,105 @@ acceptance check runs on CI after the push); live models writing in two
 worktrees of one project at once; a provider's own rate limits and real
 resource exhaustion; the released v0.1.0-preview.19 app opening a journal
 written by this one; VoiceOver; Linux execution; and the installed app.
+
+## Release check for v0.1.0-preview.21
+
+On 2026-11-19, on the commit before this record, `bash scripts/check.sh` exited
+0 with the Git that CI's fixtures use first on the path: 951 Rust tests (275
+desktop, 642 core, 18 host, 16 helper integration), 562 runtime tests,
+TypeScript checks, and release builds. This record and the README's release
+line are the only changes after it.
+
+This release adds a Worktrees tab that draws a project's worktrees as a branch
+graph, names each New thread tab by the first line of its draft, and makes
+Discard close the draft's tab. Each piece was read before release by a
+reviewer who had not written it; each finding was confirmed by a failing test
+or an experiment before it was fixed, and each fix has a regression test.
+
+- **The Worktrees view:** twelve findings. Listing worktrees took an exclusive
+  lease on each one, so a run that started at that moment was refused; the
+  listing now takes no lease, and removal keeps its own. Remove acted on a row
+  number from the last drawn frame, so a re-sort before the next frame made it
+  ask about a different worktree; it is now bound to the drawn row's folder
+  and identity. A worktree that had merged a side branch drew edges to commits
+  that were not parents. The size walk followed a directory that was swapped
+  for a symbolic link out of the checkout, and counted a nested worktree
+  twice; it now walks by directory descriptor, stays on the checkout's device
+  and skips other checkouts. After Remove in the view, the sidebar still
+  treated the folder as present. A removal whose reply was lost in one project
+  blocked Remove in another project's tab. And in the confirmation that lets a
+  person remove a worktree whose commits are not pushed, **Keep local commits
+  only** was offered for a clean, published worktree too; it is now offered
+  only when publication is what blocks removal. The view's facts and the
+  removal itself were fed the same eighteen cases for both answers and agree
+  in each.
+- **Git processes.** One refresh started about sixteen Git processes for each
+  checkout, re-ran on every change to a thread's summary, and could overlap
+  itself. Now a summary change starts none, a run that ends re-reads its own
+  checkout with thirteen, and opening the view on a project with twenty
+  worktrees starts 172 where it started 300. Each count is a test.
+- **The saved tab.** A tab file holding a Worktrees tab among thread and draft
+  tabs was given to v0.1.0-preview.20's own decoder: it restores every other
+  tab in order with its bookmark and drops the Worktrees tab, and writes that
+  back.
+- **Draft tabs and Discard:** four findings. Discard pressed while another
+  thread was being created erased the draft and left its tab open and empty;
+  it is now refused first. Tabs and runs of spaces reached the title as typed.
+  A draft that began with a long run of blank space was scanned whole on each
+  keystroke; a title now looks at most 4,096 characters into the text. The
+  guide still described the old Discard. Separately from the review, Escape
+  was changed: it closes a draft that holds nothing and does nothing to one
+  that holds text or images, where before it cleared the text.
+- **The native acceptance check** gained a mode, set only for CI's run, that
+  takes a window capture when a wait has not yet seen its state, because CI's
+  display does not present a frame until something forces one. An item that
+  needed it says so, and a summary line counts them; a real Mac runs without
+  the mode. On v0.1.0-preview.20's tree CI passed 34 of 46 items; seven of
+  the eight failures were of this kind. The change was read against the
+  runner's behaviour with the mode off, which is unchanged, and has not been
+  run on CI yet.
+- **A test on Linux.** After the previous release a lease test failed on
+  Linux only: lock files are named by a folder's device and inode, Linux
+  reuses a removed folder's inode, and the test met an earlier test's file.
+  The test now starts from that case.
+
+Of the 542 scene images the previous release rendered, 484 are byte for byte
+the same on this tree. Fifty-eight differ, all intended: forty-six show a
+draft tab named by its first line, or the neighbouring tab in front after
+Discard closed a draft's; twelve show the new Worktrees entry in the project
+menu, a worktree thread's menu, Project settings and the keyboard list.
+Forty-six images are new: eleven Worktrees scenes, each in dark and light at
+two sizes (the graph, twenty worktrees, twenty forks, merged and detached
+branches, missing and foreign folders, a refusal on hover, a lane under the
+pointer, measuring, offline, an older host, and no worktrees), and the
+overflow list with named drafts.
+
+Frame cost was measured with no other build or test running, 90 frames a
+case, twice on each tree, interleaved, against v0.1.0-preview.20. No case is
+slower. A long conversation at rest costs 0.98 to 0.99 ms a frame on both
+trees, and 2.15 to 2.17 ms while scrolling; Changes at rest 1.07 ms on both;
+twenty open tabs 1.42 ms on both; three hundred 1.53 to 1.56 ms on both. The
+Worktrees view with fifty lanes, its graph and sizes already read, costs 0.75
+to 0.76 ms a frame. A real Git read to its frame took about 21 ms on both
+trees, with the Mac in use. The streaming case measured 2.4 to 2.7 ms against
+2.4 to 2.6 ms; it follows the machine's power state and is reported, not used
+as a gate.
+
+The release-mode test build, which only the frame benchmark uses, failed to
+compile on this tree at first: three new tests read the debug-only
+accessibility collector. They are gated now; `scripts/check.sh` does not
+build tests in release mode, so nothing but the benchmark would have caught
+it.
+
+Known limits. Opening the Worktrees view reads each checkout in turn, about
+eight Git processes each. Sizes are logical bytes, and a walk that reaches
+its bound reports a lower bound. An ignored file that another program writes
+between the host's check and the removal goes with the folder. Discard stays
+available while a draft's first send is unanswered; the host may then hold a
+thread nobody opened. The sidebar shows one draft row for a project, the
+draft in front. Wait is still shown and does nothing.
+
+Not exercised: a real window on this tree before the tag (the native
+acceptance check runs on CI after the push, with its new mode for the first
+time); Remove against a live host; the Worktrees view on a second volume;
+live models; VoiceOver; Linux execution; and the installed app.
