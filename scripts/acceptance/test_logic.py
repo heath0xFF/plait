@@ -275,24 +275,36 @@ class HarnessTests(unittest.TestCase):
             self.assertIn('SIGABRT', format_exit(-signal.SIGABRT))
             self.assertIn('Duplicate a11y node id', tail_log(base / 'app.log'))
 
-    def test_select_timeout_capture_records_probe_and_arms_next_reset_trace(self):
-        with tempfile.TemporaryDirectory() as directory:
-            runner = self.runner(directory)
-            app = Mock()
-            app.poll.return_value = None
-            runner.app = app
-            runner.ready = True
-            with patch.object(runner, 'reset'), \
-                 patch.object(runner, 'ax', return_value='tabs=[Files=false(0) | Conversation=true(1)]'), \
-                 patch('run.command', return_value=''), \
-                 patch('run.time.sleep'), \
-                 contextlib.redirect_stdout(io.StringIO()):
-                runner.record('tab-probe', lambda: (_ for _ in ()).throw(AssertionError("axdrive ['select', 1] exited 1: timed out")))
-            diag = (Path(directory) / 'tab-probe-select-diag.txt').read_text()
-            self.assertIn('t+0.0s:', diag)
-            self.assertIn('t+1.5s-passive:', diag)
-            self.assertIn('after-front:', diag)
-            self.assertTrue(runner.prev_select_failed)
+    def test_select_timeout_probe_runs_before_dump_and_screenshot(self):
+        for action in ('select', 'wait-selected'):
+            with tempfile.TemporaryDirectory() as directory:
+                runner = self.runner(directory)
+                app = Mock()
+                app.poll.return_value = None
+                runner.app = app
+                runner.ready = True
+                order = []
+
+                def ax(name, *_args, **_kwargs):
+                    order.append(name)
+                    return '82' if name == 'window-id' else f'tabs after {len(order)} calls'
+
+                def screenshot(args, **_kwargs):
+                    order.append('screencapture')
+                    return ''
+
+                failing = lambda: (_ for _ in ()).throw(AssertionError(f"axdrive ['{action}', 1] exited 1: timed out"))
+                with patch.object(runner, 'reset'), patch.object(runner, 'ax', side_effect=ax), \
+                     patch('run.command', side_effect=screenshot), patch('run.time.sleep', side_effect=lambda _s: order.append('sleep')), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    runner.record('tab-probe', failing)
+                # The capture may wake a stalled frame, so both probes must precede it.
+                self.assertEqual(order[:3], ['tab-states', 'sleep', 'tab-states'], action)
+                self.assertLess(order.index('tab-states', 2), order.index('dump'))
+                self.assertLess(order.index('screencapture'), order.index('front'))
+                diag = (Path(directory) / 'tab-probe-select-diag.txt').read_text().splitlines()
+                self.assertEqual([line.split(':')[0] for line in diag], ['t+0.0s', 't+1.5s-passive', 'after-screenshot', 'after-front'])
+                self.assertTrue(runner.prev_select_failed)
 
     def test_recorded_ci_dump_selection_and_tab_bar_geometry(self):
         # Verify against real recorded CI AX dump lines (1-tab and 4-tab full row).

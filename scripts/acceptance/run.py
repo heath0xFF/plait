@@ -317,7 +317,7 @@ class Acceptance:
             if exit_note:
                 failure_text += f'\n--- last lines of app.log ---\n{exit_note[1]}\n'
             (self.output / f'{name}-failure.txt').write_text(failure_text)
-            self.last_select_timeout = "axdrive ['select'" in detail
+            self.last_select_timeout = re.search(r"axdrive \['(select|wait-selected)'", detail) is not None
             self.phase = 'capture'
             if self.app:
                 self.capture(name)
@@ -341,6 +341,15 @@ class Acceptance:
             (self.output / f'{name}-capture.txt').write_text('Development process has exited; no window to capture.\n')
             return
         errors = []
+        diag = None
+        if getattr(self, 'last_select_timeout', False):
+            # Probe before the dump and screenshot: on CI, no reset timed out
+            # right after a failure capture, so the capture may itself wake it.
+            self.prev_select_failed = True
+            diag = []
+            self.select_probe(diag, 't+0.0s')
+            time.sleep(1.5)
+            self.select_probe(diag, 't+1.5s-passive')
         try:
             (self.output / f'{name}-ax.txt').write_text(self.ax('dump', timeout=4))
         except Exception as error:
@@ -355,22 +364,22 @@ class Acceptance:
             command(['/usr/sbin/screencapture', '-x', '-l', window_id, self.output / f'{name}.png'], timeout=4)
         except Exception as error:
             errors.append(f'Window capture: {error}; grant Screen Recording to the invoking terminal')
-        if getattr(self, 'last_select_timeout', False):
-            # Post-failure probe only (item is already recorded FAIL): distinguish
-            # a slow transition (>3s) from a frame stalled until an AppKit event.
-            self.prev_select_failed = True
-            diag = []
+        if diag is not None:
+            self.select_probe(diag, 'after-screenshot')
             try:
-                diag.append(f't+0.0s: {self.ax("tab-states", timeout=4)}')
-                time.sleep(1.5)
-                diag.append(f't+1.5s-passive: {self.ax("tab-states", timeout=4)}')
                 self.ax('front', timeout=4)
-                diag.append(f'after-front: {self.ax("tab-states", timeout=4)}')
+                self.select_probe(diag, 'after-front')
             except Exception as error:
-                diag.append(f'probe-error: {error}')
+                diag.append(f'front: error={error}')
             (self.output / f'{name}-select-diag.txt').write_text('\n'.join(diag) + '\n')
         if errors:
             (self.output / f'{name}-capture.txt').write_text('\n'.join(errors) + '\n')
+
+    def select_probe(self, diag, label):
+        try:
+            diag.append(f'{label}: {self.ax("tab-states", timeout=4)}')
+        except Exception as error:
+            diag.append(f'{label}: error={error}')
 
     def setup(self):
         require(self.args.host.is_file() and os.access(self.args.host, os.X_OK), f'build host first: {self.args.host}')
