@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { realpath, lstat, open } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { constants } from 'node:fs';
 import { promisify } from 'node:util';
@@ -97,29 +98,135 @@ export function safePath(path: string, dirty: string[] = []) {
     fail('permission_denied', 'Pre-existing dirty paths are protected.');
   }
 }
-export async function acquireCheckout(root: string) {
-  // Lock the directory inode itself: stores, TMPDIR, and cleanup cannot split ownership.
-  const expected = await rootIdentity(root);
-  const lease = await open(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+export type LeaseClass = 'reader' | 'writer' | 'exclusive';
+export type LeaseHandle = {
+  fd?: number;
+  lifecycleFd?: number;
+  close(): Promise<void>;
+};
+export type CheckoutLease = LeaseHandle & {
+  fd: number | undefined;
+  lifecycleFd: number;
+  class: LeaseClass;
+  root: string;
+  identity: FileIdentity;
+};
+export type CommonMetadataLease = {
+  fd: number;
+  commonDir: string;
+  identity: FileIdentity;
+  close(): Promise<void>;
+};
+type PreparedLock = { root: string; dev: string; ino: string; lock_path: string; lock_dev: string; lock_ino: string };
+
+async function prepareLease(kind: 'checkout' | 'common', path: string): Promise<PreparedLock> {
+  const executable = process.env.PLAIT_HOST_EXE;
+  if (!executable) fail('internal', 'Host lease helper is not configured.');
+  return await new Promise<PreparedLock>((resolve, reject) => {
+    const child = spawn(executable, ['lease-prepare', kind, path], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = ''; let err = '';
+    child.stdout!.setEncoding('utf8').on('data', chunk => { out += chunk; });
+    child.stderr!.setEncoding('utf8').on('data', chunk => { err = (err + chunk).slice(-4096); });
+    child.once('error', reject);
+    child.once('close', code => {
+      if (code !== 0) {
+        const reason = err.trim().replace(/^plait-host:\s*/, '');
+        return reject(new HostError('permission_denied', reason || 'Checkout lease could not be prepared.'));
+      }
+      try { resolve(JSON.parse(out)); } catch { reject(new HostError('internal', 'Invalid lease helper output.')); }
+    });
+  });
+}
+
+function lockFailure(stderr: string, fallback: string): HostError {
+  const line = stderr.trim().replace(/^plait-host:\s*/, '');
+  const busyIndex = line.indexOf('busy:');
+  if (busyIndex >= 0) return new HostError('busy', line.slice(busyIndex + 5).trim() || fallback);
+  if (line.includes('identity:')) return new HostError('permission_denied', 'Checkout changed while taking its lease.');
+  return new HostError('permission_denied', 'Checkout lease could not be acquired safely.');
+}
+
+export async function acquireCheckout(root: string, mode: LeaseClass = 'writer'): Promise<CheckoutLease> {
+  // Lock both the per-user lifecycle file (keyed by verified dev/ino) and, for
+  // writers/exclusive mutations, the checkout directory inode itself.
+  const prepared = await prepareLease('checkout', root);
+  const expected: FileIdentity = { dev: prepared.dev, ino: prepared.ino };
+  const lifecycle = await open(prepared.lock_path, constants.O_RDWR | constants.O_NOFOLLOW);
+  let writer: FileHandle | undefined;
+  try {
+    if (mode !== 'reader') {
+      writer = await open(prepared.root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    }
+    await new Promise<void>((resolve, reject) => {
+      const stdio: ('ignore' | 'pipe' | number)[] = writer
+        ? ['ignore', 'ignore', 'pipe', lifecycle.fd, writer.fd]
+        : ['ignore', 'ignore', 'pipe', lifecycle.fd];
+      const child = spawn(process.env.PLAIT_HOST_EXE!, ['lock-fd', mode, prepared.root], { stdio });
+      let err = '';
+      child.stderr!.setEncoding('utf8').on('data', chunk => { err = (err + chunk).slice(-4096); });
+      child.once('error', reject);
+      child.once('close', code => code === 0 ? resolve() : reject(lockFailure(err, 'This checkout already has a host writer.')));
+    });
+    if (writer) {
+      const held = await writer.stat({ bigint: true });
+      if (String(held.dev) !== expected.dev || String(held.ino) !== expected.ino) fail('permission_denied', 'Checkout changed while taking its lease.');
+    }
+    await checkRoot(prepared.root, expected);
+    let closed = false;
+    return {
+      fd: writer?.fd,
+      lifecycleFd: lifecycle.fd,
+      class: mode,
+      root: prepared.root,
+      identity: expected,
+      async close() {
+        if (closed) return;
+        closed = true;
+        // Release in reverse acquisition order: writer first, then lifecycle.
+        try { await writer?.close(); } finally { await lifecycle.close(); }
+      },
+    };
+  } catch (error) {
+    try { await writer?.close(); } finally { await lifecycle.close(); }
+    throw error;
+  }
+}
+
+export async function acquireCommonMetadata(root: string, timeoutMs = 5000): Promise<CommonMetadataLease> {
+  const prepared = await prepareLease('common', root);
+  const handle = await open(prepared.lock_path, constants.O_RDWR | constants.O_NOFOLLOW);
   try {
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(process.env.PLAIT_HOST_EXE!, ['lock-fd'], { stdio: ['ignore', 'ignore', 'ignore', lease.fd] });
+      const child = spawn(process.env.PLAIT_HOST_EXE!, ['lock-fd', 'common', prepared.root, String(Math.max(0, Math.trunc(timeoutMs)))], {
+        stdio: ['ignore', 'ignore', 'pipe', handle.fd],
+      });
+      let err = '';
+      child.stderr!.setEncoding('utf8').on('data', chunk => { err = (err + chunk).slice(-4096); });
       child.once('error', reject);
-      child.once('exit', code => code === 0 ? resolve() : reject(new HostError('busy', 'This checkout already has a host writer.')));
+      child.once('close', code => code === 0 ? resolve() : reject(lockFailure(err, 'Another Plait operation is updating this repository\'s shared Git metadata.')));
     });
-    const held = await lease.stat({ bigint: true });
-    await checkRoot(root, expected);
-    if (String(held.dev) !== expected.dev || String(held.ino) !== expected.ino) fail('permission_denied', 'Checkout changed while taking its lease.');
-    return lease;
-  } catch (error) { await lease.close(); throw error; }
+    let closed = false;
+    return {
+      fd: handle.fd,
+      commonDir: prepared.root,
+      identity: { dev: prepared.dev, ino: prepared.ino },
+      async close() {
+        if (closed) return;
+        closed = true;
+        await handle.close();
+      },
+    };
+  } catch (error) { await handle.close(); throw error; }
 }
-export async function fileAction<T = FileResult>(root: string, action: string, path: string, input?: unknown, checkoutFd?: number, identity?: FileIdentity) {
+
+export async function fileAction<T = FileResult>(root: string, action: string, path: string, input?: unknown, checkoutFd?: number, identity?: FileIdentity, lifecycleFd?: number) {
   safePath(path);
   const executable = process.env.PLAIT_HOST_EXE;
   if (!executable) fail('internal', 'Host file helper is not configured.');
   try {
     const child = spawn(executable, ['file', action, root, path, ...(identity ? [identity.dev, identity.ino] : [])], {
-      stdio: ['pipe', 'pipe', 'pipe', process.env.PLAIT_LOCK_FD ? Number(process.env.PLAIT_LOCK_FD) : 'ignore', checkoutFd ?? 'ignore'],
+      stdio: ['pipe', 'pipe', 'pipe', process.env.PLAIT_LOCK_FD ? Number(process.env.PLAIT_LOCK_FD) : 'ignore', checkoutFd ?? 'ignore',
+        ...(lifecycleFd !== undefined ? ['ignore', 'ignore', lifecycleFd] as const : [])],
     });
     child.stdin!.on('error', () => {});
     child.stdin!.end(input === undefined ? undefined : JSON.stringify(input));

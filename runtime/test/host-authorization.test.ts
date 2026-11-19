@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
-import { readFile, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { setup, until } from './support/host.ts';
+import { acquireCheckout } from '../src/safety.ts';
+import { binary, childPids, delay, exec, fixture, request, setup, until } from './support/host.ts';
 
 test('each manual turn creates fresh permission and rejects an earlier approval', { timeout: 30000 }, async t => {
   const f = await setup(t, 'separate-edits');
@@ -52,4 +54,83 @@ test('a permissive fixture policy cannot bypass dirty paths, path checks, or com
   assert.equal(await readFile(join(f.repo, 'notes.txt'), 'utf8'), 'dirty\n');
   await assert.rejects(readFile(join(f.base, 'outside.txt')), { code: 'ENOENT' });
   await assert.rejects(readFile(join(f.repo, '.git', 'automation.txt')), { code: 'ENOENT' });
+});
+
+test('two host stores contend on one inode and its alias while an unrelated checkout progresses', { timeout: 30000 }, async t => {
+  process.env.PLAIT_HOST_EXE ??= binary;
+  const f = await setup(t, 'edit');
+  const secondStore = join(f.base, 'store-two');
+  const alias = join(f.base, 'repo-alias');
+  const unrelated = join(f.base, 'unrelated');
+  await mkdir(secondStore, { mode: 0o700 });
+  await symlink(f.repo, alias);
+  await mkdir(unrelated);
+  await exec('/usr/bin/git', ['init', '-q', unrelated]);
+  await writeFile(join(unrelated, 'notes.txt'), 'other\n');
+  await exec('/usr/bin/git', ['-C', unrelated, 'add', '.']);
+  await exec('/usr/bin/git', ['-C', unrelated, '-c', 'user.name=Test', '-c', 'user.email=test@invalid', 'commit', '-qm', 'init']);
+
+  const secondHost = spawn(binary, ['run', '--store', secondStore, '--runtime', fixture], {
+    stdio: ['ignore', 'ignore', 'ignore'],
+    env: { ...process.env, PLAIT_TEST_SCENARIO: 'answer' },
+  });
+  f.own(secondHost);
+  await until(async () => (await request(secondStore, { op: 'status' })).ok, ok => ok);
+
+  // Store 1 starts an active run on f.repo (paused awaiting approval, holding writer + lifecycle leases).
+  const t1 = await f.create('create-s1');
+  assert.equal((await f.submit(t1.id, 'submit-s1')).ok, true);
+  const pending = await until(() => f.watch(t1.id), value => !!value.pending_approval);
+
+  // Store 2 targets the same checkout via a symlink alias and is refused as busy.
+  const t2 = (await request(secondStore, { op: 'create_thread', checkout: alias, provider: 'faux', model_id: 'faux-1', request_id: 'create-s2' })).result.thread;
+  assert.equal(t2.checkout, f.repo);
+  const contended = await request(secondStore, { op: 'submit', thread_id: t2.id, request_id: 'submit-s2', text: 'Contend.' });
+  assert.equal(contended.ok, false);
+  assert.equal(contended.error?.code, 'busy');
+
+  // Exclusive desktop-style lease on the same checkout is also refused while store 1 holds it.
+  await assert.rejects(acquireCheckout(f.repo, 'exclusive'), { code: 'busy' });
+
+  // Meanwhile store 2 runs freely in an unrelated checkout.
+  const other = (await request(secondStore, { op: 'create_thread', checkout: unrelated, provider: 'faux', model_id: 'faux-1', request_id: 'create-other' })).result.thread;
+  assert.equal((await request(secondStore, { op: 'submit', thread_id: other.id, request_id: 'submit-other', text: 'Independent.' })).ok, true);
+  await until(async () => (await request(secondStore, { op: 'watch', thread_id: other.id })).result.thread, value => value.status === 'idle');
+
+  // Once store 1 finishes its run, store 2 can run on the checkout immediately.
+  assert.equal((await f.approve(t1.id, pending.pending_approval!.id, false)).ok, true);
+  await until(() => f.watch(t1.id), value => value.status === 'idle');
+  assert.equal((await request(secondStore, { op: 'submit', thread_id: t2.id, request_id: 'submit-s2-after', text: 'Now free.' })).ok, true);
+  await until(async () => (await request(secondStore, { op: 'watch', thread_id: t2.id })).result.thread, value => value.status === 'idle');
+});
+
+test('a host crash releases checkout leases so another store can immediately acquire the checkout', { timeout: 30000 }, async t => {
+  process.env.PLAIT_HOST_EXE ??= binary;
+  const f = await setup(t, 'edit');
+  const secondStore = join(f.base, 'store-after-crash');
+  await mkdir(secondStore, { mode: 0o700 });
+  const secondHost = spawn(binary, ['run', '--store', secondStore, '--runtime', fixture], {
+    stdio: ['ignore', 'ignore', 'ignore'],
+    env: { ...process.env, PLAIT_TEST_SCENARIO: 'answer' },
+  });
+  f.own(secondHost);
+  await until(async () => (await request(secondStore, { op: 'status' })).ok, ok => ok);
+
+  const t1 = await f.create('create-crash-1');
+  assert.equal((await f.submit(t1.id, 'submit-crash-1')).ok, true);
+  await until(() => f.watch(t1.id), value => !!value.pending_approval);
+  await assert.rejects(acquireCheckout(f.repo, 'exclusive'), { code: 'busy' });
+
+  // Kill the first host's sidecar (SIGKILL) and wait for the host to exit.
+  const [node] = await childPids(f.host.pid!);
+  process.kill(node, 'SIGKILL');
+  await until(async () => f.host.exitCode !== null || f.host.signalCode !== null, done => done);
+  await delay(50);
+
+  // Lease must be free immediately for both exclusive mutations and the second host store.
+  const exclusive = await acquireCheckout(f.repo, 'exclusive');
+  await exclusive.close();
+  const t2 = (await request(secondStore, { op: 'create_thread', checkout: f.repo, provider: 'faux', model_id: 'faux-1', request_id: 'create-crash-2' })).result.thread;
+  assert.equal((await request(secondStore, { op: 'submit', thread_id: t2.id, request_id: 'submit-crash-2', text: 'Take over.' })).ok, true);
+  await until(async () => (await request(secondStore, { op: 'watch', thread_id: t2.id })).result.thread, value => value.status === 'idle');
 });

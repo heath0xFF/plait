@@ -10,6 +10,7 @@ type GuardianCommand = {
   text: string;
   env: NodeJS.ProcessEnv;
   checkoutFd?: number;
+  lifecycleFd?: number;
   isolateEnvironment?: boolean;
 } & ({ policy: string } | { trusted: true });
 
@@ -21,9 +22,18 @@ export async function runGuardian(command: GuardianCommand, signal: AbortSignal,
   return await new Promise<string>((resolve, reject) => {
     const args = 'trusted' in command ? ['trusted-command', command.root, command.text]
       : ['command', command.root, command.policy, command.text];
+    const stdio: ('pipe' | 'ignore' | number)[] = [
+      'pipe', 'pipe', 'pipe',
+      process.env.PLAIT_LOCK_FD ? Number(process.env.PLAIT_LOCK_FD) : 'ignore',
+      command.checkoutFd ?? 'ignore',
+    ];
+    if (command.isolateEnvironment || command.lifecycleFd !== undefined) {
+      stdio.push('ignore', command.isolateEnvironment ? 'pipe' : 'ignore');
+      if (command.lifecycleFd !== undefined) stdio.push(command.lifecycleFd);
+    }
     const child = spawn(executable, args, {
       cwd: command.root, env: command.isolateEnvironment ? { ...GUARDIAN_ENV, PLAIT_COMMAND_ENV_FD: '6' } : command.env,
-      stdio: ['pipe', 'pipe', 'pipe', process.env.PLAIT_LOCK_FD ? Number(process.env.PLAIT_LOCK_FD) : 'ignore', command.checkoutFd ?? 'ignore', ...(command.isolateEnvironment ? ['ignore', 'pipe'] as const : [])],
+      stdio,
     });
     if (command.isolateEnvironment) writeEnvironment(child, command.env);
     let result = ''; let settled = false;

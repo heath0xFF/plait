@@ -57,7 +57,7 @@ export async function transport(entry: Entry, state: ToolState, secrets: Secrets
         // Neither the command nor its output enters a transcript or a command log.
         try {
           let bytes = 0;
-          resolved[key] = (await runGuardian({ root, text: `{\n${value.slice(1)}\n} 2>/dev/null`, env, isolateEnvironment: true, checkoutFd: state.lease?.fd,
+          resolved[key] = (await runGuardian({ root, text: `{\n${value.slice(1)}\n} 2>/dev/null`, env, isolateEnvironment: true, checkoutFd: state.lease?.fd, lifecycleFd: state.lease?.lifecycleFd,
             ...(trusted ? { trusted: true as const } : { policy }) }, signal, () => {}, MCP_START_TIMEOUT_MS)).trim();
           bytes = Buffer.byteLength(resolved[key]);
           if (bytes >= 16000) throw new Error();

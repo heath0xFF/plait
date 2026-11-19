@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
@@ -365,4 +365,64 @@ test('retention keeps an active before record and a pair whose after record is r
   await h.runtime.records.prune();
   recorded(h.pairs()[0], 'r1', ['codex-r1.txt']);
   assert.deepEqual(await refs(h.store), [before.id, h.pairs()[0].after!.id].sort());
+});
+
+test('a held fake reader lifecycle lease blocks turn undo and releasing it allows undo', async t => {
+  const h = await codex(t);
+  const thread = await h.create();
+  await h.submit(thread.id, 'r1');
+  await h.finish(thread.id);
+  const target = h.pairs()[0].after!.id;
+  assert.equal(existsSync(join(h.root, 'codex-r1.txt')), true);
+
+  const reader = await acquireCheckout(h.root, 'reader');
+  try {
+    const blocked = await h.call({ op: 'undo_turn', thread_id: thread.id, record_id: target, request_id: 'u-reader' }, 5);
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.error?.code, 'busy');
+    assert.equal(existsSync(join(h.root, 'codex-r1.txt')), true);
+  } finally {
+    await reader.close();
+  }
+
+  const undone = await h.call({ op: 'undo_turn', thread_id: thread.id, record_id: target, request_id: 'u-reader' }, 5);
+  assert.equal(undone.ok, true, JSON.stringify(undone));
+  assert.equal(undone.result.state, 'undone');
+  assert.equal(existsSync(join(h.root, 'codex-r1.txt')), false);
+});
+
+test('an exclusive checkout lease blocks runs and undo while an unrelated checkout progresses', async t => {
+  const h = await claude(t);
+  const otherRepo = join(dirname(h.root), 'other-repo');
+  await mkdir(otherRepo);
+  await exec('/usr/bin/git', ['init', '-q', otherRepo]);
+  const mainThread = await h.create();
+  await h.submit(mainThread.id, 'r-initial');
+  assert.equal((await h.idle(mainThread.id)).status, 'idle');
+  const target = h.pairs()[0].after!.id;
+  const otherCreated = await h.call({ op: 'create_thread', checkout: otherRepo, provider: mainThread.model.provider, model_id: mainThread.model.model_id, request_id: 'create-other', harness: 'claude', mode: 'auto' }, 4);
+  assert.equal(otherCreated.ok, true, JSON.stringify(otherCreated));
+  const otherThread = otherCreated.result.thread;
+
+  // Simulate a desktop Git mutation holding an exclusive lease on h.root.
+  const exclusive = await acquireCheckout(h.root, 'exclusive');
+  try {
+    const refused = await h.call({ op: 'submit', thread_id: mainThread.id, request_id: 'r-blocked', text: 'Wait for desktop write.' }, 4);
+    assert.equal(refused.ok, false);
+    assert.equal(refused.error?.code, 'busy');
+    const undoRefused = await h.call({ op: 'undo_turn', thread_id: mainThread.id, record_id: target, request_id: 'u-exclusive' }, 5);
+    assert.equal(undoRefused.ok, false);
+    assert.equal(undoRefused.error?.code, 'busy');
+    // Unrelated checkout still runs and records cleanly.
+    await h.submit(otherThread.id, 'r-other');
+    assert.equal((await h.idle(otherThread.id)).status, 'idle');
+    assert.equal(existsSync(join(otherRepo, 'claude-1.txt')), true);
+  } finally {
+    await exclusive.close();
+  }
+
+  // Once the exclusive lease drops, undo succeeds on mainThread.
+  const undone = await h.call({ op: 'undo_turn', thread_id: mainThread.id, record_id: target, request_id: 'u-exclusive' }, 5);
+  assert.equal(undone.ok, true, JSON.stringify(undone));
+  assert.equal(undone.result.state, 'undone');
 });

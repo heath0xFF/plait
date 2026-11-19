@@ -4,7 +4,6 @@ import { LinearService } from './linear/service.ts';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { lstat } from 'node:fs/promises';
-import type { FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import { BACKGROUND_CONTEXT as context } from '@earendil-works/chord/context';
 import { clampThinkingLevel, createModels, getSupportedThinkingLevels } from '@earendil-works/pi-ai/models';
@@ -18,6 +17,7 @@ import type { ApprovalMode, HarnessId, ModelChoice, Protocol, QueueMode, Request
 import { Store } from './store.ts';
 import { Records } from './records.ts';
 import { checkout, dirtyPaths, fileAction, identities, acquireCheckout, rootIdentity, checkRoot, pathKey } from './safety.ts';
+import type { LeaseHandle } from './safety.ts';
 import { registry } from './tools.ts';
 import { executionEntry, mcpPolicy, setMcpEnabled } from './mcp/policy.ts';
 import { McpRun, eligible, fingerprint, nameKey } from './mcp/tools.ts';
@@ -525,13 +525,13 @@ export class Runtime {
     // Reserve before async baseline reads so two admissions cannot race.
     this.active.set(snapshot.checkout, id);
     let accepted = false;
-    let lease: FileHandle | undefined;
+    let lease: LeaseHandle | undefined;
     let authorization: RunAuthorization | undefined;
     try {
       await checkRoot(snapshot.checkout, this.store.rootIdentity(id));
       // Recovery owns this host's lease until its record finishes. Accept now;
       // the detached run waits for it instead of blocking the request deadline.
-      if (!this.records.busy(snapshot.checkout)) lease = await acquireCheckout(snapshot.checkout);
+      if (!this.records.busy(snapshot.checkout)) lease = await acquireCheckout(snapshot.checkout, 'writer');
       const save = () => this.save(snapshot);
       const approvals = new InteractiveApproval(snapshot, save);
       // The mode belongs to this admission only; the next submission chooses again.
@@ -651,15 +651,15 @@ export class Runtime {
       if (!session.lease) {
         await this.records.settled(snapshot.checkout);
         await checkRoot(snapshot.checkout, session.rootIdentity);
-        session.lease = await acquireCheckout(snapshot.checkout);
+        session.lease = await acquireCheckout(snapshot.checkout, 'writer');
       }
       // Before any harness starts: a run the host cannot record does not run.
-      record = await this.records.before(snapshot.id, requestId, snapshot.checkout, session.lease?.fd);
+      record = await this.records.before(snapshot.id, requestId, snapshot.checkout, session.lease);
       if (session.authorization.signal.aborted) return;
       if (snapshot.harness?.id === 'codex') return await this.runCodex(session, requestId, text);
       if (snapshot.harness?.id === 'claude') return await this.runClaude(session, requestId, text);
       const baseline = await dirtyPaths(snapshot.checkout);
-      session.owned = await restoreOwned(snapshot.checkout, baseline, this.store.owned(snapshot.id), session.rootIdentity, session.lease?.fd);
+      session.owned = await restoreOwned(snapshot.checkout, baseline, this.store.owned(snapshot.id), session.rootIdentity, session.lease?.fd, session.lease?.lifecycleFd);
       session.baseline = baseline.filter(path => !session.owned.has(pathKey(path)));
       session.protected = await identities(snapshot.checkout, session.baseline);
       let instructions = 'You are Plait, a local coding assistant. File tools are the only checkout writers; edits and commands may require the user\'s approval. Commands read the checkout and write only private scratch (HOME/TMPDIR) and this thread\'s private build cache (CARGO_HOME/CARGO_TARGET_DIR), with no external network and a 15 minute limit. Tests may use scratch-local Git repositories and Unix sockets. Use offline locked builds. Unchanged files this thread previously wrote can be edited again. Never modify other dirty or ignored paths, bypass approval, or start daemons. Read project instructions below.\n';
@@ -689,7 +689,7 @@ export class Runtime {
       if (resources.instructions) instructions += `\nUser instructions (${resources.instructions.path}):\n` + resources.instructions.text;
       try {
         await lstat(join(snapshot.checkout, 'AGENTS.md'));
-        const { text: project } = await fileAction(snapshot.checkout, 'read', 'AGENTS.md', undefined, session.lease?.fd, session.rootIdentity);
+        const { text: project } = await fileAction(snapshot.checkout, 'read', 'AGENTS.md', undefined, session.lease?.fd, session.rootIdentity, session.lease?.lifecycleFd);
         if (project.length > 32768) fail('permission_denied', 'AGENTS.md exceeds the instruction bound.');
         instructions += '\nAGENTS.md:\n' + project;
       } catch (error) { if ((error as { code?: string }).code !== 'ENOENT') throw error; }
@@ -720,7 +720,7 @@ export class Runtime {
         for (const tool of snapshot.tools) if (tool.status === 'running') tool.status = 'interrupted';
       }
       // After every outcome, with the harness gone and the checkout still this run's.
-      if (record !== undefined) await this.records.after(record, session.lease?.fd);
+      if (record !== undefined) await this.records.after(record, session.lease);
       await session.lease?.close(); session.lease = undefined;
       this.active.delete(snapshot.checkout);
       // Idle means a following submit can acquire the checkout immediately.

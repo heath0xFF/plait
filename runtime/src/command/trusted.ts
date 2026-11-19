@@ -1,9 +1,8 @@
-import type { FileHandle } from 'node:fs/promises';
 import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fail, HostError } from '../protocol.ts';
 import { checkRoot, fileAction, ignoredPaths, pathKey, safePath } from '../safety.ts';
-import type { FileIdentity, Postimage } from '../safety.ts';
+import type { FileIdentity, LeaseHandle, Postimage } from '../safety.ts';
 import { clipHead, clipTail } from '../text.ts';
 import { commandPlatform } from './platform.ts';
 import { runGuardian, COMMAND_TIMEOUT_MS } from './supervisor.ts';
@@ -16,7 +15,7 @@ export type TrustedRun = {
   baseline: string[];
   owned: Map<string, Postimage>;
   rootIdentity: FileIdentity;
-  lease?: FileHandle;
+  lease?: LeaseHandle;
   record?: (image: Postimage) => void;
   forget?: (path: string) => void;
   loginEnvironment?: Promise<LoginEnvironment>;
@@ -100,7 +99,7 @@ export async function refreshChanged(run: TrustedRun) {
     try {
       safePath(record.path, ignored);
       safePath(record.path, run.baseline);
-      const current = (await fileAction(root, 'inspect', record.path, undefined, run.lease?.fd, run.rootIdentity)).postimage;
+      const current = (await fileAction(root, 'inspect', record.path, undefined, run.lease?.fd, run.rootIdentity, run.lease?.lifecycleFd)).postimage;
       if (pathKey(current.path) !== pathKey(record.path)) continue;
       // Durable first, as for a file-tool write: memory never outlives the store.
       run.record?.(current);
@@ -133,7 +132,7 @@ export async function trustedCommand(run: TrustedRun, text: string, signal: Abor
   await dropDrifted(run);
   let result = ''; let failure: unknown;
   try {
-    result = await runGuardian({ root, text, env: environment.env, checkoutFd: run.lease?.fd, trusted: true },
+    result = await runGuardian({ root, text, env: environment.env, checkoutFd: run.lease?.fd, lifecycleFd: run.lease?.lifecycleFd, trusted: true },
       signal, output, options.timeoutMs ?? COMMAND_TIMEOUT_MS, options.capture);
   } catch (error) { failure = error ?? new Error('Command failed.'); }
   // Reconcile after success, failure, and Stop alike: a killed command still ran.

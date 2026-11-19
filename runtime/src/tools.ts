@@ -1,4 +1,3 @@
-import type { FileHandle } from 'node:fs/promises';
 import { defineTool, createRegistry, defineExtension } from '@earendil-works/pi-durable';
 import type { ToolExecutionApi } from '@earendil-works/pi-durable';
 import type { Context } from '@earendil-works/chord/context';
@@ -8,7 +7,7 @@ import { trustedCommand } from './command/trusted.ts';
 import { TRUSTED_COMMAND_DESCRIPTION } from './command/policy.ts';
 import type { CommandPolicy } from './command/policy.ts';
 import type { LoginEnvironment } from './command/login-environment.ts';
-import type { FileIdentity, Postimage } from './safety.ts';
+import type { FileIdentity, LeaseHandle, Postimage } from './safety.ts';
 import type { BuildCache } from './build-cache.ts';
 import { fail, HostError } from './protocol.ts';
 import { rangeArgs, rangeText, outputTail } from './tool-output.ts';
@@ -22,7 +21,7 @@ import type { SkillEntry } from './skills.ts';
 export type ToolState = {
   snapshot: Snapshot; baseline: string[]; protected: FileIdentity[];
   authorization: RunAuthorization;
-  lease?: FileHandle;
+  lease?: LeaseHandle;
   rootIdentity: FileIdentity;
   buildCache: BuildCache;
   outputs: CommandOutputs;
@@ -69,7 +68,7 @@ export function registry(state: ToolState) {
         // A skill's folder is its own root; the checkout lease and identity do not apply to it.
         const page = skill
           ? await fileAction<TextRange>(skill.root, 'read_range', skill.path, rangeArgs(args), undefined, skill.identity)
-          : await fileAction<TextRange>(state.snapshot.checkout, 'read_range', args.path, rangeArgs(args), state.lease?.fd, state.rootIdentity);
+          : await fileAction<TextRange>(state.snapshot.checkout, 'read_range', args.path, rangeArgs(args), state.lease?.fd, state.rootIdentity, state.lease?.lifecycleFd);
         text = rangeText(page, offset => `read(${JSON.stringify({ path: args.path, offset })})`);
       } else if (name === 'read_output') {
         const { offset, limit } = rangeArgs(args);
@@ -85,7 +84,7 @@ export function registry(state: ToolState) {
           safePath(args.path, await ignoredPaths(state.snapshot.checkout, [args.path]));
           safePath(args.path, currentDirty.filter(path => !state.owned.has(pathKey(path))));
           if (name === 'edit') {
-            const current = await fileAction(state.snapshot.checkout, 'inspect', args.path, undefined, state.lease?.fd, state.rootIdentity);
+            const current = await fileAction(state.snapshot.checkout, 'inspect', args.path, undefined, state.lease?.fd, state.rootIdentity, state.lease?.lifecycleFd);
             expectedImage = current.postimage;
             if (state.owned.has(key) && !sameImage(state.owned.get(key)!, current.postimage)) fail('permission_denied', 'File changed outside this thread.');
           }
@@ -106,7 +105,7 @@ export function registry(state: ToolState) {
               ? await trustedCommand(state, args.command, signal, output, { capture: log.append })
               : await command(state.snapshot.checkout, args.command, state.baseline,
                 signal, output, state.lease?.fd, state.rootIdentity, state.buildCache, log.append,
-                readableFolders(state.skills ?? []));
+                readableFolders(state.skills ?? []), state.lease?.lifecycleFd);
           } catch (error) { failure = error; text = ''; }
           const reference = log.finish();
           if (failure instanceof HostError) throw new HostError(failure.code, outputTail(failure.message) + reference);
@@ -115,7 +114,7 @@ export function registry(state: ToolState) {
         }
         else {
           const result = await fileAction(state.snapshot.checkout, name, args.path,
-            name === 'edit' ? { expected: args.old_text, content: args.new_text, expected_image: expectedImage, protected: state.protected } : { content: args.content, protected: state.protected }, state.lease?.fd, state.rootIdentity);
+            name === 'edit' ? { expected: args.old_text, content: args.new_text, expected_image: expectedImage, protected: state.protected } : { content: args.content, protected: state.protected }, state.lease?.fd, state.rootIdentity, state.lease?.lifecycleFd);
           state.record(result.postimage);
           state.owned.set(pathKey(result.postimage.path), result.postimage);
           text = result.text;

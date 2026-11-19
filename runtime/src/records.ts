@@ -13,6 +13,7 @@ import { HostError, fail } from './protocol.ts';
 import type { Snapshot } from './protocol.ts';
 import type { Store } from './store.ts';
 import { acquireCheckout, checkRoot } from './safety.ts';
+import type { LeaseHandle } from './safety.ts';
 
 /** Records are kept this long, those of archived threads included. */
 export const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -37,15 +38,18 @@ type Made = {
 };
 
 /** Runs one `plait-host` record helper: JSON in on stdin, JSON out on stdout. */
-export function helper<T>(operation: 'record' | 'prune' | 'undo' | 'review', input: unknown, lease?: number, timeout = RECORD_TIMEOUT_MS): Promise<T> {
+export function helper<T>(operation: 'record' | 'prune' | 'undo' | 'review', input: unknown, lease?: LeaseHandle | number, timeout = RECORD_TIMEOUT_MS): Promise<T> {
   const executable = process.env.PLAIT_HOST_EXE;
   if (!executable) return Promise.reject(new Error('Host record helper is not configured.'));
+  const writerFd = typeof lease === 'number' ? lease : lease?.fd;
+  const lifecycleFd = typeof lease === 'number' ? undefined : lease?.lifecycleFd;
   return new Promise<T>((resolve, reject) => {
     // The store lock travels with the helper, as with every helper: a new host
     // cannot start while one still writes the store. Its own process group lets a
     // timeout stop the sandboxed copy it starts as well.
     const child = spawn(executable, [operation], {
-      stdio: ['pipe', 'pipe', 'pipe', process.env.PLAIT_LOCK_FD ? Number(process.env.PLAIT_LOCK_FD) : 'ignore', lease ?? 'ignore'],
+      stdio: ['pipe', 'pipe', 'pipe', process.env.PLAIT_LOCK_FD ? Number(process.env.PLAIT_LOCK_FD) : 'ignore', writerFd ?? 'ignore',
+        ...(lifecycleFd !== undefined ? ['ignore', 'ignore', lifecycleFd] as const : [])],
       detached: true,
     });
     const chunks: Buffer[] = []; let size = 0; let diagnostic = '';
@@ -106,7 +110,7 @@ export class Records {
    * The record a run starts from, made before any harness starts. A run that
    * cannot be recorded does not run: this throws `record_failed`.
    */
-  async before(thread: string, run: string, checkout: string, lease?: number): Promise<string> {
+  async before(thread: string, run: string, checkout: string, lease?: LeaseHandle): Promise<string> {
     const id = randomUUID();
     try {
       this.insert(id, thread, run, 'before', checkout);
@@ -125,7 +129,7 @@ export class Records {
    * record. It never throws: a run that ends has ended, and a failed record is
    * only marked so that undo knows it cannot rely on it.
    */
-  async after(before: string, lease?: number, restart = false): Promise<void> {
+  async after(before: string, lease?: LeaseHandle, restart = false): Promise<void> {
     let id: string | undefined;
     try {
       const row = this.store.db.prepare("SELECT thread,run_request,checkout,commit_id FROM records WHERE id=? AND kind='before' AND state='ready'").get(before);
@@ -137,8 +141,8 @@ export class Records {
       else this.insert(id, String(row.thread), String(row.run_request), 'after', checkout, before, restart);
       const after = id;
       this.ready(id, await this.queue(checkout, async () => {
-        const recoveryLease = restart ? await acquireCheckout(checkout) : undefined;
-        try { return await this.make(checkout, after, String(row.commit_id), recoveryLease?.fd ?? lease); }
+        const recoveryLease = restart ? await acquireCheckout(checkout, 'writer') : undefined;
+        try { return await this.make(checkout, after, String(row.commit_id), recoveryLease ?? lease); }
         finally { await recoveryLease?.close(); }
       }));
     } catch {
@@ -159,7 +163,7 @@ export class Records {
     for (const before of open) this.track(this.after(before, undefined, true));
   }
   /** A busy checkout may have deferred startup recovery until its next leased run. */
-  private async recoverBefore(checkout: string, lease?: number) {
+  private async recoverBefore(checkout: string, lease?: LeaseHandle) {
     const pending = this.store.db.prepare(`SELECT a.id,b.commit_id FROM records a JOIN records b ON b.id=a.before
       WHERE a.checkout=? AND a.kind IN ('after','undo') AND a.state='failed' AND a.after_restart=1 AND b.state='ready'`).all(checkout);
     for (const row of pending) {
@@ -237,7 +241,7 @@ export class Records {
     const started = Date.now();
     return this.queue(snapshot.checkout, async () => {
       await checkRoot(snapshot.checkout, this.store.rootIdentity(thread));
-      const lease = await acquireCheckout(snapshot.checkout);
+      const lease = await acquireCheckout(snapshot.checkout, 'exclusive');
       const before = randomUUID(), id = randomUUID();
       try {
         this.transaction(() => {
@@ -251,7 +255,7 @@ export class Records {
         try {
           await writeFile(this.undoPath(id).replace(/\.json$/, '.paths'), JSON.stringify({ paths, not_covered: JSON.parse(String(row.not_covered ?? '[]')) }), { mode: 0o600, flag: 'wx' });
           outcome = await helper<UndoOutcome>('undo', { checkout: snapshot.checkout, store: this.directory, before: row.before_commit,
-            after: row.commit_id, before_id: before, id, identity: this.store.rootIdentity(thread), leave_changed: leaveChanged, paths_file: true }, lease.fd, Math.max(1, 10_000 - (Date.now() - started)));
+            after: row.commit_id, before_id: before, id, identity: this.store.rootIdentity(thread), leave_changed: leaveChanged, paths_file: true }, lease, Math.max(1, 10_000 - (Date.now() - started)));
         } catch { outcome = await this.readUndo(id); }
         if (!outcome) {
           // No journal means no working-file writes were admitted.
@@ -314,7 +318,7 @@ export class Records {
     }
   }
 
-  private make(checkout: string, id: string, before: string | undefined, lease?: number) {
+  private make(checkout: string, id: string, before: string | undefined, lease?: LeaseHandle) {
     const undo = this.store.db.prepare("SELECT 1 FROM records WHERE id=? AND kind='undo'").get(id) !== undefined;
     return helper<Made>('record', { checkout, store: this.directory, id, ...(before ? { before } : {}), ...(undo ? { undo: true } : {}) }, lease);
   }

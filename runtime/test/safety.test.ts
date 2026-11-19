@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 import { mkdir, writeFile, readFile, rm, symlink, link, chmod, stat, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { fileAction, dirtyPaths, identities, safePath, acquireCheckout, rootIdentity, checkRoot } from '../src/safety.ts';
+import { fileAction, dirtyPaths, identities, safePath, acquireCheckout, acquireCommonMetadata, rootIdentity, checkRoot } from '../src/safety.ts';
 import { prepareBuildCache } from '../src/build-cache.ts';
 import { validate } from '../src/protocol.ts';
 import type { Snapshot } from '../src/protocol.ts';
@@ -141,4 +142,107 @@ test('read-only originals retain mode and identity on a rejected edit', async t 
   await fileAction(root, 'edit', 'readonly.txt', { expected: 'before', content: 'after', expected_image: image });
   assert.equal(await readFile(path, 'utf8'), 'after\n');
   assert.equal((await stat(path)).mode & 0o777, 0o444);
+});
+
+test('reader lifecycle lease coexists with writer and blocks exclusive checkout mutations', async t => {
+  const { root } = await setup(t);
+  const readerA = await acquireCheckout(root, 'reader');
+  const readerB = await acquireCheckout(root, 'reader');
+  const writer = await acquireCheckout(root, 'writer');
+  await assert.rejects(acquireCheckout(root, 'writer'), /already has a host writer/);
+  await assert.rejects(acquireCheckout(root, 'exclusive'), { code: 'busy' });
+  await writer.close();
+  // Readers alone still block exclusive checkout mutations (Git writes, undo, worktree removal).
+  await assert.rejects(acquireCheckout(root, 'exclusive'), { code: 'busy' });
+  await readerA.close();
+  await assert.rejects(acquireCheckout(root, 'exclusive'), { code: 'busy' });
+  await readerB.close();
+  // Exclusive blocks readers, writers, and other exclusive operations.
+  const exclusive = await acquireCheckout(root, 'exclusive');
+  await assert.rejects(acquireCheckout(root, 'reader'), { code: 'busy' });
+  await assert.rejects(acquireCheckout(root, 'writer'), { code: 'busy' });
+  await assert.rejects(acquireCheckout(root, 'exclusive'), { code: 'busy' });
+  await exclusive.close();
+  const after = await acquireCheckout(root, 'writer');
+  await after.close();
+});
+
+test('checkout aliases and canonical paths contend on the same lifecycle and writer leases', async t => {
+  const { root, base } = await setup(t);
+  const alias = join(base, 'repo-alias');
+  await symlink(root, alias);
+  const held = await acquireCheckout(root, 'writer');
+  await assert.rejects(acquireCheckout(alias, 'writer'), { code: 'busy' });
+  await assert.rejects(acquireCheckout(alias, 'exclusive'), { code: 'busy' });
+  await held.close();
+  const exclusiveAlias = await acquireCheckout(alias, 'exclusive');
+  assert.equal(exclusiveAlias.root, root);
+  await assert.rejects(acquireCheckout(root, 'writer'), { code: 'busy' });
+  await assert.rejects(acquireCheckout(root, 'reader'), { code: 'busy' });
+  await exclusiveAlias.close();
+});
+
+test('shared common-dir metadata lease serializes linked worktrees while unrelated checkouts progress', async t => {
+  const { root, base } = await setup(t);
+  await writeFile(join(root, 'a.txt'), 'init\n');
+  await exec('/usr/bin/git', ['-C', root, 'add', '.']);
+  await exec('/usr/bin/git', ['-C', root, '-c', 'user.name=Test', '-c', 'user.email=test@invalid', 'commit', '-qm', 'init']);
+  const wt = join(base, 'wt1');
+  await exec('/usr/bin/git', ['-C', root, 'worktree', 'add', '-q', '-b', 'wt-branch', wt, 'HEAD']);
+  const other = join(base, 'unrelated');
+  await mkdir(other);
+  await exec('/usr/bin/git', ['init', '-q', other]);
+
+  const common = await acquireCommonMetadata(root, 0);
+  // Linked worktree shares common_dir, so a zero-wait metadata lock is busy.
+  await assert.rejects(acquireCommonMetadata(wt, 20), { code: 'busy' });
+  // Unrelated repository has its own common_dir and progresses immediately.
+  const otherCommon = await acquireCommonMetadata(other, 0);
+  await otherCommon.close();
+  // Bounded wait serializes cleanly once the holder releases.
+  const started = Date.now();
+  const releaser = setTimeout(() => void common.close(), 120);
+  t.after(() => clearTimeout(releaser));
+  const next = await acquireCommonMetadata(wt, 2000);
+  assert(Date.now() - started >= 80, 'expected linked worktree metadata lease to wait');
+  await next.close();
+});
+
+test('process crash releases leases while an uncertain descendant holding lease descriptors keeps them held', async t => {
+  const { root, base } = await setup(t);
+  const host = process.env.PLAIT_HOST_EXE!;
+
+  // 1. Plain holder process killed with SIGKILL releases both leases immediately.
+  const plainMarker = join(base, 'plain-ready');
+  const lease = await acquireCheckout(root, 'writer');
+  const lockPath = await (async () => {
+    const out = await exec(host, ['lease-prepare', 'checkout', root]);
+    return JSON.parse(out.stdout).lock_path as string;
+  })();
+  await lease.close();
+
+  const plain = spawn('/bin/sh', ['-c', `exec 3<>'${lockPath}' 4<'${root}'; '${host}' lock-fd writer '${root}' || exit 1; echo $$ > '${plainMarker}'; exec sleep 30`], { stdio: 'ignore' });
+  t.after(() => { if (plain.exitCode === null) plain.kill('SIGKILL'); });
+  for (let i = 0; i < 100 && !(await stat(plainMarker).catch(() => null)); i++) await new Promise(r => setTimeout(r, 20));
+  await assert.rejects(acquireCheckout(root, 'exclusive'), { code: 'busy' });
+  plain.kill('SIGKILL');
+  await new Promise(resolve => plain.once('exit', resolve));
+  const afterCrash = await acquireCheckout(root, 'exclusive');
+  await afterCrash.close();
+
+  // 2. Detached descendant inheriting lease descriptors keeps the lease held after the parent closes them.
+  const held = await acquireCheckout(root, 'writer');
+  const descendant = spawn('/bin/sh', ['-c', 'exec sleep 30'], {
+    detached: true,
+    stdio: ['ignore', 'ignore', 'ignore', held.lifecycleFd, held.fd!],
+  });
+  t.after(() => { try { process.kill(-descendant.pid!, 'SIGKILL'); } catch {} });
+  // Closing the parent's handles must NOT release the lock while the descendant stays alive.
+  await held.close();
+  await assert.rejects(acquireCheckout(root, 'writer'), { code: 'busy' });
+  await assert.rejects(acquireCheckout(root, 'exclusive'), { code: 'busy' });
+  process.kill(-descendant.pid!, 'SIGKILL');
+  await new Promise(resolve => descendant.once('exit', resolve));
+  const recovered = await acquireCheckout(root, 'exclusive');
+  await recovered.close();
 });
