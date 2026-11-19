@@ -2402,3 +2402,81 @@ it. Scenes and frame cost were not measured again: the change touches one
 runtime test.
 
 Not verified: that the test now fits CI's limit, until this tag's own run.
+
+## Release check for v0.1.0-preview.23
+
+On 2026-11-19, on the commit before this record, `bash scripts/check.sh` exited
+0 with the Git that CI's fixtures use first on the path: 961 Rust tests (280
+desktop, 647 core, 18 host, 16 helper integration), 584 runtime tests,
+TypeScript checks, and release builds. The release-mode test build, which the
+frame benchmark uses, compiled too. This record and the README's release line
+are the only changes after it.
+
+This release makes **Wait** work. A message sent to a busy checkout, from a
+new thread or an existing one, can wait in a line the host keeps, and starts
+when its turn comes. The stage was read before release by a reviewer who had
+not written it, against the real runtime; each finding was confirmed by an
+experiment before it was fixed, and each fix has a regression test.
+
+- **Messages that were lost:** three findings. A waiting message's text was
+  cleared from the message box when it was accepted and shown nowhere while it
+  waited; if it then failed its check at the front of the line, or was
+  cancelled, nothing gave the text back. It now returns to the draft. Stopping
+  the host while a waiter was being admitted failed it for good; it now waits,
+  held, for Resume. And a checkout held for an unconfirmed cleanup failed
+  every waiter in its line in one pass; it now holds the line and says why.
+- **An older build:** choosing Wait on a new thread saved a placement value
+  that v0.1.0-preview.22 does not know, and that build then refused the whole
+  saved workspace and turned sending off. Wait is now saved as the placement
+  that build knows plus one field it ignores. This was run through
+  v0.1.0-preview.22's own decoder and validation.
+- **Work nobody released:** Resume in one thread also started another
+  thread's follow-ups that had been held after a failed run. Resume now
+  releases only messages waiting for the checkout.
+- **Cost:** a page of thread summaries read each checkout's line once for
+  every thread on it, 13 ms for 200 threads where a plain listing takes
+  0.3 ms, on every summary change. It reads each line once: 0.5 ms.
+- **Smaller ones:** a host that reported a queue capability this build did
+  not recognise broke the thread list; cancelling a follow-up left other
+  threads showing a stale place in line; and Waiting was drawn as a button
+  that did nothing.
+
+The reviewer found no path that starts a cancelled message, starts one twice,
+or starts one in another folder, with other settings or with other text:
+sixty timings of Cancel against the checkout coming free each ended either
+cancelled and never run, or run once and stopped. A waiting message holds no
+lock, and the order is the documented one.
+
+Of the 588 scene images the previous release rendered, 586 are byte for byte
+the same on this tree. Two differ, as intended: the busy project's choice,
+where Wait can now be chosen. Six images are new: a thread waiting for its
+checkout, a line held after a restart, and a cancelled wait, each at two
+sizes.
+
+Frame cost was measured against v0.1.0-preview.22, 90 frames a case, in five
+interleaved pairs: the first two with nothing else building, the last three
+while another test build was starting. No case is consistently slower. A long
+conversation at rest costs 1.01 to 1.03 ms a frame on both trees, and about
+2.3 ms while scrolling; Changes at rest 1.11 to 1.12 ms on both; twenty open
+tabs 1.48 to 1.56 ms on both; the Worktrees view with fifty lanes 0.77 ms on
+both. Switching between a long thread and a short one took 3.55 to 3.78 ms
+against 3.57 to 3.81 ms; the first two pairs had it slower by 0.2 ms and the
+next three did not. The streaming case ranged from 1.6 to 3.6 ms on both; it
+follows the machine's power state and is reported, not used as a gate. Every
+figure is a few hundredths higher than in the last release's record, on both
+trees: the Mac was in use.
+
+Known limits. While a message waits, the thread says Waiting and does not show
+the message's text; Cancel gives it back to the draft. When a waiting message
+fails and its thread's draft already holds other text, the message's text goes
+to the clipboard, with a notice, and its images are not restored. The desktop
+remembers sixteen accepted messages for each thread, and a checkout's line
+holds thirty-two. A held message in an archived thread holds its line while
+Resume and Cancel may be out of sight. After a restart nothing waiting starts
+until Resume is pressed.
+
+Not exercised: Wait, Cancel and Resume in a real window before the tag (the
+native acceptance check has no item for them yet); live models; a provider
+sign-out while a message waits, other than simulated; an outside program
+holding the checkout for a long time; VoiceOver; Linux execution; and the
+installed app.
