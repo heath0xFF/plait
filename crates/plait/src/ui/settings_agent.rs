@@ -649,7 +649,10 @@ impl Plait {
                 div()
                     .text_size(px(12.))
                     .text_color(rgb(if quiet { colors().muted } else { colors().text }))
-                    .child(a11y_text((id, index), item.title.clone())),
+                    .child(a11y_text(
+                        SharedString::from(format!("{id}-title-{index}")),
+                        item.title.clone(),
+                    )),
             );
             if !item.detail.is_empty() {
                 text = text.child(
@@ -689,9 +692,13 @@ impl Plait {
                     .child(text.child(place))
                     .when_some(open, |el, folder| {
                         el.child(
-                            toned_button((id, index), "Open folder", Tone::Ghost)
-                                .flex_shrink_0()
-                                .on_activate(cx, move |_, _, cx| cx.open_with_system(&folder)),
+                            toned_button(
+                                SharedString::from(format!("{id}-open-{index}")),
+                                "Open folder",
+                                Tone::Ghost,
+                            )
+                            .flex_shrink_0()
+                            .on_activate(cx, move |_, _, cx| cx.open_with_system(&folder)),
                         )
                     }),
             );
