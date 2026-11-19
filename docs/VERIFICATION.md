@@ -2119,3 +2119,103 @@ brings the native acceptance check up to date with the tab row.
 Not exercised: a debug build driven through Settings → Editor in a real window
 since the fix; VoiceOver itself; and the installed app.
 
+## Release check for v0.1.0-preview.20
+
+On 2026-11-19, on the commit before this record, `bash scripts/check.sh` exited
+0 with the Git that CI's fixtures use first on the path: 895 Rust tests (247
+desktop, 614 core, 18 host, 16 helper integration), 560 runtime tests,
+TypeScript checks, and release builds. This record and the README's release
+line are the only changes after it.
+
+This release lets a second thread start in a project that already has one
+running, in a worktree of its own, and removes the limit of one New thread
+tab. It was built in six pieces. Each was read before release by a reviewer
+who had not written it; each finding was confirmed by a failing test or an
+experiment before it was fixed, and each fix has a regression test.
+
+- **Write exclusion (Stage 6a):** nine findings. Every desktop Git write
+  started one extra `git` process and every runtime lease one extra
+  `plait-host` process; both are gone. `plait-host undo` upgraded an inherited
+  lock in place. A Git process could outlive the lease of the process that
+  started it; a lease is now lent to `git worktree add` and `git worktree
+  remove` only. Tests used the person's real lease directory. The docs said
+  nothing was visible when desktop Git writes during a run had become
+  refusals.
+- **Cleanup confirmation (Stage 6b):** seven findings. A normal Git exit
+  released the checkout while a hook's background job still ran in its process
+  group. Stop gave up when its signal ended Git and other members of the group
+  survived. Recording a Git write forked the whole desktop, 8 to 9 ms for each
+  staged hunk or commit; recording now starts no process. A record from before
+  a reboot was never recognized. The host checked Git records before it held
+  the checkout's locks.
+- **Host-owned worktrees (Stage 7):** ten findings, two of which would have
+  destroyed work. Removal deleted edits hidden by assume-unchanged or
+  skip-worktree index bits, and lost commits kept only by the worktree's own
+  HEAD reflog or refs. Also: the host's umask made every file in a new
+  checkout private to its owner; a forged journal entry could remove a
+  person's own linked worktree; a failed checkout hook hid a finished
+  worktree; and Cmd-Option-N resent a stale request in another project.
+- **The busy-project choice (Stage 8):** eight findings. The busy probe
+  reported an idle project as busy when two probes ran together, or while the
+  desktop was making a Git write such as a push; with the project's automatic
+  setting on, either made a worktree nobody needed. Own worktree sent the
+  draft's text from before the person's last edits. Closing the window while a
+  worktree was being prepared led to a second thread and worktree on the next
+  send. The new controls were missing from the accessibility guard.
+- **A lock-file race,** found by the Stage 8 review in the lease code beneath
+  it. On macOS, two callers that create the same file at the same moment
+  through `openat` with `O_CREAT` leave one of them with "no such file". In a
+  fresh lease directory that surfaced as an unconfirmed cleanup, which holds a
+  thread. Lock files are now opened first and created exclusively when absent,
+  and a lock file that cannot be opened is reported as itself.
+- **Independent New thread tabs:** four findings. The draft journal gained a
+  field that older builds ignore. A v0.1.0-preview.19 build that opened such a
+  journal deleted the images of every draft but one per project as it opened,
+  and dropped their text at its first save. Each save now also writes those
+  drafts, and an unanswered first send, where older builds keep them without
+  showing them. This was tested against a copy of the released build's journal
+  types and read against its code; the released app itself was not run. Empty
+  drafts whose tab did not come back were never removed, and the guide did not
+  say that a full journal also refuses opening a tab.
+
+Of the 520 scene images the previous release rendered, 504 are byte for byte
+the same on this tree. Sixteen differ, all intended: twelve show Project
+settings with its new **New threads** section; two show a new-thread default
+that names a harness which is not ready, which now stays chosen instead of
+silently becoming Pi; and two show a second New thread tab where the earlier
+build returned to the first. Twenty-two images are new: a desktop Git write
+refused during a run, a checkout held because its cleanup is unconfirmed, a
+busy project's choice, a worktree being created, created in the background
+and failing, a run waiting its turn to be recorded, twenty threads running at
+once, several drafts in one project, and three hundred open tabs with their
+overflow list.
+
+Frame cost was measured with no other build or test running, 90 frames a
+case, twice on each tree, interleaved, against v0.1.0-preview.19. No case is
+slower. A long conversation at rest costs 0.98 to 0.99 ms a frame on both
+trees, and 2.14 to 2.15 ms while scrolling; Changes at rest 1.06 to 1.07 ms
+and History at rest 0.91 to 0.92 ms on both; switching views 3.8 to 3.9 ms on
+both. Twenty open tabs with five running threads cost 1.42 to 1.43 ms against
+1.42 ms. Three hundred open tabs cost 1.53 ms a frame, and their overflow
+list, which draws only its visible rows, 1.75 ms. A real Git read to its
+frame took about 20 ms on both trees; the Mac was in use, and the same case
+measured 8 ms on an idle machine for v0.1.0-preview.18. The streaming case
+measured 3.1 to 3.4 ms against 2.6 to 3.1 ms; it follows the machine's power
+state and is reported, not used as a gate.
+
+Known limits. Wait is shown and does nothing: the queue is not built. A
+worktree starts cold and is never removed for you. A worktree whose checkout
+hook failed has no Remove in the app. A hook or credential helper that keeps
+running after Git exits keeps the checkout held until it ends; with `git
+credential-cache` that is the cache's lifetime, fifteen minutes by default,
+after which the hold clears by itself. Programs outside Plait, such as an
+editor or Git in a terminal, do not take Plait's locks. An older build shows
+one draft per project, and that draft does not carry its unanswered first
+send through an older build's save. Every New thread tab is titled "New
+thread", whatever it holds.
+
+Not exercised: a real window on this tree before the tag (the native
+acceptance check runs on CI after the push); live models writing in two
+worktrees of one project at once; a provider's own rate limits and real
+resource exhaustion; the released v0.1.0-preview.19 app opening a journal
+written by this one; VoiceOver; Linux execution; and the installed app.
