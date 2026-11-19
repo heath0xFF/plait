@@ -412,19 +412,100 @@ AX top-left points are converted to AppKit bottom-left points without pixel
 scaling. The development window ID and accessibility owner must both match;
 Dock, another window, the menu bar and unknown targets are still refused.
 
-**Subsequent real-window runs established a sharper picture.**
+**Runs with thread tabs.** One run on a real display against the release
+build, and one on CI against the same code.
 
-- **Local release build (with thread tabs):** **40 passed, 4 failed, and 2 skipped** (46 total items: 40 of the 44 non-skipped items passed; the narrow-window inspector items did not skip on the wider display). Every workspace view, every Settings page, the tab row and shortcuts, Find, branches, staging and committing, handoffs, long-message typing, text selection, approvals, streaming (41 distinct lengths), and closing-line Undo/Redo passed. Three failures were the bar pointer items (`drag-sidebar-bar`, `drag-header-bar`, `double-click-system-setting`), and the fourth was the known Redo-by-shortcut defect (`turn-undo-redo-shortcut`). A local debug build additionally aborted at Settings → Editor on a framework duplicate-accessibility-node assertion, after which the runner failed each of the remaining 23 items with `development app is not running`.
-- **CI runner on the same code:** **23 passed, 19 failed, and 4 skipped** (the two inspector items on the 984-point window, Show in Finder, and Follow conversation link). Sixteen failures were `reset: axdrive ['select', …] exited 1: timed out after 3.0s waiting for selected …` on `Files` (4) or `Conversation` (12) — the same pattern seen on CI runs before tabs (16 and 17 `select` timeouts respectively, including one outside `reset` on `Changes`). Across all three CI runs, 49 of 49 timed-out `AXPress` selections were on a present `AXRadioButton/AXTabButton` whose `AXValue` stayed `false(0)` for the full 3.0s poll and in the immediate post-timeout AX dump, yet had already switched to the pressed tab by the start of the next item (~1.4s later, after window activation, placement, and `Escape`). Every passing `select` on CI finished within 0.45s (almost all within 0.23s), and several failure screenshots still showed an earlier view's pixels after a preceding AX update had landed. The remaining three CI failures were: `drag-header-bar` reporting that the sidebar button stopped responding after dragging (the check ran an instantaneous `count` 14 ms after `AXPress`; the failure capture 18 ms later showed `Resize sidebar` present), `streaming-reply` observing only one 30-character length of `Plait is writing:` before the label disappeared when the turn finished ~8 s later, and the known `turn-undo-redo-shortcut` defect.
+- **Real display, release build:** 40 passed, 4 failed and 2 skipped (40 of
+  the 44 attempted items). Every workspace view, every Settings page, the tab
+  row and its shortcuts, Find, branches, staging and committing, handoffs,
+  long-message typing, text selection, approvals, streaming (41 distinct
+  lengths) and closing-line Undo/Redo passed. The fourth failure is the known
+  defect that Redo by shortcut straight after Undo by shortcut does nothing
+  (`turn-undo-redo-shortcut`). The other three were the bar pointer items
+  (`drag-sidebar-bar`, `drag-header-bar`, `double-click-system-setting`). In
+  that run the window also ignored placement: it stayed at 1780 × 1129 points
+  after a request for 1000 × 650. So these three failures do not show that the
+  pointer was in the wrong place, and the pointer change below is not expected
+  to fix them on that display. A debug build of the same code stopped at
+  Settings → Editor on a framework assertion about a duplicate accessibility
+  node, and the runner then failed each of the 24 remaining items with
+  `development app is not running`.
+- **CI:** 23 passed, 19 failed and 4 skipped (23 of 42 attempted). The skips
+  were the two inspector items on the 984-point window, Show in Finder and
+  following a conversation link. Sixteen failures were `reset` selection
+  timeouts on `Files` (4) or `Conversation` (12), as in the two CI runs before
+  tabs (16 each, plus one `Changes` timeout outside the reset). In every
+  case the control was present, `AXPress` succeeded and `AXValue` stayed
+  false for the full three seconds and in the dump taken just after. Passing
+  selections finished within 0.45 seconds, almost all within 0.23.
+  - **All three CI runs:** a reset timed out in 48 of the 73 items that
+    followed a pass or a skip, and in none of the 54 items that followed a
+    failure. After a failure the check takes an accessibility dump, a window
+    list and a screenshot of the window. By the next item's first selection,
+    the selection that had timed out had landed (16 of 16 in the run with
+    tabs). Several failure screenshots still showed the previous view after
+    the accessibility tree had changed. The evidence points to a frame that
+    stalls on the CI display until something wakes the window. It does not
+    yet show what wakes it.
+  - **The other three CI failures:**
+    - `drag-header-bar` reported that the sidebar button stopped responding.
+      The check counted controls 14 ms after the press, and the dump 18 ms
+      later showed the sidebar.
+    - `streaming-reply` saw a single 30-character `Plait is writing:` label
+      that disappeared when the turn finished about 8 seconds later. The
+      message said "timed out after 15.0s", which was misleading.
+    - The known Redo defect.
 
 **Changed in the acceptance check (not the app):**
 
-- **Tab-row pointer items:** There is no separate bar over the sidebar; a single 40-point tab bar spans the window, and its empty right end moves the window and handles title-bar double-clicks. `drag-sidebar-bar` and `drag-header-bar` are replaced by `drag-tab-bar` (sidebar shown) and `drag-tab-bar-sidebar-hidden` (sidebar hidden), alongside `double-click-system-setting`. All three find the empty right end from the accessibility tree's own frames (`tab-bar-end`: strictly right of the rightmost control in the 40-point top band, centered vertically at +20 pt) rather than fixed offsets from the window edge, keep drag endpoints in bounds even with a full row of tabs, and skip explicitly with measurements (exit code 4) if no empty right end remains.
-- **Post-drag sidebar check:** `bar_drag` now waits for `Resize sidebar` to appear or disappear instead of checking instantaneously with `count`.
-- **Reset and selection/streaming diagnostics:** `reset` now closes an open Find bar on the active tab before switching and only visits `Files` when a prior check actually visited `Files`, avoiding gratuitous `Files` → `Conversation` flips on unrelated items without weakening Find cleanup. Because the evidence shows CI `select` stalls are bimodal rather than uniformly slow — and also affected a non-reset `Changes` selection and streaming growth — ordinary timeouts are not lengthened blindly. Instead, `waitSelected` records deduplicated poll traces (role, name, `AXSelected`, `AXValue`, frame, sibling tab states, and window focus/frontmost state); post-failure capture probes whether a timed-out selection flips passively after 1.5 s or after `front`, and the following `reset` traces tab states around `front`, `place`, and `Escape`. `growth` now records timestamped length/frame samples and distinguishes early label disappearance from a timeout.
-- **Mid-run process exit:** `axdrive` stops polling immediately when the target PID exits, and the runner reports the exit code or signal plus the last lines of `app.log` once, fails only the crashing item, and marks all remaining items `SKIPPED` (`not run: app exited`) with `incomplete=true`.
+- **Pointer items:** There is no separate bar over the sidebar any more. One
+  40-point tab row spans the window, and its empty right end moves the window
+  and takes the title-bar double-click. `drag-sidebar-bar` and
+  `drag-header-bar` become `drag-tab-bar` (sidebar shown) and
+  `drag-tab-bar-sidebar-hidden` (sidebar hidden), next to
+  `double-click-system-setting`. All three take their point from the
+  accessibility tree's own frames instead of fixed offsets from the window
+  edge (`tab-bar-end`: right of the rightmost control in the 40-point band,
+  20 points down). A full row drags left so the drag stays inside the window.
+  The row always keeps at least 48 points free at its right end, even when
+  full, so a missing end fails, with its measurements, rather than skipping.
+- **Post-drag sidebar check:** waits for `Resize sidebar` to appear or
+  disappear, instead of counting once.
+- **Reset:** closes Find on the active view before switching. It visits
+  `Files` only when the previous check visited it. Both changes avoid view
+  switches that test nothing. This lowers how often a reset meets the CI
+  stall but does not explain it: the stall can now show up in the item's own
+  first view switch, where it still fails. Ordinary waits stay at three
+  seconds.
+- **Selection and streaming diagnostics:**
+  - Selection waits record each distinct state they observe (role, name,
+    `AXSelected`, `AXValue`, frame), the sibling tabs and the window's
+    focus.
+  - After a `select` or `wait-selected` timeout, the check samples the tabs
+    immediately, again after 1.5 seconds with no other action, then after
+    its screenshot, then after activating the window. The next reset samples
+    them around activation, placement and `Escape`.
+  - `growth` records timed samples and reports a label that vanished
+    separately from a real timeout.
+- **App exit:** `axdrive` treats a process that has exited as gone even
+  before the runner collects its status, and stops waiting. The runner prints
+  the exit status and the end of `app.log` once and fails that item. It marks
+  every remaining item `SKIPPED` (`not run: app exited`) and prints
+  `incomplete=true`.
 
-**Unverified until the next CI run:** The updated tab-row drag/double-click gestures on a real window, the post-drag sidebar wait, the reduction in CI `reset` failures, whether the underlying CI `select` and streaming-growth stalls are passive delays or frame-wake stalls on the virtualized runner, and live mid-run app-exit reporting. On the narrow CI display the two inspector items plus Finder and URL activation remain expected skips; the remaining 42 items are intended checks, not a pass claim. Failures remain failures, with no pointer substitute for a broken `AXPress`.
+**Unverified until the next CI run:** none of the changes above has run
+against a real window. That includes:
+
+- the tab-row drag and double-click;
+- the post-drag wait;
+- how many reset timeouts remain, and where;
+- what wakes a stalled selection;
+- whether the streaming label also stalls;
+- reporting a real mid-run app exit.
+
+On the narrow CI display the two inspector items, Finder and following a
+link should skip. The other 42 items are intended checks, not a pass claim.
+Failures remain failures, and a broken `AXPress` gets no pointer substitute.
 
 Build the normal development executables and runtime dependencies with
 `bash scripts/check.sh`, then run the check when the computer is free:
@@ -490,9 +571,9 @@ seven Settings tabs each have separate results):
 | Native setup / permissions | PID-owned window and seeded assistant message; permission state recorded | No |
 | Traffic lights, sidebar hidden | All three light frames centered within 3 points of the 40-point bar, first about 14 points in, sidebar toggle at least 4 points clear | No |
 | Thread tab row and keys | Tab row stays visible; Cmd-T opens a draft, Cmd-1/Cmd-9 switch, and Cmd-W closes the empty draft tab | No |
-| Drag tab bar | Tab row's empty right end (from AX frames) moves the window with sidebar shown; sidebar toggle still responds; skips if no empty end | Yes |
-| Drag tab bar, sidebar hidden | Tab row's empty right end moves the window with sidebar hidden; sidebar toggle still responds; skips if no empty end | Yes |
-| Double-click tab bar | Current system setting on the tab row's empty right end produces minimize, no movement, or resize; setting never changed; skips if no empty end | Yes |
+| Drag tab bar | Tab row's empty right end (from AX frames) moves the window with sidebar shown; sidebar toggle still responds; fails if no empty end | Yes |
+| Drag tab bar, sidebar hidden | Tab row's empty right end moves the window with sidebar hidden; sidebar toggle still responds; fails if no empty end | Yes |
+| Double-click tab bar | Current system setting on the tab row's empty right end produces minimize, no movement, or resize; setting never changed; fails if no empty end | Yes |
 | Full screen and back | Native full-screen state changes both ways; header control responds afterwards | No |
 | Sidebar toggle and shortcut | AXPress and Cmd-B hide and restore it | No |
 | Inspector toggle and shortcut | AXPress and Cmd-L hide and restore it; skipped on a display too narrow for it | No |
@@ -586,12 +667,14 @@ finished package without installing it. Tagged releases skip both steps; there
 is no additional macOS job or Rust build.
 
 Verified without a window: Swift compilation and pure selector, flag decoding,
-tab-bar empty-right-end geometry (one tab, full row, wide window, crowded
-no-empty-end skip, missing controls), wait-trace and growth-trace formatting,
+tab-row empty-right-end geometry (recorded one-tab, full-row and wide trees,
+a crowded row, missing controls), an exited but unreaped process counted as
+gone, wait-trace and growth-trace formatting,
 full-screen stability, coordinate and ownership tests; Python tests of named
 waits, deadlines and termination, mid-run app-exit reporting and `not run: app
-exited` skipping, tab-bar-end skips, post-drag sidebar waits, conditional
-`Files` reset, post-failure selection diagnostics, immediate artifact
+exited` skipping, a missing tab-row end failing, post-drag sidebar waits,
+conditional `Files` reset, selection probes taken before the failure
+screenshot, immediate artifact
 persistence, item ordering, reset after failure, skip reasons, disposable Git
 reset, isolation and replay; and `bash scripts/check.sh` (format, Clippy,
 workspace and runtime tests, release builds). The fixture's production-host
