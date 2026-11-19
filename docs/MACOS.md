@@ -882,7 +882,9 @@ If it remains, check for commands, servers, or builds still using that folder
 and stop them. Click **Stop unconfirmed**, then **Confirm stopped** only when
 you have checked. This acknowledges the uncertainty; it does not kill a process
 or bypass a still-held checkout lease. A host restart during a run can require
-this check. If a Git command survived the desktop and Plait can still verify
+this check. A Git change whose hook or credential helper keeps running in
+Git's process group (Git's credential cache, for example) keeps the checkout
+blocked until that process exits; the state then clears by itself. If a Git command survived the desktop and Plait can still verify
 its identity, the second choice is **Stop processes**. Hover it to see the Git
 command, its process group, and the checkout. Plait stops only that verified
 group and keeps the checkout blocked if its exit remains unconfirmed; when

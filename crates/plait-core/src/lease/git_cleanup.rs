@@ -86,7 +86,11 @@ pub fn with_lease<T>(
 
 /// Dropped without `finish` (an early return or a panic while Git may run),
 /// the record is marked unconfirmed, never left hidden behind a live desktop.
-pub(crate) struct Running(Arc<Scope>, std::cell::Cell<bool>);
+pub(crate) struct Running {
+    scope: Arc<Scope>,
+    finished: std::cell::Cell<bool>,
+    group: std::cell::Cell<i32>,
+}
 fn save(file: &File, bytes: &[u8], offset: i64) -> Result<(), String> {
     lock(file).map_err(String::from)?;
     let wrote =
@@ -116,28 +120,43 @@ pub(crate) fn prepare(label: &str) -> Result<Option<Running>, String> {
         let size = label.len().min(95);
         record[64..64 + size].copy_from_slice(&label[..size]);
         save(&scope.file, &record, 0)?;
-        Ok(Some(Running(scope, std::cell::Cell::new(false))))
+        Ok(Some(Running {
+            scope,
+            finished: Default::default(),
+            group: Default::default(),
+        }))
     })
 }
 impl Running {
     /// The child is not reaped yet, so its PID cannot have been reused. A
     /// failed save leaves the starting record, which also holds the checkout.
+    /// Git leads its own group (`process_group(0)`). A child that already
+    /// exited may be unreadable (a zombie on macOS): its group is still known,
+    /// but with no birth identity it is never offered a signal.
     pub(crate) fn started(&self, pid: u32) {
-        let Ok(child) = process::inspect(pid as i32) else {
-            return;
+        let pid = pid as i32;
+        let birth = match process::inspect(pid) {
+            Ok(child) if child.group != pid => return,
+            Ok(child) => child.birth,
+            Err(_) => [0, 0],
         };
-        if child.group != child.pid {
-            return;
-        }
+        self.group.set(pid);
         let mut fields = [0u8; 24];
-        put(&mut fields, 0, child.pid as u64);
-        put(&mut fields, 8, child.birth[0]);
-        put(&mut fields, 16, child.birth[1]);
-        let _ = save(&self.0.file, &fields, 40);
+        put(&mut fields, 0, pid as u64);
+        put(&mut fields, 8, birth[0]);
+        put(&mut fields, 16, birth[1]);
+        let _ = save(&self.scope.file, &fields, 40);
+    }
+    /// Git's exit acknowledges its own work, not that of a hook job or helper
+    /// still in its group; those keep the record until the group is gone.
+    fn quiet(&self) -> bool {
+        let group = self.group.get();
+        group == 0 || wait_gone_within(group, Duration::from_millis(100))
     }
     pub(crate) fn finish(&self, acknowledged: bool) -> Result<(), String> {
-        lock(&self.0.file).map_err(String::from)?;
-        let fd = self.0.file.as_raw_fd();
+        let acknowledged = acknowledged && self.quiet();
+        lock(&self.scope.file).map_err(String::from)?;
+        let fd = self.scope.file.as_raw_fd();
         let result = unsafe {
             if acknowledged {
                 libc::ftruncate(fd, 0)
@@ -152,9 +171,9 @@ impl Running {
             }
         };
         let error = io::Error::last_os_error();
-        unlock(&self.0.file);
+        unlock(&self.scope.file);
         if result == 0 {
-            self.1.set(true);
+            self.finished.set(true);
             Ok(())
         } else {
             Err(format!("Git cleanup could not be saved: {error}"))
@@ -164,7 +183,7 @@ impl Running {
 
 impl Drop for Running {
     fn drop(&mut self) {
-        if !self.1.get() {
+        if !self.finished.get() {
             let _ = self.finish(false);
         }
     }
@@ -289,7 +308,10 @@ pub fn resolve(id: DirIdentity, expected: &str) -> Result<(), LeaseError> {
 }
 
 fn wait_gone(group: i32) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(2);
+    wait_gone_within(group, Duration::from_secs(2))
+}
+fn wait_gone_within(group: i32, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
     loop {
         if process::group_gone(group) {
             return true;
@@ -297,7 +319,7 @@ fn wait_gone(group: i32) -> bool {
         if Instant::now() >= deadline {
             return false;
         }
-        thread::sleep(Duration::from_millis(20));
+        thread::sleep(Duration::from_millis(5));
     }
 }
 /// Never needs the checkout lease: a surviving lent child can still hold it.
@@ -611,6 +633,69 @@ mod tests {
             LeaseErrorKind::CleanupUncertain
         );
         assert!(unconfirmed(id).unwrap().is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_hook_job_left_in_the_git_group_holds_the_checkout_until_it_exits() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = root();
+        let git = |args: &[&str]| {
+            assert!(
+                Command::new("git")
+                    .args(args)
+                    .current_dir(&root)
+                    .status()
+                    .unwrap()
+                    .success()
+            )
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.name", "Fixture"]);
+        git(&["config", "user.email", "fixture@example.invalid"]);
+        git(&["config", "commit.gpgsign", "false"]);
+        fs::write(root.join("a.txt"), "fixture").unwrap();
+        git(&["add", "a.txt"]);
+        let hook = root.join(".git/hooks/post-commit");
+        // A background job with its output redirected: Git exits normally.
+        fs::write(
+            &hook,
+            "#!/bin/sh\nps -o pgid= -p $$ > .git/hook-group\n(sleep 30; echo late > late.txt) >/dev/null 2>&1 &\n",
+        )
+        .unwrap();
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o700)).unwrap();
+        crate::git::write(
+            &root,
+            &crate::git::WriteOp::Commit {
+                message: "m".into(),
+            },
+        )
+        .unwrap();
+        let group: i32 = fs::read_to_string(root.join(".git/hook-group"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let id = open_verified_dir(&root).unwrap().2;
+        let state = unconfirmed(id).unwrap();
+        let admission = acquire_checkout(&root, None, LeaseClass::Writer).map(drop);
+        unsafe {
+            libc::kill(-group, libc::SIGKILL);
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while unconfirmed(id).unwrap().is_some() {
+            assert!(
+                Instant::now() < deadline,
+                "group exit never cleared the record"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        let state = state.expect("a live member of the Git group was released");
+        assert!(state.reason.contains("git commit"), "{}", state.reason);
+        assert_eq!(
+            admission.unwrap_err().kind,
+            LeaseErrorKind::CleanupUncertain
+        );
+        drop(acquire_checkout(&root, None, LeaseClass::Writer).unwrap());
         fs::remove_dir_all(root).unwrap();
     }
     fn crash_case(lent: bool) {

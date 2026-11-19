@@ -1589,7 +1589,7 @@ launching commands, servers, or record workers.
 | Codex | A terminal notification confirms the turn ended; the shared app-server can remain for other checkouts | Interrupt is requested; after 10 seconds without a terminal notification the checkout is blocked, without killing another checkout's shared server | App-server exit kills and checks its normal process group before satisfying cleanup | Marker blocks the checkout; no attempt is made to identify an old server by a reused PID |
 | Claude Code | Session is closed; actual child exit and normal process-group absence are observed through the pinned SDK's spawn hook | Interrupt is requested; after 10 seconds the session closes; a close without observed exit remains blocked | Normal group is killed and checked after process exit | Marker blocks the checkout; an SDK close from the old host is not evidence |
 | Checkout record and undo helpers | The supervisor verifies its worker group disappeared | The bounded deadline kills the group; an absent receipt remains uncertain | Worker lifetime EOF kills its group; known-group absence supplies proof | In-flight run/undo markers block new mutations; recovery does not replay an undo |
-| Desktop Git writes | A normal Git exit acknowledges completion and clears its child record | A timed-out or signalled writer retains its record until the group is observed absent | No new run or desktop write starts beside a surviving recorded group | A desktop crash leaves the child record; a later host checks the recorded group, without relying on the old desktop's locks |
+| Desktop Git writes | A normal Git exit clears its child record once the recorded group is gone; a hook job or helper still in that group keeps it until it exits | A timed-out or signalled writer retains its record until the group is observed absent | No new run or desktop write starts beside a surviving recorded group | A desktop crash leaves the child record; a later host checks the recorded group, without relying on the old desktop's locks |
 | Lent worktree Git child | Normal completion clears its child record and the caller releases its lease | Same group evidence; inherited locks also retain exclusion | A child can keep its lent lease after the lender dies; its recorded group is shown | The stop action can reach a verified recorded group without acquiring the checkout lease it holds |
 
 The precise boundary is cooperating Plait processes and the normal process
@@ -1598,8 +1598,12 @@ acknowledgement for each turn, not a per-turn descendant inventory. Trusted
 commands and external harnesses can deliberately detach writers into another
 process group; Plait cannot prove those exited. Such writers remain an explicit
 limit, as do unrelated editors and commands. A normal acknowledged Git exit
-also retains the existing limit for hooks and credential helpers that detach
-on purpose; this stage does not supervise those as independent jobs. Sandboxed command descendants
+clears its record only once Git's process group is gone. A hook's background
+job or a helper that stays in that group keeps the checkout blocked until it
+exits, then the block clears by itself; Git's credential cache daemon is one
+such helper and lives until its cache timeout (15 minutes by default). Hooks
+and helpers that leave the group on purpose (Git's detached maintenance, for
+example) remain outside what Plait can see. Sandboxed command descendants
 retain Seatbelt restrictions even after detaching: they cannot write the
 checkout, although Plait does not claim they all exited. This is not a general
 process container. Tests use scripted harnesses and processes; they do not
