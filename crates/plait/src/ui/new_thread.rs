@@ -175,6 +175,16 @@ impl Plait {
             self.tabs.model.get(*id).is_some_and(|tab| matches!(tab.thread().target(),
                 plait_core::tabs::ThreadTarget::Draft { id, .. } if self.draft.id.as_ref() == Some(id)))
         });
+        // Closing the front tab is refused while another creation is unanswered;
+        // refuse first, so the draft is not erased under a tab that stays open.
+        if tab.is_some()
+            && (self.host.creation.creating || self.host.creation.pending_create.is_some())
+        {
+            self.notice =
+                Some("Resolve the pending thread creation before discarding this draft.".into());
+            cx.notify();
+            return;
+        }
         self.cancel_isolation(cx);
         window.focus(&self.focus, cx);
         self.clear_new_draft(cx);

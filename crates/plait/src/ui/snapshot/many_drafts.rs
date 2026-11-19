@@ -797,3 +797,68 @@ fn discard_closes_only_its_draft_without_journal_or_history_recovery() {
     assert!(saved.new_draft.is_none());
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+#[core::prelude::v1::test]
+fn discard_waits_for_a_creation_that_blocks_closing_its_tab() {
+    if !isolated("many_drafts::discard_waits_for_a_creation_that_blocks_closing_its_tab") {
+        return;
+    }
+    let scratch =
+        std::env::temp_dir().join(format!("plait-discard-blocked-{}", std::process::id()));
+    let repo = fixture_repository(&scratch);
+    let (directory, store) = plait_core::session::locations().unwrap();
+    let (journal, data) = plait_core::session::Journal::open(&directory, store).unwrap();
+    let mut h = Harness::new(&repo, None, 900., 600.);
+    h.connect(&repo, false);
+    h.update(|p, w, cx| {
+        p.tabs = Default::default();
+        p.park_workspace(cx);
+        p.session.data = Some(data);
+        p.session.journal = Some(journal.clone());
+        p.open_draft(w, cx);
+    });
+    h.type_draft("Keep this sibling");
+    h.update(|p, w, cx| p.open_draft(w, cx));
+    wait_tabs(&mut h);
+    h.type_draft("Still wanted");
+    // A busy thread's Continue separately holds the window's creation.
+    h.update(|p, w, cx| {
+        p.host.creation.pending_create = Some(("continuation".into(), choice()));
+        p.discard_draft(w, cx);
+    });
+    wait_tabs(&mut h);
+    let id = h
+        .window
+        .update(&mut h.cx, |p, _, cx| {
+            assert_eq!(p.tabs.model.tabs().len(), 2);
+            assert_eq!(draft_text(p, cx), "Still wanted");
+            let id = p.draft.id.clone().unwrap();
+            assert_eq!(
+                p.session.data.as_ref().unwrap().draft_tabs[&id].draft.text,
+                "Still wanted"
+            );
+            assert_eq!(
+                p.notice.as_deref(),
+                Some("Resolve the pending thread creation before discarding this draft.")
+            );
+            p.host.creation.pending_create = None;
+            id
+        })
+        .unwrap();
+    h.update(|p, w, cx| p.discard_draft(w, cx));
+    wait_tabs(&mut h);
+    h.update(|p, _, cx| {
+        assert_eq!(p.tabs.model.tabs().len(), 1);
+        assert_eq!(draft_text(p, cx), "Keep this sibling");
+        assert!(
+            !p.session
+                .data
+                .as_ref()
+                .unwrap()
+                .draft_tabs
+                .contains_key(&id)
+        );
+    });
+    drop(h);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
