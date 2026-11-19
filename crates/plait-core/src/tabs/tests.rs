@@ -24,7 +24,7 @@ pub(super) fn target(id: &str) -> ThreadTarget {
         checkout: checkout("/repo"),
     }
 }
-fn draft(id: &str) -> ThreadTarget {
+pub(super) fn draft(id: &str) -> ThreadTarget {
     ThreadTarget::Draft {
         id: id.into(),
         checkout: checkout("/repo"),
@@ -452,7 +452,7 @@ fn bookmarks_round_trip_all_views_and_semantic_locations() {
         assert_eq!(decode_extended(&encode_extended(&b).unwrap()), Some(b));
     }
 }
-fn rich_bookmark(view: ThreadView) -> ThreadBookmark {
+pub(super) fn rich_bookmark(view: ThreadView) -> ThreadBookmark {
     let position = TextPosition {
         source: "message-1".into(),
         block: 2,
@@ -565,4 +565,100 @@ fn invalid_bookmarks_are_rejected_without_replacing_saved_state() {
     }
     assert!(decode_extended(&vec![b' '; EXTENDED_BOOKMARK_LIMIT + 1]).is_none());
     assert!(decode_extended(b"{\"conversation\":{\"pages\":65535}}").is_none());
+}
+
+#[test]
+fn removing_many_project_tabs_selects_original_right_survivor() {
+    let mut w = window();
+    let a = open(&mut w, "a");
+    let external = |id: &str| ThreadTarget::Existing {
+        id: id.into(),
+        checkout: checkout("/other"),
+    };
+    w.open(external("b"), Some(1)).unwrap();
+    let c = open(&mut w, "c");
+    open(&mut w, "d");
+    let e = w.open(external("e"), Some(1)).unwrap();
+    w.open(external("f"), Some(1)).unwrap();
+    w.activate(c).unwrap();
+    w.project_removed(&[checkout("/repo")]).unwrap();
+    assert!(w.get(a).is_none());
+    assert_eq!(w.active(), Some(e));
+}
+
+#[test]
+fn mixed_transition_sequences_keep_unique_content_and_at_most_one_resident() {
+    let mut w = window();
+    let mut random = 7_u64;
+    for _ in 0..2000 {
+        random = random.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let name = format!("thread{}", random % 17);
+        match (random >> 32) % 10 {
+            0..=2 => {
+                let _ = w.open(target(&name), Some(1));
+            }
+            3 => {
+                if let Some(id) = w.active() {
+                    w.close(id, false).unwrap();
+                }
+            }
+            4 => {
+                w.reopen(|_| Some(Some(1))).unwrap();
+            }
+            5 => {
+                w.next_tab().unwrap();
+            }
+            6 => {
+                w.previous_tab().unwrap();
+            }
+            7 => {
+                w.jump((random % 11) as usize).unwrap();
+            }
+            8 => {
+                if let Some(id) = w.active() {
+                    w.move_tab(id, (random % 20) as usize).unwrap();
+                }
+            }
+            _ => {
+                w.thread_deleted(&target(&name).thread_key().unwrap())
+                    .unwrap();
+            }
+        }
+        assert_eq!(w.active().is_none(), w.tabs().is_empty());
+        assert!(w.active().is_none_or(|id| w.get(id).is_some()));
+        assert!(w.closed_len() <= CLOSED_TAB_LIMIT);
+        for (index, tab) in w.tabs().iter().enumerate() {
+            assert!(tab.cold_bytes() <= COLD_TAB_BYTES);
+            assert!(
+                w.tabs()[index + 1..]
+                    .iter()
+                    .all(|other| !tab.thread().target().same_content(other.thread().target()))
+            );
+            if tab.thread().residency.visibility().is_some() {
+                assert_eq!(w.active(), Some(tab.id()));
+            }
+        }
+    }
+}
+
+#[test]
+fn extended_payload_and_collection_limits_are_enforced() {
+    let b = ThreadBookmark {
+        details: ViewDetails {
+            expanded: vec!["a".repeat(128); 4096],
+            folded: vec!["b".repeat(128); 4096],
+            commit_message: "x".repeat(256 * 1024),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    assert_eq!(encode_extended(&b), Err(BookmarkError::TooLarge));
+    let b = ThreadBookmark {
+        details: ViewDetails {
+            expanded: vec!["a".into(); 4097],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    assert_eq!(encode_extended(&b), Err(BookmarkError::Invalid));
 }

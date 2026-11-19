@@ -5,6 +5,7 @@
 //! Drafts and mutation acknowledgements belong to their existing owner ledgers,
 //! never to a tab's visibility guard.
 pub mod bookmark;
+pub mod persistence;
 pub mod row;
 
 use crate::thread_view::{SelectedThreadState, ThreadRepositoryView, ThreadView};
