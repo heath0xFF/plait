@@ -34,6 +34,11 @@ pub fn worker(input: Value) -> io::Result<()> {
 fn execute(input: Value) -> io::Result<Value> {
     let request: Request = serde_json::from_value(input).map_err(io::Error::other)?;
     let result = match request {
+        Request::Inventory { root, records } => {
+            return worktree::inventory::inventory(&root, &records)
+                .and_then(|value| serde_json::to_value(value).map_err(|e| e.to_string()))
+                .map_err(io::Error::other);
+        }
         Request::Parent { root } => {
             return worktree::worktree_parent(&root)
                 .and_then(|value| serde_json::to_value(value).map_err(|e| e.to_string()))

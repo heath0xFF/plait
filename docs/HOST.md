@@ -2453,6 +2453,26 @@ fields, including `protocol_version`, and unknown lifecycle states are refused.
   `list_worktrees {}` returns `{schema:1,operations:[...]}`, newest first,
   bounded to 256 operations and 750,000 bytes. These are recorded lifecycle facts, not live
   dirty-file or publication scans; removal always makes fresh checks.
+- `project_worktrees {checkout}` returns
+  `{schema:1,worktree_inventory_v1:true,checkouts:[...]}`. The main checkout is
+  first, followed by registered linked checkouts and retained removed records.
+  Each row has `path`, `main`, nullable `branch`, `head`, recorded `base`,
+  `thread_id`, directory `identity`, `creation_id`, host-millisecond `last_used`,
+  `missing`, `removed`, and `preservation`. Preservation contains nullable
+  counts `changed`, `unpushed`, `exclusive` and nullable exact `refusal`.
+  Unknown counts remain null. Changed includes untracked and ignored status
+  entries; ignored directories are counted as Git reports them. Publication
+  uses the known remote-tracking ref. Exclusive counts commits reachable only
+  from worktree-local refs or reflogs. These are the same checks removal uses,
+  supplemented by identity, ownership, lease, operation and admission refusals.
+  A null refusal requires all counts known and zero and a verified owned
+  checkout; removal still rechecks under its leases. External checkouts have
+  no creation authority. Missing folders remain rows; removed records keep
+  branch/history/cache attribution with no deletion action. The result is
+  bounded to 256 rows and 750,000 bytes; reading creation records is bounded
+  to 4096 records and 900,000 bytes across the host store. Excess is an explicit
+  error. This
+  operation probes its own capability, preserving all previous reply shapes.
 - `remove_worktree {request_id,creation_id,identity,allow_unpushed}` requires a
   recorded host-owned checkout and explicit confirmation. `allow_unpushed:false`
   refuses a missing/local upstream or commits absent from its known remote

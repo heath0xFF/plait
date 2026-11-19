@@ -8,6 +8,9 @@ pub const OLDER_HOST: &str = "Host-owned worktrees need a newer host.";
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
+    ProjectWorktrees {
+        checkout: PathBuf,
+    },
     WorktreeInfo {
         checkout: PathBuf,
     },
@@ -303,5 +306,186 @@ mod tests {
                     .is_err()
             );
         }
+    }
+}
+
+/// Additive inventory includes foreign checkouts and the host's removal decision.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Inventory {
+    pub schema: u32,
+    pub worktree_inventory_v1: bool,
+    pub checkouts: Vec<Checkout>,
+}
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Checkout {
+    pub path: PathBuf,
+    pub main: bool,
+    pub branch: Option<String>,
+    pub head: Option<String>,
+    pub base: Option<String>,
+    pub thread_id: Option<String>,
+    pub identity: Option<Identity>,
+    pub missing: bool,
+    pub removed: bool,
+    pub preservation: crate::git::worktree::inventory::Preservation,
+    pub creation_id: Option<String>,
+    pub last_used: Option<u64>,
+}
+impl Inventory {
+    pub fn verified(self) -> Result<Self, Error> {
+        let mut paths = std::collections::HashSet::new();
+        if self.schema != 1
+            || !self.worktree_inventory_v1
+            || self.checkouts.is_empty()
+            || self.checkouts.len() > 256
+        {
+            return Err(invalid());
+        }
+        for (index, row) in self.checkouts.iter().enumerate() {
+            if !path(&row.path)
+                || !paths.insert(&row.path)
+                || row.main != (index == 0)
+                || row.identity.as_ref().is_some_and(|id| !identity(id))
+                || [&row.head, &row.base].into_iter().flatten().any(|s| {
+                    !matches!(s.len(), 40 | 64)
+                        || !s
+                            .bytes()
+                            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+                })
+                || [&row.thread_id, &row.creation_id]
+                    .into_iter()
+                    .flatten()
+                    .any(|s| !bounded_id(s))
+                || row
+                    .branch
+                    .as_ref()
+                    .is_some_and(|s| s.len() > 4096 || s.chars().any(char::is_control))
+                || row
+                    .preservation
+                    .refusal
+                    .as_ref()
+                    .is_some_and(|s| s.is_empty() || s.len() > 8192)
+                || [
+                    row.preservation.changed,
+                    row.preservation.unpushed,
+                    row.preservation.exclusive,
+                    row.last_used,
+                ]
+                .into_iter()
+                .flatten()
+                .any(|n| n > 9_007_199_254_740_991)
+                || (row.removed && (!row.missing || row.main))
+                || (row.preservation.refusal.is_none()
+                    && (row.main
+                        || row.missing
+                        || row.creation_id.is_none()
+                        || row.identity.is_none()
+                        || row.thread_id.is_none()
+                        || row.preservation.changed != Some(0)
+                        || row.preservation.exclusive != Some(0)
+                        || row.preservation.unpushed != Some(0)))
+            {
+                return Err(invalid());
+            }
+        }
+        Ok(self)
+    }
+}
+pub fn inventory(client: &Client, checkout: PathBuf) -> Result<Inventory, Error> {
+    let reply: Inventory = client
+        .send(&Request::ProjectWorktrees { checkout })
+        .map_err(compatibility)?;
+    reply.verified()
+}
+
+#[cfg(test)]
+mod inventory_tests {
+    use super::*;
+    use serde_json::json;
+    fn recorded() -> serde_json::Value {
+        json!({"schema":1,"worktree_inventory_v1":true,"checkouts":[
+            {"path":"/repo","main":true,"branch":"main","head":"a".repeat(40),"base":null,"thread_id":null,"identity":{"dev":"1","ino":"2"},"missing":false,"removed":false,"creation_id":null,"last_used":null,"preservation":{"changed":0,"unpushed":0,"exclusive":0,"refusal":"The main checkout cannot be removed here."}},
+            {"path":"/repo.worktrees/owned","main":false,"branch":"plait/owned","head":"b".repeat(40),"base":"a".repeat(40),"thread_id":"thread","identity":{"dev":"1","ino":"3"},"missing":false,"removed":false,"creation_id":"creation","last_used":1800000000000_u64,"preservation":{"changed":0,"unpushed":0,"exclusive":0,"refusal":null}},
+            {"path":"/external","main":false,"branch":"topic","head":"c".repeat(40),"base":null,"thread_id":null,"identity":null,"missing":false,"removed":false,"creation_id":null,"last_used":null,"preservation":{"changed":1,"unpushed":null,"exclusive":0,"refusal":"Plait did not create this worktree. Remove it with your Git tools."}}
+        ]})
+    }
+    fn read(value: serde_json::Value) -> Result<Inventory, String> {
+        serde_json::from_value::<Inventory>(value)
+            .map_err(|e| e.to_string())?
+            .verified()
+            .map_err(|e| e.to_string())
+    }
+    #[test]
+    fn inventory_preserves_foreign_missing_removed_and_exact_refusals() {
+        let good = read(recorded()).unwrap();
+        assert!(good.checkouts[0].main);
+        assert!(good.checkouts[1].preservation.refusal.is_none());
+        assert_eq!(good.checkouts[2].creation_id, None);
+        for reason in [
+            "Hidden index edit.",
+            "This worktree still has active, queued, or recovering work.",
+            "Commits kept only here.",
+            "The folder is missing.",
+        ] {
+            let mut reply = recorded();
+            reply["checkouts"][1]["preservation"]["refusal"] = json!(reason);
+            reply["checkouts"][1]["missing"] = json!(true);
+            assert_eq!(
+                read(reply).unwrap().checkouts[1]
+                    .preservation
+                    .refusal
+                    .as_deref(),
+                Some(reason)
+            );
+        }
+        let mut removed = recorded();
+        removed["checkouts"][1]["missing"] = json!(true);
+        removed["checkouts"][1]["removed"] = json!(true);
+        removed["checkouts"][1]["preservation"]["refusal"] = json!("This worktree was removed.");
+        assert!(read(removed).unwrap().checkouts[1].removed);
+    }
+    #[test]
+    fn inventory_rejects_unknown_fields_capabilities_and_false_safe_decisions() {
+        for (field, value) in [
+            ("schema", json!(2)),
+            ("worktree_inventory_v1", json!(false)),
+            ("future", json!(true)),
+        ] {
+            let mut bad = recorded();
+            bad[field] = value;
+            assert!(read(bad).is_err());
+        }
+        for (field, value) in [
+            ("path", json!("/repo")),
+            ("main", json!(true)),
+            ("head", json!("--all")),
+            ("identity", json!({"dev":"01","ino":"2"})),
+            ("missing", json!(true)),
+            ("removed", json!(true)),
+            ("creation_id", json!(null)),
+            ("last_used", json!(u64::MAX)),
+        ] {
+            let mut bad = recorded();
+            bad["checkouts"][1][field] = value;
+            assert!(read(bad).is_err(), "{field}");
+        }
+        for field in ["changed", "unpushed", "exclusive"] {
+            let mut bad = recorded();
+            bad["checkouts"][1]["preservation"][field] = json!(1);
+            assert!(read(bad).is_err());
+        }
+        let mut bad = recorded();
+        bad["checkouts"] = json!([]);
+        assert!(read(bad).is_err());
+        assert_eq!(
+            compatibility(Error::Rejected(HostError {
+                code: "invalid_request".into(),
+                message: "Unknown operation".into()
+            }))
+            .to_string(),
+            Error::Protocol(OLDER_HOST.into()).to_string()
+        );
     }
 }

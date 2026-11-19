@@ -4,6 +4,8 @@
 //! Plait creates them beside the repository, in `<name>.worktrees/`, and removes
 //! them only through `git worktree remove`, which refuses uncommitted work.
 
+pub mod inventory;
+
 use super::{
     Result, head_exists,
     write::{git, git_holding},
@@ -258,6 +260,23 @@ pub fn worktree_parent(root: &Path) -> Result<Parent> {
     })
 }
 
+/// Resolve the main checkout without requiring a first commit.
+pub fn main_checkout(root: &Path) -> Result<PathBuf> {
+    let raw = read_worktree(root, &["worktree", "list", "--porcelain", "-z"])?;
+    let first = raw
+        .split(|b| *b == 0)
+        .next()
+        .ok_or("Git returned no checkouts.")?;
+    let text = std::str::from_utf8(first).map_err(|_| "Worktree paths must be UTF-8.")?;
+    let path = PathBuf::from(
+        text.strip_prefix("worktree ")
+            .ok_or("Invalid Git worktree list.")?,
+    );
+    if !path.is_absolute() {
+        return Err("Invalid main checkout path.".into());
+    }
+    Ok(path)
+}
 fn read_worktree(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
     let mut command = super::read_command(root)?;
     super::run_readonly(command.args(args))
@@ -728,51 +747,7 @@ pub fn remove_managed_supervised(
     .map_err(String::from)?;
     verify_managed(&record)?;
     verify_repository(&record.parent)?;
-    let dirty = read_worktree(
-        &record.path,
-        &[
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-            "--ignored=matching",
-        ],
-    )?;
-    if !dirty.is_empty() {
-        return Err("This worktree has uncommitted or ignored files. Preserve or remove them before removing the worktree.".into());
-    }
-    refuse_hidden_edits(&record.path)?;
-    refuse_worktree_only_commits(&record)?;
-    let git_dir = text_read(&record.path, &["rev-parse", "--absolute-git-dir"])?;
-    if [
-        "MERGE_HEAD",
-        "CHERRY_PICK_HEAD",
-        "REVERT_HEAD",
-        "rebase-merge",
-        "rebase-apply",
-        "sequencer",
-    ]
-    .iter()
-    .any(|name| fs::symlink_metadata(Path::new(&git_dir).join(name)).is_ok())
-    {
-        return Err("This worktree has an unfinished Git operation.".into());
-    }
-    if !allow_unpushed {
-        let remote_ref = text_read(&record.path, &["rev-parse", "--symbolic-full-name", "@{upstream}"])
-            .map_err(|_| "This worktree has unpushed or unknown publication status. Explicitly confirm preserving only the local branch.".to_owned())?;
-        if !remote_ref.starts_with("refs/remotes/") {
-            return Err("This worktree tracks a local branch; publication is unknown. Explicitly confirm preserving only the local branch.".into());
-        }
-        let upstream = text_read(&record.path, &["rev-parse", "--verify", "@{upstream}^{commit}"])
-            .map_err(|_| "This worktree has unpushed or unknown publication status. Explicitly confirm keeping its work only on the local branch.".to_owned())?;
-        let count = text_read(
-            &record.path,
-            &["rev-list", "--count", &format!("{upstream}..HEAD")],
-        )?;
-        if count != "0" {
-            return Err("This worktree has unpushed commits. Push them or explicitly confirm preserving only the local branch.".into());
-        }
-    }
+    inventory::preservation(&record.path, &record.parent.main, allow_unpushed)?.require_safe()?;
     record.stage = ManagedStage::Removing;
     save(&record)?;
     mutate(
@@ -813,10 +788,10 @@ fn refuse_hidden_edits(path: &Path) -> Result<()> {
 
 /// Commits kept only by this worktree's HEAD reflog or its own refs lose their
 /// last reference when Git deletes the worktree's administrative folder.
-fn refuse_worktree_only_commits(record: &ManagedWorktree) -> Result<()> {
-    let mut tips = read_worktree(&record.path, &["rev-list", "--walk-reflogs", "HEAD"])?;
+fn worktree_only_commits(path: &Path, main: &Path) -> Result<u64> {
+    let mut tips = read_worktree(path, &["rev-list", "--walk-reflogs", "HEAD"])?;
     tips.extend(read_worktree(
-        &record.path,
+        path,
         &[
             "for-each-ref",
             "--format=%(objectname)",
@@ -826,12 +801,12 @@ fn refuse_worktree_only_commits(record: &ManagedWorktree) -> Result<()> {
         ],
     )?);
     if tips.iter().all(u8::is_ascii_whitespace) {
-        return Ok(());
+        return Ok(0);
     }
     // From the main checkout, `--single-worktree` leaves out this worktree's
     // HEAD, reflog and own refs: what remains survives the removal. `--stdin`
     // comes before `--not` so every Git version reads the tips as positive.
-    let mut command = super::read_command(&record.parent.main)?;
+    let mut command = super::read_command(main)?;
     let raw = super::run(
         command.args([
             "rev-list",
@@ -849,15 +824,19 @@ fn refuse_worktree_only_commits(record: &ManagedWorktree) -> Result<()> {
     if !raw.status.success() {
         return Err(raw.failure());
     }
-    if String::from_utf8_lossy(&raw.out.bytes).trim() != "0" {
-        return Err("This worktree has commits that are on no branch (made on a detached HEAD or kept only by its own refs). Removing it would lose them. Put them on a branch, then remove the worktree.".into());
-    }
-    Ok(())
+    String::from_utf8_lossy(&raw.out.bytes)
+        .trim()
+        .parse()
+        .map_err(|_| "Invalid commit count.".into())
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum HelperRequest {
+    Inventory {
+        root: PathBuf,
+        records: Vec<ManagedWorktree>,
+    },
     Parent {
         root: PathBuf,
     },

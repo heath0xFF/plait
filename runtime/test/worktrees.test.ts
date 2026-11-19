@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { validateWorktree, type Operation } from '../src/worktrees.ts';
@@ -212,4 +212,44 @@ test('killed worktree worker leaves checkout and common leases with Git descenda
       helper.kill('SIGCONT'); helper.kill('SIGKILL');
     }
   }
+});
+
+test('project inventory lists main, owned and external worktrees with live removal facts', async t => {
+  const h = await codex(t); await chmod(h.store, 0o700); await commit(h.root);
+  const info: any = await h.runtime.reply({ op: 'worktree_info', checkout: h.root });
+  await h.runtime.reply({ op: 'create_worktree_thread', request_id: 'inventory', parent: info.result.parent, harness: 'codex', provider: 'codex', model_id: 'gpt-fake', mode: 'ask', approval: 'ask' });
+  const ready = await done(h.runtime, 'inventory');
+  const external = join(h.root, '..', 'external');
+  await exec('/usr/bin/git', ['-C', h.root, 'worktree', 'add', '-b', 'external', external]);
+  await writeFile(join(ready.worktree!.path, 'source.txt'), 'changed');
+  const reply: any = await h.runtime.reply({ op: 'project_worktrees', checkout: h.root });
+  assert.equal(reply.ok, true, JSON.stringify(reply));
+  const rows = reply.result.checkouts;
+  assert.equal(rows.length, 3); assert.equal(rows[0].main, true);
+  const owned = rows.find((r: any) => r.creation_id === 'inventory');
+  assert.equal(owned.preservation.changed, 1); assert.equal(owned.preservation.exclusive, 0);
+  assert.equal(owned.preservation.unpushed, null); assert.equal(owned.base, info.result.parent.base);
+  const removed: any = await h.runtime.reply({ op: 'remove_worktree', request_id: 'inventory-remove', creation_id: 'inventory', identity: ready.worktree!.identity, allow_unpushed: false });
+  assert.equal(removed.ok, true);
+  const refusal = await done(h.runtime, 'inventory-remove');
+  assert.equal(owned.preservation.refusal, refusal.error!.message);
+  const foreign = rows.find((r: any) => r.path === external);
+  assert.equal(foreign.creation_id, null); assert.match(foreign.preservation.refusal, /did not create/);
+  await writeFile(join(ready.worktree!.path, 'source.txt'), 'committed\n');
+  await h.runtime.reply({ op: 'remove_worktree', request_id: 'inventory-clean', creation_id: 'inventory', identity: ready.worktree!.identity, allow_unpushed: true });
+  assert.equal((await done(h.runtime, 'inventory-clean')).state, 'removed');
+  const after: any = await h.runtime.reply({ op: 'project_worktrees', checkout: h.root });
+  assert.equal(after.ok, true, JSON.stringify(after));
+  const retained = after.result.checkouts.find((r: any) => r.creation_id === 'inventory');
+  assert.equal(retained.removed, true); assert.equal(retained.missing, true);
+  assert.match(retained.preservation.refusal, /cache remain/);
+  await unlink(join(external, 'source.txt'));
+  const changed: any = await h.runtime.reply({ op: 'project_worktrees', checkout: external });
+  assert.equal(changed.result.checkouts[0].path, h.root);
+  assert.equal(changed.result.checkouts.find((r: any) => r.path === external).preservation.changed, 1);
+});
+
+test('project inventory validates its additive request strictly', () => {
+  assert.deepEqual(validateWorktree({ op: 'project_worktrees', checkout: '/repo' }), { op: 'project_worktrees', checkout: '/repo' });
+  for (const request of [{ op: 'project_worktrees', checkout: '/repo', protocol_version: 6 }, { op: 'project_worktrees', checkout: '/repo/../other' }, { op: 'project_worktrees', checkout: 4 }, { op: 'project_worktrees' }]) assert.throws(() => validateWorktree(request));
 });
