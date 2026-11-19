@@ -502,7 +502,9 @@ sidebar hidden, a 36-point row for the thread's Conversation, Changes, History
 and Files views, and a state-grouped overflow list. Sidebar clicks open or
 activate a thread's tab. Each checkout has one New thread draft tab; creating
 its thread replaces the draft in place. Closing never stops a run or removes
-a worktree. Closing the last tab leaves an empty workspace.
+a worktree. Closing the last tab leaves an empty workspace. Settings and
+Project settings open as window modals over the unchanged tab rows and content.
+Tab controls remain inactive until the modal closes.
 
 Cmd-1 through Cmd-8 select positions; Cmd-9 selects the last tab. Cmd-W closes
 a tab, Cmd-Shift-W closes the window, Cmd-Shift-T reopens one of the last twenty
@@ -519,7 +521,7 @@ with debounced atomic writes and total decoding after host and checkout
 verification. Drafts and submissions remain in the existing recovery journal.
 
 **Still planned:** other tab content kinds, many concurrent threads in one
-checkout, Settings modals, authoritative checkout write exclusion, host-owned
+checkout, authoritative checkout write exclusion, host-owned
 worktree creation, independent multi-checkout capacity, a durable checkout
 queue, and optional storage, seeding and read-only extensions. Tabs do not
 change the host's current execution admission or single-writer rules.

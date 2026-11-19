@@ -663,3 +663,201 @@ fn assistive_actions_reach_only_the_modal_and_what_opens_above_it() {
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+#[core::prelude::v1::test]
+fn modal_blocks_tab_keys_pointer_and_assistive_focus() {
+    if !isolated("settings_modal::modal_blocks_tab_keys_pointer_and_assistive_focus") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-modal-tabs-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut h = Harness::new(&repository, None, 900., 600.);
+    h.connect(&repository, false);
+    super::tabs::install(&mut h, 20);
+    h.update(|p, window, cx| {
+        p.host.connection.connected = false;
+        window.activate_window();
+        window.focus(&p.focus, cx);
+    });
+    h.draw();
+    h.keystroke("cmd-9");
+    h.keystroke("cmd-w");
+    h.keystroke("cmd-1");
+    h.draw();
+    h.update(|p, window, cx| window.focus(&p.focus, cx));
+    h.keystroke("tab");
+    h.keystroke("tab");
+    let (ids, active, row_focus) = h
+        .window
+        .update(&mut h.cx, |p, window, cx| {
+            assert_eq!(p.tabs.model.closed_len(), 1);
+            (
+                p.tabs
+                    .model
+                    .tabs()
+                    .iter()
+                    .map(|tab| tab.id())
+                    .collect::<Vec<_>>(),
+                p.tabs.model.active(),
+                window.focused(cx).unwrap(),
+            )
+        })
+        .unwrap();
+    h.keystroke("cmd-shift-\\");
+    h.update(|p, _, _| assert!(p.tabs.list_open));
+    for project in [false, true] {
+        h.update(|p, window, cx| {
+            if project {
+                p.show_project_settings(window, cx);
+            } else {
+                p.show_settings(true, window, cx);
+            }
+            assert!(!p.tabs.list_open, "opening settings dismisses overflow");
+        });
+        h.draw();
+        for key in [
+            "cmd-1",
+            "cmd-2",
+            "cmd-3",
+            "cmd-4",
+            "cmd-5",
+            "cmd-6",
+            "cmd-7",
+            "cmd-8",
+            "cmd-9",
+            "cmd-w",
+            "cmd-shift-w",
+            "cmd-shift-t",
+            "cmd-t",
+            "cmd-n",
+            "cmd-shift-[",
+            "cmd-shift-]",
+            "ctrl-tab",
+            "ctrl-shift-tab",
+            "ctrl-shift-left",
+            "ctrl-shift-right",
+            "cmd-shift-\\",
+        ] {
+            h.keystroke(key);
+            h.update(|p, window, cx| {
+                assert!(p.settings_open, "{key}");
+                assert_eq!(p.tabs.model.active(), active, "{key}");
+                assert_eq!(
+                    p.tabs
+                        .model
+                        .tabs()
+                        .iter()
+                        .map(|tab| tab.id())
+                        .collect::<Vec<_>>(),
+                    ids,
+                    "{key}"
+                );
+                assert_eq!(p.tabs.model.closed_len(), 1, "{key}");
+                assert!(!p.tabs.list_open, "{key}");
+                assert!(p.settings_focus.contains_focused(window, cx), "{key}");
+            });
+        }
+        h.update(|_, window, cx| {
+            assert!(crate::ui::theme::beneath_modal(
+                Some(&row_focus),
+                window,
+                cx
+            ));
+            // The same focus path used by an assistive action on a cached row.
+            window.focus(&row_focus, cx);
+        });
+        h.draw();
+        h.update(|p, window, cx| assert!(p.settings_focus.contains_focused(window, cx)));
+        for button in [MouseButton::Middle, MouseButton::Left] {
+            h.draw();
+            h.pointer(PlatformInput::MouseDown(MouseDownEvent {
+                button,
+                position: point(px(350.), px(20.)),
+                click_count: 1,
+                ..Default::default()
+            }));
+            h.pointer(PlatformInput::MouseUp(MouseUpEvent {
+                button,
+                position: point(px(350.), px(20.)),
+                click_count: 1,
+                ..Default::default()
+            }));
+            h.update(|p, window, cx| {
+                assert_eq!(p.tabs.model.active(), active);
+                assert_eq!(
+                    p.tabs
+                        .model
+                        .tabs()
+                        .iter()
+                        .map(|tab| tab.id())
+                        .collect::<Vec<_>>(),
+                    ids
+                );
+                // An outside click may dismiss Settings; it never reaches the row below.
+                p.show_settings(true, window, cx);
+            });
+        }
+        h.draw();
+        h.keystroke("escape");
+        h.update(|p, _, _| {
+            assert!(!p.settings_open);
+            assert!(!p.tabs.list_open);
+            assert_eq!(p.tabs.model.active(), active);
+            assert_eq!(p.tabs.model.closed_len(), 1);
+        });
+    }
+    h.draw();
+    h.keystroke("cmd-2");
+    h.update(|p, _, _| assert_ne!(p.tabs.model.active(), active));
+    drop(h);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn creation_parking_finishes_beneath_the_modal() {
+    if !isolated("settings_modal::creation_parking_finishes_beneath_the_modal") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-modal-save-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut h = Harness::new(&repository, None, 900., 600.);
+    h.connect(&repository, false);
+    let (journal, _) =
+        plait_core::session::Journal::open(&scratch.join("session"), "/fixture-host".into())
+            .unwrap();
+    h.update(|p, window, cx| {
+        p.host.connection.connected = false;
+        p.session.journal = Some(journal);
+        p.new_thread_open = true;
+        p.host.creation.pending_create = Some(("picked".into(), choice()));
+        p.host.creation.creating = true;
+        p.show_settings(true, window, cx);
+        let epoch = p.host.thread.watch_epoch;
+        p.finish_create(
+            created(&repository, "picked", epoch),
+            created_reply(&repository, "thr_picked"),
+            window,
+            cx,
+        );
+        assert!(p.settings_open);
+    });
+    undo::wait(&mut h, |p| {
+        !p.tabs.lifecycle.busy && p.host.thread.selected.as_deref() == Some("thr_picked")
+    });
+    h.draw();
+    h.update(|p, window, cx| {
+        assert!(p.settings_open);
+        assert!(p.settings_focus.contains_focused(window, cx));
+    });
+    h.keystroke("escape");
+    h.update(|p, window, cx| {
+        assert!(!p.settings_open);
+        assert!(
+            p.workspace.composers["thr_picked"]
+                .focus_handle(cx)
+                .is_focused(window)
+        );
+    });
+    drop(h);
+    std::fs::remove_dir_all(scratch).unwrap();
+}

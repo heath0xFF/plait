@@ -1281,7 +1281,9 @@ projection, scroll handles, selection, find and draft. The same thread watch
 continues applying replies. A full-window dimming layer blocks pointer input;
 the root action shield suppresses workspace commands, including menu dispatch.
 Tab traversal wraps within the modal and dismissal restores the previously
-focused handle. Escape gives nested pickers, shortcut recording, provider
+focused handle. Opening Settings closes tab overflow and cancels tab dragging;
+the two tab rows retain their layout beneath the scrim. Their keyboard and
+assistive activation/focus actions remain inert until the modal closes. Escape gives nested pickers, shortcut recording, provider
 forms and the trust confirmation precedence. GPUI runs an accessibility
 action on its element without a hit test, so each frame records what covers
 the window (`theme::Covered`): buttons built outside the modal or a picker

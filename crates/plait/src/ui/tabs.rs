@@ -126,6 +126,22 @@ fn measure(text: &str, window: &Window) -> f32 {
 }
 
 impl Plait {
+    pub(super) fn dismiss_tab_controls(&mut self) {
+        self.tabs.list_open = false;
+        self.tabs.drag = None;
+        // Cached controls must rebuild their focus actions when the modal changes.
+        self.tabs.measured = None;
+        self.window_drag = false;
+    }
+
+    pub(super) fn covered_tab_control(&self, control: Stateful<Div>) -> Stateful<Div> {
+        control.when(self.settings_open, |el| {
+            el.tab_stop(false)
+                // GPUI otherwise handles assistive Focus without the modal's hit test.
+                .on_a11y_action(AccessibleAction::Focus, |_, _, _| {})
+        })
+    }
+
     pub(super) fn refresh_tab_rows(&mut self) {
         let rows = model::metadata(
             &self.tabs.model,
@@ -153,8 +169,15 @@ impl Plait {
             })))*
         }; }
         let root = root
-            .on_action(cx.listener(|this, _: &NewTab, window, cx| this.open_draft(window, cx)))
+            .on_action(cx.listener(|this, _: &NewTab, window, cx| {
+                if !this.settings_open {
+                    this.open_draft(window, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
+                if this.settings_open {
+                    return;
+                }
                 if let Some(id) = this.tabs.model.active() {
                     this.close_tab(id, window, cx);
                 } else {
@@ -176,7 +199,7 @@ impl Plait {
                 this.toggle_tab_list(window, cx);
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if !this.tabs.list_open {
+                if this.settings_open || !this.tabs.list_open {
                     return;
                 }
                 let order = this.tab_list_order();
@@ -307,6 +330,9 @@ impl Plait {
     }
 
     fn activate_tab(&mut self, id: TabId, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings_open {
+            return;
+        }
         self.request_tab(super::tab_lifecycle::Intent::Activate(id), window, cx);
     }
 
@@ -358,14 +384,23 @@ impl Plait {
     }
 
     fn close_tab(&mut self, id: TabId, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings_open {
+            return;
+        }
         self.request_tab(super::tab_lifecycle::Intent::Close(id), window, cx);
     }
 
     fn navigate_tab(&mut self, action: TabNavigation, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings_open {
+            return;
+        }
         self.request_tab(super::tab_lifecycle::Intent::Navigate(action), window, cx);
     }
 
     fn move_active_tab(&mut self, right: bool, cx: &mut Context<Self>) {
+        if self.settings_open {
+            return;
+        }
         let Some(id) = self.tabs.model.active() else {
             return;
         };
@@ -453,6 +488,7 @@ impl Plait {
             .child(
                 icon_button("toggle-sidebar", "panel", "Toggle sidebar")
                     .mr_1()
+                    .map(|el| self.covered_tab_control(el))
                     .aria_keyshortcuts(self.shortcut_aria("view.toggle_sidebar"))
                     .tooltip(|_, cx| tooltip("Toggle sidebar (⌘B)".into(), cx))
                     .on_activate(cx, |this, window, cx| this.toggle_sidebar(window, cx)),
@@ -469,6 +505,7 @@ impl Plait {
                         }))
                         .overflow_hidden()
                         .aria_label("Show all tabs")
+                        .map(|el| self.covered_tab_control(el))
                         .tooltip(move |_, cx| tooltip(hover.clone(), cx))
                         .on_activate(cx, |this, window, cx| {
                             this.toggle_tab_list(window, cx);
@@ -478,6 +515,7 @@ impl Plait {
             .child(
                 icon_button("new-tab", "plus", "New thread tab")
                     .ml_1()
+                    .map(|el| self.covered_tab_control(el))
                     .tooltip(|_, cx| tooltip("New thread tab (⌘T)".into(), cx))
                     .on_activate(cx, |this, window, cx| this.open_draft(window, cx)),
             )
@@ -579,6 +617,7 @@ impl Plait {
             .aria_selected(meta.active)
             .focusable()
             .tab_stop(true)
+            .map(|el| self.covered_tab_control(el))
             .cursor_pointer()
             .w(px(width))
             .h(px(34.))
@@ -612,6 +651,9 @@ impl Plait {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, _| {
+                    if this.settings_open {
+                        return;
+                    }
                     window.prevent_default();
                     this.window_drag = false;
                     this.tabs.drag = Some(Drag {
@@ -689,6 +731,7 @@ impl Plait {
     ) -> Stateful<Div> {
         icon_button(("close-tab", id.get()), "close", "Close tab")
             .size(px(18.))
+            .map(|el| self.covered_tab_control(el))
             .when(!visible, |el| {
                 el.w_0()
                     .opacity(0.)
@@ -707,6 +750,9 @@ impl Plait {
     }
 
     fn toggle_tab_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings_open {
+            return;
+        }
         self.tabs.list_open = !self.tabs.list_open;
         self.tabs.list_cursor = self.tabs.model.active();
         window.focus(&self.focus, cx);
@@ -728,7 +774,7 @@ impl Plait {
     }
 
     pub(super) fn tab_list(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.tabs.list_open {
+        if self.settings_open || !self.tabs.list_open {
             return None;
         }
         let layout = self.tabs.layout.as_ref()?;

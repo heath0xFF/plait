@@ -262,6 +262,7 @@ impl Plait {
 
     fn perform_tab(&mut self, intent: Intent, window: &mut Window, cx: &mut Context<Self>) {
         let previous = self.tabs.model.active();
+        let covered = self.settings_open;
         let connection = self
             .host
             .connection
@@ -319,8 +320,13 @@ impl Plait {
                 self.present_tab(window, cx);
                 self.tabs.lifecycle.presenting = false;
             }
-            self.settings_open = false;
-            if self.workspace.tab == super::Workspace::Conversation
+            self.settings_open = covered;
+            if covered {
+                self.settings_restore = self.visible_composer().map(|c| c.focus_handle(cx));
+                window.focus(&self.settings_focus, cx);
+            }
+            if !covered
+                && self.workspace.tab == super::Workspace::Conversation
                 && self.conversation_snapshot().is_some()
                 && window.is_window_active()
                 && let Some(id) = self.host.thread.selected.clone()

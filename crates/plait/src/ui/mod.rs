@@ -572,6 +572,8 @@ impl Plait {
             self.settings_restore = window.focused(cx);
         }
         self.settings_open = page.is_some();
+        self.dismiss_tab_controls();
+        self.cover_workspace(window, cx);
         if self.settings_open {
             window.focus(&self.settings_focus, cx);
         } else {
@@ -854,6 +856,7 @@ impl Plait {
                         "Git inspector (needs a wider window)"
                     },
                 )
+                .map(|el| self.covered_tab_control(el))
                 .aria_keyshortcuts(self.shortcut_aria("view.toggle_inspector"))
                 .on_activate(cx, |this, window, cx| this.toggle_inspector(window, cx)),
             )
@@ -906,6 +909,7 @@ impl Plait {
             };
             controls = controls.child(
                 segment(id, title, self.workspace.tab == view)
+                    .map(|el| self.covered_tab_control(el))
                     .aria_keyshortcuts(self.shortcut_aria(action))
                     .tooltip(move |_, cx| {
                         cx.new(|_| thread_controls::TextTooltip(hover.into()))
