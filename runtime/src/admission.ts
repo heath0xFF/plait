@@ -53,6 +53,7 @@ const policyKey = (root: string, identity: FileIdentity) => `project_isolation:$
 export class Admissions {
   private pending = new Map<string, Promise<Admission>>();
   private admitting = new Map<string, Promise<Admission>>();
+  private probes = new Map<string, Promise<boolean>>();
   private capacity: RunCapacity;
   private store: Store;
   private worktrees: Worktrees;
@@ -96,14 +97,28 @@ export class Admissions {
     catch (error) { refusal = error instanceof Error ? error.message : 'Worktree base is unavailable.'; }
     let busy = this.busy(root);
     if (!busy) {
-      try { const lease = await acquireCheckout(root); await lease.close(); }
-      catch (error) { if (error instanceof HostError && error.code === 'busy') busy = true; else throw error; }
+      // Checked and registered in one step, so a local run start sees the probe.
+      let probe = this.probes.get(root);
+      if (!probe) {
+        probe = this.writerElsewhere(root).finally(() => this.probes.delete(root));
+        this.probes.set(root, probe);
+      }
+      busy = await probe;
     }
     await checkRoot(root, identity);
     if (parent && (parent.root !== root || canonical(parent.identity) !== canonical(identity))) fail('permission_denied', 'Checkout identity changed. Refresh before starting a thread.');
     const project = parent?.main ?? root; const project_identity = parent?.main_identity ?? identity;
     return { schema: 1, worktree_at_start_v1: true, linked_continuation_v1: true, queue: false, strict_reader: false,
       checkout: root, identity, project, project_identity, busy, auto_worktree: this.store.setting(policyKey(project, project_identity)) === 'worktree', parent, refusal };
+  }
+  /** Settles when no placement probe holds this checkout's lease. */
+  probing(root: string): Promise<void> { return (this.probes.get(root) ?? Promise.resolve(false)).then(() => {}, () => {}); }
+  /** Another host's run holds the writer lock with a shared lifecycle lock. A Git
+   * write or removal holds the lifecycle exclusively; it is not a run. */
+  protected async writerElsewhere(root: string): Promise<boolean> {
+    const busy = (error: unknown) => { if (error instanceof HostError && error.code === 'busy') return true; throw error; };
+    try { await (await acquireCheckout(root)).close(); return false; } catch (error) { busy(error); }
+    try { await (await acquireCheckout(root, 'reader')).close(); return true; } catch (error) { busy(error); return false; }
   }
   private get(id: string): Admission {
     const row = this.store.db.prepare('SELECT result FROM thread_admissions WHERE request_id=?').get(id);

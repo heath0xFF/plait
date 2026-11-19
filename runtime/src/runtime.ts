@@ -624,6 +624,8 @@ export class Runtime {
       await checkRoot(snapshot.checkout, this.store.rootIdentity(id));
       // Recovery owns this host's lease until its record finishes. Accept now;
       // the detached run waits for it instead of blocking the request deadline.
+      // A placement probe briefly holds the lease; wait for it rather than collide.
+      await this.admissions.probing(snapshot.checkout);
       if (!this.records.busy(snapshot.checkout)) lease = await acquireCheckout(snapshot.checkout, 'writer');
       const save = () => this.save(snapshot);
       const approvals = new InteractiveApproval(snapshot, save);

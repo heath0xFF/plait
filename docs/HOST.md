@@ -2534,8 +2534,12 @@ An older desktop continues to receive the existing `busy` refusal.
 - `admission_info {checkout}` returns schema 1, `worktree_at_start_v1:true`,
   `linked_continuation_v1:true`, `queue:false`, `strict_reader:false`, canonical
   `checkout`, its `identity`, main `project`, `project_identity`, `busy`,
-  `auto_worktree`, nullable Stage 7 `parent` and nullable `refusal`. Busy checks
-  both current host state and the actual writer lease; a stale summary is not
+  `auto_worktree`, nullable Stage 7 `parent` and nullable `refusal`. Busy means a
+  run: this host's active or recovering run, or another host's run holding the
+  writer lease. A desktop Git write (stage, commit, push, fetch, pull) or a
+  removal holds the checkout exclusively and is not a busy project. Concurrent
+  probes of one checkout share a single lease check, and a run start waits for
+  an in-flight probe instead of colliding with it. A stale summary is not
   authority. An unborn repository can use its own checkout but has no worktree
   base until its first commit.
 - `set_project_isolation {checkout,identity,auto_worktree}` returns that info.

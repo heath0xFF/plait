@@ -216,3 +216,43 @@ test('held cleanup refuses busy and automatic worktree placement without changin
   assert.equal((await h.runtime.reply({...start(h.root,'held-false-worktree','codex'),placement:'worktree'})).ok,true);
   assert.ok((await admitted(h.runtime,'held-false-worktree')).worktree);
 });
+
+test('placement probes share one lease check and a Git write is not a busy project',async t=>{
+  const h=await codex(t);await chmod(h.store,0o700);await commit(h.root);
+  // The lease directory's first use is outside this test.
+  assert.equal((await h.runtime.reply({op:'admission_info',checkout:h.root}) as any).result.busy,false);
+  for(let i=0;i<5;i++) {
+    const infos:any[]=await Promise.all([1,2,3].map(()=>h.runtime.reply({op:'admission_info',checkout:h.root})));
+    assert.deepEqual(infos.map(info=>info.result?.busy ?? info.error),[false,false,false]);
+  }
+  const info:any=await h.runtime.reply({op:'admission_info',checkout:h.root});
+  assert.equal((await h.runtime.reply({op:'set_project_isolation',checkout:h.root,identity:info.result.project_identity,auto_worktree:true})).ok,true);
+  // Stage, commit, push, fetch and pull hold an exclusive lease; none of them is a run.
+  const write=await acquireCheckout(h.root,'exclusive');
+  try {
+    assert.equal((await h.runtime.reply({op:'admission_info',checkout:h.root}) as any).result.busy,false);
+    assert.equal((await h.runtime.reply(start(h.root,'during-git-write','codex'))).ok,true);
+  } finally {await write.close();}
+  const created=await admitted(h.runtime,'during-git-write');
+  assert.equal(created.worktree,null);assert.equal(created.checkout,h.root);
+  assert.equal(h.runtime.store.db.prepare('SELECT count(*) AS n FROM worktree_operations').get()!.n,0);
+  // Another host's run is still a busy project.
+  const run=await acquireCheckout(h.root);
+  try {assert.equal((await h.runtime.reply({op:'admission_info',checkout:h.root}) as any).result.busy,true);}
+  finally {await run.close();}
+});
+test('a run start waits for an in-flight placement probe instead of colliding with it',async t=>{
+  const h=await pi(t,[fauxAssistantMessage('done')]);await commit(h.root);
+  const created:any=await h.runtime.reply({protocol_version:6,op:'create_thread',checkout:h.root,request_id:'c',harness:'pi',provider:'faux',model_id:'faux-1'});
+  let release!:()=>void;const held=new Promise<void>(resolve=>release=resolve);let probing=false;
+  // The probe's real lease, held long enough that a start would otherwise collide.
+  (h.runtime.admissions as any).writerElsewhere=async(root:string)=>{const lease=await acquireCheckout(root);probing=true;await held;await lease.close();return false;};
+  const info=h.runtime.reply({op:'admission_info',checkout:h.root});
+  await until(()=>probing);
+  const submitted=h.runtime.reply({protocol_version:6,op:'submit',thread_id:created.result.thread.id,request_id:'run',text:'hello',approval:'auto'});
+  await pause();release();
+  const reply:any=await submitted;assert.equal(reply.ok,true,JSON.stringify(reply));
+  assert.equal((await info as any).result.busy,false);
+  await until(()=>!h.runtime.sessions.has(created.result.thread.id));
+  assert.equal(h.runtime.snapshot(created.result.thread.id).status,'idle',JSON.stringify(h.runtime.snapshot(created.result.thread.id).error));
+});
