@@ -98,6 +98,7 @@ export class LinearCache {
         issue_id TEXT NOT NULL,
         payload TEXT NOT NULL,
         cached_at INTEGER NOT NULL,
+        stale INTEGER NOT NULL DEFAULT 0,
         touched_seq INTEGER NOT NULL,
         PRIMARY KEY(workspace_id, team_id, identifier)
       );
@@ -136,6 +137,9 @@ export class LinearCache {
     }
     if (!this.db.prepare('PRAGMA table_info(linear_thread_links)').all().some(row => row.name === 'workspace_id')) {
       this.db.exec('ALTER TABLE linear_thread_links ADD COLUMN workspace_id TEXT');
+    }
+    if (!this.db.prepare('PRAGMA table_info(linear_cache_aliases)').all().some(row => row.name === 'stale')) {
+      this.db.exec('ALTER TABLE linear_cache_aliases ADD COLUMN stale INTEGER NOT NULL DEFAULT 0');
     }
     const maxSeq = this.db.prepare(`
       SELECT MAX(seq) AS m FROM (
@@ -370,17 +374,17 @@ export class LinearCache {
     });
   }
 
-  getIssueAlias(workspaceId: string, teamId: string, identifier: string): { issue: LinearIssueSummary; cached_at: number } | null {
-    const row = this.db.prepare(`SELECT payload, cached_at FROM linear_cache_aliases
+  getIssueAlias(workspaceId: string, teamId: string, identifier: string): { issue: LinearIssueSummary; cached_at: number; stale: boolean } | null {
+    const row = this.db.prepare(`SELECT payload, cached_at, stale FROM linear_cache_aliases
       WHERE workspace_id=? AND team_id=? AND identifier=?`).get(workspaceId, teamId, identifier);
-    return row ? { issue: JSON.parse(String(row.payload)), cached_at: Number(row.cached_at) } : null;
+    return row ? { issue: JSON.parse(String(row.payload)), cached_at: Number(row.cached_at), stale: row.stale === 1 } : null;
   }
 
   saveIssueAlias(workspaceId: string, issue: LinearIssueSummary, cachedAt: number): void {
     this.db.prepare(`INSERT INTO linear_cache_aliases
-      (workspace_id, team_id, identifier, issue_id, payload, cached_at, touched_seq) VALUES (?, ?, ?, ?, ?, ?, ?)
+      (workspace_id, team_id, identifier, issue_id, payload, cached_at, stale, touched_seq) VALUES (?, ?, ?, ?, ?, ?, 0, ?)
       ON CONFLICT(workspace_id, team_id, identifier) DO UPDATE SET issue_id=excluded.issue_id,
-        payload=excluded.payload, cached_at=excluded.cached_at, touched_seq=excluded.touched_seq`)
+        payload=excluded.payload, cached_at=excluded.cached_at, stale=0, touched_seq=excluded.touched_seq`)
       .run(workspaceId, issue.team_id, issue.identifier, issue.id, JSON.stringify(issue), cachedAt, ++this.touchSeq);
     this.db.prepare(`DELETE FROM linear_cache_aliases WHERE workspace_id=? AND team_id=? AND identifier NOT IN (
       SELECT identifier FROM linear_cache_aliases WHERE workspace_id=? AND team_id=?
@@ -402,8 +406,8 @@ export class LinearCache {
     this.transaction(() => {
       const resolvedTeam = teamId ?? this.findIssueTeamId(issueId);
       this.db.prepare('DELETE FROM linear_cache_details WHERE issue_id=?').run(issueId);
-      // Keep exact identity for offline lookup, but never present its pre-write summary as fresh.
-      this.db.prepare('UPDATE linear_cache_aliases SET cached_at=0 WHERE issue_id=?').run(issueId);
+      // Keep exact identity and fetch timestamp for offline lookup, marking it stale until refreshed.
+      this.db.prepare('UPDATE linear_cache_aliases SET stale=1 WHERE issue_id=?').run(issueId);
       if (resolvedTeam) {
         this.db.prepare('DELETE FROM linear_cache_pages WHERE team_id=?').run(resolvedTeam);
       } else {

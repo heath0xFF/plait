@@ -901,3 +901,49 @@ test('team and workflow completeness survives caching and reports caps honestly'
   assert.equal(legacy.result.teams_complete, null);
   assert.equal(legacy.result.teams[0].states_complete, null);
 });
+
+test('write invalidation marks cached aliases stale while preserving cached_at and age offline', async t => {
+  const h = await setupHarness(t);
+  const root = await makeRepo(h.dir, 'stale-alias-repo');
+  await h.call({ op: 'linear_set_key', key: h.fake.validKey });
+  await h.call({ op: 'linear_bind_project', checkout: root, team_id: 'team-pla' });
+
+  const initialAt = h.now;
+  const resolved = await h.call({ op: 'linear_resolve_issue', checkout: root, reference: 'PLA-142' });
+  assert.equal(resolved.ok, true);
+  assert.equal(resolved.result.cached_at, initialAt);
+
+  // Post a comment whose follow-up issue refresh fails with 503 so the alias remains invalidated.
+  h.advance(10_000);
+  h.fake.enqueueFault(() => false);
+  h.fake.enqueueFault((_req, res) => { res.writeHead(503); res.end(); return true; });
+  const posted = await h.call({
+    op: 'linear_post_comment',
+    issue_id: 'issue-142',
+    body: 'Invalidate alias without losing cached_at',
+    request_id: 'req-stale-alias',
+  });
+  assert.equal(posted.ok, true);
+  assert.equal(posted.result.issue, null);
+
+  // While online, a write-invalidated alias must refresh instead of serving stale data.
+  await h.call({ op: 'linear_resolve_issue', checkout: root, reference: 'PLA-143' });
+  h.fake.enqueueFault(() => false);
+  h.fake.enqueueFault((_req, res) => { res.writeHead(503); res.end(); return true; });
+  await h.call({ op: 'linear_post_comment', issue_id: 'issue-143', body: 'Invalidate PLA-143', request_id: 'req-stale-online' });
+  h.fake.issues[1].title = 'Refreshed PLA-143';
+  const refreshedOnline = await h.call({ op: 'linear_resolve_issue', checkout: root, reference: 'PLA-143' });
+  assert.equal(refreshedOnline.ok, true);
+  assert.equal(refreshedOnline.result.cached, false);
+  assert.equal(refreshedOnline.result.issue.title, 'Refreshed PLA-143');
+
+  // While Linear is offline, resolving from the invalidated alias must report the real cached_at and age.
+  h.advance(5_000);
+  await h.fake.close();
+  const offline = await h.call({ op: 'linear_resolve_issue', checkout: root, reference: 'PLA-142' });
+  assert.equal(offline.ok, true);
+  assert.equal(offline.result.cached, true);
+  assert.equal(offline.result.stale, true);
+  assert.equal(offline.result.cached_at, initialAt);
+  assert.equal(offline.result.cache_age_seconds, 15);
+});

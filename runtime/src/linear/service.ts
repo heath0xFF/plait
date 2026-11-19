@@ -527,7 +527,7 @@ export class LinearService {
       issue, workspace_id: auth.workspace_id, cached: fromCache, stale, cached_at: cachedAt,
       cache_age_seconds: fromCache ? cacheAgeSeconds(cachedAt, this.now()) : 0, partial, warning,
     });
-    if (cached && !refresh && this.now() - cached.cached_at < LINEAR_CACHE_ISSUES_TTL_MS) {
+    if (cached && !cached.stale && !refresh && this.now() - cached.cached_at < LINEAR_CACHE_ISSUES_TTL_MS) {
       validate(cached.issue);
       return reply(cached.issue, cached.cached_at, true, false, false, null);
     }
