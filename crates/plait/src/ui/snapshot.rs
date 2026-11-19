@@ -749,6 +749,9 @@ impl Harness {
     /// Draw the scene, which runs layout and paint, and save it when rendering.
     fn capture(&mut self, name: &str) {
         let Some(output) = &self.output else {
+            #[cfg(debug_assertions)]
+            self.draw_a11y().assert_no_duplicates(name);
+            #[cfg(not(debug_assertions))]
             self.draw();
             return;
         };
