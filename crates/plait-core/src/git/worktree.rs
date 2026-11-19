@@ -290,6 +290,28 @@ fn verify_parent(parent: &Parent) -> Result<()> {
     Ok(())
 }
 
+/// Removal needs the repository, not the checkout or commit the worktree
+/// started from: either may be gone by then, as when it began in a worktree.
+fn verify_repository(parent: &Parent) -> Result<()> {
+    let changed = || {
+        "The repository this worktree belongs to has moved or changed. Nothing was removed."
+            .to_owned()
+    };
+    parent
+        .main_identity
+        .checked(&parent.main)
+        .map_err(|_| changed())?;
+    parent
+        .common_identity
+        .checked(&parent.common)
+        .map_err(|_| changed())?;
+    let paths = crate::lease::resolve_git_checkout(&parent.main).map_err(|_| changed())?;
+    if paths.root != parent.main || paths.common_dir != parent.common {
+        return Err(changed());
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ManagedStage {
@@ -649,7 +671,7 @@ pub fn remove_managed_supervised(
     if record.stage == ManagedStage::Removed {
         return Ok(record);
     }
-    verify_parent(&record.parent)?;
+    verify_repository(&record.parent)?;
     if record.stage == ManagedStage::Removing && fs::symlink_metadata(&record.path).is_err() {
         let _lease = crate::lease::acquire_git_checkout(
             &record.parent.main,
@@ -682,7 +704,7 @@ pub fn remove_managed_supervised(
     )
     .map_err(String::from)?;
     verify_managed(&record)?;
-    verify_parent(&record.parent)?;
+    verify_repository(&record.parent)?;
     let dirty = read_worktree(
         &record.path,
         &[
@@ -1304,6 +1326,31 @@ mod managed_tests {
         }
         repo.git(&["worktree", "remove", mine.to_str().unwrap()]);
         clean(&tree);
+    }
+    #[test]
+    fn a_worktree_started_from_a_removed_worktree_can_be_removed() {
+        let repo = repository();
+        let first = create(&repo);
+        let second_id = "abcdef01-1234-4abc-8abc-123456789abc";
+        let second = create_managed_worktree(
+            &worktree_parent(&first.path).unwrap(),
+            second_id,
+            None,
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(second.parent.main, repo.0);
+        for tree in [&first, &second] {
+            let removed = remove_managed_worktree(
+                tree.clone(),
+                tree.identity.as_ref().unwrap(),
+                true,
+                |_| Ok(()),
+            )
+            .unwrap();
+            assert_eq!(removed.stage, ManagedStage::Removed);
+        }
+        clean(&first);
     }
     fn git_in(root: &Path, args: &[&str]) {
         let output = std::process::Command::new("git")
