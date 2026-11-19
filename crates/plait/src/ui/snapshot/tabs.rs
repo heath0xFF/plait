@@ -853,3 +853,61 @@ pub(super) fn stored_views() {
     drop(journal);
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+/// Saved tabs restored while Settings is open stay beneath it.
+pub(super) fn restore_beneath_settings() {
+    use plait_core::{
+        session::Journal,
+        tabs::{CheckoutKey, HostKey, storage},
+    };
+    let scratch = std::env::temp_dir().join(format!("plait-tab-covered-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let saved_path = scratch.join("desktop/tabs.json");
+    let (journal, data) = Journal::open(&scratch.join("session"), "/tab-test-host".into()).unwrap();
+    let mut h = Harness::new(&repository, None, 900., 600.);
+    h.connect(&repository, false);
+    install(&mut h, 3);
+    let host = HostKey {
+        id: "verified-test-host".into(),
+        store: "/tab-test-host".into(),
+    };
+    let checkout = CheckoutKey {
+        host: host.clone(),
+        root: repository.clone(),
+        directory: super::super::tab_identity::directory(&repository),
+    };
+    h.update(|p, w, cx| {
+        p.host.connection.connected = false;
+        p.install_tab_identity(host.clone(), vec![checkout.clone()], cx);
+        p.session.journal = Some(journal.clone());
+        p.session.data = Some(data);
+        p.tabs.identity.catalog_ready = true;
+        p.tabs.persistence.requested = true;
+        p.tabs.persistence.loaded = true;
+        p.tabs.persistence.restored = true;
+        p.tabs.persistence.writable = true;
+        p.tabs.persistence.path = Some(saved_path.clone());
+        p.tabs.persistence.window = Some(w.window_handle());
+    });
+    h.window
+        .update(&mut h.cx, |p, w, cx| {
+            p.flush_tab_preferences(Some(w), cx).unwrap()
+        })
+        .unwrap()
+        .write()
+        .unwrap();
+    let bytes = storage::read(&saved_path).unwrap().unwrap();
+    h.update(|p, w, cx| {
+        p.tabs.persistence.restored = false;
+        p.tabs.persistence.edited = false;
+        p.tabs.persistence.bytes = Some(bytes);
+        p.show_settings(true, w, cx);
+        p.try_restore_tabs(w, cx);
+        assert_eq!(p.tabs.model.tabs().len(), 3);
+        assert!(p.settings_open);
+        assert!(p.settings_focus.contains_focused(w, cx));
+    });
+    drop(h);
+    drop(journal);
+    std::fs::remove_dir_all(scratch).unwrap();
+}

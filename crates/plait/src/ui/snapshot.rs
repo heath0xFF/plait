@@ -6813,3 +6813,11 @@ fn unchanged_large_tab_views_are_stored_once() {
     }
     tabs::stored_views();
 }
+
+#[core::prelude::v1::test]
+fn restored_tabs_stay_beneath_open_settings() {
+    if !isolated("restored_tabs_stay_beneath_open_settings") {
+        return;
+    }
+    tabs::restore_beneath_settings();
+}

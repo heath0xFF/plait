@@ -320,11 +320,7 @@ impl Plait {
                 self.present_tab(window, cx);
                 self.tabs.lifecycle.presenting = false;
             }
-            self.settings_open = covered;
-            if covered {
-                self.settings_restore = self.visible_composer().map(|c| c.focus_handle(cx));
-                window.focus(&self.settings_focus, cx);
-            }
+            self.keep_beneath_settings(covered, window, cx);
             if !covered
                 && self.workspace.tab == super::Workspace::Conversation
                 && self.conversation_snapshot().is_some()
@@ -343,6 +339,20 @@ impl Plait {
         self.apply_pending_tab_identity(window, cx);
         if let Some(intent) = self.tabs.lifecycle.pending.pop_front() {
             self.request_tab(intent, window, cx);
+        }
+    }
+
+    /// Presenting a tab selects its thread, which would close an open modal.
+    pub(super) fn keep_beneath_settings(
+        &mut self,
+        covered: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings_open = covered;
+        if covered {
+            self.settings_restore = self.visible_composer().map(|c| c.focus_handle(cx));
+            window.focus(&self.settings_focus, cx);
         }
     }
 

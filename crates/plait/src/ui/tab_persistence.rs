@@ -236,6 +236,7 @@ impl Plait {
             self.tabs.persistence.writable &= restored.status != RestoreStatus::UnknownVersion;
             self.session.restore_thread = None;
             if !self.tabs.persistence.edited {
+                let covered = self.settings_open;
                 self.tabs.model = restored.window;
                 self.park_workspace(cx);
                 self.tabs.lifecycle.presenting = true;
@@ -245,6 +246,7 @@ impl Plait {
                 }
                 self.present_tab(window, cx);
                 self.tabs.lifecycle.presenting = false;
+                self.keep_beneath_settings(covered, window, cx);
             } else if self.tabs.model.active().is_some() {
                 // Keep the person's early action in front while restoring the other tabs.
                 let active = self.tabs.model.active();
