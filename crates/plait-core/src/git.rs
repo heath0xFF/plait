@@ -43,7 +43,7 @@ fn drain(mut reader: impl Read, limit: usize) -> std::io::Result<Output> {
     Ok(Output { bytes, truncated })
 }
 
-fn base_command(root: &Path) -> Command {
+pub(crate) fn base_command(root: &Path) -> Command {
     let mut command = Command::new("git");
     command
         .args([
@@ -159,6 +159,15 @@ fn execute(command: &mut Command, limit: usize, timeout: Duration) -> Result<Out
         return Err(raw.failure());
     }
     Ok(raw.out)
+}
+
+/// Run a short hardened read-only Git query (used by checkout lease resolution).
+pub(crate) fn run_readonly(command: &mut Command) -> Result<Vec<u8>> {
+    let output = execute(command, STATUS_LIMIT, TIMEOUT)?;
+    if output.truncated {
+        return Err("Git query output exceeds the safe read limit.".into());
+    }
+    Ok(output.bytes)
 }
 
 /// Run to completion under a deadline. `input` goes to stdin from its own
