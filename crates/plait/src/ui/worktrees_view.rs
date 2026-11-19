@@ -1,4 +1,5 @@
 //! One visible project graph. Host/Git/storage reads retire at the visibility boundary.
+mod presentation;
 mod render;
 use super::{Plait, theme::*, thread_controls::TextTooltip};
 use gpui::{prelude::*, *};
@@ -36,6 +37,10 @@ pub(super) struct View {
     pub titles: Vec<String>,
     pub head_labels: Vec<String>,
     pub commit_labels: Vec<String>,
+    head_styles: Vec<presentation::LabelStyle>,
+    commit_styles: Vec<presentation::LabelStyle>,
+    strokes: Vec<Vec<presentation::Stroke>>,
+    pub hovered: Option<usize>,
     pub ages: Vec<String>,
     pub total: String,
     pub largest: f32,
@@ -89,6 +94,10 @@ impl View {
         self.titles.clear();
         self.head_labels.clear();
         self.commit_labels.clear();
+        self.head_styles.clear();
+        self.commit_styles.clear();
+        self.strokes.clear();
+        self.hovered = None;
         self.ages.clear();
         self.total.clear();
         self.largest = 1.;
@@ -153,6 +162,19 @@ impl View {
                 )
             })
             .collect();
+        self.commit_styles = self
+            .graph
+            .rows
+            .iter()
+            .map(|r| {
+                let hash = r.commit.commit.short.len();
+                presentation::LabelStyle {
+                    title: hash + 2..hash + 2 + r.commit.commit.subject.len(),
+                    state: 0..0,
+                    code: 0..hash,
+                }
+            })
+            .collect();
         self.items.clear();
         for (i, row) in self.graph.rows.iter().enumerate() {
             for &lane in &row.heads {
@@ -169,6 +191,12 @@ impl View {
             }
         }
         self.selected = self.selected.min(self.rows.len().saturating_sub(1));
+        self.strokes = self
+            .items
+            .iter()
+            .map(|item| presentation::strokes(item, &self.graph))
+            .collect();
+        self.hovered = None;
     }
 }
 fn size_label(size: Option<&Result<Size, String>>) -> String {
@@ -633,6 +661,24 @@ impl Plait {
                     safe_text(row.branch.as_deref().unwrap_or("Detached")),
                     facts.join(" · ")
                 )
+            })
+            .collect();
+        self.worktrees.head_styles = self
+            .worktrees
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(i, row)| {
+                let title = self.worktrees.titles[i].len();
+                let state_end = title + 2 + self.worktrees.words[i].len();
+                let branch_start = state_end + " · ".len();
+                presentation::LabelStyle {
+                    title: 0..title,
+                    state: title + 2..state_end,
+                    code: branch_start
+                        ..branch_start
+                            + safe_text(row.branch.as_deref().unwrap_or("Detached")).len(),
+                }
             })
             .collect();
     }

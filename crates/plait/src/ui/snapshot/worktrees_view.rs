@@ -12,7 +12,14 @@ use plait_core::{
     worktree_size::Size,
 };
 fn oid(n: usize) -> String {
-    format!("{n:04x}").repeat(10)
+    (0..5)
+        .map(|part| {
+            format!(
+                "{:08x}",
+                (n as u32).wrapping_mul(0x9e3779b9).rotate_left(part * 5) ^ 0xa3c59ac3
+            )
+        })
+        .collect()
 }
 fn commit(n: usize, parent: usize, subject: String) -> GraphCommit {
     GraphCommit {
@@ -76,6 +83,17 @@ pub(super) fn walk(repo: &Path, out: Option<&Path>, suffix: &str, width: f32, he
             modifiers: Modifiers::default(),
         }));
         h.capture(&format!("worktrees-refusal-hover-{theme}-{suffix}"));
+        h.pointer(PlatformInput::MouseMove(MouseMoveEvent {
+            position: point(px(10.), px(10.)),
+            pressed_button: None,
+            modifiers: Modifiers::default(),
+        }));
+        h.pointer(PlatformInput::MouseMove(MouseMoveEvent {
+            position: point(px(600.), px(182.)),
+            pressed_button: None,
+            modifiers: Modifiers::default(),
+        }));
+        h.capture(&format!("worktrees-lane-hover-{theme}-{suffix}"));
         h.pointer(PlatformInput::MouseMove(MouseMoveEvent {
             position: point(px(10.), px(10.)),
             pressed_button: None,
@@ -161,6 +179,7 @@ fn graph_accessibility_is_unique_stable_and_has_no_thread_view_bar() {
     let mut h = Harness::new(&repo, None, 1380., 860.);
     h.connect(&repo, false);
     install(&mut h, 4);
+    let mut previous = None;
     for i in 0..2 {
         let frame = h.draw_a11y();
         frame.assert_no_duplicates(&format!("worktrees frame {i}"));
@@ -168,7 +187,27 @@ fn graph_accessibility_is_unique_stable_and_has_no_thread_view_bar() {
             == Some("Refresh")));
         assert!(!frame.has_node(Role::Tab, |node| node.label.as_deref()
             == Some("Conversation")));
+        assert!(frame.has_node(Role::Button, |node| node.label.as_deref()
+            == Some(
+                "Retry requests after rate limits  Working · plait/topic-1 · Clean · 2 not pushed"
+            )));
+        let nodes: Vec<_> = frame
+            .nodes
+            .into_iter()
+            .filter(|node| node.path.contains("worktrees-"))
+            .collect();
+        if let Some(previous) = previous.as_ref() {
+            assert_eq!(&nodes, previous);
+        }
+        previous = Some(nodes);
     }
+    h.pointer(PlatformInput::MouseMove(MouseMoveEvent {
+        position: point(px(600.), px(182.)),
+        pressed_button: None,
+        modifiers: Modifiers::default(),
+    }));
+    h.update(|p, _, _| assert_eq!(p.worktrees.hovered, Some(2)));
+    h.draw_a11y().assert_no_duplicates("hovered worktree");
     h.update(|p, _, cx| {
         let owner = p.worktrees.rows[1].thread_id.clone().unwrap();
         p.host

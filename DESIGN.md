@@ -48,15 +48,22 @@ conversation keeps a readable minimum width.
   commits first. Worktrees occupy fixed lanes beside it. One-point neutral
   lines and small rings follow the conversation turn line; position separates
   lanes. Filled nodes are commits, hollow head nodes are uncommitted changes.
-  State alone adds color. Short hashes, truncated subjects and age occupy
-  virtualized 28-point rows. Head labels carry thread, state, branch, preservation
-  facts and right-aligned size. Merged heads rejoin; unavailable or rewritten
-  bases say Detached. Selection is a neutral fill. The detail sits beside the
+  State alone adds color. Short hashes and branches use the code font, dimmed
+  like counts and ages; commit subjects use secondary text. Thread titles use
+  primary text and their state words use the same color as thread tabs.
+  Virtualized 28-point rows carry those labels and right-aligned sizes.
+  Merged heads rejoin; unavailable or rewritten bases say Detached. Connectors
+  turn through six-point rounded corners. Selection adds a neutral fill and
+  strengthens the whole lane to foreground; hover strengthens it more quietly.
+  The detail sits beside the
   graph in wide windows and below it in narrow windows, with actions near its
   top. Its six-point storage bar shows the selected checkout's share of the
   largest, split into source and build output in two neutral tones. The project
-  total sits above the graph. Last used and Size order lanes while retaining
-  the main checkout first. Long graphs scroll in both directions. Unknown and
+  total sits above the graph. The path stays on one line, shortened in its
+  middle and complete on hover. Storage qualifications and exact removal reasons
+  are available on hover; visible refusal advice names an available next step.
+  Last used and Size show the active order while retaining the main checkout
+  first. Long graphs scroll in both directions. Unknown and
   bounded measurements say Measuring, Unavailable or over, never zero by default.
 - **Rail.** No in-app logo: the app icon and window carry the brand. The rail
   sits below the 40-point tab bar and starts with two actions, New thread and

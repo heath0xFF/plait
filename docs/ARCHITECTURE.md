@@ -598,6 +598,11 @@ IDs and keyboard selection. More lanes widen the scrollable graph. The frame
 suite's fifty-worktree case measures cached graph rendering, layout, prepaint
 and paint with no host, Git or storage work; it does not measure GPU presentation.
 
+The desktop prepares rounded connector strokes and label style ranges when
+the graph changes. Selection and hover only tint those strokes; the virtualized
+list builds text and geometry for visible rows. Accessible row names retain the
+title, state and branch order independently of their visual styles.
+
 `worktree_size` bounds each walk, including the private build cache, to 50,000
 entries and a 250 ms deadline checked between entries. It reaches every entry
 from its parent's open directory descriptor, opens folders without following a

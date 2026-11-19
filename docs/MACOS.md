@@ -393,7 +393,9 @@ changes. History is capped at 300 commits; a clipped graph says **Older commits
 not shown**. External worktrees are labelled plainly and cannot be removed here.
 
 Select a lane with the pointer or Tab and Return/Space. Its detail appears beside
-the graph in wide windows and below in narrow windows. **Open** brings its thread
+the graph in wide windows and below in narrow windows. The selected lane is
+drawn stronger from its head to its fork; hover gives a quieter preview. Hover
+the shortened path to read it in full. **Open** brings its thread
 forward. **Finder** shows the checkout folder; **Terminal** uses the terminal
 chosen in Settings. **Remove** is available only when the host's current checks
 permit it. Hover explains a refusal in the host's words. Removal asks once with
@@ -402,7 +404,7 @@ a lost reply says unconfirmed and **Refresh** recovers the same request.
 Branches, thread history and private build caches remain. Removed records retain
 cache accounting and say **Removed**. Nothing is removed automatically.
 
-**Last used** and **Size** sort lanes, keeping the main checkout first. Last used
+**Last used** and **Size** sort lanes and show the current order, keeping the main checkout first. Last used
 is recorded thread activity, not a filesystem access time. **Refresh** rereads
 state and measures again. When a thread's run ends, its checkout is read again
 by itself. **Remove** waits while a run works in that checkout. Measurements run only while this tab is visible,

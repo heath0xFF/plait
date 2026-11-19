@@ -79,24 +79,42 @@ impl Plait {
                     .child(a11y_text("worktrees-total", self.worktrees.total.clone())),
             )
             .child(
-                button("worktrees-sort-used", "Last used")
-                    .tooltip(|_, cx| {
-                        hover(
-                            "Order lanes by last use; the main checkout stays first.".into(),
-                            cx,
-                        )
-                    })
-                    .on_activate(cx, |this, _, cx| this.sort_worktree_lanes(false, cx)),
+                toned_button(
+                    "worktrees-sort-used",
+                    "Last used",
+                    if self.worktrees.sort_size {
+                        Tone::Ghost
+                    } else {
+                        Tone::Selected
+                    },
+                )
+                .aria_selected(!self.worktrees.sort_size)
+                .tooltip(|_, cx| {
+                    hover(
+                        "Order lanes by last use; the main checkout stays first.".into(),
+                        cx,
+                    )
+                })
+                .on_activate(cx, |this, _, cx| this.sort_worktree_lanes(false, cx)),
             )
             .child(
-                button("worktrees-sort-size", "Size")
-                    .tooltip(|_, cx| {
-                        hover(
-                            "Order lanes by measured size; the main checkout stays first.".into(),
-                            cx,
-                        )
-                    })
-                    .on_activate(cx, |this, _, cx| this.sort_worktree_lanes(true, cx)),
+                toned_button(
+                    "worktrees-sort-size",
+                    "Size",
+                    if self.worktrees.sort_size {
+                        Tone::Selected
+                    } else {
+                        Tone::Ghost
+                    },
+                )
+                .aria_selected(self.worktrees.sort_size)
+                .tooltip(|_, cx| {
+                    hover(
+                        "Order lanes by measured size; the main checkout stays first.".into(),
+                        cx,
+                    )
+                })
+                .on_activate(cx, |this, _, cx| this.sort_worktree_lanes(true, cx)),
             )
             .child(
                 button("worktrees-refresh", "Refresh")
@@ -108,54 +126,31 @@ impl Plait {
     }
     fn worktree_graph_row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let item = &self.worktrees.items[index];
-        let (r, lane) = match item {
-            Item::Head(r, l) | Item::Changed(r, l) => (Some(*r), *l),
-            Item::Commit(r) => (Some(*r), self.worktrees.graph.rows[*r].lane),
-            Item::Detached(l) => (None, *l),
+        let node_lane = match item {
+            Item::Head(_, lane) | Item::Changed(_, lane) | Item::Detached(lane) => *lane,
+            Item::Commit(r) => self.worktrees.graph.rows[*r].lane,
         };
-        let node_x = 12. + lane as f32 * 14.;
-        let lane = if lane < self.worktrees.rows.len() {
-            lane
+        let node_x = 12. + node_lane as f32 * 14.;
+        let lane = if node_lane < self.worktrees.rows.len() {
+            node_lane
         } else {
             0
         };
         let width = 24. + self.worktrees.graph.columns as f32 * 14.;
         let mut drawing = div().relative().h(px(28.)).w(px(width)).flex_shrink_0();
-        if let Some(r) = r {
-            let row = &self.worktrees.graph.rows[r];
-            for &l in &row.lines {
-                drawing = drawing.child(
-                    div()
-                        .absolute()
-                        .left(px(12. + l as f32 * 14.))
-                        .top_0()
-                        .h_full()
-                        .w(px(1.))
-                        .bg(rgb(colors().edge)),
-                );
-            }
-            if matches!(item, Item::Commit(_)) {
-                for &(a, b) in &row.joins {
-                    drawing = drawing.child(
-                        div()
-                            .absolute()
-                            .left(px(12. + a.min(b) as f32 * 14.))
-                            .top(px(14.))
-                            .w(px(a.abs_diff(b) as f32 * 14.))
-                            .h(px(1.))
-                            .bg(rgb(colors().edge)),
-                    );
-                }
-            }
+        for stroke in &self.worktrees.strokes[index] {
+            let tint = if self.worktrees.selected == stroke.lane {
+                colors().text
+            } else if self.worktrees.hovered == Some(stroke.lane) {
+                colors().muted
+            } else {
+                colors().edge
+            };
+            drawing = drawing.child(graph_stroke(stroke, tint));
         }
         let changed = matches!(item, Item::Changed(..));
         let node_color = if matches!(item, Item::Head(..)) {
-            match self.worktrees.words[lane] {
-                "Working" => colors().blue,
-                "Approve" | "Interrupted" => colors().amber,
-                "Failed" => colors().red,
-                _ => colors().muted,
-            }
+            state_tint(self.worktrees.words[lane])
         } else {
             colors().muted
         };
@@ -213,8 +208,15 @@ impl Plait {
                     .min_w_0()
                     .truncate()
                     .text_size(px(12.))
-                    .child(a11y_text(format!("{id}-text"), text)),
+                    .child(self.worktree_row_text(item, lane, format!("{id}-text"), text)),
             )
+            .on_hover(cx.listener(move |this, hovered, _, cx| {
+                let next = if *hovered { Some(node_lane) } else { None };
+                if *hovered || this.worktrees.hovered == Some(node_lane) {
+                    this.worktrees.hovered = next;
+                    cx.notify();
+                }
+            }))
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                     this.select_worktree_lane(lane, cx);
@@ -272,6 +274,7 @@ impl Plait {
             .and_then(|s| s.as_ref().ok());
         let largest = self.worktrees.largest;
         let bar = row()
+            .gap_0()
             .h(px(6.))
             .flex_shrink_0()
             .w_full()
@@ -312,20 +315,110 @@ impl Plait {
         } else {
             reason.clone()
         };
-        panel.child(a11y_text("worktrees-detail-title",title))
+        let visible_reason = removal_advice(&reason).to_owned();
+        let path_text = safe_text(&path.display().to_string());
+        panel.min_w_0().child(column().min_w_0().flex_shrink_0().gap_2().child(a11y_text("worktrees-detail-title",title))
             .child(row().flex_wrap().gap_2()
                 .when_some(thread,|el,id|el.child(button("worktrees-open","Open").tooltip(|_,cx|hover("Bring this worktree’s thread forward.".into(),cx)).on_activate(cx,move |this,window,cx|this.select_host_thread(id.clone(),window,cx))))
                 .child(button("worktrees-finder","Finder").disabled(tree.missing).tooltip(|_,cx|hover("Show this checkout in Finder.".into(),cx)).on_activate(cx,move |this,_,cx| { if !missing { this.hand_off(plait_core::handoff::show_in_finder(&finder),cx); } }))
                 .child(button("worktrees-terminal","Terminal").disabled(tree.missing).tooltip(|_,cx|hover("Open Terminal Here using Settings → Editor.".into(),cx)).on_activate(cx,move |this,_,cx| { if !missing { this.hand_off(plait_core::handoff::open_terminal(&this.preferences.value.open_terminals_with,&terminal),cx); } }))
                 .when(tree.creation_id.is_some()&&!tree.main&&!tree.removed,|el|el.child(button("worktrees-remove","Remove").when(cfg!(test), |el| el.tooltip_show_delay(std::time::Duration::ZERO)).disabled(facts.refusal.is_some() || busy || self.worktrees.removal.pending.is_some() || self.worktree_busy || !self.host.connection.connected || self.worktrees.loading || self.worktrees.error.is_some()).text_color(rgb(if facts.refusal.is_some(){colors().subtle}else{colors().text})).tooltip(move |_,cx|hover(remove_reason.clone(),cx)).on_activate(cx,move |this,window,cx|this.ask_remove_view_worktree(&drawn.0,drawn.1.as_ref(),window,cx)))))
             .child(div().text_size(px(12.)).text_color(rgb(colors().muted)).child(a11y_text("worktrees-detail-branch",format!("{} · from {base}",safe_text(tree.branch.as_deref().unwrap_or("Detached"))))))
-            .child(div().text_size(px(11.)).text_color(rgb(colors().subtle)).child(a11y_text("worktrees-detail-path",safe_text(&path.display().to_string()))))
+            .child(hover_text("worktrees-detail-path",path_text.clone(),path_text).min_w_0().w_full().truncate().text_ellipsis_middle().text_size(px(11.)).text_color(rgb(colors().subtle)))
             .child(a11y_text("worktrees-detail-facts",format!("{} changed · {} not pushed · {} kept only here",count(facts.changed),count(facts.unpushed),count(facts.exclusive))))
-            .child(div().text_size(px(12.)).text_color(rgb(colors().muted)).child(a11y_text("worktrees-detail-reason",safe_text(&reason))))
+            .child(hover_text("worktrees-detail-reason",safe_text(&visible_reason),reason).text_size(px(12.)).text_color(rgb(colors().muted)))
             .child(bar)
-            .child(a11y_text("worktrees-detail-size",size.map_or_else(||size_label(self.worktrees.sizes[n].as_ref()),|s|format!("{} source · {} build output{}",bytes(s.source),bytes(s.build),if s.incomplete {" · lower bound"}else{""}))))
-            .child(div().text_size(px(11.)).text_color(rgb(colors().subtle)).child(a11y_text("worktrees-size-note","Logical bytes, including private build cache. Shared Git storage excluded; this is not space reclaimable.")))
-            .child(a11y_text("worktrees-last-used",format!("Last used: {}",self.worktrees.ages[n])))
+            .child(hover_text("worktrees-detail-size",size.map_or_else(||size_label(self.worktrees.sizes[n].as_ref()),|s|format!("{} source · {} build output{}",bytes(s.source),bytes(s.build),if s.incomplete {" · lower bound"}else{""})),"Logical bytes, including private build cache. Shared Git storage excluded; this is not space reclaimable.".into()))
+            .child(a11y_text("worktrees-last-used",format!("Last used: {}",self.worktrees.ages[n]))))
+    }
+
+    fn worktree_row_text(&self, item: &Item, lane: usize, id: String, label: String) -> AnyElement {
+        let (style, title_color) = match item {
+            Item::Commit(r) => (&self.worktrees.commit_styles[*r], colors().muted),
+            Item::Head(..) | Item::Detached(_) => {
+                (&self.worktrees.head_styles[lane], colors().text)
+            }
+            Item::Changed(..) => {
+                return div()
+                    .text_color(rgb(colors().subtle))
+                    .child(a11y_text(id, label))
+                    .into_any_element();
+            }
+        };
+        let highlights = [
+            (style.title.clone(), title_color),
+            (style.state.clone(), state_tint(self.worktrees.words[lane])),
+        ]
+        .into_iter()
+        .filter(|(range, _)| !range.is_empty())
+        .map(|(range, color)| {
+            (
+                range,
+                HighlightStyle {
+                    color: Some(rgb(color).into()),
+                    ..Default::default()
+                },
+            )
+        });
+        div()
+            .id(SharedString::from(id))
+            .role(Role::Label)
+            .aria_label(label.clone())
+            .text_color(rgb(colors().subtle))
+            .truncate()
+            .child(
+                StyledText::new(label)
+                    .with_highlights(highlights)
+                    .with_font_family_overrides([(style.code.clone(), mono())]),
+            )
+            .audited()
+            .into_any_element()
+    }
+}
+
+fn state_tint(word: &str) -> u32 {
+    match word {
+        "Working" => colors().blue,
+        "Approve" | "Interrupted" => colors().amber,
+        "Failed" => colors().red,
+        "Ready" | "Done" => colors().mint,
+        _ => colors().subtle,
+    }
+}
+
+fn removal_advice(reason: &str) -> &str {
+    if reason.contains("explicitly confirm preserving only the local branch") {
+        "Push this branch's commits before removing the worktree."
+    } else {
+        reason
+    }
+}
+
+fn hover_text(id: &'static str, label: String, explanation: String) -> Audited<Stateful<Div>> {
+    div()
+        .id(id)
+        .role(Role::Label)
+        .aria_label(label.clone())
+        .tooltip(move |_, cx| hover(explanation.clone(), cx))
+        .child(StyledText::new(label))
+        .audited()
+}
+
+fn graph_stroke(stroke: &presentation::Stroke, tint: u32) -> Div {
+    use presentation::Corner;
+    let line = div()
+        .absolute()
+        .left(px(stroke.x))
+        .top(px(stroke.y))
+        .w(px(stroke.width))
+        .h(px(stroke.height))
+        .border_color(rgb(tint));
+    match stroke.corner {
+        None => line.bg(rgb(tint)),
+        Some(Corner::TopLeft) => line.border_t_1().border_l_1().rounded_tl(px(6.)),
+        Some(Corner::TopRight) => line.border_t_1().border_r_1().rounded_tr(px(6.)),
+        Some(Corner::BottomLeft) => line.border_b_1().border_l_1().rounded_bl(px(6.)),
+        Some(Corner::BottomRight) => line.border_b_1().border_r_1().rounded_br(px(6.)),
     }
 }
 
