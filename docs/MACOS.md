@@ -571,6 +571,7 @@ path alongside separate `PLAIT_HOST_STORE` and `PLAIT_DESKTOP_STATE_DIR` paths.
 | --- | --- | --- |
 | Cmd-comma | Settings… | `app.settings` |
 | Cmd-Q | Quit Plait | `app.quit` |
+| Cmd-T | New Tab | `tab.new` |
 | Cmd-N | New Thread | `thread.new` |
 | Cmd-Shift-N | New Thread with Model… | `thread.new_with_model` |
 | Cmd-Option-N | New Thread in Worktree | `thread.new_worktree` |
@@ -580,7 +581,9 @@ path alongside separate `PLAIT_HOST_STORE` and `PLAIT_DESKTOP_STATE_DIR` paths.
 | Cmd-R | Refresh Git Status | `git.refresh` |
 | Cmd-Option-E | Open in Editor | `file.open_in_editor` |
 | Cmd-Option-T | Open Terminal Here | `project.open_terminal` |
-| Cmd-W | Close Window | `window.close` |
+| Cmd-W | Close Tab | `tab.close` |
+| Cmd-Shift-T | Reopen Closed Tab | `tab.reopen` |
+| Cmd-Shift-W | Close Window | `window.close` |
 | Cmd-K | Command Palette… | `palette.toggle` |
 | Cmd-B | Toggle Sidebar | `view.toggle_sidebar` |
 | Cmd-L | Toggle Git Inspector | `view.toggle_inspector` |
@@ -601,7 +604,13 @@ path alongside separate `PLAIT_HOST_STORE` and `PLAIT_DESKTOP_STATE_DIR` paths.
 | Cmd-Shift-C | Commit Staged Changes… | `git.commit` |
 | Cmd-Shift-B | Switch Branch… | `git.switch_branch` |
 | Cmd-M | Minimize | `window.minimize` |
-| Cmd-1 to Cmd-9 | Jump to Sidebar Item 1–9 | `jump.1` to `jump.9` |
+| Cmd-Shift-] | Next Tab | `tab.next` |
+| Cmd-Shift-[ | Previous Tab | `tab.previous` |
+| Control-Shift-Right | Move Tab Right | `tab.move_right` |
+| Control-Shift-Left | Move Tab Left | `tab.move_left` |
+| Cmd-Shift-Backslash | Show All Tabs… | `tab.list` |
+| Cmd-1 to Cmd-9 | Switch to Tab 1–9 | `tab_jump.1` to `tab_jump.9` |
+| Cmd-Option-1 to Cmd-Option-9 | Jump to Sidebar Item 1–9 | `jump.1` to `jump.9` |
 | Tab | Focus Next Control | `focus.next` |
 | Shift-Tab | Focus Previous Control | `focus.previous` |
 
@@ -625,7 +634,7 @@ another thread sets it aside with its text, which Cmd-N brings back; Escape or
 in the desktop recovery journal across restarts. Cmd-Shift-N opens it with the
 model list open. A thread with no title
 yet reads **New thread**. Cmd-Option-N still creates a worktree thread at once,
-since its worktree is made for it. Cmd-1 to Cmd-9
+since its worktree is made for it. Cmd-Option-1 to Cmd-Option-9
 count threads in sidebar order; Settings can change this to machines or
 projects. Cmd-B hides or shows the sidebar on the left; Cmd-L hides or shows the
 Git inspector on the right, and that choice is remembered. On a window too narrow
@@ -633,13 +642,23 @@ for the inspector it explains where Git is instead. Drag either panel's inner
 edge to resize it; the width is remembered, and double-clicking the edge restores
 the default. Both shortcuts can be changed in Settings → Keyboard.
 
-The window has one bar at the top instead of a separate title bar. The close,
-minimize, and full-screen buttons sit at the top of the sidebar, and the header
-runs beside them. Drag an empty part of the sidebar's top strip or the header to
-move the window; double-clicking there does what **System Settings → Desktop &
-Dock → Double-click a window's title bar to** is set to. With the sidebar
-hidden, the header moves right to clear the buttons, except in full screen,
-where macOS hides them.
+The 40-point top row holds the native window buttons, sidebar toggle, thread
+tabs, and New tab control. It stays visible with the sidebar hidden. Drag the
+empty right end to move the window; double-clicking it follows the system's
+title-bar preference. The 36-point second row holds the active thread's
+project, branch, four views, and inspector toggle. An empty workspace has no
+second row.
+
+Clicking a sidebar thread opens it at the end or switches to its existing tab.
+Cmd-T and Cmd-N open the project's New thread draft. Cmd-1 through Cmd-8 select
+tabs by position; Cmd-9 selects the last. Cmd-Shift-[ and Cmd-Shift-] cycle
+through tabs; Control-Shift-Left and Control-Shift-Right move the active tab.
+Drag a tab to reorder it. The overflow control opens all tabs grouped by state.
+
+Cmd-W or middle-click closes a tab without stopping its run. Cmd-Shift-T reopens
+the most recently closed tab, including a nonempty draft. Closing the last tab
+leaves an empty workspace; another Cmd-W closes the window. Cmd-Shift-W closes
+the window directly.
 
 Cmd-Option-period answers the open thread's approval card with **Deny once**
 and Cmd-Option-Y with **Allow once**. Each button shows its shortcut as the

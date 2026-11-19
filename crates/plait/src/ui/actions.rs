@@ -16,6 +16,7 @@
 
 use super::{
     jump::*,
+    tabs::*,
     ways_out::{OpenInEditor, OpenTerminal, ShowInFinder},
     *,
 };
@@ -93,6 +94,7 @@ pub(super) const ACTIONS: &[AppAction] = &[
     entry("settings.providers", "Provider Settings", "Plait", None, Item, || Box::new(ProviderSettings)),
     entry("app.check_for_updates", "Check for Updates…", "Plait", None, Item, || Box::new(CheckForUpdates)),
     entry("app.quit", "Quit Plait", "Plait", Some("cmd-q"), Group, || Box::new(Quit)),
+    entry("tab.new", "New Tab", "File", Some("cmd-t"), Item, || Box::new(NewTab)),
     entry("thread.new", "New Thread", "File", Some("cmd-n"), Item, || Box::new(NewThread)),
     entry("thread.new_with_model", "New Thread with Model…", "File", Some("cmd-shift-n"), Item, || Box::new(NewThreadWithModel)),
     entry("thread.new_worktree", "New Thread in Worktree", "File", Some("cmd-alt-n"), Item, || Box::new(NewWorktreeThread)),
@@ -105,7 +107,9 @@ pub(super) const ACTIONS: &[AppAction] = &[
     entry("file.open_in_editor", "Open in Editor", "File", Some("cmd-alt-e"), Group, || Box::new(OpenInEditor)),
     entry("file.show_in_finder", "Show in Finder", "File", None, Item, || Box::new(ShowInFinder)),
     entry("project.open_terminal", "Open Terminal Here", "File", Some("cmd-alt-t"), Item, || Box::new(OpenTerminal)),
-    entry("window.close", "Close Window", "File", Some("cmd-w"), Group, || Box::new(Close)),
+    entry("tab.close", "Close Tab", "File", Some("cmd-w"), Group, || Box::new(CloseTab)),
+    entry("tab.reopen", "Reopen Closed Tab", "File", Some("cmd-shift-t"), Item, || Box::new(ReopenTab)),
+    entry("window.close", "Close Window", "File", Some("cmd-shift-w"), Group, || Box::new(Close)),
     entry("palette.toggle", "Command Palette…", "View", Some("cmd-k"), Item, || Box::new(CommandPalette)),
     entry("view.toggle_sidebar", "Toggle Sidebar", "View", Some("cmd-b"), Group, || Box::new(ToggleSidebar)),
     entry("view.toggle_inspector", "Toggle Git Inspector", "View", Some("cmd-l"), Item, || Box::new(ToggleInspector)),
@@ -141,15 +145,29 @@ pub(super) const ACTIONS: &[AppAction] = &[
     entry("git.switch_branch", "Switch Branch…", "Git", Some("cmd-shift-b"), Group, || Box::new(SwitchBranch)),
     entry("git.new_branch", "New Branch…", "Git", None, Item, || Box::new(NewBranch)),
     entry("window.minimize", "Minimize", "Window", Some("cmd-m"), Item, || Box::new(Minimize)),
-    entry("jump.1", "Jump to Sidebar Item 1", "Navigation", Some("cmd-1"), Hidden, || Box::new(Jump1)),
-    entry("jump.2", "Jump to Sidebar Item 2", "Navigation", Some("cmd-2"), Hidden, || Box::new(Jump2)),
-    entry("jump.3", "Jump to Sidebar Item 3", "Navigation", Some("cmd-3"), Hidden, || Box::new(Jump3)),
-    entry("jump.4", "Jump to Sidebar Item 4", "Navigation", Some("cmd-4"), Hidden, || Box::new(Jump4)),
-    entry("jump.5", "Jump to Sidebar Item 5", "Navigation", Some("cmd-5"), Hidden, || Box::new(Jump5)),
-    entry("jump.6", "Jump to Sidebar Item 6", "Navigation", Some("cmd-6"), Hidden, || Box::new(Jump6)),
-    entry("jump.7", "Jump to Sidebar Item 7", "Navigation", Some("cmd-7"), Hidden, || Box::new(Jump7)),
-    entry("jump.8", "Jump to Sidebar Item 8", "Navigation", Some("cmd-8"), Hidden, || Box::new(Jump8)),
-    entry("jump.9", "Jump to Sidebar Item 9", "Navigation", Some("cmd-9"), Hidden, || Box::new(Jump9)),
+    entry("tab.next", "Next Tab", "Window", Some("cmd-shift-]"), Item, || Box::new(NextTab)),
+    entry("tab.previous", "Previous Tab", "Window", Some("cmd-shift-["), Item, || Box::new(PreviousTab)),
+    entry("tab.move_right", "Move Tab Right", "Window", Some("ctrl-shift-right"), Item, || Box::new(MoveTabRight)),
+    entry("tab.move_left", "Move Tab Left", "Window", Some("ctrl-shift-left"), Item, || Box::new(MoveTabLeft)),
+    entry("tab.list", "Show All Tabs…", "Window", Some("cmd-shift-\\"), Item, || Box::new(ListTabs)),
+    entry("tab_jump.1", "Switch to Tab 1", "Navigation", Some("cmd-1"), Hidden, || Box::new(TabJump1)),
+    entry("tab_jump.2", "Switch to Tab 2", "Navigation", Some("cmd-2"), Hidden, || Box::new(TabJump2)),
+    entry("tab_jump.3", "Switch to Tab 3", "Navigation", Some("cmd-3"), Hidden, || Box::new(TabJump3)),
+    entry("tab_jump.4", "Switch to Tab 4", "Navigation", Some("cmd-4"), Hidden, || Box::new(TabJump4)),
+    entry("tab_jump.5", "Switch to Tab 5", "Navigation", Some("cmd-5"), Hidden, || Box::new(TabJump5)),
+    entry("tab_jump.6", "Switch to Tab 6", "Navigation", Some("cmd-6"), Hidden, || Box::new(TabJump6)),
+    entry("tab_jump.7", "Switch to Tab 7", "Navigation", Some("cmd-7"), Hidden, || Box::new(TabJump7)),
+    entry("tab_jump.8", "Switch to Tab 8", "Navigation", Some("cmd-8"), Hidden, || Box::new(TabJump8)),
+    entry("tab_jump.9", "Switch to Tab 9", "Navigation", Some("cmd-9"), Hidden, || Box::new(TabJump9)),
+    entry("jump.1", "Jump to Sidebar Item 1", "Navigation", Some("cmd-alt-1"), Hidden, || Box::new(Jump1)),
+    entry("jump.2", "Jump to Sidebar Item 2", "Navigation", Some("cmd-alt-2"), Hidden, || Box::new(Jump2)),
+    entry("jump.3", "Jump to Sidebar Item 3", "Navigation", Some("cmd-alt-3"), Hidden, || Box::new(Jump3)),
+    entry("jump.4", "Jump to Sidebar Item 4", "Navigation", Some("cmd-alt-4"), Hidden, || Box::new(Jump4)),
+    entry("jump.5", "Jump to Sidebar Item 5", "Navigation", Some("cmd-alt-5"), Hidden, || Box::new(Jump5)),
+    entry("jump.6", "Jump to Sidebar Item 6", "Navigation", Some("cmd-alt-6"), Hidden, || Box::new(Jump6)),
+    entry("jump.7", "Jump to Sidebar Item 7", "Navigation", Some("cmd-alt-7"), Hidden, || Box::new(Jump7)),
+    entry("jump.8", "Jump to Sidebar Item 8", "Navigation", Some("cmd-alt-8"), Hidden, || Box::new(Jump8)),
+    entry("jump.9", "Jump to Sidebar Item 9", "Navigation", Some("cmd-alt-9"), Hidden, || Box::new(Jump9)),
     entry("focus.next", "Focus Next Control", "Navigation", Some("tab"), Hidden, || Box::new(Tab)),
     entry("focus.previous", "Focus Previous Control", "Navigation", Some("shift-tab"), Hidden, || Box::new(BackTab)),
 ];
@@ -355,7 +373,10 @@ pub(super) struct Shortcut {
 /// Every action as editor rows, in table order.
 pub(super) fn shortcuts() -> Vec<Shortcut> {
     ACTIONS
-        .chunk_by(|a, b| a.id.starts_with(JUMP) && b.id.starts_with(JUMP))
+        .chunk_by(|a, b| {
+            (a.id.starts_with(JUMP) && b.id.starts_with(JUMP))
+                || (a.id.starts_with("tab_jump.") && b.id.starts_with("tab_jump."))
+        })
         .map(|actions| Shortcut { actions })
         .collect()
 }
@@ -403,7 +424,11 @@ impl Shortcut {
 
     pub fn title(&self) -> &'static str {
         if self.is_set() {
-            "Jump to Sidebar Item 1–9"
+            if self.actions[0].id.starts_with("tab_jump.") {
+                "Switch to Tab 1–9"
+            } else {
+                "Jump to Sidebar Item 1–9"
+            }
         } else {
             self.actions[0].title
         }
@@ -425,7 +450,10 @@ impl Shortcut {
         if !self.is_set() {
             return Ok(vec![with_key(&pressed.key)]);
         }
-        let numbers = self.actions.iter().map(|action| &action.id[JUMP.len()..]);
+        let numbers = self
+            .actions
+            .iter()
+            .map(|action| action.id.rsplit_once('.').expect("numbered action").1);
         if !numbers.clone().any(|number| number == pressed.key) {
             return Err(
                 "The nine jumps change together. Hold the modifiers you want and press a number, such as ⌃1."
@@ -663,6 +691,7 @@ fn documented(keystroke: &str) -> String {
         "ctrl" => "Control".to_owned(),
         "," => "comma".to_owned(),
         "." => "period".to_owned(),
+        "\\" => "Backslash".to_owned(),
         part => {
             let mut letters = part.chars();
             letters.next().map_or_else(String::new, |first| {

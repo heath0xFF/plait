@@ -49,7 +49,7 @@ def check_lights(values, toggle):
     lights = [values[i:i + 4] for i in (4, 8, 12)]
     for lx, ly, lw, lh in lights:
         require(lw > 0 and lh > 0 and x <= lx < lx + lw <= x + width, f'light outside window: {values}')
-        require(y <= ly and ly + lh <= y + 44 and abs(ly + lh / 2 - (y + 22)) <= 3, f'light not centered on 44-point bar: {values}')
+        require(y <= ly and ly + lh <= y + 40 and abs(ly + lh / 2 - (y + 20)) <= 3, f'light not centered on 40-point bar: {values}')
     require(abs(lights[0][0] - x - 14) <= 4, f'traffic lights not about 14 pt in: {lights}')
     right = max(lx + lw for lx, _ly, lw, _lh in lights)
     require(toggle[0] >= right + 4, f'header toggle overlaps lights: lights={lights}, toggle={toggle}')
@@ -297,7 +297,8 @@ class Acceptance:
 
     def gap(self, sidebar=False):
         x, y, width, _height = self.window()[:4]
-        start, end = (x + 90, self.frame('Resize sidebar')[0] - 8) if sidebar else (x + 90, x + width - 30)
+        # Tabs occupy the old header gaps; the rightmost 48 points stay draggable.
+        start, end = x + width - 46, x + width - 12
         return [float(v) for v in self.ax('bar-gap', start, end).split()]
 
     def bar_drag(self, shown):

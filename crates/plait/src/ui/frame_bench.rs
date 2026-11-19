@@ -437,6 +437,9 @@ pub fn run() -> Vec<Row> {
         .unwrap();
     scroll_conversation(&mut harness, 1.0);
     rows.push(harness.steady(&format!("c1 conversation, {count} rows, at bottom")));
+    super::tabs::install(&mut harness, 20);
+    rows.push(harness.steady("tabs20 conversation, twenty tabs, five running summaries"));
+    super::tabs::install(&mut harness, 1);
     scroll_conversation(&mut harness, 0.5);
     rows.push(harness.steady("c2 conversation, middle (steady)"));
     rows.push(harness.scrolling(

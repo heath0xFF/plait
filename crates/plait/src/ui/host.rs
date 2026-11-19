@@ -202,6 +202,34 @@ impl Plait {
             .connection
             .threads
             .iter()
+            .find(|t| t.id == id)
+            .map(|t| t.checkout.clone())
+        else {
+            return;
+        };
+        if self.host.thread.selected.as_ref() == Some(&id) {
+            self.settings_open = false;
+            cx.notify();
+            return;
+        }
+        if !self.open_thread_tab(id.clone(), checkout, cx) {
+            cx.notify();
+            return;
+        }
+        self.present_tab(window, cx);
+    }
+
+    pub(super) fn select_host_thread_content(
+        &mut self,
+        id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(checkout) = self
+            .host
+            .connection
+            .threads
+            .iter()
             .find(|thread| thread.id == id)
             .map(|thread| thread.checkout.clone())
         else {

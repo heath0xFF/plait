@@ -7,26 +7,11 @@ use gpui::*;
 /// AppKit's standard window buttons are taken to be 16 points tall; GPUI reads
 /// their real frames, but only while laying them out. It centers them in a
 /// titlebar as tall as a button plus twice the vertical offset, so this offset
-/// centers them on the 44-point bar.
+/// centers them on the 40-point bar.
 const BUTTON_HEIGHT: f32 = 16.;
 
 /// Where the traffic lights sit: 14 points in, on the bar's center line.
 pub const TRAFFIC_LIGHTS: Point<Pixels> = point(px(14.), px((CHROME_HEIGHT - BUTTON_HEIGHT) / 2.));
-
-/// The header's left padding while the lights sit over it. The three lights
-/// span roughly 54 points, and a few more when built with the macOS 26 SDK,
-/// so this leaves a gap after them on either.
-const LIGHTS_INSET: f32 = 84.;
-
-/// The header's left padding: its usual 8 points, or clear of the lights when
-/// the rail is hidden. Full screen hides the lights, so it needs no inset.
-pub fn header_inset(sidebar: bool, fullscreen: bool) -> Pixels {
-    if sidebar || fullscreen {
-        px(8.)
-    } else {
-        px(LIGHTS_INSET)
-    }
-}
 
 /// What a left press on the bar does. A control under the pointer takes the
 /// press first: focusing it prevents default, so the bar leaves it alone.
@@ -85,7 +70,7 @@ impl Plait {
 
 #[cfg(test)]
 mod tests {
-    use super::{Press, TRAFFIC_LIGHTS, header_inset, press};
+    use super::{Press, TRAFFIC_LIGHTS, press};
     use crate::ui::theme::CHROME_HEIGHT;
     use gpui::px;
 
@@ -93,14 +78,6 @@ mod tests {
     fn the_lights_center_on_the_bar() {
         assert_eq!(TRAFFIC_LIGHTS.x, px(14.));
         assert_eq!(TRAFFIC_LIGHTS.y * 2. + px(16.), px(CHROME_HEIGHT));
-    }
-
-    #[test]
-    fn the_header_clears_the_lights_only_when_they_sit_over_it() {
-        assert_eq!(header_inset(true, false), px(8.));
-        assert_eq!(header_inset(true, true), px(8.));
-        assert_eq!(header_inset(false, true), px(8.));
-        assert!(header_inset(false, false) >= px(76.));
     }
 
     #[test]

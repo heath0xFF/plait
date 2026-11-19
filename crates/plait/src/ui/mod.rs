@@ -35,6 +35,7 @@ mod settings_project;
 mod settings_providers;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod snapshot;
+mod tabs;
 mod text_field;
 pub mod theme;
 mod thread_controls;
@@ -119,6 +120,7 @@ pub(super) use plait_core::thread_view::ThreadView as Workspace;
 const WIDE_WINDOW: f32 = 1150.;
 
 pub struct Plait {
+    tabs: tabs::Tabs,
     state: AppState,
     host: HostState,
     navigation: navigation::Navigation,
@@ -190,6 +192,7 @@ impl Plait {
         let commit_message =
             cx.new(|cx| text_field::TextField::new("Commit message", "Commit message", cx));
         let mut this = Self {
+            tabs: Default::default(),
             state,
             host,
             navigation: navigation::Navigation::new(cx),
@@ -702,86 +705,81 @@ impl Plait {
         }
     }
 
-    /// One compact chrome row: where you are, its state, and the workspaces.
-    /// It is also the window's title bar, so its empty parts move the window.
-    /// A settings page is not a thread's workspace, so it draws neither the
-    /// workspace switch nor the inspector toggle.
+    /// The active content supplies the second row; an empty workspace has none.
     fn header(
         &self,
         title: String,
-        location: Option<String>,
-        status: (String, u32),
+        _location: Option<String>,
+        _status: (String, u32),
         wide: bool,
-        fullscreen: bool,
+        _fullscreen: bool,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let header = self
-            .window_drag(row(), cx)
-            .h(px(CHROME_HEIGHT))
+    ) -> AnyElement {
+        if !self.settings_open && self.tabs.model.active().is_none() {
+            return div().into_any_element();
+        }
+        let header = row()
+            .h(px(36.))
             .flex_shrink_0()
-            .pl(window_bar::header_inset(self.sidebar, fullscreen))
-            .pr_3()
-            .gap_3()
+            .px_3()
+            .gap_2()
             .border_b_1()
-            .border_color(rgb(colors().border))
+            .border_color(rgb(colors().border));
+        if self.settings_open {
+            return header
+                .child(div().flex_1().child(title))
+                .child(
+                    toned_button("close-settings", "Done", Tone::Filled)
+                        .on_activate(cx, |this, window, cx| this.show_settings(false, window, cx)),
+                )
+                .into_any_element();
+        }
+        let project = self.active_project();
+        let branch = self
+            .state
+            .repository
+            .snapshot()
+            .ready()
+            .map(|s| s.branch.as_str());
+        let full = format!(
+            "{} / {}{}\n{}",
+            project.name,
+            project.machines[0].name,
+            branch.map(|b| format!(" · {b}")).unwrap_or_default(),
+            self.host.creation.checkout.display()
+        );
+        let context = format!(
+            "{}{}{}",
+            project.name,
+            if wide {
+                format!(" / {}", project.machines[0].name)
+            } else {
+                String::new()
+            },
+            branch.map(|b| format!(" · {b}")).unwrap_or_default()
+        );
+        header
             .child(
-                icon_button("toggle-sidebar", "panel", "Toggle sidebar")
-                    .aria_keyshortcuts(self.shortcut_aria("view.toggle_sidebar"))
-                    .on_activate(cx, |this, window, cx| this.toggle_sidebar(window, cx)),
-            )
-            .child(
-                row()
-                    .flex_1()
+                div()
+                    .id("workspace-context")
                     .min_w_0()
-                    .gap_3()
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child(text!(title)),
-                    )
-                    // The composer repeats this context; the header keeps it for Changes.
-                    .when_some(location.filter(|_| wide), |el, location| {
-                        el.child(
-                            tag(location, colors().subtle)
-                                .flex_shrink_0()
-                                .whitespace_nowrap(),
-                        )
+                    .flex_1()
+                    .truncate()
+                    .text_size(px(12.))
+                    .text_color(rgb(colors().muted))
+                    .child(context)
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| thread_controls::TextTooltip(full.clone()))
+                            .into()
                     }),
             )
-            // A settings page is not a thread's: it has no state to show here.
-            .when(!self.settings_open, |el| {
-                el.child(
-                    row()
-                        .flex_shrink_0()
-                        .gap(px(6.))
-                        .child(dot(status.1))
-                        .child(tag(status.0, colors().muted)),
-                )
-            });
-        if self.settings_open {
-            // The bar names the page and holds the way out, so the page
-            // itself repeats neither.
-            return header.child(
-                toned_button("close-settings", "Done", Tone::Filled)
-                    .on_activate(cx, |this, window, cx| this.show_settings(false, window, cx)),
-            );
-        }
-        header.child(self.workspace_switch(cx)).child(
-            // Mirrors the sidebar toggle at the other end of the header.
-            icon_button(
-                "toggle-inspector",
-                "panel-right",
-                if wide {
-                    "Toggle Git inspector"
-                } else {
-                    "Git inspector (needs a wider window)"
-                },
+            .child(self.workspace_switch(cx))
+            .child(
+                icon_button("toggle-inspector", "panel-right", "Toggle Git inspector")
+                    .aria_keyshortcuts(self.shortcut_aria("view.toggle_inspector"))
+                    .on_activate(cx, |this, window, cx| this.toggle_inspector(window, cx)),
             )
-            .aria_keyshortcuts(self.shortcut_aria("view.toggle_inspector"))
-            .on_activate(cx, |this, window, cx| this.toggle_inspector(window, cx)),
-        )
+            .into_any_element()
     }
 
     /// Conversation, Changes, History, and Files: the views of the open checkout.
@@ -1155,6 +1153,7 @@ impl Render for Plait {
             }))
             .on_action(cx.listener(|_, _: &Minimize, window, _| window.minimize_window()))
             .map(|root| self.on_jump_actions(root, cx))
+            .map(|root| self.on_tab_actions(root, cx))
             .map(|root| self.on_ways_out_actions(root, cx))
             .on_action(
                 cx.listener(|this, _: &UndoLastTurn, window, cx| this.undo_last_turn(window, cx)),
@@ -1169,6 +1168,7 @@ impl Render for Plait {
             .text_color(rgb(colors().text))
             .text_size(px(13.))
             .font_family(".SystemUIFont")
+            .child(self.tab_row(window, cx))
             .child(
                 row()
                     .gap_0()
@@ -1237,6 +1237,7 @@ impl Render for Plait {
             .when_some(self.overlay.as_ref(), |el, overlay| {
                 el.child(overlay.palette.clone())
             });
+        let root = root.when_some(self.tab_list(cx), |el, list| el.child(list));
         let root = root.when_some(self.image_overlay(window, cx), |el, overlay| {
             el.child(overlay)
         });

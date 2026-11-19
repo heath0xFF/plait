@@ -30,7 +30,7 @@ pub fn set_colors(palette: &Palette) -> bool {
 /// Readable column for conversation text and the composer.
 pub const CONTENT_WIDTH: f32 = 760.;
 /// Shared chrome row: the sidebar brand row and the workspace header align.
-pub const CHROME_HEIGHT: f32 = 44.;
+pub const CHROME_HEIGHT: f32 = 40.;
 /// Compact row for navigation, changed files, and model choices.
 pub const ROW_HEIGHT: f32 = 28.;
 

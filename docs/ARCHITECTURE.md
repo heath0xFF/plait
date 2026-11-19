@@ -456,8 +456,12 @@ implemented.
 
 ### Headless tab model
 
-`plait_core::tabs` now provides a tab model in the core; the desktop does not
-use it to show tabs yet. `WindowTabs` owns at most 100 ordered `TabRecord`s,
+`plait_core::tabs` provides the window tab model. The desktop draws its
+40-point top row and state-grouped overflow from cached core row metadata;
+only width or metadata changes rerun measured layout. The active thread
+adds a 36-point view row. Keyboard and sidebar commands dispatch to the
+model, while presentation remains in the single workspace container.
+Cold workspace hydration and durable desktop integration are separate work. `WindowTabs` owns at most 100 ordered `TabRecord`s,
 one active ID, and a session-only stack of up to 20 closed bookmarks.
 `TabContent::Thread` is its only content variant. A thread identity includes
 its host and store; its expected checkout separately includes the canonical
@@ -702,7 +706,7 @@ An unsafe or failed load disables writes for that window, preserving the file.
 Unknown fields are ignored so a newer client's file still loads, and a file
 written before a field existed loads with that field's default.
 
-Cmd-1 to Cmd-9 count matching real host threads in project order on the local
+Cmd-Option-1 to Cmd-Option-9 count matching real host threads in project order on the local
 machine. A machine or project selects its first matching thread; an empty row
 does nothing. Jumping expands collapsed parents.
 

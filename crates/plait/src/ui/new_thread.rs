@@ -71,6 +71,15 @@ impl Plait {
 
     /// Show the draft, with any text it kept, in the active project.
     pub(super) fn open_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.open_draft_tab(cx) {
+            cx.notify();
+            return;
+        }
+        self.open_draft_content(window, cx);
+        self.refresh_tab_rows();
+    }
+
+    pub(super) fn open_draft_content(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_overlay(false, window, cx);
         self.settings_open = false;
         self.workspace.tab = Workspace::Conversation;

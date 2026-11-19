@@ -909,11 +909,11 @@ func run(_ arguments: [String]) throws {
         say("owner \(owner) \(node.role) \(node.name.prefix(80))")
         if expandRoles("control,field").contains(node.role) { exit(1) }
     case "bar-gap":
-        // A point on the 44-point bar that no element covers.
+        // A point on the 40-point bar that no element covers.
         guard rest.count == 2 else { die(usage, 2) }
         let window = requireWindow(pid)
         guard let rect = frame(of: window) else { die("window has no frame") }
-        let band = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: 44)
+        let band = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: 40)
         var occupied = walk(window).compactMap { node -> (CGFloat, CGFloat)? in
             guard let box = node.frame, box.height <= 46, box.intersects(band),
                   expandRoles("control,field,text,AXSplitter").contains(node.role) else { return nil }

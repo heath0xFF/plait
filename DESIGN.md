@@ -20,26 +20,26 @@ optional wide-window Git inspector. Keep machine and thread context visible.
 Both side panels resize from their inner edge (Cmd-B and Cmd-L hide them); the
 conversation keeps a readable minimum width.
 
-- **Chrome.** One 44-point window bar, with no system title bar above it. The
-  native traffic lights sit at its left, centered on it and 14 points in, over
-  the rail's top strip. The rest is the header: sidebar toggle, thread title, a
-  muted `project / machine` on wide windows, state dot with a text label, and the
-  Conversation / Changes switch, then the Git inspector toggle, mirroring the
-  sidebar toggle at the other end. With the rail hidden, the header starts clear
-  of the lights; in full screen, where macOS hides them, it starts at the edge.
-  The bar's empty parts move the window, and double-clicking them does what
-  macOS is set to do for a title bar. No window title is drawn, no second
-  header, tab strip, or permanent footer.
+- **Chrome.** A 40-point top tab bar serves as the window bar, with no system
+  title bar above it. The native traffic lights sit at its left, centered on it
+  and 14 points in (hidden in full screen), followed by the sidebar toggle,
+  open tabs, an overflow summary when tabs exceed the bar, and `+`. Empty space
+  at the right moves the window and handles title-bar double-clicks; no window
+  title or permanent footer is drawn. Each tab shows a state dot, its title,
+  a one-word state while active, running, needing attention, failed, stopped,
+  or unread-done, and a close control on the active tab or on hover. Clicking
+  the overflow summary opens a state-grouped list of all open tabs. Beneath
+  the tab bar, a thread tab adds a 36-point workspace bar over the workspace:
+  `project / machine · branch` (omitting machine on narrow windows), the
+  Conversation / Changes / History / Files switch, and the Git inspector
+  toggle. Tabs whose content has no sub-views omit this second bar.
 - **Rail.** No in-app logo: the app icon and window carry the brand. The rail
-  starts with an empty 44-point strip under the traffic lights, then two actions, New thread and Open repository. New thread names the
-  model it will use; the control beside it opens the model picker. Projects are plain
-  section headers, ordered by their newest thread activity. The local machine
-  stays in the data model and workspace context; it does not add a repeated row
-  under every project. Every tree row is 28 points and one line. Category glyphs use the Plait
-  vector kit in `assets/branding`: mint projects, blue machines, violet
-  threads, and light Git. Do not use a generic braid or a crop from the
-  reference sheet. The Dock/Finder icon uses the kit's rounded tile. Host state
-  sits in a one-line footer with Settings.
+  sits below the 40-point tab bar and starts with two actions, New thread and
+  Open repository. New thread names the model it will use; its adjacent control
+  opens the model picker. Projects are plain section headers, ordered by newest
+  activity. The local machine stays in the data model and workspace context.
+  Every tree row is 28 points and one line. Host state sits in a one-line footer
+  with Settings.
 - **Thread rows.** A title leads, followed by a compact state word and relative
   activity time. Unread activity uses a heavier title and a dot, with a full
   accessible name. Selection is a neutral fill. A search field narrows projects

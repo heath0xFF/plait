@@ -201,7 +201,7 @@ fn the_keyboard_leaves_a_hidden_composer_and_returns_to_it() {
     // are the segment's inset, a gap, and the inspector toggle.
     let files_tab = point(
         px(900. - 12. - ROW_HEIGHT - 12. - 3. - 10.),
-        px(CHROME_HEIGHT / 2.),
+        px(CHROME_HEIGHT + 18.),
     );
     click(&mut harness, files_tab);
     assert_eq!(tab(&mut harness), Workspace::Files);

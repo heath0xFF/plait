@@ -61,6 +61,7 @@ impl Plait {
             let mut preferences = self.preferences.value.clone();
             preferences.navigation.unread.remove(id);
             self.persist_navigation(preferences, cx);
+            self.refresh_tab_rows();
         }
         if !cfg!(test) {
             cx.dismiss_system_notification(&format!("plait-thread:{id}"))
@@ -279,6 +280,7 @@ impl Plait {
             &self.host.creation.checkout,
             &machine,
         );
+        self.refresh_tab_rows();
         let paths = self
             .state
             .projects

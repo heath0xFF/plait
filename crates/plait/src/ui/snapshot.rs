@@ -46,6 +46,7 @@ mod find;
 mod mcp;
 mod messages;
 mod showcase;
+mod tabs;
 mod turn_review;
 mod undo;
 mod ways_out;
@@ -657,6 +658,7 @@ impl Harness {
                     matches!(repository.snapshot(), Load::Loading)
                         || matches!(repository.diff(), Load::Loading)
                         || plait.host.connection.connecting
+                        || plait.workspace.file_viewer.loading
                 })
                 .expect("window update");
             if !busy {
@@ -671,6 +673,7 @@ impl Harness {
         self.window
             .update(&mut self.cx, |plait, window, cx| {
                 change(plait, window, cx);
+                plait.refresh_tab_rows();
                 cx.notify();
             })
             .expect("window update");
@@ -789,6 +792,9 @@ impl Harness {
                     ..Default::default()
                 },
             ];
+            plait.tabs = Default::default();
+            assert!(plait.open_thread_tab(THREAD.into(), checkout.clone(), cx));
+            plait.refresh_tab_rows();
             // Mirror select_host_thread without opening a socket.
             plait.host.thread.selected = Some(THREAD.into());
             plait.workspace.history = Default::default();
@@ -2102,6 +2108,7 @@ fn walk(output: Option<&Path>) {
     let repository = fixture_repository(&scratch);
 
     for (suffix, width, height) in [("wide", 1380., 860.), ("narrow", 900., 600.)] {
+        tabs::walk(&repository, output, suffix, width, height);
         let mut harness = Harness::new(&repository, output, width, height);
         // No socket in tests, so the host starts disconnected.
         harness.capture(&format!("home-disconnected-{suffix}"));
@@ -5427,7 +5434,7 @@ fn the_window_bar_moves_the_window_only_from_empty_space() {
     // is released, which always disarms.
     let arms = |harness: &mut Harness, x: f32| {
         harness.draw();
-        let position = point(px(x), px(22.));
+        let position = point(px(x), px(20.));
         harness.pointer(PlatformInput::MouseDown(MouseDownEvent {
             button: MouseButton::Left,
             position,
@@ -5459,10 +5466,13 @@ fn the_window_bar_moves_the_window_only_from_empty_space() {
             .unwrap()
     };
     assert!(arms(&mut harness, 40.), "the rail's empty strip");
-    assert!(!arms(&mut harness, rail - 2.), "the rail's resize handle");
+    assert!(
+        arms(&mut harness, rail - 2.),
+        "the bar is above the rail resize handle"
+    );
     assert!(arms(&mut harness, rail + 400.), "the header's empty middle");
     // A control in the bar keeps its click: this one hides the rail.
-    assert!(!arms(&mut harness, rail + 22.), "the sidebar toggle");
+    assert!(!arms(&mut harness, 98.), "the sidebar toggle");
     assert!(!sidebar(&mut harness));
     // With the rail hidden the header starts under the lights, so its toggle
     // moves clear of them and the space it leaves still moves the window.
@@ -6686,4 +6696,12 @@ fn policy_reply_cannot_return_to_an_earlier_checkout_lifetime() {
     });
     drop(harness);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn tab_shortcuts_drive_window_transitions() {
+    if !isolated("tab_shortcuts_drive_window_transitions") {
+        return;
+    }
+    tabs::exercise();
 }
