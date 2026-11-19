@@ -2459,7 +2459,11 @@ fields, including `protocol_version`, and unknown lifecycle states are refused.
   Each row has `path`, `main`, nullable `branch`, `head`, recorded `base`,
   `thread_id`, directory `identity`, `creation_id`, host-millisecond `last_used`,
   `missing`, `removed`, and `preservation`. Preservation contains nullable
-  counts `changed`, `unpushed`, `exclusive` and nullable exact `refusal`.
+  counts `changed`, `unpushed`, `exclusive`, nullable exact `refusal`, and
+  `can_keep_local`. That boolean explicitly permits the confirmed local-branch
+  choice: only the publication refusal is waived, with every ownership,
+  preservation and busy check still required. Older replies omit it; readers
+  default it to false. No extra Git reads are needed to compute it.
   Unknown counts remain null. Changed includes untracked and ignored status
   entries; ignored directories are counted as Git reports them. Publication
   uses the known remote-tracking ref. Exclusive counts commits reachable only

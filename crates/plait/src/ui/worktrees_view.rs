@@ -10,6 +10,7 @@ use plait_core::{
     },
     tabs::{ReadStamp, TabTarget},
     worktree_graph::{self, Graph},
+    worktree_removal::{self, Choices},
     worktree_size::{self, Cache, Key, Size},
 };
 use std::{
@@ -364,7 +365,7 @@ impl Plait {
             && self.removal_here()
             && !self.worktree_busy
         {
-            self.finish_view_removal(cx);
+            self.finish_worktree_removal(cx);
             return;
         }
         if !self.host.connection.connected {
@@ -789,7 +790,7 @@ impl Plait {
         if tree.path != path
             || tree.identity.as_ref() != identity
             || tree.main
-            || tree.preservation.refusal.is_some()
+            || !Choices::for_checkout(tree).any()
             || self.run_in_worktree(tree)
             || self.worktree_busy
             || !self.host.connection.connected
@@ -798,7 +799,11 @@ impl Plait {
         {
             return;
         }
-        let path = tree.path.clone();
+        let detail = worktree_removal::confirmation_detail(
+            &tree.path,
+            tree.branch.as_deref().unwrap_or("Detached"),
+            Some(&tree.preservation),
+        );
         if !self.worktrees.removal.ask(
             tree,
             self.tabs.host.clone(),
@@ -806,72 +811,11 @@ impl Plait {
         ) {
             return;
         }
-        self.worktrees.removal_project = Some(self.visible_project_checkout().to_owned());
-        let answer=window.prompt(PromptLevel::Warning,"Remove this worktree?",Some(&format!("Delete {}? Its branch and thread history stay. Private build cache stays. The host will check for work to preserve again.",path.display())),&[PromptButton::Other("Remove".into()),PromptButton::Cancel("Cancel".into())],cx);
-        cx.spawn(async move |this, cx| {
-            let confirmed = answer.await == Ok(0);
-            let _ = this.update(cx, |this, cx| {
-                if this.worktrees.removal.answer(confirmed).is_some() {
-                    this.finish_view_removal(cx);
-                }
-            });
-        })
-        .detach();
-    }
-    fn finish_view_removal(&mut self, cx: &mut Context<Self>) {
-        let Some(attempt) = self.worktrees.removal.pending.clone() else {
-            return;
-        };
-        if attempt.host != self.tabs.host {
-            self.worktrees.removal.message =
-                Some("Reconnect the original host to recover this removal.".into());
-            return;
-        }
-        self.worktree_busy = true;
-        let request = attempt.request.clone();
-        let task = cx.background_executor().spawn(async move {
-            super::worktree::await_operation(&Client::from_environment()?, &request)
-        });
-        cx.spawn(async move |this, cx| {
-            let result = task.await;
-            let _ = this.update(cx, |this, cx| {
-                this.worktree_busy = false;
-                this.settle_view_removal(&attempt, result, cx);
-            });
-        })
-        .detach();
-    }
-    /// Removal here must leave the sidebar and composer where the sidebar's own
-    /// Remove leaves them: the folder is gone, not merely re-listed.
-    pub(super) fn settle_view_removal(
-        &mut self,
-        attempt: &plait_core::worktree_removal::Attempt,
-        result: Result<worktree::Operation, host::Error>,
-        cx: &mut Context<Self>,
-    ) {
-        let removed = result
-            .as_ref()
-            .ok()
-            .filter(|operation| {
-                operation.error.is_none() && operation.state == worktree::Stage::Removed
-            })
-            .cloned();
-        if !self
-            .worktrees
-            .removal
-            .finish(attempt, result.map_err(|e| e.to_string()))
-        {
-            return;
-        }
-        if let Some(operation) = removed {
-            self.remember_worktree_operation(&operation, cx);
-            self.navigation
-                .available
-                .insert(attempt.path.clone(), false);
-            self.sync_composer(cx);
-        }
-        self.refresh_host_worktrees(cx);
-        self.refresh_worktrees_view(false, cx);
-        cx.notify();
+        self.show_worktree_removal(
+            self.visible_project_checkout().to_owned(),
+            detail,
+            window,
+            cx,
+        );
     }
 }

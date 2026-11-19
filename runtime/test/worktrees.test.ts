@@ -226,9 +226,11 @@ test('project inventory lists main, owned and external worktrees with live remov
   assert.equal(reply.ok, true, JSON.stringify(reply));
   const rows = reply.result.checkouts;
   assert.equal(rows.length, 3); assert.equal(rows[0].main, true);
+  assert.equal(rows[0].preservation.can_keep_local, false);
   const owned = rows.find((r: any) => r.creation_id === 'inventory');
   assert.equal(owned.preservation.changed, 1); assert.equal(owned.preservation.exclusive, 0);
   assert.equal(owned.preservation.unpushed, null); assert.equal(owned.base, info.result.parent.base);
+  assert.equal(owned.preservation.can_keep_local, false);
   const removed: any = await h.runtime.reply({ op: 'remove_worktree', request_id: 'inventory-remove', creation_id: 'inventory', identity: ready.worktree!.identity, allow_unpushed: false });
   assert.equal(removed.ok, true);
   const refusal = await done(h.runtime, 'inventory-remove');
@@ -243,13 +245,36 @@ test('project inventory lists main, owned and external worktrees with live remov
   assert.equal(stranger.ok, false); assert.equal(stranger.error.code, 'invalid_request');
   const foreign = rows.find((r: any) => r.path === external);
   assert.equal(foreign.creation_id, null); assert.match(foreign.preservation.refusal, /did not create/);
+  assert.equal(foreign.preservation.can_keep_local, false);
   await writeFile(join(ready.worktree!.path, 'source.txt'), 'committed\n');
+  const clean: any = await h.runtime.reply({ op: 'project_worktrees', checkout: h.root });
+  const local = clean.result.checkouts.find((r: any) => r.creation_id === 'inventory');
+  assert.equal(local.preservation.can_keep_local, true);
+  assert.equal(local.preservation.unpushed, null);
+  await h.runtime.reply({ op: 'remove_worktree', request_id: 'inventory-published', creation_id: 'inventory', identity: ready.worktree!.identity, allow_unpushed: false });
+  assert.equal((await done(h.runtime, 'inventory-published')).error!.message, local.preservation.refusal);
+  h.runtime.store.db.prepare("INSERT INTO requests(scope,id,hash,result,state) VALUES (?,'waiting','test','{}','queued')").run(ready.thread_id);
+  const queued: any = await h.runtime.reply({ op: 'project_worktrees', checkout: h.root });
+  const busy = queued.result.checkouts.find((r: any) => r.creation_id === 'inventory');
+  assert.equal(busy.preservation.can_keep_local, false);
+  assert.match(busy.preservation.refusal, /queued/);
+  for (const allow of [false, true]) {
+    const request_id = `inventory-queued-${allow}`;
+    await h.runtime.reply({ op: 'remove_worktree', request_id, creation_id: 'inventory', identity: ready.worktree!.identity, allow_unpushed: allow });
+    assert.equal((await done(h.runtime, request_id)).error!.message, busy.preservation.refusal);
+  }
+  h.runtime.store.db.prepare("DELETE FROM requests WHERE scope=? AND id='waiting'").run(ready.thread_id);
+  h.runtime.store.db.prepare('UPDATE worktree_operations SET result=? WHERE request_id=?').run(JSON.stringify({ ...ready, state: 'removing' }), 'inventory');
+  const changing: any = await h.runtime.reply({ op: 'project_worktrees', checkout: h.root });
+  assert.equal(changing.result.checkouts.find((r: any) => r.creation_id === 'inventory').preservation.can_keep_local, false);
+  h.runtime.store.db.prepare('UPDATE worktree_operations SET result=? WHERE request_id=?').run(JSON.stringify(ready), 'inventory');
   await h.runtime.reply({ op: 'remove_worktree', request_id: 'inventory-clean', creation_id: 'inventory', identity: ready.worktree!.identity, allow_unpushed: true });
   assert.equal((await done(h.runtime, 'inventory-clean')).state, 'removed');
   const after: any = await h.runtime.reply({ op: 'project_worktrees', checkout: h.root });
   assert.equal(after.ok, true, JSON.stringify(after));
   const retained = after.result.checkouts.find((r: any) => r.creation_id === 'inventory');
   assert.equal(retained.removed, true); assert.equal(retained.missing, true);
+  assert.equal(retained.preservation.can_keep_local, false);
   assert.match(retained.preservation.refusal, /cache remain/);
   await unlink(join(external, 'source.txt'));
   const changed: any = await h.runtime.reply({ op: 'project_worktrees', checkout: external });

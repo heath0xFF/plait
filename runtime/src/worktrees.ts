@@ -135,12 +135,18 @@ export class Worktrees {
       operations.push(JSON.parse(raw) as Operation);
     }
     const records = operations.flatMap(op => op.worktree ? [op.worktree] : []);
-    const checkouts = await worktreeHelper<Array<{ path: string; thread_id: string | null; preservation: { refusal: string | null } }>>({ action: 'inventory', root: checkout, records, ...(only === undefined ? {} : { only }) });
+    const checkouts = await worktreeHelper<Array<{ path: string; thread_id: string | null; preservation: { refusal: string | null; can_keep_local: boolean } }>>({ action: 'inventory', root: checkout, records, ...(only === undefined ? {} : { only }) });
     if (only !== undefined && (checkouts.length !== 1 || checkouts[0].path !== only)) fail('invalid_request', 'That folder is not one of this project’s checkouts.');
     const rows = checkouts.map(row => {
       const operation = operations.find(op => op.thread_id === row.thread_id);
-      if (this.busy(row.path) || this.store.db.prepare("SELECT 1 FROM requests JOIN threads ON threads.id=requests.scope WHERE threads.checkout=? AND requests.state='queued' LIMIT 1").get(row.path)) row.preservation.refusal = 'This worktree still has active, queued, or recovering work.';
-      if (operation && ['preparing', 'removing'].includes(operation.state)) row.preservation.refusal = 'A worktree operation is still in progress.';
+      if (this.busy(row.path) || this.store.db.prepare("SELECT 1 FROM requests JOIN threads ON threads.id=requests.scope WHERE threads.checkout=? AND requests.state='queued' LIMIT 1").get(row.path)) {
+        row.preservation.refusal = 'This worktree still has active, queued, or recovering work.';
+        row.preservation.can_keep_local = false;
+      }
+      if (operation && ['preparing', 'removing'].includes(operation.state)) {
+        row.preservation.refusal = 'A worktree operation is still in progress.';
+        row.preservation.can_keep_local = false;
+      }
       const thread = row.thread_id ? this.store.db.prepare('SELECT updated_at FROM threads WHERE id=?').get(row.thread_id) : this.store.db.prepare('SELECT MAX(updated_at) AS updated_at FROM threads WHERE checkout=?').get(row.path);
       return { ...row, creation_id: operation?.request_id ?? null, last_used: thread?.updated_at != null ? Number(thread.updated_at) : null };
     });

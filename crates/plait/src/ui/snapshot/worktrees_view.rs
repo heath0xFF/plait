@@ -53,7 +53,7 @@ pub(super) fn install(h: &mut Harness, count: usize) {
             let title=match i {0=>"Main checkout".into(),1=>"Retry requests after rate limits".into(),2=>"Read the local project settings".into(),3=>"Keep attachments across restarts".into(),_=>format!("Worktree {i}")};
             let id=format!("worktree-scene-{i}");
             if i > 0 { p.host.connection.threads.push(ThreadSummary{id:id.clone(),checkout:path.clone(),title:Some(title),status:if i==1{ThreadStatus::Running}else if i==2{ThreadStatus::AwaitingApproval}else{ThreadStatus::Idle},..Default::default()}); }
-            rows.push(Checkout {path,main:i==0,branch:Some(if i==0{"main".into()}else{format!("plait/topic-{i}")}),head:Some(oid(if i==0{10}else{100+i})),base:(i>0).then(||oid(9-i.min(6))),thread_id:(i>0).then_some(id),identity:Some(plait_core::git::worktree::Identity{dev:"1".into(),ino:(i+1).to_string()}),missing:false,removed:false,preservation:Preservation{changed:Some(if i==2{3}else{0}),unpushed:Some(if i==1{2}else{0}),exclusive:Some(0),refusal:if i==1{Some("This worktree has unpushed commits. Push them or explicitly confirm preserving only the local branch.".into())}else if i==2{Some("This worktree has uncommitted or ignored files. Preserve or remove them before removing the worktree.".into())}else if i==0{Some("The main checkout cannot be removed here.".into())}else{None}},creation_id:(i>0).then(||format!("creation-{i}")),last_used:Some(super::super::commits::now() as u64*1000-i as u64*300000)});
+            rows.push(Checkout {path,main:i==0,branch:Some(if i==0{"main".into()}else{format!("plait/topic-{i}")}),head:Some(oid(if i==0{10}else{100+i})),base:(i>0).then(||oid(9-i.min(6))),thread_id:(i>0).then_some(id),identity:Some(plait_core::git::worktree::Identity{dev:"1".into(),ino:(i+1).to_string()}),missing:false,removed:false,preservation:Preservation{changed:Some(if i==2{3}else{0}),unpushed:Some(if i==1{2}else{0}),exclusive:Some(0),can_keep_local:i>0 && i!=2,refusal:if i==1{Some("This worktree has unpushed commits. Push them or explicitly confirm preserving only the local branch.".into())}else if i==2{Some("This worktree has uncommitted or ignored files. Preserve or remove them before removing the worktree.".into())}else if i==0{Some("The main checkout cannot be removed here.".into())}else{None}},creation_id:(i>0).then(||format!("creation-{i}")),last_used:Some(super::super::commits::now() as u64*1000-i as u64*300000)});
             if i>0 {commits.push(commit(100+i,9-i.min(6),(if i==1{"Retry transient failures"}else if i==2{"Validate project overrides"}else{"Preserve draft attachments"}).to_string()));}
         }
         for n in (1..=10).rev(){commits.push(commit(n,n-1,match n {10=>"Keep thread tabs independent".into(),9=>"Read host-owned worktrees".into(),8=>"Preserve the checkout identity".into(),_=>format!("Project change {n}")}));}
@@ -74,6 +74,7 @@ pub(super) fn walk(repo: &Path, out: Option<&Path>, suffix: &str, width: f32, he
         let theme = if light { "light" } else { "dark" };
         install(&mut h, 4);
         h.capture(&format!("worktrees-graph-{theme}-{suffix}"));
+        h.update(|p, _, _| p.worktrees.selected = 2);
         h.pointer(PlatformInput::MouseMove(MouseMoveEvent {
             position: point(
                 px(if width > 1000. { 1290. } else { 480. }),
@@ -88,6 +89,7 @@ pub(super) fn walk(repo: &Path, out: Option<&Path>, suffix: &str, width: f32, he
             pressed_button: None,
             modifiers: Modifiers::default(),
         }));
+        h.update(|p, _, _| p.worktrees.selected = 1);
         h.pointer(PlatformInput::MouseMove(MouseMoveEvent {
             position: point(px(600.), px(182.)),
             pressed_button: None,
@@ -131,11 +133,13 @@ pub(super) fn walk(repo: &Path, out: Option<&Path>, suffix: &str, width: f32, he
         install(&mut h, 4);
         h.update(|p,_,_| {
             p.worktrees.rows[1].missing=true;
+            p.worktrees.rows[1].preservation.can_keep_local=false;
             p.worktrees.rows[1].preservation.refusal=Some("The worktree folder is missing. Nothing was removed. If you moved it, move it back; if its disk is not connected, connect it.".into());
             p.worktrees.sizes[1]=Some(Err("The checkout folder is missing.".into()));
             p.worktrees.rows[2].missing=true;p.worktrees.rows[2].removed=true;
             p.worktrees.rows[2].preservation.refusal=Some("This worktree was removed. Its branch, thread history and private build cache remain.".into());
             p.worktrees.rows[3].creation_id=None;p.worktrees.rows[3].thread_id=None;
+            p.worktrees.rows[3].preservation.can_keep_local=false;
             p.worktrees.rows[3].preservation.refusal=Some("Plait did not create this worktree. Remove it with your Git tools.".into());
             p.worktrees.prepare();p.worktree_labels();
         });
@@ -259,6 +263,12 @@ fn remove_asks_for_the_worktree_that_was_drawn() {
         for t in &mut p.host.connection.threads {
             t.status = ThreadStatus::Idle;
         }
+        p.host
+            .connection
+            .threads
+            .iter_mut()
+            .filter(|t| t.id == "worktree-scene-1")
+            .for_each(|t| t.status = ThreadStatus::Idle);
         let row = &mut p.worktrees.rows[1];
         row.preservation.refusal = None;
         row.preservation.unpushed = Some(0);
@@ -431,6 +441,7 @@ fn remove_waits_for_a_run_in_that_worktree() {
             unpushed: Some(0),
             exclusive: Some(0),
             refusal: None,
+            can_keep_local: true,
         };
         p.worktrees.selected = at;
         let (path, id) = (
@@ -501,7 +512,11 @@ fn removal_here_marks_the_folder_missing_for_the_sidebar() {
                 .removal
                 .ask(&row, p.tabs.host.clone(), "removal".into())
         );
-        let attempt = p.worktrees.removal.answer(true).unwrap();
+        let attempt = p
+            .worktrees
+            .removal
+            .answer(Some(plait_core::worktree_removal::Choice::RemoveIfPushed))
+            .unwrap();
         let removed = plait_core::host::worktree::Operation {
             request_id: "creation-3".into(),
             thread_id: "12345678-1234-4abc-8abc-123456789abc".into(),
@@ -509,20 +524,25 @@ fn removal_here_marks_the_folder_missing_for_the_sidebar() {
             worktree: None,
             error: None,
         };
-        p.settle_view_removal(&attempt, Ok(removed), cx);
+        p.settle_worktree_removal(&attempt, Ok(removed), cx);
         assert_eq!(p.navigation.available.get(&row.path), Some(&false));
         assert!(p.worktrees.removal.pending.is_none());
         // A refusal changes nothing about the folder.
         let other = p.worktrees.rows[1].path.clone();
         p.navigation.available.insert(other.clone(), true);
         p.worktrees.rows[1].preservation.refusal = None;
+        p.worktrees.rows[1].preservation.unpushed = Some(0);
         let row = p.worktrees.rows[1].clone();
         assert!(
             p.worktrees
                 .removal
                 .ask(&row, p.tabs.host.clone(), "refused".into())
         );
-        let attempt = p.worktrees.removal.answer(true).unwrap();
+        let attempt = p
+            .worktrees
+            .removal
+            .answer(Some(plait_core::worktree_removal::Choice::RemoveIfPushed))
+            .unwrap();
         let refused = plait_core::host::worktree::Operation {
             request_id: "creation-1".into(),
             thread_id: "12345678-1234-4abc-8abc-123456789abc".into(),
@@ -533,7 +553,7 @@ fn removal_here_marks_the_folder_missing_for_the_sidebar() {
                 message: "New work appeared.".into(),
             }),
         };
-        p.settle_view_removal(&attempt, Ok(refused), cx);
+        p.settle_worktree_removal(&attempt, Ok(refused), cx);
         assert_eq!(p.navigation.available.get(&other), Some(&true));
     });
     drop(h);
@@ -564,7 +584,11 @@ fn an_unconfirmed_removal_stays_with_its_project() {
         p.worktrees.selected = 3;
         let row = p.worktrees.rows[3].clone();
         p.ask_remove_view_worktree(&row.path, row.identity.as_ref(), window, cx);
-        let attempt = p.worktrees.removal.answer(true).unwrap();
+        let attempt = p
+            .worktrees
+            .removal
+            .answer(Some(plait_core::worktree_removal::Choice::RemoveIfPushed))
+            .unwrap();
         assert!(
             p.worktrees
                 .removal
@@ -714,6 +738,123 @@ fn graph_controls_are_named_and_keep_their_ids_when_lanes_resort() {
             after.contains(&(path.clone(), *id)),
             "{path} changed its id"
         );
+    }
+    drop(h);
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
+struct RemovalPrompt(FocusHandle);
+impl Focusable for RemovalPrompt {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.0.clone()
+    }
+}
+impl EventEmitter<PromptResponse> for RemovalPrompt {}
+impl Render for RemovalPrompt {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
+#[core::prelude::v1::test]
+fn removal_prompt_freezes_choices_and_identity_across_resort_and_refresh() {
+    if !isolated(
+        "worktrees_view::removal_prompt_freezes_choices_and_identity_across_resort_and_refresh",
+    ) {
+        return;
+    }
+    use plait_core::{host::worktree::Request, worktree_removal::Choice};
+    use std::{cell::RefCell, rc::Rc};
+    let scratch =
+        std::env::temp_dir().join(format!("plait-worktree-prompt-{}", std::process::id()));
+    let repo = fixture_repository(&scratch);
+    let mut h = Harness::new(&repo, None, 1380., 860.);
+    h.connect(&repo, false);
+    let captured = Rc::new(RefCell::new(None));
+    h.cx.update(|cx| {
+        let captured = captured.clone();
+        cx.set_prompt_builder(move |_, title, detail, buttons, handle, window, cx| {
+            let view = cx.new(|cx| RemovalPrompt(cx.focus_handle()));
+            *captured.borrow_mut() = Some((
+                view.clone(),
+                title.to_owned(),
+                detail.unwrap().to_owned(),
+                buttons
+                    .iter()
+                    .map(|b| b.label().to_string())
+                    .collect::<Vec<_>>(),
+            ));
+            handle.with_view(view, window, cx)
+        });
+    });
+    for (published, choice) in [
+        (true, Some(Choice::RemoveIfPushed)),
+        (true, Some(Choice::KeepLocal)),
+        (false, Some(Choice::KeepLocal)),
+        (false, None),
+    ] {
+        install(&mut h, 4);
+        let mut original = None;
+        h.update(|p, window, cx| {
+            p.worktrees.removal = Default::default();
+            p.worktree_busy = false;
+            p.host
+                .connection
+                .threads
+                .iter_mut()
+                .filter(|t| t.id == "worktree-scene-1")
+                .for_each(|t| t.status = ThreadStatus::Idle);
+            let row = &mut p.worktrees.rows[1];
+            if published {
+                row.preservation.unpushed = Some(0);
+                row.preservation.refusal = None;
+            }
+            let row = row.clone();
+            p.ask_remove_view_worktree(&row.path, row.identity.as_ref(), window, cx);
+            original = p.worktrees.removal.asking.clone();
+            // Another inventory and size reply change both ordering and identity.
+            p.worktrees.rows[1].identity.as_mut().unwrap().ino = "999".into();
+            p.worktrees.rows[1].creation_id = Some("replacement".into());
+            p.worktrees.rows[1].preservation.can_keep_local = false;
+            p.worktrees.sizes[3] = Some(Ok(Size {
+                source: 9_000_000_000,
+                build: 0,
+                incomplete: false,
+                entries: 1,
+            }));
+            p.sort_worktree_lanes(true, cx);
+            // Keep this test from sending a real host mutation after confirmation.
+            p.worktree_busy = true;
+        });
+        let (prompt, title, detail, buttons) = captured.borrow_mut().take().unwrap();
+        assert_eq!(title, "Remove this worktree?");
+        let expected = if published {
+            vec!["Remove if pushed", "Keep local commits only", "Cancel"]
+        } else {
+            vec!["Keep local commits only", "Cancel"]
+        };
+        assert_eq!(buttons, expected);
+        if !published {
+            assert!(
+                detail.contains("2 commits are not pushed; they stay on branch plait/topic-1.")
+            );
+        }
+        let label = choice.map_or("Cancel", Choice::label);
+        let index = buttons.iter().position(|s| s == label).unwrap();
+        prompt.update(&mut h.cx, |_, cx| cx.emit(PromptResponse(index)));
+        h.settle();
+        h.update(|p, _, _| {
+            assert!(p.worktrees.removal.asking.is_none());
+            if let Some(choice) = choice {
+                let mut expected = original.take().unwrap();
+                if let Request::RemoveWorktree { allow_unpushed, .. } = &mut expected.request {
+                    *allow_unpushed = choice == Choice::KeepLocal;
+                }
+                assert_eq!(p.worktrees.removal.pending.as_ref(), Some(&expected));
+            } else {
+                assert!(p.worktrees.removal.pending.is_none());
+            }
+        });
     }
     drop(h);
     let _ = std::fs::remove_dir_all(scratch);

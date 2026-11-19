@@ -585,6 +585,11 @@ The runtime adds creation ownership, recorded last-use time and busy refusals.
 The desktop never derives its own removal permission from Git status.
 `worktree_removal` owns ask, confirmation, exact request retry and result state;
 mutation replies settle their original operation even after navigation.
+The host's `can_keep_local` fact distinguishes a publication-only refusal from
+every other refusal. The desktop offers only permitted choices and freezes the
+choices, path and identity before asking. Both the sidebar and graph use
+`ui/worktree.rs` for the prompt, request and receipt; the sidebar's older-host
+path retains its two explicit choices without inventing live counts.
 
 `git::log::graph` reads at most 300 commits and parents from all checkout heads
 in one command. Pure `worktree_graph::layout` follows the trunk's first parents,

@@ -7,6 +7,7 @@ use plait_core::{
         worktree::{self, Operation, Request, Stage},
     },
     host_state::request_id,
+    worktree_removal,
 };
 use std::{
     path::PathBuf,
@@ -254,78 +255,145 @@ impl Plait {
             self.navigation.error = Some(BUSY.into());
             return cx.notify();
         }
+        if let Some(pending) = &self.worktrees.removal.pending {
+            if pending.path == path {
+                self.finish_worktree_removal(cx);
+            } else {
+                self.navigation.error = Some(
+                    "Another worktree's removal is unconfirmed. Refresh its Worktrees tab first."
+                        .into(),
+                );
+                cx.notify();
+            }
+            return;
+        }
         let Some(tree) = self.preferences.value.navigation.worktree(&path).cloned() else {
             return;
         };
-        let (Some(creation_id), Some(identity)) = (tree.creation_id, tree.identity) else {
+        if tree.creation_id.is_none() || tree.identity.is_none() {
             self.navigation.error = Some("This is an imported worktree. Remove it with your Git tools; Plait has no host ownership record.".into());
             return cx.notify();
+        }
+        if !self.worktrees.removal.ask_record(
+            path.clone(),
+            &tree,
+            self.tabs.host.clone(),
+            request_id(),
+        ) {
+            return;
+        }
+        let detail = worktree_removal::confirmation_detail(&path, &tree.branch, None);
+        self.show_worktree_removal(tree.main, detail, window, cx);
+    }
+    /// Both entry points use the same frozen choices, request and reply ledger.
+    pub(super) fn show_worktree_removal(
+        &mut self,
+        project: PathBuf,
+        detail: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(asked) = self.worktrees.removal.asking.clone() else {
+            return;
         };
-        let detail = format!(
-            "Delete {}? Branch {} and the thread history stay. Uncommitted and ignored files always block removal. Choose Keep local commits only to explicitly allow unpushed or unknown publication status.",
-            path.display(),
-            tree.branch
-        );
+        let choices = self.worktrees.removal.choices().offered();
+        let mut buttons: Vec<_> = choices
+            .iter()
+            .map(|choice| PromptButton::Other(choice.label().into()))
+            .collect();
+        buttons.push(PromptButton::Cancel("Cancel".into()));
+        self.worktrees.removal_project = Some(project);
         let answer = window.prompt(
             PromptLevel::Warning,
             "Remove this worktree?",
             Some(&detail),
-            &[
-                PromptButton::Other("Remove if pushed".into()),
-                PromptButton::Other("Keep local commits only".into()),
-                PromptButton::Cancel("Cancel".into()),
-            ],
+            &buttons,
             cx,
         );
-        let epoch = self.host.connection.epoch;
-        cx.spawn_in(window, async move |this, cx| {
-            let allow_unpushed = match answer.await {
-                Ok(0) => false,
-                Ok(1) => true,
-                _ => return,
-            };
-            let request = Request::RemoveWorktree {
-                request_id: request_id(),
-                creation_id,
-                identity,
-                allow_unpushed,
-            };
-            let Ok(task) = this.update(cx, |this, cx| {
-                this.worktree_busy = true;
-                cx.notify();
-                cx.background_executor()
-                    .spawn(async move { await_operation(&Client::from_environment()?, &request) })
-            }) else {
-                return;
-            };
-            let result = task.await;
-            let _ = this.update_in(cx, |this, _, cx| {
-                this.worktree_busy = false;
-                if this.host.connection.epoch != epoch {
+        cx.spawn(async move |this, cx| {
+            let choice = answer
+                .await
+                .ok()
+                .and_then(|index| choices.get(index).copied());
+            let _ = this.update(cx, |this, cx| {
+                if this.worktrees.removal.asking.as_ref() != Some(&asked) {
                     return;
                 }
-                match result {
-                    Ok(operation) => {
-                        this.remember_worktree_operation(&operation, cx);
-                        this.navigation.available.remove(&path);
-                        this.navigation.error = operation.error.map(|error| error.message);
-                        if operation.state == Stage::Removed {
-                            this.navigation.available.insert(path, false);
-                            this.notice = Some(
-                                "Worktree removed. Its branch and thread history remain.".into(),
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        this.navigation.error = Some(format!(
-                            "{error} Refresh worktrees to recover the removal result."
-                        ))
-                    }
+                if this.worktrees.removal.answer(choice).is_some() {
+                    this.finish_worktree_removal(cx);
                 }
-                cx.notify();
             });
         })
         .detach();
+    }
+    pub(super) fn finish_worktree_removal(&mut self, cx: &mut Context<Self>) {
+        if self.worktree_busy {
+            self.worktrees.removal.message = Some(
+                "Another worktree operation is in progress. Refresh to retry this removal.".into(),
+            );
+            return cx.notify();
+        }
+        let Some(attempt) = self.worktrees.removal.pending.clone() else {
+            return;
+        };
+        if attempt.host != self.tabs.host {
+            self.worktrees.removal.message =
+                Some("Reconnect the original host to recover this removal.".into());
+            return cx.notify();
+        }
+        self.worktree_busy = true;
+        let request = attempt.request.clone();
+        let task = cx.background_executor().spawn(async move {
+            super::worktree::await_operation(&Client::from_environment()?, &request)
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.worktree_busy = false;
+                this.settle_worktree_removal(&attempt, result, cx);
+            });
+        })
+        .detach();
+    }
+    /// Removal here must leave the sidebar and composer where the sidebar's own
+    /// Remove leaves them: the folder is gone, not merely re-listed.
+    pub(super) fn settle_worktree_removal(
+        &mut self,
+        attempt: &plait_core::worktree_removal::Attempt,
+        result: Result<worktree::Operation, host::Error>,
+        cx: &mut Context<Self>,
+    ) {
+        let removed = result
+            .as_ref()
+            .ok()
+            .filter(|operation| {
+                operation.error.is_none() && operation.state == worktree::Stage::Removed
+            })
+            .cloned();
+        if !self
+            .worktrees
+            .removal
+            .finish(attempt, result.map_err(|e| e.to_string()))
+        {
+            return;
+        }
+        if !self.worktrees_visible()
+            && attempt.host == self.tabs.host
+            && self.worktrees.removal_project.as_deref()
+                == Some(self.project_of(self.visible_project_checkout()))
+        {
+            self.notice = self.worktrees.removal.message.clone();
+        }
+        if let Some(operation) = removed {
+            self.remember_worktree_operation(&operation, cx);
+            self.navigation
+                .available
+                .insert(attempt.path.clone(), false);
+            self.sync_composer(cx);
+        }
+        self.refresh_host_worktrees(cx);
+        self.refresh_worktrees_view(false, cx);
+        cx.notify();
     }
 }
 fn completion_visible<T: PartialEq>(

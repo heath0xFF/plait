@@ -8,6 +8,9 @@ pub struct Preservation {
     pub unpushed: Option<u64>,
     pub exclusive: Option<u64>,
     pub refusal: Option<String>,
+    /// The same checks with the person's explicit publication exception.
+    #[serde(default)]
+    pub can_keep_local: bool,
 }
 impl Preservation {
     pub fn require_safe(&self) -> Result<()> {
@@ -53,7 +56,7 @@ pub(super) fn preservation(path: &Path, main: &Path, allow_unpushed: bool) -> Re
     .iter()
     .any(|name| fs::symlink_metadata(Path::new(&git_dir).join(name)).is_ok());
     let publication = publication(path);
-    let refusal = if changed > 0 {
+    let local_refusal = if changed > 0 {
         Some(DIRTY.into())
     } else if hidden.is_some() {
         hidden
@@ -63,7 +66,11 @@ pub(super) fn preservation(path: &Path, main: &Path, allow_unpushed: bool) -> Re
         Some(EXCLUSIVE.into())
     } else if unfinished {
         Some("This worktree has an unfinished Git operation.".into())
-    } else if !allow_unpushed {
+    } else {
+        None
+    };
+    let can_keep_local = local_refusal.is_none();
+    let refusal = local_refusal.or_else(|| if !allow_unpushed {
         match &publication {
             Err(error) => Some(error.clone()),
             Ok(n) if *n > 0 => Some("This worktree has unpushed commits. Push them or explicitly confirm preserving only the local branch.".into()),
@@ -71,12 +78,13 @@ pub(super) fn preservation(path: &Path, main: &Path, allow_unpushed: bool) -> Re
         }
     } else {
         None
-    };
+    });
     Ok(Preservation {
         changed: Some(changed),
         unpushed: publication.ok(),
         exclusive: exclusive.ok(),
         refusal,
+        can_keep_local,
     })
 }
 fn publication(path: &Path) -> Result<u64> {
@@ -230,6 +238,7 @@ fn read_inventory(
         };
         if ownership.is_some() && !row.missing {
             row.preservation.refusal = ownership;
+            row.preservation.can_keep_local = false;
         }
     }
     Ok(rows)
@@ -540,6 +549,9 @@ mod tests {
         let cases: &[(&str, Setup)] = &[
             ("no upstream", &|_| {}),
             ("published", &|_| {}),
+            ("local upstream", &|t| {
+                git_in(&t.path, &["branch", "--set-upstream-to=main"]);
+            }),
             ("untracked", &|t| {
                 fs::write(t.path.join("new"), "x").unwrap()
             }),
@@ -570,30 +582,60 @@ mod tests {
                 git_in(&t.path, &["checkout", "-q", &t.branch]);
             }),
             ("unpushed", &|t| commit(&t.path, "ahead")),
+            ("branch changed", &|t| {
+                git_in(&t.path, &["checkout", "-qb", "different"])
+            }),
+            ("detached head", &|t| {
+                git_in(&t.path, &["checkout", "-q", "--detach"])
+            }),
+            ("folder changed", &|t| {
+                fs::rename(&t.path, t.path.with_extension("moved")).unwrap();
+                fs::create_dir(&t.path).unwrap();
+            }),
+            ("missing", &|t| fs::remove_dir_all(&t.path).unwrap()),
         ];
-        for (name, setup) in cases {
-            let (repo, tree) = repository();
-            if *name != "no upstream" {
-                repo.git(&["remote", "add", "origin", "/nonexistent"]);
-                let remote = format!("refs/remotes/origin/{}", tree.branch);
-                git_in(&repo.0, &["update-ref", &remote, "HEAD"]);
-                let upstream = format!("--set-upstream-to=origin/{}", tree.branch);
-                git_in(&tree.path, &["branch", &upstream]);
+        for allow_unpushed in [false, true] {
+            for (name, setup) in cases {
+                let (repo, tree) = repository();
+                if *name != "no upstream" {
+                    repo.git(&["remote", "add", "origin", "/nonexistent"]);
+                    let remote = format!("refs/remotes/origin/{}", tree.branch);
+                    git_in(&repo.0, &["update-ref", &remote, "HEAD"]);
+                    let upstream = format!("--set-upstream-to=origin/{}", tree.branch);
+                    git_in(&tree.path, &["branch", &upstream]);
+                }
+                setup(&tree);
+                let facts = inventory(&repo.0, std::slice::from_ref(&tree)).unwrap()[1]
+                    .preservation
+                    .clone();
+                let preview = if allow_unpushed && facts.can_keep_local {
+                    None
+                } else {
+                    facts.refusal.clone()
+                };
+                let identity = tree.identity.clone().unwrap();
+                let removal =
+                    remove_managed_worktree(tree.clone(), &identity, allow_unpushed, |_| Ok(()));
+                match (&preview, &removal) {
+                    (None, Ok(removed)) => assert_eq!(removed.stage, ManagedStage::Removed),
+                    (Some(preview), Err(removal)) => {
+                        // A replaced or missing folder can fail Git discovery before
+                        // removal reaches its ownership check; both must refuse.
+                        if !matches!(*name, "folder changed" | "missing") {
+                            assert_eq!(preview, removal, "{name}");
+                        }
+                    }
+                    _ => panic!("{name}: preview {preview:?}, removal {removal:?}"),
+                }
+                assert_eq!(
+                    preview.is_none(),
+                    *name == "published"
+                        || (allow_unpushed
+                            && matches!(*name, "no upstream" | "local upstream" | "unpushed")),
+                    "{name}, keep local: {allow_unpushed}"
+                );
+                clean(&tree);
             }
-            setup(&tree);
-            let preview = inventory(&repo.0, std::slice::from_ref(&tree)).unwrap()[1]
-                .preservation
-                .refusal
-                .clone();
-            let identity = tree.identity.clone().unwrap();
-            let removal = remove_managed_worktree(tree.clone(), &identity, false, |_| Ok(()));
-            match (&preview, &removal) {
-                (None, Ok(removed)) => assert_eq!(removed.stage, ManagedStage::Removed),
-                (Some(preview), Err(removal)) => assert_eq!(preview, removal, "{name}"),
-                _ => panic!("{name}: preview {preview:?}, removal {removal:?}"),
-            }
-            assert_eq!(preview.is_none(), *name == "published", "{name}");
-            clean(&tree);
         }
     }
 }

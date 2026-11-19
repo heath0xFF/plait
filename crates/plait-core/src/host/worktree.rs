@@ -391,15 +391,16 @@ impl Inventory {
                 .flatten()
                 .any(|n| n > 9_007_199_254_740_991)
                 || (row.removed && (!row.missing || row.main))
-                || (row.preservation.refusal.is_none()
+                || ((row.preservation.refusal.is_none() || row.preservation.can_keep_local)
                     && (row.main
                         || row.missing
                         || row.creation_id.is_none()
                         || row.identity.is_none()
                         || row.thread_id.is_none()
+                        || row.branch.as_ref().is_none_or(|branch| branch.is_empty())
                         || row.preservation.changed != Some(0)
-                        || row.preservation.exclusive != Some(0)
-                        || row.preservation.unpushed != Some(0)))
+                        || row.preservation.exclusive != Some(0)))
+                || (row.preservation.refusal.is_none() && row.preservation.unpushed != Some(0))
             {
                 return Err(invalid());
             }
@@ -558,5 +559,52 @@ mod inventory_tests {
             .to_string(),
             Error::Protocol(OLDER_HOST.into()).to_string()
         );
+    }
+    #[test]
+    fn keep_local_permission_is_explicit_and_strictly_validated() {
+        assert!(
+            !read(recorded()).unwrap().checkouts[1]
+                .preservation
+                .can_keep_local
+        );
+        for unpushed in [json!(null), json!(2)] {
+            let mut good = recorded();
+            let facts = &mut good["checkouts"][1]["preservation"];
+            facts["refusal"] = json!("Publication needs confirmation.");
+            facts["unpushed"] = unpushed;
+            facts["can_keep_local"] = json!(true);
+            assert!(
+                read(good.clone()).unwrap().checkouts[1]
+                    .preservation
+                    .can_keep_local
+            );
+            for field in ["changed", "exclusive"] {
+                let mut bad = good.clone();
+                bad["checkouts"][1]["preservation"][field] = json!(1);
+                assert!(read(bad).is_err(), "{field}");
+            }
+            for (field, value) in [
+                ("missing", json!(true)),
+                ("removed", json!(true)),
+                ("creation_id", json!(null)),
+                ("identity", json!(null)),
+                ("thread_id", json!(null)),
+                ("branch", json!(null)),
+            ] {
+                let mut bad = good.clone();
+                bad["checkouts"][1][field] = value;
+                assert!(read(bad).is_err(), "{field}");
+            }
+            for value in [json!(null), json!("true"), json!(1)] {
+                let mut bad = good.clone();
+                bad["checkouts"][1]["preservation"]["can_keep_local"] = value;
+                assert!(read(bad).is_err());
+            }
+        }
+        for row in [0, 2] {
+            let mut bad = recorded();
+            bad["checkouts"][row]["preservation"]["can_keep_local"] = json!(true);
+            assert!(read(bad).is_err());
+        }
     }
 }

@@ -400,8 +400,12 @@ drawn stronger from its head to its fork; hover gives a quieter preview. Hover
 the shortened path to read it in full. **Open** brings its thread
 forward. **Finder** shows the checkout folder; **Terminal** uses the terminal
 chosen in Settings. **Remove** is available only when the host's current checks
-permit it. Hover explains a refusal in the host's words. Removal asks once with
-**Remove** and **Cancel**, then reports the result. A later refusal is preserved;
+permit at least one confirmation choice. Hover explains a refusal in the host's
+words. Removal asks once, shows the known counts and retained branch, and offers
+**Remove if pushed**, **Keep local commits only**, or **Cancel**. Only choices
+the host permits are offered. **Keep local commits only** explicitly accepts
+unpushed or unknown publication status; other safety checks still apply.
+The view then reports the result. A later refusal is preserved;
 a lost reply says unconfirmed and **Refresh** recovers the same request.
 Branches, thread history and private build caches remain. Removed records retain
 cache accounting and say **Removed**. Nothing is removed automatically.

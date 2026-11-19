@@ -4,6 +4,86 @@ use crate::{
     tabs::HostKey,
 };
 use std::path::PathBuf;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Choice {
+    RemoveIfPushed,
+    KeepLocal,
+}
+impl Choice {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::RemoveIfPushed => "Remove if pushed",
+            Self::KeepLocal => "Keep local commits only",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Choices {
+    pub if_pushed: bool,
+    pub keep_local: bool,
+}
+impl Choices {
+    pub fn for_checkout(row: &Checkout) -> Self {
+        if row.main
+            || row.missing
+            || row.removed
+            || row.creation_id.is_none()
+            || row.identity.is_none()
+            || row.thread_id.is_none()
+            || row.branch.as_ref().is_none_or(|branch| branch.is_empty())
+            || row.preservation.changed != Some(0)
+            || row.preservation.exclusive != Some(0)
+        {
+            return Self::default();
+        }
+        Self {
+            if_pushed: row.preservation.refusal.is_none() && row.preservation.unpushed == Some(0),
+            keep_local: row.preservation.can_keep_local,
+        }
+    }
+    pub fn any(self) -> bool {
+        self.if_pushed || self.keep_local
+    }
+    pub fn offered(self) -> Vec<Choice> {
+        [Choice::RemoveIfPushed, Choice::KeepLocal]
+            .into_iter()
+            .filter(|choice| self.allows(*choice))
+            .collect()
+    }
+    fn allows(self, choice: Choice) -> bool {
+        match choice {
+            Choice::RemoveIfPushed => self.if_pushed,
+            Choice::KeepLocal => self.keep_local,
+        }
+    }
+}
+
+pub fn confirmation_detail(
+    path: &std::path::Path,
+    branch: &str,
+    facts: Option<&crate::git::worktree::inventory::Preservation>,
+) -> String {
+    let path = crate::display_text::escape(&path.display().to_string());
+    let branch = crate::display_text::escape(branch);
+    let publication = match facts.and_then(|f| f.unpushed) {
+        Some(0) => format!("The host reports no unpushed commits on branch {branch}."),
+        Some(1) => format!("1 commit is not pushed; it stays on branch {branch}."),
+        Some(n) => format!("{n} commits are not pushed; they stay on branch {branch}."),
+        None => format!("Publication is unknown; commits stay on branch {branch}."),
+    };
+    let counts = facts.map_or(String::new(), |facts| {
+        let count = |n: Option<u64>| n.map_or("Unknown".into(), |n| n.to_string());
+        format!(
+            "\nChanged files: {}. Commits kept only here: {}.",
+            count(facts.changed),
+            count(facts.exclusive)
+        )
+    });
+    format!(
+        "Delete {path}?\n{publication}{counts}\nThe branch, thread history and private build cache stay. Uncommitted or ignored files, hidden index edits and commits kept only here block removal. The host checks again."
+    )
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Attempt {
     pub host: HostKey,
@@ -15,38 +95,85 @@ pub struct Removal {
     pub asking: Option<Attempt>,
     pub pending: Option<Attempt>,
     pub message: Option<String>,
+    choices: Choices,
 }
 impl Removal {
     pub fn ask(&mut self, row: &Checkout, host: HostKey, id: String) -> bool {
-        if self.asking.is_some()
-            || self.pending.is_some()
-            || row.main
-            || row.missing
-            || row.preservation.refusal.is_some()
-        {
-            return false;
-        }
+        let choices = Choices::for_checkout(row);
         let (Some(creation_id), Some(identity)) = (row.creation_id.clone(), row.identity.clone())
         else {
             return false;
         };
-        self.asking = Some(Attempt {
-            host,
-            path: row.path.clone(),
-            request: Request::RemoveWorktree {
-                request_id: id,
-                creation_id,
-                identity,
-                allow_unpushed: false,
+        self.start(
+            Attempt {
+                host,
+                path: row.path.clone(),
+                request: Request::RemoveWorktree {
+                    request_id: id,
+                    creation_id,
+                    identity,
+                    allow_unpushed: false,
+                },
             },
-        });
+            choices,
+        )
+    }
+    /// The sidebar's older-host path has ownership but no live inventory.
+    /// Keep its explicit choices; the host still applies every removal guard.
+    pub fn ask_record(
+        &mut self,
+        path: PathBuf,
+        record: &crate::navigation::WorktreeOf,
+        host: HostKey,
+        id: String,
+    ) -> bool {
+        let (Some(creation_id), Some(identity)) =
+            (record.creation_id.clone(), record.identity.clone())
+        else {
+            return false;
+        };
+        if path == record.main || record.branch.is_empty() {
+            return false;
+        }
+        self.start(
+            Attempt {
+                host,
+                path,
+                request: Request::RemoveWorktree {
+                    request_id: id,
+                    creation_id,
+                    identity,
+                    allow_unpushed: false,
+                },
+            },
+            Choices {
+                if_pushed: true,
+                keep_local: true,
+            },
+        )
+    }
+    fn start(&mut self, attempt: Attempt, choices: Choices) -> bool {
+        if self.asking.is_some() || self.pending.is_some() || !choices.any() {
+            return false;
+        }
+        self.asking = Some(attempt);
+        self.choices = choices;
         true
     }
-    pub fn answer(&mut self, confirmed: bool) -> Option<Attempt> {
-        let attempt = self.asking.take()?;
-        if !confirmed {
+    pub fn choices(&self) -> Choices {
+        self.choices
+    }
+    pub fn answer(&mut self, choice: Option<Choice>) -> Option<Attempt> {
+        let mut attempt = self.asking.take()?;
+        let choices = std::mem::take(&mut self.choices);
+        let choice = choice?;
+        if !choices.allows(choice) {
             return None;
         }
+        let Request::RemoveWorktree { allow_unpushed, .. } = &mut attempt.request else {
+            return None;
+        };
+        *allow_unpushed = choice == Choice::KeepLocal;
         self.message = None;
         self.pending = Some(attempt.clone());
         Some(attempt)
@@ -103,6 +230,7 @@ mod tests {
                 unpushed: Some(0),
                 exclusive: Some(0),
                 refusal: None,
+                can_keep_local: true,
             },
             creation_id: Some("creation".into()),
             last_used: None,
@@ -119,10 +247,10 @@ mod tests {
         let mut removal = Removal::default();
         assert!(removal.ask(&row(), host(), "id".into()));
         assert!(!removal.ask(&row(), host(), "other".into()));
-        assert!(removal.answer(false).is_none());
+        assert!(removal.answer(None).is_none());
         assert!(removal.pending.is_none());
         assert!(removal.ask(&row(), host(), "id".into()));
-        let attempt = removal.answer(true).unwrap();
+        let attempt = removal.answer(Some(Choice::RemoveIfPushed)).unwrap();
         assert!(removal.finish(&attempt, Err("Connection lost.".into())));
         assert_eq!(removal.pending.as_ref(), Some(&attempt));
         assert!(removal.message.as_ref().unwrap().contains("unconfirmed"));
@@ -145,10 +273,12 @@ mod tests {
         let mut removal = Removal::default();
         let mut row = row();
         row.preservation.refusal = Some("New work appeared.".into());
+        row.preservation.can_keep_local = false;
         assert!(!removal.ask(&row, host(), "id".into()));
         row.preservation.refusal = None;
+        row.preservation.can_keep_local = true;
         assert!(removal.ask(&row, host(), "id".into()));
-        let attempt = removal.answer(true).unwrap();
+        let attempt = removal.answer(Some(Choice::RemoveIfPushed)).unwrap();
         removal.finish(
             &attempt,
             Ok(Operation {
@@ -164,5 +294,79 @@ mod tests {
         );
         assert_eq!(removal.message.as_deref(), Some("New work appeared."));
         assert!(removal.pending.is_none());
+    }
+
+    #[test]
+    fn every_offered_choice_freezes_its_publication_exception() {
+        for (published, local) in [(false, false), (false, true), (true, false), (true, true)] {
+            let mut row = row();
+            row.preservation.refusal = (!published).then(|| "Publication is unknown.".into());
+            row.preservation.unpushed = published.then_some(0);
+            row.preservation.can_keep_local = local;
+            let choices = Choices::for_checkout(&row);
+            let expected: Vec<_> = [
+                published.then_some(Choice::RemoveIfPushed),
+                local.then_some(Choice::KeepLocal),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            assert_eq!(choices.offered(), expected);
+            assert_eq!(choices.any(), published || local);
+            for choice in [Choice::RemoveIfPushed, Choice::KeepLocal] {
+                let mut removal = Removal::default();
+                assert_eq!(removal.ask(&row, host(), "request".into()), choices.any());
+                let attempt = removal.answer(Some(choice));
+                assert_eq!(attempt.is_some(), expected.contains(&choice));
+                if let Some(attempt) = attempt {
+                    assert!(
+                        matches!(&attempt.request, Request::RemoveWorktree {request_id,allow_unpushed,..} if request_id == "request" && *allow_unpushed == (choice == Choice::KeepLocal))
+                    );
+                    assert!(removal.finish(&attempt, Err("Reply lost.".into())));
+                    assert_eq!(removal.pending.as_ref(), Some(&attempt));
+                    assert!(!removal.ask(&row, host(), "other".into()));
+                }
+            }
+        }
+    }
+    #[test]
+    fn local_choice_never_bypasses_ownership_or_preservation_guards() {
+        type Mutation = fn(&mut Checkout);
+        let unsafe_rows: [Mutation; 11] = [
+            |r| r.main = true,
+            |r| r.missing = true,
+            |r| r.removed = true,
+            |r| r.creation_id = None,
+            |r| r.identity = None,
+            |r| r.thread_id = None,
+            |r| r.branch = None,
+            |r| r.preservation.changed = Some(1),
+            |r| r.preservation.changed = None,
+            |r| r.preservation.exclusive = Some(1),
+            |r| r.preservation.exclusive = None,
+        ];
+        for change in unsafe_rows {
+            let mut row = row();
+            change(&mut row);
+            assert!(!Choices::for_checkout(&row).any());
+            assert!(!Removal::default().ask(&row, host(), "request".into()));
+        }
+    }
+    #[test]
+    fn confirmation_names_real_counts_and_the_branch_that_survives() {
+        let mut row = row();
+        row.preservation.unpushed = Some(2);
+        let detail = confirmation_detail(
+            &row.path,
+            row.branch.as_deref().unwrap(),
+            Some(&row.preservation),
+        );
+        assert!(detail.contains("2 commits are not pushed; they stay on branch plait/tree."));
+        assert!(detail.contains("Changed files: 0. Commits kept only here: 0."));
+        let detail = confirmation_detail(&row.path, "plait/tree", None);
+        assert!(detail.contains("Publication is unknown"));
+        assert!(!detail.contains("Changed files: 0"));
+        assert_eq!(Choice::RemoveIfPushed.label(), "Remove if pushed");
+        assert_eq!(Choice::KeepLocal.label(), "Keep local commits only");
     }
 }
