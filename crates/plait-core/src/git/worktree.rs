@@ -682,6 +682,7 @@ pub fn remove_managed_supervised(
     if !dirty.is_empty() {
         return Err("This worktree has uncommitted or ignored files. Preserve or remove them before removing the worktree.".into());
     }
+    refuse_hidden_edits(&record.path)?;
     let git_dir = text_read(&record.path, &["rev-parse", "--absolute-git-dir"])?;
     if [
         "MERGE_HEAD",
@@ -728,6 +729,26 @@ pub fn remove_managed_supervised(
     record.error = None;
     save(&record)?;
     Ok(record)
+}
+
+/// Status cannot see an edit behind an assume-unchanged or skip-worktree bit,
+/// but `git worktree remove` deletes it with the folder.
+fn refuse_hidden_edits(path: &Path) -> Result<()> {
+    let listing = read_worktree(path, &["ls-files", "-v", "-z"])?;
+    for entry in listing.split(|b| *b == 0).filter(|entry| !entry.is_empty()) {
+        let [tag, b' ', name @ ..] = entry else {
+            return Err("Git listed an index entry Plait cannot read. Nothing was removed.".into());
+        };
+        // A sparse checkout's skipped files are absent; a present one may be edited.
+        let present = || {
+            use std::os::unix::ffi::OsStrExt;
+            fs::symlink_metadata(path.join(std::ffi::OsStr::from_bytes(name))).is_ok()
+        };
+        if tag.is_ascii_lowercase() || (*tag == b'S' && present()) {
+            return Err("This worktree has tracked files Git is told not to check (assume-unchanged or skip-worktree), so their edits cannot be seen. Clear those flags and commit or discard the edits before removing the worktree.".into());
+        }
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -1122,6 +1143,47 @@ mod managed_tests {
         std::os::unix::fs::symlink(&repo.0, &base).unwrap();
         assert!(create_managed_worktree(&parent, ID, None, |_| Ok(())).is_err());
         fs::remove_file(base).unwrap();
+    }
+    #[test]
+    fn removal_refuses_edits_hidden_by_index_bits() {
+        let repo = repository();
+        let tree = create(&repo);
+        let identity = tree.identity.as_ref().unwrap();
+        for flag in ["--assume-unchanged", "--skip-worktree"] {
+            git_in(&tree.path, &["update-index", flag, "file"]);
+            fs::write(tree.path.join("file"), "only copy\n").unwrap();
+            let error =
+                remove_managed_worktree(tree.clone(), identity, true, |_| Ok(())).unwrap_err();
+            assert!(error.contains("not to check"), "{flag}: {error}");
+            assert_eq!(
+                fs::read_to_string(tree.path.join("file")).unwrap(),
+                "only copy\n"
+            );
+            let clear = flag.replace("--", "--no-");
+            git_in(&tree.path, &["update-index", &clear, "file"]);
+            git_in(&tree.path, &["checkout", "--", "file"]);
+        }
+        // A sparse-style skipped file that is absent holds no edit.
+        git_in(&tree.path, &["update-index", "--skip-worktree", "file"]);
+        fs::remove_file(tree.path.join("file")).unwrap();
+        let removed = remove_managed_worktree(tree.clone(), identity, true, |_| Ok(())).unwrap();
+        assert_eq!(removed.stage, ManagedStage::Removed);
+        clean(&tree);
+    }
+    fn git_in(root: &Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     #[test]
     fn substituted_path_and_forged_removal_identity_are_refused() {
