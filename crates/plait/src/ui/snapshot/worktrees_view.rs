@@ -172,6 +172,9 @@ fn scenes() {
         walk(&repo, out.as_deref(), suffix, w, h);
     }
 }
+// The accessibility collector exists only in debug builds; the frame
+// benchmark compiles these tests in release.
+#[cfg(debug_assertions)]
 #[core::prelude::v1::test]
 fn graph_accessibility_is_unique_stable_and_has_no_thread_view_bar() {
     if !isolated("worktrees_view::graph_accessibility_is_unique_stable_and_has_no_thread_view_bar")
@@ -561,6 +564,9 @@ fn removal_here_marks_the_folder_missing_for_the_sidebar() {
 }
 /// One window holds one removal state. A removal whose reply was lost in one
 /// project stays with that project's Worktrees tab.
+// The accessibility collector exists only in debug builds; the frame
+// benchmark compiles these tests in release.
+#[cfg(debug_assertions)]
 #[core::prelude::v1::test]
 fn an_unconfirmed_removal_stays_with_its_project() {
     if !isolated("worktrees_view::an_unconfirmed_removal_stays_with_its_project") {
@@ -690,6 +696,9 @@ fn reopen_returns_worktrees_only_for_a_present_project() {
 }
 /// Assistive technology keeps its place by node id: every control in the view
 /// is named, and each keeps its id when a size reply re-sorts the lanes.
+// The accessibility collector exists only in debug builds; the frame
+// benchmark compiles these tests in release.
+#[cfg(debug_assertions)]
 #[core::prelude::v1::test]
 fn graph_controls_are_named_and_keep_their_ids_when_lanes_resort() {
     if !isolated("worktrees_view::graph_controls_are_named_and_keep_their_ids_when_lanes_resort") {
