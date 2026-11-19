@@ -862,3 +862,59 @@ fn discard_waits_for_a_creation_that_blocks_closing_its_tab() {
     drop(h);
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+#[core::prelude::v1::test]
+fn closing_a_draft_keeps_it_for_reopen_and_discarding_does_not() {
+    if !isolated("many_drafts::closing_a_draft_keeps_it_for_reopen_and_discarding_does_not") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-close-discard-{}", std::process::id()));
+    let repo = fixture_repository(&scratch);
+    let (directory, store) = plait_core::session::locations().unwrap();
+    let (journal, data) = plait_core::session::Journal::open(&directory, store).unwrap();
+    let mut h = Harness::new(&repo, None, 900., 600.);
+    h.connect(&repo, false);
+    h.update(|p, w, cx| {
+        p.tabs = Default::default();
+        p.park_workspace(cx);
+        p.session.data = Some(data);
+        p.session.journal = Some(journal.clone());
+        p.open_draft(w, cx);
+    });
+    h.type_draft("Closed only\nbody");
+    let closed = h
+        .window
+        .update(&mut h.cx, |p, _, _| p.draft.id.clone().unwrap())
+        .unwrap();
+    h.update(|p, w, cx| p.open_draft(w, cx));
+    wait_tabs(&mut h);
+    h.type_draft("Discarded");
+    h.keystroke("cmd-1");
+    wait_tabs(&mut h);
+    h.keystroke("cmd-w");
+    wait_tabs(&mut h);
+    h.update(|p, _, _| {
+        assert_eq!(p.tabs.model.closed_len(), 1);
+        let data = p.session.data.as_ref().unwrap();
+        assert_eq!(data.draft_tabs[&closed].draft.text, "Closed only\nbody");
+    });
+    h.update(|p, w, cx| p.discard_draft(w, cx));
+    wait_tabs(&mut h);
+    h.update(|p, _, _| {
+        assert!(p.tabs.model.tabs().is_empty());
+        assert_eq!(p.session.data.as_ref().unwrap().draft_tabs.len(), 1);
+    });
+    h.keystroke("cmd-shift-t");
+    wait_tabs(&mut h);
+    h.update(|p, _, cx| {
+        assert_eq!(p.tabs.model.tabs().len(), 1);
+        assert_eq!(draft_text(p, cx), "Closed only\nbody");
+        assert_eq!(p.tabs.rows[0].title, "Closed only");
+    });
+    // Neither history nor the journal holds the discarded draft.
+    h.keystroke("cmd-shift-t");
+    wait_tabs(&mut h);
+    h.update(|p, _, _| assert_eq!(p.tabs.model.tabs().len(), 1));
+    drop(h);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
