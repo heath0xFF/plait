@@ -61,11 +61,11 @@ pub(super) struct Sending {
 pub(super) const LOCKED: &str = "Resolve the pending thread creation first.";
 
 impl Plait {
-    /// The draft is what the conversation area shows now.
+    /// The draft is what the conversation area shows now, including under a
+    /// settings modal, which leaves the workspace as it is.
     pub(super) fn draft_visible(&self) -> bool {
         self.draft.open
             && self.host.thread.selected.is_none()
-            && !self.settings_open
             && self.workspace.tab == Workspace::Conversation
     }
 

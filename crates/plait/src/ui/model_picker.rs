@@ -516,8 +516,7 @@ impl Plait {
             );
         }
         // A rejected request. The conversation view shows host errors itself.
-        let idle =
-            self.new_thread_open && self.host.thread.selected.is_none() && !self.settings_open;
+        let idle = self.new_thread_open && self.host.thread.selected.is_none();
         let error = failure.filter(|_| idle)?;
         Some(
             bar()

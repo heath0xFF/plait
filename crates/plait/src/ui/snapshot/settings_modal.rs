@@ -510,3 +510,67 @@ fn a_thread_created_under_the_modal_opens_behind_it() {
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+#[core::prelude::v1::test]
+fn a_sent_draft_stays_in_place_and_opens_behind_the_modal() {
+    if !isolated("settings_modal::a_sent_draft_stays_in_place_and_opens_behind_the_modal") {
+        return;
+    }
+    use crate::ui::new_thread::Sending;
+    let scratch = std::env::temp_dir().join(format!("plait-modal-draft-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.update(|plait, window, cx| {
+        plait.open_draft(window, cx);
+        // As `send_draft` leaves things, without a socket.
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 3;
+        plait.host.creation.pending_create = Some(("drafted".into(), choice()));
+        plait.host.creation.creating = true;
+        plait.draft.sending = Some(Sending {
+            images: Vec::new(),
+            generation: plait.draft.generation,
+            request_id: "drafted".into(),
+            text: "Sent before Settings".into(),
+            revision: 1,
+            approval: Some(ApprovalMode::Ask),
+            choice: Some(ApprovalMode::Ask),
+        });
+        let bar = plait.creation_bar(cx).is_some();
+        plait.show_settings(true, window, cx);
+        assert!(plait.draft_visible(), "the draft is still on screen");
+        assert_eq!(
+            plait.creation_bar(cx).is_some(),
+            bar,
+            "the workspace keeps its rows"
+        );
+    });
+    harness.draw();
+    harness.update(|plait, window, cx| {
+        let epoch = plait.host.thread.watch_epoch;
+        plait.finish_create(
+            created(&repository, "drafted", epoch),
+            created_reply(&repository, "thr_drafted"),
+            window,
+            cx,
+        );
+        assert!(plait.settings_open);
+        assert_eq!(
+            plait.host.thread.selected.as_deref(),
+            Some("thr_drafted"),
+            "the draft's thread opens where the draft was"
+        );
+        assert_eq!(
+            plait.host.submissions.all("thr_drafted")[0].text,
+            "Sent before Settings"
+        );
+    });
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
