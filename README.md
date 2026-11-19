@@ -113,6 +113,20 @@ reloads when the agent changes it on disk.
 <tr>
 <td width="50%" valign="top">
 
+### See every worktree
+
+The Worktrees graph shows each branch's commits, its thread's state, and the
+space its checkout holds. Remove is available when nothing would be lost, or
+with your say for unpushed commits that stay on their branch.
+
+</td>
+<td width="50%">
+<img src="docs/images/worktrees.png" width="100%" alt="The sample forecast project's Worktrees tab, with four branches, thread states, storage sizes, and the selected checkout's removal details" />
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
 ### Light, dark, and your themes
 
 Follows macOS appearance. Stillwater is the default dark theme; Plait Light

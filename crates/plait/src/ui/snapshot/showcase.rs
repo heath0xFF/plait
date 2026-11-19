@@ -586,6 +586,259 @@ fn walk(output: &Path) {
         field.update(cx, |field, cx| field.set_text("delay", cx));
     });
     harness.capture("files");
+
+    stage(&mut harness, &repository, finished_thread(&repository));
+    stage_worktrees(&mut harness, &repository);
+    #[cfg(debug_assertions)]
+    harness.draw_a11y().assert_no_duplicates("readme-worktrees");
+    harness.capture("worktrees");
+}
+
+fn graph_oid(short: &str) -> String {
+    format!("{short}a6e38d27f4c2195b073d8e6f921acb04")
+}
+
+fn graph_commit(
+    id: &str,
+    parent: &str,
+    subject: &str,
+    minutes: u64,
+) -> plait_core::git::log::GraphCommit {
+    plait_core::git::log::GraphCommit {
+        commit: plait_core::git::log::Commit {
+            id: graph_oid(id),
+            short: id[..7].into(),
+            subject: subject.into(),
+            author: "Sample Author".into(),
+            time: (now() / 1000 - minutes * 60) as i64,
+        },
+        parents: if parent.is_empty() {
+            vec![]
+        } else {
+            vec![graph_oid(parent)]
+        },
+    }
+}
+
+fn worktree_history() -> Vec<plait_core::git::log::GraphCommit> {
+    vec![
+        graph_commit("7a8d4c32", "bc6209e1", "Honor Retry-After dates", 2),
+        graph_commit("a3d18b6f", "4d927ea1", "Validate station aliases", 8),
+        graph_commit("bc6209e1", "b6e82c90", "Bound retry delays", 10),
+        graph_commit(
+            "8f3a72bc",
+            "4d927ea1",
+            "Share forecast request settings",
+            12,
+        ),
+        graph_commit("29be46d1", "e428b90a", "Group readings by local date", 18),
+        graph_commit("f19c73a8", "b6e82c90", "Convert readings to Fahrenheit", 25),
+        graph_commit("4d927ea1", "b6e82c90", "Read station metadata", 40),
+        graph_commit(
+            "b6e82c90",
+            "e428b90a",
+            "Parse hourly forecast responses",
+            70,
+        ),
+        graph_commit("e428b90a", "62ca19fd", "Fetch hourly forecasts", 130),
+        graph_commit("62ca19fd", "", "Model station identifiers", 180),
+    ]
+}
+
+/// Sample facts for the same forecast project; no host or agent runs.
+fn stage_worktrees(harness: &mut Harness, repository: &Path) {
+    use plait_core::{
+        git::worktree::{Identity, inventory::Preservation},
+        host::worktree::Checkout,
+        navigation::WorktreeOf,
+        worktree_graph,
+        worktree_size::Size,
+    };
+    let commits = worktree_history();
+    let sampled_at = now() / 1000 * 1000;
+    let samples = [
+        (
+            "72c51ba14f3d",
+            "Honor Retry-After dates",
+            ThreadStatus::Running,
+            "7a8d4c32",
+            "b6e82c90",
+            0,
+            2,
+            2,
+            1800,
+        ),
+        (
+            "d9af16428c71",
+            "Validate station aliases",
+            ThreadStatus::AwaitingApproval,
+            "a3d18b6f",
+            "4d927ea1",
+            0,
+            1,
+            8,
+            486,
+        ),
+        (
+            "4bd8a6f0b31c",
+            "Add Fahrenheit output",
+            ThreadStatus::Idle,
+            "f19c73a8",
+            "b6e82c90",
+            0,
+            0,
+            25,
+            640,
+        ),
+        (
+            "e124b0a78d35",
+            "Group readings by local date",
+            ThreadStatus::Idle,
+            "29be46d1",
+            "e428b90a",
+            2,
+            1,
+            18,
+            0,
+        ),
+    ];
+    let mut rows = vec![Checkout {
+        path: repository.into(),
+        main: true,
+        branch: Some("main".into()),
+        head: Some(graph_oid("8f3a72bc")),
+        base: None,
+        thread_id: None,
+        identity: Some(Identity {
+            dev: "1".into(),
+            ino: "1".into(),
+        }),
+        missing: false,
+        removed: false,
+        preservation: Preservation {
+            changed: Some(4),
+            unpushed: Some(0),
+            exclusive: Some(0),
+            refusal: Some("The main checkout cannot be removed here.".into()),
+            can_keep_local: false,
+        },
+        creation_id: None,
+        last_used: Some(sampled_at - 60_000),
+    }];
+    let mut sizes = vec![Some(Ok(Size {
+        source: 272 * 1024,
+        build: 330 << 20,
+        incomplete: false,
+        entries: 840,
+    }))];
+    let mut owners = Vec::new();
+    for (i, (suffix, title, status, head, base, changed, unpushed, minutes, build)) in
+        samples.into_iter().enumerate()
+    {
+        let path = PathBuf::from("/code/forecast.worktrees").join(suffix);
+        let id = format!("readme-{suffix}");
+        let busy = matches!(
+            status,
+            ThreadStatus::Running | ThreadStatus::AwaitingApproval
+        );
+        let refusal = if busy {
+            Some("This worktree still has active, queued, or recovering work.".into())
+        } else if changed > 0 {
+            Some("This worktree has uncommitted or ignored files. Preserve or remove them before removing the worktree.".into())
+        } else {
+            None
+        };
+        rows.push(Checkout {
+            path: path.clone(),
+            main: false,
+            branch: Some(format!("plait/{suffix}")),
+            head: Some(graph_oid(head)),
+            base: Some(graph_oid(base)),
+            thread_id: Some(id.clone()),
+            identity: Some(Identity {
+                dev: "1".into(),
+                ino: (i + 2).to_string(),
+            }),
+            missing: false,
+            removed: false,
+            preservation: Preservation {
+                changed: Some(changed),
+                unpushed: Some(unpushed),
+                exclusive: Some(0),
+                refusal,
+                can_keep_local: !busy && changed == 0,
+            },
+            creation_id: Some(format!("create-{suffix}")),
+            last_used: Some(sampled_at - minutes * 60_000),
+        });
+        sizes.push(Some(Ok(Size {
+            source: (248 + i as u64 * 16) * 1024,
+            build: build << 20,
+            incomplete: false,
+            entries: 920,
+        })));
+        owners.push(ThreadSummary {
+            id,
+            checkout: path,
+            title: Some(title.into()),
+            model: choice(),
+            status,
+            created_at: Some(now() - 86_400_000),
+            updated_at: Some(now() - minutes * 60_000),
+            pending_approval: Some(status == ThreadStatus::AwaitingApproval),
+            ..Default::default()
+        });
+    }
+    harness.update(move |plait, _, cx| {
+        plait.park_workspace(cx);
+        plait.host.connection.threads.extend(owners.clone());
+        for tree in &rows[1..] {
+            plait.preferences.value.navigation.worktrees.insert(
+                tree.path.clone(),
+                WorktreeOf {
+                    main: repository.into(),
+                    branch: tree.branch.clone().unwrap(),
+                    creation_id: tree.creation_id.clone(),
+                    identity: tree.identity.clone(),
+                },
+            );
+            plait.navigation.available.insert(tree.path.clone(), true);
+        }
+        plait.rebuild_projects(cx);
+        plait.tabs = Default::default();
+        for owner in &owners[..2] {
+            plait
+                .tabs
+                .model
+                .open(
+                    TabTarget::Existing {
+                        id: owner.id.clone(),
+                        checkout: plait.tab_checkout(owner.checkout.clone()),
+                    },
+                    Some(plait.host.connection.epoch),
+                )
+                .unwrap();
+        }
+        let graph = plait
+            .tabs
+            .model
+            .open(
+                TabTarget::Worktrees {
+                    checkout: plait.tab_checkout(repository.into()),
+                },
+                Some(plait.host.connection.epoch),
+            )
+            .unwrap();
+        plait.tabs.model.activate(graph).unwrap();
+        plait.worktrees.graph = worktree_graph::layout(&rows, commits, false);
+        plait.worktrees.rows = rows;
+        plait.worktrees.sizes = sizes;
+        plait.worktrees.selected = 3;
+        plait.worktrees.prepare();
+        plait.worktree_labels();
+        plait.refresh_tab_rows();
+        plait.notice = None;
+    });
 }
 
 #[core::prelude::v1::test]
