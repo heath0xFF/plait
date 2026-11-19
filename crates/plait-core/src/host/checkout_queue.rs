@@ -90,8 +90,9 @@ pub fn available(client: &Client) -> Result<bool, Error> {
         {
             Ok(true)
         }
-        Ok(_) => Err(Error::Protocol("Invalid checkout queue capability.".into())),
-        Err(Error::Rejected(error)) if error.code == "invalid_request" => Ok(false),
+        // The thread listing asks this first. A capability this build does not
+        // know, or a refused probe, makes Wait unavailable rather than the list.
+        Ok(_) | Err(Error::Rejected(_)) => Ok(false),
         Err(error) => Err(error),
     }
 }

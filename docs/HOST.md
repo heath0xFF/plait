@@ -2648,7 +2648,7 @@ existing reply shapes are unchanged:
 
 | Operation | Result and meaning |
 | --- | --- |
-| `checkout_queue_info {}` | `{schema:1,checkout_queue_v1:true,limit:32,payload_bytes:33554432}`. An older host's `invalid_request` makes Wait unavailable. |
+| `checkout_queue_info {}` | `{schema:1,checkout_queue_v1:true,limit:32,payload_bytes:33554432}`. An older host's `invalid_request`, any other refusal, or a capability with other values makes Wait unavailable; the desktop's thread listing, which probes first, still loads. |
 | `submit_checkout {thread_id,request_id,text,approval?,images?}` | The existing acceptance fields `{thread_id,request_id,accepted:true}` after a durable commit. Approval defaults to `ask`; image IDs refer to completed thread-owned uploads. An available checkout may start immediately. |
 | `checkout_queue {thread_id}` | `{schema:1,thread_id,checkout,waiters}` with up to 32 checkout waiter receipts in acceptance order: pending inputs first for inclusion, then recent terminal receipts. Each has `request_id`, `state`, `position` (zero when terminal), and nullable `error`. Cancellation replies always include the requested receipt. |
 | `cancel_checkout_wait {thread_id,request_id}` | The same queue receipt. Waiting or held input becomes cancelled. If that exact input already started and is still the active run, the operation requests the existing Stop. It never stops a later run or silently discards an executing input. Repeating cancellation is safe. |

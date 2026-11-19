@@ -1307,7 +1307,7 @@ mod tests {
     }
 
     #[test]
-    fn checkout_queue_capability_falls_back_only_for_older_hosts() {
+    fn checkout_queue_capability_never_breaks_the_thread_list() {
         let (client, server, directory) = scripted(
             "queue-capability",
             vec![
@@ -1319,8 +1319,10 @@ mod tests {
         );
         assert!(!checkout_queue::available(&client).unwrap());
         assert!(checkout_queue::available(&client).unwrap());
-        assert!(checkout_queue::available(&client).is_err());
-        assert!(checkout_queue::available(&client).is_err());
+        // A capability this build does not know, or a refused probe, leaves Wait
+        // unavailable; the thread listing that asks first must still load.
+        assert!(!checkout_queue::available(&client).unwrap());
+        assert!(!checkout_queue::available(&client).unwrap());
         for request in server.join().unwrap() {
             assert_eq!(request, serde_json::json!({"op":"checkout_queue_info"}));
         }
