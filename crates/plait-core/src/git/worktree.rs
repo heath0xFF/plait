@@ -702,14 +702,22 @@ pub fn remove_managed_supervised(
         )?;
         let entry = format!("worktree {}", record.path.display());
         if list.split(|b| *b == 0).any(|part| part == entry.as_bytes()) {
-            return Err(
-                "Worktree folder is missing but Git still registers it. Nothing was removed."
-                    .into(),
-            );
+            // Git may have deleted the folder before it stopped; say only what is known.
+            return Err(format!(
+                "Removal was interrupted: the worktree folder {} is gone, but Git still lists the worktree. Its branch {} was kept. Check `git worktree list` before trying again.",
+                record.path.display(),
+                record.branch
+            ));
         }
         record.stage = ManagedStage::Removed;
         save(&record)?;
         return Ok(record);
+    }
+    if fs::symlink_metadata(&record.path).is_err() {
+        return Err(format!(
+            "The worktree folder {} is missing. Nothing was removed. If you moved it, move it back; if its disk is not connected, connect it.",
+            record.path.display()
+        ));
     }
     let lease = crate::lease::acquire_git_checkout(
         &record.path,
@@ -1035,11 +1043,23 @@ mod managed_tests {
         fs::remove_dir_all(worktree_base(&repo.0).unwrap()).unwrap();
         let tree = create(&repo);
         fs::remove_dir_all(&tree.path).unwrap();
+        let error =
+            remove_managed_worktree(tree.clone(), tree.identity.as_ref().unwrap(), true, |_| {
+                Ok(())
+            })
+            .unwrap_err();
+        assert!(error.contains("is missing. Nothing was removed"), "{error}");
+        // An interrupted removal never claims that nothing was removed.
+        let mut interrupted = tree.clone();
+        interrupted.stage = ManagedStage::Removing;
+        let error =
+            remove_managed_worktree(interrupted, tree.identity.as_ref().unwrap(), true, |_| {
+                Ok(())
+            })
+            .unwrap_err();
         assert!(
-            remove_managed_worktree(tree.clone(), tree.identity.as_ref().unwrap(), true, |_| Ok(
-                ()
-            ))
-            .is_err()
+            error.contains("Removal was interrupted") && !error.contains("Nothing was removed"),
+            "{error}"
         );
     }
     #[test]
