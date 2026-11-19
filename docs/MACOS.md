@@ -327,6 +327,55 @@ post macOS notifications, and delivery depends on system permission and Focus
 settings. The initial listing never posts alerts. Native delivery and activation
 remain manual acceptance checks.
 
+### Starting a thread while a project is busy
+
+A checkout runs one thread at a time. Sending a new draft asks the host where
+it can start. If the project already has a thread running, **Project busy**
+offers **Own worktree**, **Wait**, and **Cancel**.
+
+- **Own worktree** creates a new branch and checkout from HEAD, then sends the
+  draft there with its chosen harness, model, and permissions. The draft stays
+  editable while the choice is open; what is sent is the text and images shown
+  when you choose. Uncommitted files and build output are not copied.
+- **Wait** is disabled and marked not yet available. Nothing is queued.
+- **Cancel** keeps the draft.
+
+Another draft can send while the first is preparing its worktree, and drafts
+can be closed or moved to another project independently. A thread that
+finishes being created never takes the front from a tab you have moved to.
+
+A creation with no answer keeps its request, and so does the saved draft:
+after closing the window or quitting while a worktree is being prepared,
+sending the reopened draft reaches the thread and worktree the host already
+made instead of making a second. A refused creation keeps the draft. Pending
+first messages and placement choices are saved with the draft. A restart never
+sends them by itself, and **Retry** reuses the same creation ID and captured
+message.
+
+If a checkout's cleanup is unconfirmed, the host refuses to start a thread
+there with **Stop unconfirmed** and the recorded reason. Resolve that checkout
+through its cleanup controls first; the automatic worktree setting does not
+bypass the hold.
+
+Project settings → New threads → **When this project is busy** is **Ask** by
+default. **Own worktree** makes the worktree automatic for new threads in that
+project only. The finished checkout's path and branch are shown, and removing
+it stays manual. Cmd-Option-N still creates a worktree thread directly, whether
+or not the project is busy.
+
+A thread already bound to a busy checkout offers **Continue separately**.
+Confirming **Own worktree** there creates a linked thread from HEAD with a new
+harness session. The original history and draft stay where they are, and
+**Original thread** opens the source. No conversation is replayed or moved. A
+disconnected or older host does not offer choices it cannot carry out.
+
+Checkouts that share no files have no default limit on how many run at once.
+Before a run starts, the host records the checkout; on one filesystem those
+recordings take turns. The selected thread says it is waiting, and Stop
+cancels the wait before the harness starts. When the machine runs out of a
+resource, the run fails with an explicit error and waits for a deliberate
+retry. There is no hidden queue.
+
 ### Codex and Claude Code threads
 
 Source builds from `main` with a matching host can run a thread in Codex or
@@ -1173,44 +1222,3 @@ nothing. The job's only secret is the update signing key, which signs
 `update.json` for in-app updates (see [Releasing](RELEASING.md)); the app and
 packages are not Developer ID signed. [Issue #6](https://github.com/heath0xFF/plait/issues/6)
 tracks Developer ID signing and notarization.
-
-
-### Starting a thread while a project is busy
-
-Sending a new draft asks the host where it can start. If the project already has
-a writer, **Project busy** offers **Own worktree** and **Wait**. Own worktree
-creates a new branch and checkout from HEAD, then sends the draft there using
-its chosen harness, model and permissions. The draft stays editable during the
-choice; Own worktree sends the text and images shown when you choose it.
-Uncommitted files and build outputs are not copied. Wait is disabled and marked not yet available; nothing is queued.
-Cancel keeps the draft. An unanswered creation keeps the request for safe retry, and the saved
-draft keeps it too: after closing the window or quitting during preparation,
-sending the reopened draft reaches the thread and worktree the host already
-made instead of creating a second one;
-a refused creation keeps the draft. Completing it never selects a tab the person
-has moved away from. Another draft can send while the first is preparing its
-worktree, and drafts can close or switch projects independently. Pending first
-messages and placement choices are saved with the draft; restart never sends
-them automatically. Retry reuses the same creation ID and captured message.
-
-If cleanup is unconfirmed, the host refuses placement with **Stop unconfirmed**
-and the recorded reason. Resolve that checkout through its cleanup controls
-before starting another thread from it; automatic worktree authorization does
-not bypass that hold.
-
-Project settings → New threads → **When this project is busy** defaults to
-**Ask** (each time). **Own worktree** authorizes automatic worktrees for new
-threads in that project only. The completed checkout path and branch are shown;
-cleanup remains manual. Cmd-Option-N still explicitly creates a cold worktree
-thread without waiting for a busy project.
-
-A thread already bound to a busy checkout offers **Continue separately**.
-Confirming **Own worktree** creates a linked thread from HEAD with a fresh harness
-session. The original history and draft stay in place; **Original thread** opens
-that source. No conversation is silently replayed or moved. A disconnected or
-older host does not offer unsupported isolation choices.
-
-Independent checkouts have no default run-count ceiling. Before-record scans on
-one filesystem prepare one at a time; the selected thread explains this wait
-and Stop cancels it before its harness starts. Exhausted resources produce an
-explicit error requiring a deliberate retry, rather than a hidden queue.

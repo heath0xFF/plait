@@ -39,8 +39,13 @@ tabs, threads, and drafts.
   there when you come back.
 - **Tabs.** Keep several threads open and switch with Cmd-1 to Cmd-9. Each tab
   says whether its thread is working, needs you, finished, or failed, and keeps
-  its own view, scroll position, find, and draft. Closing a tab never stops its
-  run, and your tabs come back after a restart. See [tabs](docs/MACOS.md#tabs).
+  its own view, scroll position, find, and draft. Open as many New thread tabs
+  as you like; each is its own draft. Closing a tab never stops its run, and
+  your tabs come back after a restart. See [tabs](docs/MACOS.md#tabs).
+- **Several threads in one project.** Start a thread where another is already
+  running and Plait offers it its own worktree: a new branch and checkout made
+  from HEAD, beside the repository. A project can make that automatic. See
+  [a busy project](docs/MACOS.md#starting-a-thread-while-a-project-is-busy).
 - **Images in messages.** Paste or drop PNG/JPEG images, remove
   attachments before sending, and open conversation thumbnails larger. Drafts
   and sent originals persist privately. Requires host protocol 6; see the
@@ -179,10 +184,11 @@ The latest release is **v0.1.0-preview.19**.
   Pi threads find and call tools from configured stdio and header-auth HTTP MCP
   servers, with per-project switches and per-call approvals. MCP browser sign-in
   and named CLIs are planned (M8).
-- **One run per checkout.** Tabs keep many threads open, but a checkout runs
-  one thread at a time; a second thread in a busy project needs its own
-  worktree today. Running several in one project is
-  [planned](docs/ROADMAP.md).
+- **One thread writes a checkout at a time.** A second thread in a busy
+  project runs in its own worktree, which starts cold: uncommitted files and
+  build output are not copied, and removing it is manual. Waiting in a queue
+  for the checkout, reading it while another thread writes, and cleanup rules
+  are [planned](docs/ROADMAP.md).
 - **Not an IDE.** There is no file editor, embedded terminal, merge, or rebase.
   The Files view is read-only. Instead Plait hands off: Open in Editor opens the
   file on screen at its line in your editor, Show in Finder reveals it, and

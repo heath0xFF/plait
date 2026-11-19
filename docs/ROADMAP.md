@@ -10,8 +10,10 @@ v0.1.0-preview.10. Ways out, branches, and search in a conversation shipped in
 v0.1.0-preview.13. M9 step 1 (per-turn undo) shipped in v0.1.0-preview.15. M8
 step 4's tool calls (MCP servers that need no browser sign-in), images in
 messages, and the first part of M9 step 2 (a run's closing line opens exactly
-what that run changed) shipped in v0.1.0-preview.17. The rest of M9 steps 2
-and 3, MCP browser sign-in, and M8 step 3 are the current work.**
+what that run changed) shipped in v0.1.0-preview.17. Thread tabs shipped in
+v0.1.0-preview.18. A second thread in a busy project, in its own worktree,
+and any number of New thread tabs shipped in v0.1.0-preview.20. The rest of
+M9 steps 2 and 3, MCP browser sign-in, and M8 step 3 are the current work.**
 
 ## Milestones
 
@@ -119,7 +121,8 @@ each; older files load with the defaults. Base16 scheme files are read from a
 themes folder beside the desktop preferences, and a few MIT-licensed schemes ship
 with their license. Nothing changes in the host or the protocol.
 
-**Built for optional worktrees (Stage 7):** the desktop requests one durable
+**Shipped in v0.1.0-preview.20 for optional worktrees (Stage 7):** the
+desktop requests one durable
 host-owned worktree thread, with the chosen harness and model. Its branch is
 `plait/<first-12-UUID-hex-digits>` (extended on collision), from an explicit
 captured commit, under `<main-repository>.worktrees/`. New worktrees start cold.
@@ -128,7 +131,9 @@ Imported desktop associations group threads but cannot authorize removal.
 Manual removal preserves branches/history, requires the recorded identity and
 fresh lease-protected preservation checks, and never forces removal. Work
 returns by commit, push and pull request; no integration command is added.
-The per-project automatic choice and busy-checkout queue remain later stages.
+A busy project's choice of a worktree, and the project setting that makes it
+automatic, are under [Thread tabs](#several-threads-in-one-project). The
+checkout queue is planned.
 
 **Agreed for M4 file viewer:** open any file in a checkout read-only, with
 line numbers and the same syntax highlighting as the conversation, from a
@@ -501,13 +506,15 @@ network access or the person's own credentials.
 **Shipped in v0.1.0-preview.18:** one thread per tab, a 40-point top row that stays visible with the
 sidebar hidden, a 36-point row for the thread's Conversation, Changes, History
 and Files views, and a state-grouped overflow list. Sidebar clicks open or
-activate a thread's tab. **Built next:** every New tab or New thread action
-appends an independent, empty draft, including in the same checkout; creating
-its thread replaces that draft in place. There is no interactive tab-count
-ceiling. Only visible tab-strip and overflow rows are drawn. Closing never stops a run or removes
-a worktree. Closing the last tab leaves an empty workspace. Settings and
-Project settings open as window modals over the unchanged tab rows and content.
-Tab controls remain inactive until the modal closes.
+activate a thread's tab. Closing never stops a run or removes a worktree.
+Closing the last tab leaves an empty workspace. Settings and Project settings
+open as window modals over the unchanged tab rows and content. Tab controls
+remain inactive until the modal closes.
+
+**Shipped in v0.1.0-preview.20:** every New tab or New thread action appends
+an independent, empty draft, including in the same checkout; creating its
+thread replaces that draft in place. There is no ceiling on open tabs. Only
+visible tab-strip and overflow rows are drawn.
 
 Cmd-1 through Cmd-8 select positions; Cmd-9 selects the last tab. Cmd-W closes
 a tab, Cmd-Shift-W closes the window, Cmd-Shift-T reopens one of the last twenty
@@ -523,7 +530,13 @@ Tab order, active identity and bookmarks are saved separately in `tabs.json`,
 with debounced atomic writes and total decoding after host and checkout
 verification. Drafts and submissions remain in the existing recovery journal.
 
-**Built (Stage 6a, write exclusion):** every Git write Plait makes (staging
+### Several threads in one project
+
+**Shipped in v0.1.0-preview.20:** stages 6a, 6b, 7 and 8 below. A checkout
+still has one writer at a time. A new thread in a busy project is offered its
+own worktree, and a project can make that automatic.
+
+**Stage 6a, write exclusion.** Every Git write Plait makes (staging
 and unstaging by file or hunk, committing, discarding and restoring a discard,
 creating and switching branches, pushing, publishing, fetching, pulling, turn
 undo and redo, adding and removing a worktree) and every run take one ordered
@@ -534,12 +547,9 @@ metadata so linked worktrees take turns. One change is visible: a desktop Git
 write while a thread is running in the same checkout is now refused with a
 note (staging and committing used to go ahead with a warning; branch controls
 were already locked), and a message sent during such a write is refused as
-busy. No control or Git verb was added, and a second run
-in a busy checkout is still refused. Not yet excluded: a Codex or Claude Code
-process that keeps running after its run has ended was left for Stage 6b below.
+busy. This stage added no control and no Git verb.
 
-**Built for concurrency foundation (Stage 6b — cleanup confirmation):**
-run and undo admission persist inode-keyed cleanup markers; unconfirmed cleanup
+**Stage 6b, cleanup confirmation.** Run and undo admission persist inode-keyed cleanup markers; unconfirmed cleanup
 blocks both runs and desktop Git changes across host restarts and stores.
 Command/MCP/record guardians verify normal-group absence, Claude cleanup waits
 for actual process exit, and a Codex interrupt timeout retains exclusion until
@@ -554,17 +564,55 @@ are unchanged; unrelated checkouts keep working. Scripted process tests and
 native offscreen scenes cover this behavior; live harness and installed-window
 acceptance are separate. See [the cleanup contract](HOST.md#cleanup-confirmation-and-quarantine).
 
-**Still planned:** other tab content kinds, busy-checkout
-admission and independent multi-checkout capacity (Stage 8), a durable checkout
-queue (Stage 9), enforced Pi read-in-place (Stage 10), copy-on-write artifact
-seeding (Stage 11), and worktree storage accounting and cleanup (Stage 12).
+**Stage 7, host-owned worktrees.** The host owns explicit worktree creation and removal. A creation request fixes
+its parent directory identity, common Git directory identity, base commit and
+harness/model/permissions before any checkout is made. Its durable request ID
+allocates one thread UUID; the branch is `plait/` plus the first twelve UUID hex
+digits, extended on a name collision. The checkout lives beside the main
+repository in `<repository>.worktrees/`, including when requested from a linked
+worktree. It starts cold, with no build artifacts or dirty files copied.
+
+Creation, status, listing and removal use additive operations, leaving protocol
+versions 1–6 unchanged. Older hosts explicitly refuse the new operations.
+Desktop worktree associations remain imported presentation metadata and never
+grant deletion authority. Removal is manual, preserves branches and history,
+and refuses changed identities, active leases, uncommitted or unknown ignored
+files. Unpushed or unknown publication status requires an explicit preservation
+exception. No force removal, branch deletion, integration verb or automatic
+cleanup is added.
+
+**Stage 8, busy-project choice and capacity.** New drafts negotiate placement before the first run. A busy project asks each
+time whether to use an own worktree; the project modal can authorize that choice
+automatically for that project. Wait is visibly unavailable until the durable
+checkout queue ships. Existing threads remain bound to their checkout and can
+explicitly start a linked continuation with a fresh harness session. The original
+history and draft remain intact. Capabilities are additive and strictly probed.
+
+Worktree creation retains the agreed `plait/<UUID-prefix>` branch naming and
+explicit HEAD commit base. It excludes original dirty files and build outputs,
+shows the actual checkout and branch, and never removes worktrees automatically.
+Commit, push and pull request remain the integration path. No merge, rebase,
+cherry-pick, shared live reader, artifact cloning or fake queue is added.
+
+The fixed eight-checkout cap is removed. There is no default run-count ceiling;
+a host can set `PLAIT_MAX_ACTIVE_CHECKOUTS`. Before-record preparation is
+serialized by filesystem and resource exhaustion fails explicitly with cleanup.
+Scripted harness tests cover twenty simultaneous independent writers, same-root
+exclusion, preparation cancellation, lost replies and resource failures. Live
+provider limits and native focus/accessibility behavior still need separate
+acceptance; headless tests do not claim those results.
+
+**Still planned:** other tab content kinds, a durable checkout queue (Stage
+9), enforced Pi read-in-place (Stage 10), copy-on-write artifact seeding
+(Stage 11), and worktree storage accounting and cleanup (Stage 12).
 
 **Agreed concurrency decisions (built in the stages named below):**
 
 - **Busy-project choice (Stages 8 and 9):** when a project is busy and a new
   thread is started there, Plait offers a choice between its own worktree or
   waiting in a checkout queue; a per-project switch can make the worktree
-  automatic, never automatic everywhere.
+  automatic, never automatic everywhere. Stage 8 shipped the worktree choice
+  and the switch; waiting is shown, disabled, until Stage 9.
 - **Reading in place (Stage 10):** sharing a busy checkout to read while another
   thread writes comes later, and only as a host-enforced mode for Pi. Until
   then, all runs are writers (with the lifecycle lease prepared and tested for a
@@ -721,46 +769,3 @@ makes on its own, what it writes into the agent's configuration, and what
 keeps running after quit. Plait means to keep the first three at nothing. The
 host is meant to keep running, so its memory after quit is reported, not
 hidden.
-
-### Host-owned worktree contract (Stage 7)
-
-The host owns explicit worktree creation and removal. A creation request fixes
-its parent directory identity, common Git directory identity, base commit and
-harness/model/permissions before any checkout is made. Its durable request ID
-allocates one thread UUID; the branch is `plait/` plus the first twelve UUID hex
-digits, extended on a name collision. The checkout lives beside the main
-repository in `<repository>.worktrees/`, including when requested from a linked
-worktree. It starts cold, with no build artifacts or dirty files copied.
-
-Creation, status, listing and removal use additive operations, leaving protocol
-versions 1–6 unchanged. Older hosts explicitly refuse the new operations.
-Desktop worktree associations remain imported presentation metadata and never
-grant deletion authority. Removal is manual, preserves branches and history,
-and refuses changed identities, active leases, uncommitted or unknown ignored
-files. Unpushed or unknown publication status requires an explicit preservation
-exception. No force removal, branch deletion, integration verb or automatic
-cleanup is added. Busy-checkout choices and queue admission remain Stage 8/9.
-
-
-### Busy-project choice and independent-run capacity
-
-New drafts negotiate placement before the first run. A busy project asks each
-time whether to use an own worktree; the project modal can authorize that choice
-automatically for that project. Wait is visibly unavailable until the durable
-checkout queue ships. Existing threads remain bound to their checkout and can
-explicitly start a linked continuation with a fresh harness session. The original
-history and draft remain intact. Capabilities are additive and strictly probed.
-
-Worktree creation retains the agreed `plait/<UUID-prefix>` branch naming and
-explicit HEAD commit base. It excludes original dirty files and build outputs,
-shows the actual checkout and branch, and never removes worktrees automatically.
-Commit, push and pull request remain the integration path. No merge, rebase,
-cherry-pick, shared live reader, artifact cloning or fake queue is added.
-
-The fixed eight-checkout cap is removed. There is no default run-count ceiling;
-a host can set `PLAIT_MAX_ACTIVE_CHECKOUTS`. Before-record preparation is
-serialized by filesystem and resource exhaustion fails explicitly with cleanup.
-Scripted harness tests cover twenty simultaneous independent writers, same-root
-exclusion, preparation cancellation, lost replies and resource failures. Live
-provider limits and native focus/accessibility behavior still need separate
-acceptance; headless tests do not claim those results.
