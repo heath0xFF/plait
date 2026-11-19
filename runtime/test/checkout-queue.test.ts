@@ -117,3 +117,13 @@ test('Resume revalidates a moved checkout and finishes its held line with reason
  await until(()=>h.runtime.store.waiters.line(h.root).length===0);
  for(const [id,request] of [[a,'first'],[b,'second']])assert.equal(h.runtime.store.waiters.get(id,request)!.state,'failed');
 });
+test('a host stop during admission holds the waiter instead of failing it',async t=>{
+ const h=await fixture(t),a=await thread(h.runtime,h.root,'a');
+ // The checkout is free, so the drain is already admitting when the host stops.
+ await h.runtime.handle(queue(a,'about-to-start'));await h.restart();
+ assert.equal(h.runtime.store.waiters.get(a,'about-to-start')!.state,'held');
+ assert.equal(h.runtime.snapshot(a).status,'idle');assert.equal(h.runtime.snapshot(a).error,null);
+ h.faux.setResponses([fauxAssistantMessage('ran once')]);await h.runtime.handle({op:'resume_checkout_queue',thread_id:a});
+ await until(()=>h.runtime.store.waiters.get(a,'about-to-start')!.state==='started'&&h.runtime.active.size===0);
+ assert.equal(h.runtime.snapshot(a).messages.filter(m=>m.id==='request-about-to-start').length,1);
+});

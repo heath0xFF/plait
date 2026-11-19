@@ -774,6 +774,8 @@ export class Runtime {
         });
         this.changed('#'); return;
       } catch (error) {
+        // A host stop is not the waiter's failure: it stays pending, and startup holds it for Resume.
+        if (this.closing) return;
         const reason = resourceFailure(error) ?? failure(error);
         if (reason.code === 'busy' || reason.code === 'resource_exhausted' && this.capacity.maximum !== undefined && this.active.size >= this.capacity.maximum) { this.wakeQueue(); return; }
         if (next.kind === 'checkout') {
