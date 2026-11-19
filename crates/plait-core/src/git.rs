@@ -753,7 +753,7 @@ mod log;
 pub mod record;
 pub mod review;
 pub mod undo;
-mod worktree;
+pub mod worktree;
 mod write;
 #[cfg(test)]
 use branch::parse_branches;

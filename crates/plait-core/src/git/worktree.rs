@@ -166,3 +166,799 @@ fn seed() -> u32 {
         .as_nanos();
     (nanos as u32) ^ (std::process::id() << 12)
 }
+
+// Host-managed operations have a private durable journal. Legacy helpers above
+// remain for older callers; desktop associations alone cannot use this API.
+use serde::{Deserialize, Serialize};
+use std::{fs, os::unix::fs::MetadataExt};
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Identity {
+    pub dev: String,
+    pub ino: String,
+}
+impl Identity {
+    fn read(path: &Path) -> Result<Self> {
+        let meta = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+        if !meta.is_dir() || path.canonicalize().map_err(|e| e.to_string())? != path {
+            return Err("Worktree directory identity changed.".into());
+        }
+        Ok(Self {
+            dev: meta.dev().to_string(),
+            ino: meta.ino().to_string(),
+        })
+    }
+    fn checked(&self, path: &Path) -> Result<()> {
+        if Self::read(path)? != *self {
+            return Err("Worktree directory identity changed.".into());
+        }
+        Ok(())
+    }
+    fn lease(&self) -> Result<crate::lease::DirIdentity> {
+        Ok(crate::lease::DirIdentity {
+            dev: self.dev.parse().map_err(|_| "Invalid device identity.")?,
+            ino: self.ino.parse().map_err(|_| "Invalid inode identity.")?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Parent {
+    pub root: PathBuf,
+    pub identity: Identity,
+    pub main: PathBuf,
+    pub main_identity: Identity,
+    pub common: PathBuf,
+    pub common_identity: Identity,
+    pub base: String,
+}
+
+/// Capture the explicit base and resolve linked checkouts to their main root.
+/// Reads never run checkout hooks, filters, external diff or textconv.
+pub fn worktree_parent(root: &Path) -> Result<Parent> {
+    if root.to_str().is_none() {
+        return Err("The worktree folder path is not UTF-8.".into());
+    }
+    let paths = crate::lease::resolve_git_checkout(root).map_err(String::from)?;
+    let list = read_worktree(&paths.root, &["worktree", "list", "--porcelain", "-z"])?;
+    let first = list.split(|b| *b == 0).next().ok_or("No main worktree.")?;
+    let main = first
+        .strip_prefix(b"worktree ")
+        .ok_or("No main worktree.")?;
+    let main = PathBuf::from(
+        std::str::from_utf8(main).map_err(|_| "The main repository path is not UTF-8.")?,
+    );
+    let main = main.canonicalize().map_err(|e| e.to_string())?;
+    let main_paths = crate::lease::resolve_git_checkout(&main).map_err(String::from)?;
+    if main_paths.common_dir != paths.common_dir {
+        return Err("Main repository identity changed.".into());
+    }
+    for path in [&paths.root, &main, &paths.common_dir] {
+        if path.to_str().is_none() {
+            return Err("The worktree folder path is not UTF-8.".into());
+        }
+    }
+    let base =
+        text_read(&paths.root, &["rev-parse", "--verify", "HEAD^{commit}"]).map_err(|_| {
+            "Make a first commit before starting a thread in its own worktree.".to_owned()
+        })?;
+    Ok(Parent {
+        identity: Identity::read(&paths.root)?,
+        main_identity: Identity::read(&main)?,
+        common_identity: Identity::read(&paths.common_dir)?,
+        root: paths.root,
+        main,
+        common: paths.common_dir,
+        base,
+    })
+}
+
+fn read_worktree(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    let mut command = super::read_command(root)?;
+    super::run_readonly(command.args(args))
+}
+fn text_read(root: &Path, args: &[&str]) -> Result<String> {
+    String::from_utf8(read_worktree(root, args)?)
+        .map(|s| s.trim_end_matches('\n').to_owned())
+        .map_err(|_| "Git returned a name that is not UTF-8.".into())
+}
+fn verify_parent(parent: &Parent) -> Result<()> {
+    parent.identity.checked(&parent.root)?;
+    parent.main_identity.checked(&parent.main)?;
+    parent.common_identity.checked(&parent.common)?;
+    let actual = worktree_parent(&parent.root)?;
+    if actual.root != parent.root || actual.main != parent.main || actual.common != parent.common {
+        return Err("The parent repository does not match its recorded identity.".into());
+    }
+    if !super::log::is_object_id(&parent.base)
+        || text_read(
+            &parent.root,
+            &[
+                "rev-parse",
+                "--verify",
+                &format!("{}^{{commit}}", parent.base),
+            ],
+        )? != parent.base
+    {
+        return Err("The selected base commit is unavailable.".into());
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ManagedStage {
+    Reserved,
+    Creating,
+    Ready,
+    Failed,
+    Removing,
+    Removed,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ManagedWorktree {
+    pub thread_id: String,
+    pub parent: Parent,
+    pub path: PathBuf,
+    pub branch: String,
+    pub identity: Option<Identity>,
+    pub stage: ManagedStage,
+    pub error: Option<String>,
+}
+
+fn uuid_hex(id: &str) -> Result<String> {
+    let bytes = id.as_bytes();
+    if bytes.len() != 36
+        || !bytes.iter().enumerate().all(|(i, b)| {
+            if [8, 13, 18, 23].contains(&i) {
+                *b == b'-'
+            } else {
+                b.is_ascii_hexdigit() && !b.is_ascii_uppercase()
+            }
+        })
+    {
+        return Err("Invalid worktree thread UUID.".into());
+    }
+    Ok(id.replace('-', ""))
+}
+fn worktree_base(main: &Path) -> Result<PathBuf> {
+    let mut name = main
+        .file_name()
+        .ok_or("The main repository has no folder name.")?
+        .to_owned();
+    name.push(".worktrees");
+    Ok(main
+        .parent()
+        .ok_or("The main repository has no parent folder.")?
+        .join(name))
+}
+fn owned_base(main: &Path) -> Result<PathBuf> {
+    let base = worktree_base(main)?;
+    match fs::create_dir(&base) {
+        Ok(()) => (),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
+        Err(e) => return Err(e.to_string()),
+    }
+    Identity::read(&base)?;
+    let meta = fs::symlink_metadata(&base).map_err(|e| e.to_string())?;
+    if meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o022 != 0 {
+        return Err(
+            "The worktree parent folder must be owned and not writable by other users.".into(),
+        );
+    }
+    Ok(base)
+}
+
+/// `save` must commit and sync the journal before returning. A retry uses that
+/// same journal, never an inferred association or an existing unrecognized path.
+pub fn create_managed_worktree(
+    parent: &Parent,
+    thread_id: &str,
+    previous: Option<ManagedWorktree>,
+    mut save: impl FnMut(&ManagedWorktree) -> Result<()>,
+) -> Result<ManagedWorktree> {
+    create_managed_with_timeout(parent, thread_id, previous, &mut save, CHECKOUT_TIMEOUT)
+}
+/// The host supplies a supervised mutation whose descendants end before it returns.
+pub type Mutation<'a> = dyn FnMut(&Path, &[&str], Duration) -> Result<()> + 'a;
+
+pub fn create_managed_supervised(
+    parent: &Parent,
+    thread_id: &str,
+    previous: Option<ManagedWorktree>,
+    mut save: impl FnMut(&ManagedWorktree) -> Result<()>,
+    mutate: &mut Mutation<'_>,
+) -> Result<ManagedWorktree> {
+    create_managed_inner(
+        parent,
+        thread_id,
+        previous,
+        &mut save,
+        CHECKOUT_TIMEOUT,
+        mutate,
+    )
+}
+fn create_managed_with_timeout(
+    parent: &Parent,
+    thread_id: &str,
+    previous: Option<ManagedWorktree>,
+    save: &mut impl FnMut(&ManagedWorktree) -> Result<()>,
+    timeout: Duration,
+) -> Result<ManagedWorktree> {
+    create_managed_inner(
+        parent,
+        thread_id,
+        previous,
+        save,
+        timeout,
+        &mut |root, args, timeout| git(root, args, None, timeout),
+    )
+}
+fn create_managed_inner(
+    parent: &Parent,
+    thread_id: &str,
+    previous: Option<ManagedWorktree>,
+    save: &mut impl FnMut(&ManagedWorktree) -> Result<()>,
+    timeout: Duration,
+    mutate: &mut Mutation<'_>,
+) -> Result<ManagedWorktree> {
+    let hex = uuid_hex(thread_id)?;
+    let _lease = crate::lease::acquire_git_checkout(
+        &parent.root,
+        Some(parent.identity.lease()?),
+        crate::lease::LeaseClass::Reader,
+        Some(crate::lease::COMMON_METADATA_WAIT),
+    )
+    .map_err(String::from)?;
+    verify_parent(parent)?;
+    let base = owned_base(&parent.main)?;
+    let mut record = match previous {
+        Some(record) => {
+            if record.thread_id != thread_id
+                || &record.parent != parent
+                || record.path.parent() != Some(base.as_path())
+                || !record
+                    .branch
+                    .strip_prefix("plait/")
+                    .is_some_and(|suffix| suffix.len() >= 12 && hex.starts_with(suffix))
+                || record.path.file_name().and_then(|s| s.to_str())
+                    != record.branch.strip_prefix("plait/")
+            {
+                return Err(
+                    "Worktree journal does not match the requested parent and UUID.".into(),
+                );
+            }
+            record
+        }
+        None => {
+            let suffix = (12..=32)
+                .step_by(4)
+                .map(|n| &hex[..n])
+                .find_map(|suffix| {
+                    let path = base.join(suffix);
+                    match (
+                        path.try_exists(),
+                        branch_exists(&parent.root, &format!("plait/{suffix}")),
+                    ) {
+                        (Ok(false), Ok(false)) if fs::symlink_metadata(&path).is_err() => {
+                            Some(Ok(suffix))
+                        }
+                        (Err(e), _) => Some(Err(e.to_string())),
+                        (_, Err(e)) => Some(Err(e)),
+                        _ => None,
+                    }
+                })
+                .ok_or("All UUID-derived worktree names already exist.")??;
+            let record = ManagedWorktree {
+                thread_id: thread_id.into(),
+                parent: parent.clone(),
+                path: base.join(suffix),
+                branch: format!("plait/{suffix}"),
+                identity: None,
+                stage: ManagedStage::Reserved,
+                error: None,
+            };
+            save(&record)?;
+            record
+        }
+    };
+    match record.stage {
+        ManagedStage::Ready => {
+            verify_managed(&record)?;
+            return Ok(record);
+        }
+        ManagedStage::Removed | ManagedStage::Removing | ManagedStage::Failed => return Ok(record),
+        ManagedStage::Creating => {
+            // Git may have finished before its reply was lost. Never rerun hooks.
+            record.stage = if verify_managed(&record).is_ok()
+                && text_read(&record.path, &["rev-parse", "--verify", "HEAD"])
+                    .ok()
+                    .as_ref()
+                    == Some(&parent.base)
+                && read_worktree(
+                    &record.path,
+                    &[
+                        "status",
+                        "--porcelain=v1",
+                        "-z",
+                        "--untracked-files=all",
+                        "--ignored=matching",
+                    ],
+                )
+                .is_ok_and(|status| status.is_empty())
+            {
+                ManagedStage::Ready
+            } else {
+                ManagedStage::Failed
+            };
+            record.error = (record.stage == ManagedStage::Failed).then(|| "Worktree creation was interrupted. Existing files and branch were preserved; inspect them before making a new request.".into());
+            save(&record)?;
+            return Ok(record);
+        }
+        ManagedStage::Reserved => (),
+    }
+    if branch_exists(&parent.root, &record.branch)? {
+        return Err("The reserved branch already exists; it was left untouched.".into());
+    }
+    // create_dir refuses even an empty existing directory or dangling symlink.
+    fs::create_dir(&record.path).map_err(|e| format!("Cannot reserve the worktree folder: {e}"))?;
+    record.identity = Some(Identity::read(&record.path)?);
+    record.stage = ManagedStage::Creating;
+    save(&record)?;
+    let target = record
+        .path
+        .to_str()
+        .ok_or("The worktree folder path is not UTF-8.")?;
+    let result = mutate(
+        &parent.root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            &record.branch,
+            target,
+            &parent.base,
+        ],
+        timeout,
+    );
+    match result.and_then(|()| verify_managed(&record)) {
+        Ok(()) => record.stage = ManagedStage::Ready,
+        Err(error) => {
+            record.stage = ManagedStage::Failed;
+            record.error = Some(error);
+        }
+    }
+    save(&record)?;
+    Ok(record)
+}
+fn verify_managed(record: &ManagedWorktree) -> Result<()> {
+    record
+        .identity
+        .as_ref()
+        .ok_or("Worktree has no recorded directory identity.")?
+        .checked(&record.path)?;
+    let paths = crate::lease::resolve_git_checkout(&record.path).map_err(String::from)?;
+    if paths.root != record.path || paths.common_dir != record.parent.common {
+        return Err("Worktree is not attached to its recorded parent repository.".into());
+    }
+    record.parent.common_identity.checked(&paths.common_dir)?;
+    if text_read(&record.path, &["symbolic-ref", "--quiet", "HEAD"])?
+        != format!("refs/heads/{}", record.branch)
+    {
+        return Err("Worktree branch changed; removal is refused.".into());
+    }
+    Ok(())
+}
+
+/// Removal keeps the branch and requires an explicit publication exception when
+/// the current commit is not reachable from the branch's known upstream.
+pub fn remove_managed_worktree(
+    record: ManagedWorktree,
+    expected: &Identity,
+    allow_unpushed: bool,
+    save: impl FnMut(&ManagedWorktree) -> Result<()>,
+) -> Result<ManagedWorktree> {
+    remove_managed_supervised(
+        record,
+        expected,
+        allow_unpushed,
+        save,
+        &mut |root, args, timeout| git(root, args, None, timeout),
+    )
+}
+/// Holds checkout exclusion until the supervisor has reclaimed Git descendants.
+pub fn remove_managed_supervised(
+    mut record: ManagedWorktree,
+    expected: &Identity,
+    allow_unpushed: bool,
+    mut save: impl FnMut(&ManagedWorktree) -> Result<()>,
+    mutate: &mut Mutation<'_>,
+) -> Result<ManagedWorktree> {
+    if record.identity.as_ref() != Some(expected) {
+        return Err("Removal identity does not match the host-owned worktree.".into());
+    }
+    if record.stage == ManagedStage::Removed {
+        return Ok(record);
+    }
+    verify_parent(&record.parent)?;
+    if record.stage == ManagedStage::Removing && fs::symlink_metadata(&record.path).is_err() {
+        let _lease = crate::lease::acquire_git_checkout(
+            &record.parent.main,
+            Some(record.parent.main_identity.lease()?),
+            crate::lease::LeaseClass::Reader,
+            Some(crate::lease::COMMON_METADATA_WAIT),
+        )
+        .map_err(String::from)?;
+        // A missing path alone may be an unavailable volume, not successful removal.
+        let list = read_worktree(
+            &record.parent.main,
+            &["worktree", "list", "--porcelain", "-z"],
+        )?;
+        let entry = format!("worktree {}", record.path.display());
+        if list.split(|b| *b == 0).any(|part| part == entry.as_bytes()) {
+            return Err(
+                "Worktree folder is missing but Git still registers it. Nothing was removed."
+                    .into(),
+            );
+        }
+        record.stage = ManagedStage::Removed;
+        save(&record)?;
+        return Ok(record);
+    }
+    let _lease = crate::lease::acquire_git_checkout(
+        &record.path,
+        Some(expected.lease()?),
+        crate::lease::LeaseClass::Exclusive,
+        Some(crate::lease::COMMON_METADATA_WAIT),
+    )
+    .map_err(String::from)?;
+    verify_managed(&record)?;
+    verify_parent(&record.parent)?;
+    let dirty = read_worktree(
+        &record.path,
+        &[
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--ignored=matching",
+        ],
+    )?;
+    if !dirty.is_empty() {
+        return Err("This worktree has uncommitted or ignored files. Preserve or remove them before removing the worktree.".into());
+    }
+    let git_dir = text_read(&record.path, &["rev-parse", "--absolute-git-dir"])?;
+    if [
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "rebase-merge",
+        "rebase-apply",
+        "sequencer",
+    ]
+    .iter()
+    .any(|name| fs::symlink_metadata(Path::new(&git_dir).join(name)).is_ok())
+    {
+        return Err("This worktree has an unfinished Git operation.".into());
+    }
+    if !allow_unpushed {
+        let remote_ref = text_read(&record.path, &["rev-parse", "--symbolic-full-name", "@{upstream}"])
+            .map_err(|_| "This worktree has unpushed or unknown publication status. Explicitly confirm preserving only the local branch.".to_owned())?;
+        if !remote_ref.starts_with("refs/remotes/") {
+            return Err("This worktree tracks a local branch; publication is unknown. Explicitly confirm preserving only the local branch.".into());
+        }
+        let upstream = text_read(&record.path, &["rev-parse", "--verify", "@{upstream}^{commit}"])
+            .map_err(|_| "This worktree has unpushed or unknown publication status. Explicitly confirm keeping its work only on the local branch.".to_owned())?;
+        let count = text_read(
+            &record.path,
+            &["rev-list", "--count", &format!("{upstream}..HEAD")],
+        )?;
+        if count != "0" {
+            return Err("This worktree has unpushed commits. Push them or explicitly confirm preserving only the local branch.".into());
+        }
+    }
+    record.stage = ManagedStage::Removing;
+    save(&record)?;
+    mutate(
+        &record.parent.main,
+        &[
+            "worktree",
+            "remove",
+            record.path.to_str().ok_or("Worktree path is not UTF-8.")?,
+        ],
+        CHECKOUT_TIMEOUT,
+    )?;
+    record.stage = ManagedStage::Removed;
+    record.error = None;
+    save(&record)?;
+    Ok(record)
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum HelperRequest {
+    Parent {
+        root: PathBuf,
+    },
+    Create {
+        store: PathBuf,
+        thread_id: String,
+        parent: Parent,
+    },
+    Remove {
+        store: PathBuf,
+        thread_id: String,
+        identity: Identity,
+        allow_unpushed: bool,
+    },
+    Read {
+        store: PathBuf,
+        thread_id: String,
+    },
+}
+
+/// Internal supervised Git worker; callers must hold the managed operation leases.
+pub fn managed_git(root: &Path, args: &[&str]) -> Result<()> {
+    if args.first() != Some(&"worktree") || !matches!(args.get(1), Some(&"add" | &"remove")) {
+        return Err("Unsupported worktree Git operation.".into());
+    }
+    git(root, args, None, CHECKOUT_TIMEOUT)
+}
+
+#[cfg(test)]
+mod managed_tests {
+    use super::*;
+    use crate::git::tests::Repo;
+    const ID: &str = "12345678-1234-4abc-8abc-123456789abc";
+    fn repository() -> Repo {
+        let mut repo = Repo::new();
+        repo.0 = repo.0.canonicalize().unwrap();
+        fs::write(repo.0.join("file"), "committed\n").unwrap();
+        repo.git(&["add", "."]);
+        repo.git(&["commit", "-qm", "initial"]);
+        repo
+    }
+    fn create(repo: &Repo) -> ManagedWorktree {
+        create_managed_worktree(&worktree_parent(&repo.0).unwrap(), ID, None, |_| Ok(())).unwrap()
+    }
+    fn clean(tree: &ManagedWorktree) {
+        if tree.path.exists() {
+            let _ = remove_managed_worktree(
+                tree.clone(),
+                tree.identity.as_ref().unwrap(),
+                true,
+                |_| Ok(()),
+            );
+        }
+        if let Ok(base) = worktree_base(&tree.parent.main) {
+            let _ = fs::remove_dir_all(base);
+        }
+    }
+    #[test]
+    fn unborn_repository_and_forged_parent_have_no_effects() {
+        let empty = Repo::new();
+        assert!(
+            worktree_parent(&empty.0)
+                .unwrap_err()
+                .contains("first commit")
+        );
+        let repo = repository();
+        let mut parent = worktree_parent(&repo.0).unwrap();
+        parent.common_identity.ino = "0".into();
+        assert!(create_managed_worktree(&parent, ID, None, |_| Ok(())).is_err());
+        assert!(!worktree_base(&repo.0).unwrap().exists());
+    }
+    #[test]
+    fn uuid_collisions_extend_without_reusing_existing_branch_or_directory() {
+        let repo = repository();
+        let base = owned_base(&repo.0).unwrap();
+        fs::create_dir(base.join("123456781234")).unwrap();
+        repo.git(&["branch", "plait/1234567812344abc"]);
+        let tree = create(&repo);
+        assert_eq!(tree.branch, "plait/1234567812344abc8abc");
+        assert!(base.join("123456781234").is_dir());
+        clean(&tree);
+    }
+    #[test]
+    fn linked_worktree_resolves_main_and_selected_base_ignores_dirty_files() {
+        let repo = repository();
+        fs::write(repo.0.join("file"), "dirty\n").unwrap();
+        let tree = create(&repo);
+        assert_eq!(
+            fs::read_to_string(tree.path.join("file")).unwrap(),
+            "committed\n"
+        );
+        let parent = worktree_parent(&tree.path).unwrap();
+        assert_eq!(parent.main, repo.0);
+        let second = create_managed_worktree(
+            &parent,
+            "22345678-1234-4abc-8abc-123456789abc",
+            None,
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(second.path.parent(), tree.path.parent());
+        clean(&second);
+        clean(&tree);
+    }
+    #[test]
+    fn spaces_work_and_non_utf8_main_paths_fail_explicitly() {
+        use std::os::unix::ffi::OsStringExt;
+        let mut repo = repository();
+        let moved = repo.0.with_extension("with spaces");
+        fs::rename(&repo.0, &moved).unwrap();
+        repo.0 = moved;
+        let tree = create(&repo);
+        assert_eq!(tree.stage, ManagedStage::Ready);
+        clean(&tree);
+        let moved = repo
+            .0
+            .with_file_name(std::ffi::OsString::from_vec(vec![b'p', b'l', 0xff]));
+        assert!(worktree_parent(&moved).unwrap_err().contains("UTF-8"));
+    }
+    #[test]
+    fn restart_after_lost_reply_reuses_inode_branch_and_uuid() {
+        let repo = repository();
+        let parent = worktree_parent(&repo.0).unwrap();
+        let mut journal = None;
+        let tree = create_managed_worktree(&parent, ID, None, |record| {
+            journal = Some(record.clone());
+            Ok(())
+        })
+        .unwrap();
+        let retry = create_managed_worktree(&parent, ID, journal.clone(), |_| Ok(())).unwrap();
+        assert_eq!(retry, tree);
+        let mut interrupted = tree.clone();
+        interrupted.stage = ManagedStage::Creating;
+        let recovered =
+            create_managed_worktree(&parent, ID, Some(interrupted), |_| Ok(())).unwrap();
+        assert_eq!(recovered.stage, ManagedStage::Ready);
+        assert_eq!(recovered.identity, tree.identity);
+        clean(&tree);
+    }
+    #[test]
+    fn partial_creation_and_missing_filesystem_preserve_unknown_work() {
+        let repo = repository();
+        let parent = worktree_parent(&repo.0).unwrap();
+        let mut journal = None;
+        let error = create_managed_worktree(&parent, ID, None, |record| {
+            journal = Some(record.clone());
+            if record.stage == ManagedStage::Creating {
+                Err("simulated crash".into())
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+        assert_eq!(error, "simulated crash");
+        let saved = journal.unwrap();
+        fs::write(saved.path.join("keep"), "user work").unwrap();
+        let recovered =
+            create_managed_worktree(&parent, ID, Some(saved.clone()), |_| Ok(())).unwrap();
+        assert_eq!(recovered.stage, ManagedStage::Failed);
+        assert_eq!(
+            fs::read_to_string(saved.path.join("keep")).unwrap(),
+            "user work"
+        );
+        fs::remove_dir_all(worktree_base(&repo.0).unwrap()).unwrap();
+        let tree = create(&repo);
+        fs::remove_dir_all(&tree.path).unwrap();
+        assert!(
+            remove_managed_worktree(tree.clone(), tree.identity.as_ref().unwrap(), true, |_| Ok(
+                ()
+            ))
+            .is_err()
+        );
+    }
+    #[test]
+    fn hooks_and_filters_fail_or_timeout_without_replaying_effects() {
+        use std::os::unix::fs::PermissionsExt;
+        for (name, script) in [
+            ("failure", "#!/bin/sh\nexit 1\n"),
+            ("timeout", "#!/bin/sh\nsleep 5\n"),
+        ] {
+            let repo = repository();
+            let hook = repo.0.join(".git/hooks/post-checkout");
+            fs::write(&hook, script).unwrap();
+            fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+            let parent = worktree_parent(&repo.0).unwrap();
+            let tree = create_managed_with_timeout(
+                &parent,
+                ID,
+                None,
+                &mut |_| Ok(()),
+                Duration::from_millis(250),
+            )
+            .unwrap();
+            assert_eq!(tree.stage, ManagedStage::Failed, "{name}");
+            let retry =
+                create_managed_worktree(&parent, ID, Some(tree.clone()), |_| Ok(())).unwrap();
+            assert_eq!(retry, tree);
+            clean(&tree);
+        }
+        for filter in ["false", "sleep 5"] {
+            let repo = repository();
+            fs::write(repo.0.join(".gitattributes"), "file filter=blocked\n").unwrap();
+            repo.git(&["add", ".gitattributes"]);
+            repo.git(&["commit", "-qm", "attributes"]);
+            repo.git(&["config", "filter.blocked.smudge", filter]);
+            repo.git(&["config", "filter.blocked.required", "true"]);
+            let parent = worktree_parent(&repo.0).unwrap();
+            let tree = create_managed_with_timeout(
+                &parent,
+                ID,
+                None,
+                &mut |_| Ok(()),
+                Duration::from_millis(250),
+            )
+            .unwrap();
+            assert_eq!(tree.stage, ManagedStage::Failed);
+            clean(&tree);
+        }
+    }
+    #[test]
+    fn removal_refuses_dirty_ignored_unpushed_and_stale_busy_summary() {
+        let repo = repository();
+        let tree = create(&repo);
+        let identity = tree.identity.as_ref().unwrap();
+        assert!(
+            remove_managed_worktree(tree.clone(), identity, false, |_| Ok(()))
+                .unwrap_err()
+                .contains("publication")
+        );
+        fs::write(tree.path.join("file"), "changed\n").unwrap();
+        assert!(
+            remove_managed_worktree(tree.clone(), identity, true, |_| Ok(()))
+                .unwrap_err()
+                .contains("uncommitted")
+        );
+        fs::write(tree.path.join("file"), "committed\n").unwrap();
+        fs::write(tree.path.join("unknown"), "preserve\n").unwrap();
+        assert!(remove_managed_worktree(tree.clone(), identity, true, |_| Ok(())).is_err());
+        fs::remove_file(tree.path.join("unknown")).unwrap();
+        let writer =
+            crate::lease::acquire_checkout(&tree.path, None, crate::lease::LeaseClass::Writer)
+                .unwrap();
+        assert!(
+            remove_managed_worktree(tree.clone(), identity, true, |_| Ok(()))
+                .unwrap_err()
+                .contains("in use")
+        );
+        drop(writer);
+        let removed = remove_managed_worktree(tree.clone(), identity, true, |_| Ok(())).unwrap();
+        assert_eq!(removed.stage, ManagedStage::Removed);
+        assert!(branch_exists(&repo.0, &tree.branch).unwrap());
+        assert_eq!(
+            remove_managed_worktree(removed.clone(), identity, true, |_| Ok(())).unwrap(),
+            removed
+        );
+    }
+    #[test]
+    fn substituted_path_and_forged_removal_identity_are_refused() {
+        let repo = repository();
+        let tree = create(&repo);
+        let original = tree.identity.clone().unwrap();
+        let forged = Identity {
+            dev: original.dev.clone(),
+            ino: "0".into(),
+        };
+        assert!(remove_managed_worktree(tree.clone(), &forged, true, |_| Ok(())).is_err());
+        let saved = tree.path.with_extension("saved");
+        fs::rename(&tree.path, &saved).unwrap();
+        fs::create_dir(&tree.path).unwrap();
+        fs::write(tree.path.join("keep"), "unrelated").unwrap();
+        assert!(remove_managed_worktree(tree.clone(), &original, true, |_| Ok(())).is_err());
+        assert_eq!(
+            fs::read_to_string(tree.path.join("keep")).unwrap(),
+            "unrelated"
+        );
+        fs::remove_dir_all(&tree.path).unwrap();
+        fs::rename(saved, &tree.path).unwrap();
+        clean(&tree);
+    }
+}

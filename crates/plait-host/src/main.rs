@@ -10,6 +10,7 @@ mod service;
 mod startup;
 mod transport;
 mod update;
+mod worktree;
 
 use std::{
     env,
@@ -56,9 +57,16 @@ fn run() -> io::Result<()> {
     match operation.as_str() {
         "record" => return record::run(),
         "review" => return review::run(),
+        "worktree" => return worktree::run(),
+        "worktree-git" => return worktree::git_run(),
         "review-contained" => return review::contained(),
         "undo" => return record::undo(),
-        "record-worker" | "undo-worker" | "prune-worker" | "review-worker" => {
+        "record-worker"
+        | "undo-worker"
+        | "prune-worker"
+        | "review-worker"
+        | "worktree-worker"
+        | "worktree-git-worker" => {
             return record::worker(&operation);
         }
         "undo-contained" => return record::undo_contained(),

@@ -139,6 +139,8 @@ pub fn worker(operation: &str) -> io::Result<()> {
         "prune-worker" => prune_value(value),
         "undo-worker" => undo_request(value),
         "review-worker" => super::review::worker(value),
+        "worktree-worker" => super::worktree::worker(value),
+        "worktree-git-worker" => super::worktree::git_worker(value),
         _ => Err(failure("Unknown checkout worker.".into())),
     })
 }

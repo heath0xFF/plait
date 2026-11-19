@@ -1,0 +1,190 @@
+//! Supervised host worktree helper. Journals outlive both the socket and runtime.
+use plait_core::git::worktree::{self, HelperRequest as Request, ManagedWorktree};
+use serde_json::{Value, json};
+use std::{
+    fs::{self, File, OpenOptions},
+    io::{self, Read, Write},
+    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+pub fn run() -> io::Result<()> {
+    super::record::supervise("worktree-worker", Duration::from_secs(150))
+}
+pub fn worker(input: Value) -> io::Result<()> {
+    let result = execute(input);
+    let value = match result {
+        Ok(value) => json!({"value":value,"error":null}),
+        Err(error) => json!({"value":null,"error":error.to_string()}),
+    };
+    let mut out = io::stdout().lock();
+    serde_json::to_writer(&mut out, &value)?;
+    out.write_all(b"\n")
+}
+fn execute(input: Value) -> io::Result<Value> {
+    let request: Request = serde_json::from_value(input).map_err(io::Error::other)?;
+    let result = match request {
+        Request::Parent { root } => {
+            return worktree::worktree_parent(&root)
+                .and_then(|value| serde_json::to_value(value).map_err(|e| e.to_string()))
+                .map_err(io::Error::other);
+        }
+        Request::Create {
+            store,
+            thread_id,
+            parent,
+        } => {
+            let path = journal_path(&store, &thread_id)?;
+            worktree::create_managed_supervised(
+                &parent,
+                &thread_id,
+                read(&path)?,
+                |record| save(&path, record).map_err(|e| e.to_string()),
+                &mut supervised_git,
+            )
+        }
+        Request::Remove {
+            store,
+            thread_id,
+            identity,
+            allow_unpushed,
+        } => {
+            let path = journal_path(&store, &thread_id)?;
+            let record = read(&path)?.ok_or_else(|| {
+                io::Error::other(
+                    "No host-owned worktree record. Imported worktrees cannot be removed here.",
+                )
+            })?;
+            worktree::remove_managed_supervised(
+                record,
+                &identity,
+                allow_unpushed,
+                |record| save(&path, record).map_err(|e| e.to_string()),
+                &mut supervised_git,
+            )
+        }
+        Request::Read { store, thread_id } => {
+            return serde_json::to_value(read(&journal_path(&store, &thread_id)?)?)
+                .map_err(io::Error::other);
+        }
+    };
+    serde_json::to_value(result.map_err(io::Error::other)?).map_err(io::Error::other)
+}
+fn journal_path(store: &Path, id: &str) -> io::Result<PathBuf> {
+    if id.len() != 36 || !id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
+        return Err(io::Error::other("Invalid thread UUID."));
+    }
+    if !store.is_absolute() || store.canonicalize()? != store {
+        return Err(io::Error::other("Invalid host store."));
+    }
+    let base = store.join("worktrees");
+    match fs::DirBuilder::new().mode(0o700).create(&base) {
+        Ok(()) => (),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (),
+        Err(e) => return Err(e),
+    }
+    for path in [store, base.as_path()] {
+        let meta = fs::symlink_metadata(path)?;
+        if !meta.is_dir() || meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o077 != 0 {
+            return Err(io::Error::other(
+                "Worktree journals require a private host store.",
+            ));
+        }
+    }
+    Ok(base.join(format!("{id}.json")))
+}
+fn read(path: &Path) -> io::Result<Option<ManagedWorktree>> {
+    let mut file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let meta = file.metadata()?;
+    if !meta.is_file()
+        || meta.uid() != unsafe { libc::geteuid() }
+        || meta.nlink() != 1
+        || meta.mode() & 0o077 != 0
+        || meta.len() > 65536
+    {
+        return Err(io::Error::other("Unsafe worktree journal."));
+    }
+    let mut data = Vec::new();
+    file.read_to_end(&mut data)?;
+    serde_json::from_slice(&data)
+        .map(Some)
+        .map_err(io::Error::other)
+}
+fn save(path: &Path, record: &ManagedWorktree) -> io::Result<()> {
+    let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&temporary)?;
+        serde_json::to_writer(&mut file, record)?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)?;
+        File::open(path.parent().unwrap())?.sync_all()
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+// Nested supervision keeps the outer worker's leases alive until hooks and
+// filters are reclaimed. Outer-helper death closes both lifetime pipes.
+fn supervised_git(root: &Path, args: &[&str], _timeout: Duration) -> Result<(), String> {
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(std::env::current_exe().map_err(|e| e.to_string())?)
+        .arg("worktree-git")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let mut input = child.stdin.take().ok_or("Missing Git helper input.")?;
+    serde_json::to_writer(&mut input, &json!({"root":root,"args":args}))
+        .map_err(|e| e.to_string())?;
+    drop(input);
+    let result = child.wait_with_output().map_err(|e| e.to_string())?;
+    if !result.status.success() {
+        return Err(
+            "Worktree Git helper stopped; existing files and branch were preserved.".into(),
+        );
+    }
+    let reply: Value = serde_json::from_slice(&result.stdout).map_err(|e| e.to_string())?;
+    match reply["error"].as_str() {
+        Some(error) => Err(error.into()),
+        None if reply["ok"] == true => Ok(()),
+        _ => Err("Invalid worktree Git result.".into()),
+    }
+}
+pub fn git_run() -> io::Result<()> {
+    super::record::supervise("worktree-git-worker", Duration::from_secs(130))
+}
+pub fn git_worker(input: Value) -> io::Result<()> {
+    let root = input["root"]
+        .as_str()
+        .ok_or_else(|| io::Error::other("Missing Git root."))?;
+    let args = input["args"]
+        .as_array()
+        .ok_or_else(|| io::Error::other("Missing Git arguments."))?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| io::Error::other("Invalid Git argument."))
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    let result = worktree::managed_git(Path::new(root), &args);
+    let mut out = io::stdout().lock();
+    serde_json::to_writer(&mut out, &json!({"ok":result.is_ok(),"error":result.err()}))?;
+    out.write_all(b"\n")
+}

@@ -1113,6 +1113,7 @@ pub mod policy;
 pub mod providers;
 pub mod review;
 pub mod sign_in;
+pub mod worktree;
 
 impl Client {
     /// One request and reply for an operation defined outside this file, such
