@@ -51,6 +51,11 @@ pub(super) struct View {
     pub cache: Cache,
     pub sort_size: bool,
     pub removal: plait_core::worktree_removal::Removal,
+    /// One inventory at a time: its helper and Git reads run to the end even
+    /// when their result is retired, so overlapping refreshes would stack.
+    pub reading: bool,
+    /// A refresh asked for while one was reading, and whether it was forced.
+    pub again: Option<bool>,
 }
 impl View {
     pub fn park(&mut self) {
@@ -295,6 +300,10 @@ impl Plait {
         if !self.worktrees_visible() {
             return;
         }
+        if self.worktrees.reading {
+            self.worktrees.again = Some(self.worktrees.again.unwrap_or(false) || force);
+            return;
+        }
         self.worktrees.cancelled.store(true, Ordering::Release);
         self.worktrees.cancelled = Arc::new(AtomicBool::new(false));
         self.worktrees.generation += 1;
@@ -327,6 +336,7 @@ impl Plait {
             self.worktrees.cache.clear();
         }
         let cancelled = self.worktrees.cancelled.clone();
+        self.worktrees.reading = true;
         let task = cx.background_executor().spawn(async move {
             let inventory = worktree::inventory(&Client::from_environment()?, root)?;
             if cancelled.load(Ordering::Acquire) {
@@ -345,33 +355,45 @@ impl Plait {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                if !this.accepts_worktrees(stamp, generation) {
-                    return;
+                this.worktrees.reading = false;
+                if this.accepts_worktrees(stamp, generation) {
+                    this.install_worktree_read(result, stamp, generation, cx);
                 }
-                this.worktrees.loading = false;
-                match result {
-                    Err(error) => this.worktrees.error = Some(error.to_string()),
-                    Ok((rows, graph)) => {
-                        this.worktrees.sizes = rows
-                            .iter()
-                            .map(|row| this.worktrees.cache.get(&key(row)).cloned().map(Ok))
-                            .collect();
-                        this.worktrees.rows = rows;
-                        this.worktrees.graph = graph;
-                        this.worktrees.selected = this
-                            .worktrees
-                            .selection
-                            .as_ref()
-                            .and_then(|p| this.worktrees.rows.iter().position(|r| &r.path == p))
-                            .unwrap_or(0);
-                        this.sort_worktree_lanes(this.worktrees.sort_size, cx);
-                        this.measure_worktrees(stamp, generation, cx);
-                    }
+                if let Some(force) = this.worktrees.again.take() {
+                    this.refresh_worktrees_view(force, cx);
                 }
-                cx.notify();
             });
         })
         .detach();
+    }
+    fn install_worktree_read(
+        &mut self,
+        result: Result<(Vec<Checkout>, Graph), host::Error>,
+        stamp: ReadStamp,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        self.worktrees.loading = false;
+        match result {
+            Err(error) => self.worktrees.error = Some(error.to_string()),
+            Ok((rows, graph)) => {
+                self.worktrees.sizes = rows
+                    .iter()
+                    .map(|row| self.worktrees.cache.get(&key(row)).cloned().map(Ok))
+                    .collect();
+                self.worktrees.rows = rows;
+                self.worktrees.graph = graph;
+                self.worktrees.selected = self
+                    .worktrees
+                    .selection
+                    .as_ref()
+                    .and_then(|p| self.worktrees.rows.iter().position(|r| &r.path == p))
+                    .unwrap_or(0);
+                self.sort_worktree_lanes(self.worktrees.sort_size, cx);
+                self.measure_worktrees(stamp, generation, cx);
+            }
+        }
+        cx.notify();
     }
     pub(super) fn accepts_worktrees(&self, stamp: ReadStamp, generation: u64) -> bool {
         self.worktrees_visible()

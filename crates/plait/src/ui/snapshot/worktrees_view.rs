@@ -257,3 +257,31 @@ fn remove_asks_for_the_worktree_that_was_drawn() {
     drop(h);
     let _ = std::fs::remove_dir_all(scratch);
 }
+/// A host helper runs to the end even when its result is retired, so
+/// refreshes that arrive while one reads wait for it and run once.
+#[core::prelude::v1::test]
+fn refreshes_during_a_read_run_once_after_it() {
+    if !isolated("worktrees_view::refreshes_during_a_read_run_once_after_it") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-worktree-once-{}", std::process::id()));
+    let repo = fixture_repository(&scratch);
+    let mut h = Harness::new(&repo, None, 1380., 860.);
+    h.connect(&repo, false);
+    install(&mut h, 4);
+    h.update(|p, _, cx| {
+        assert!(p.host.connection.connected && p.worktrees_visible());
+        let generation = p.worktrees.generation;
+        for force in [false, false, true, false] {
+            p.refresh_worktrees_view(force, cx);
+        }
+        assert_eq!(p.worktrees.generation, generation + 1, "inventories overlapped");
+        assert_eq!(p.worktrees.again, Some(true));
+    });
+    h.update(|p, _, _| {
+        assert!(!p.worktrees.reading);
+        assert_eq!(p.worktrees.again, None);
+    });
+    drop(h);
+    let _ = std::fs::remove_dir_all(scratch);
+}
