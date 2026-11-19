@@ -1,9 +1,14 @@
 //! Bounded logical storage accounting. No Git, symlink following, or reclamation promise.
 use std::{
     collections::HashSet,
-    fs,
-    os::unix::fs::MetadataExt,
+    ffi::{CStr, CString},
+    fs, io,
+    os::{
+        fd::{AsRawFd, FromRawFd, OwnedFd},
+        unix::{ffi::OsStrExt, fs::MetadataExt},
+    },
     path::{Path, PathBuf},
+    rc::Rc,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
@@ -22,84 +27,224 @@ impl Size {
 pub const ENTRY_LIMIT: usize = 50_000;
 pub const DEADLINE: Duration = Duration::from_millis(250);
 pub const BUILD_DIRS: &[&str] = &["target", "build", "dist", ".next", "node_modules"];
-pub fn measure(root: &Path, cache: Option<&Path>, cancelled: &AtomicBool) -> Result<Size, String> {
-    measure_bounded(root, cache, ENTRY_LIMIT, DEADLINE, cancelled)
+/// A directory's device and inode, as the walk compares them.
+pub type DirId = (u64, u64);
+pub fn measure(
+    root: &Path,
+    cache: Option<&Path>,
+    skip: &HashSet<DirId>,
+    cancelled: &AtomicBool,
+) -> Result<Size, String> {
+    measure_bounded(root, cache, skip, ENTRY_LIMIT, DEADLINE, cancelled)
 }
+/// Entries are reached from their parent's open descriptor and never through a
+/// path, so a directory swapped for a symlink mid-walk cannot lead it outside.
+/// The walk stays on each root's device and does not enter the `skip` folders
+/// (the project's other checkouts), which are measured on their own.
 pub fn measure_bounded(
     root: &Path,
     cache: Option<&Path>,
+    skip: &HashSet<DirId>,
     limit: usize,
     duration: Duration,
     cancelled: &AtomicBool,
 ) -> Result<Size, String> {
-    let deadline = Instant::now() + duration;
-    let meta =
-        fs::symlink_metadata(root).map_err(|e| format!("Cannot measure this folder: {e}"))?;
-    if !meta.is_dir() || meta.is_symlink() {
-        return Err("The checkout folder is missing or replaced.".into());
-    }
-    let mut result = Size::default();
-    let mut seen = HashSet::new();
-    let mut stack = vec![(root.to_owned(), false)];
+    let mut walk = Walk {
+        result: Size::default(),
+        seen: HashSet::new(),
+        stack: Vec::new(),
+        skip,
+        limit,
+        deadline: Instant::now() + duration,
+    };
+    let checkout =
+        open_root(root).map_err(|_| "The checkout folder is missing or replaced.".to_owned())?;
+    walk.enter(checkout, false, true);
     if let Some(cache) = cache
         && cache != root
         && fs::symlink_metadata(cache).is_ok()
     {
-        stack.push((cache.to_owned(), true));
+        match open_root(cache) {
+            Ok(dir) => walk.enter(dir, true, false),
+            Err(_) => walk.result.incomplete = true,
+        }
     }
-    while let Some((path, build)) = stack.pop() {
+    while let Some(entry) = walk.stack.pop() {
         if cancelled.load(Ordering::Relaxed) {
             return Err("Measurement cancelled.".into());
         }
-        if result.entries >= limit || Instant::now() >= deadline {
-            result.incomplete = true;
+        if walk.result.entries >= limit || Instant::now() >= walk.deadline {
+            walk.result.incomplete = true;
             break;
         }
-        result.entries += 1;
-        let Ok(meta) = fs::symlink_metadata(&path) else {
-            result.incomplete = true;
-            continue;
-        };
-        if meta.is_symlink() {
-            continue;
+        walk.result.entries += 1;
+        walk.visit(entry);
+    }
+    Ok(walk.result)
+}
+struct Entry {
+    parent: Rc<OwnedFd>,
+    name: CString,
+    build: bool,
+    device: u64,
+}
+struct Walk<'a> {
+    result: Size,
+    seen: HashSet<DirId>,
+    stack: Vec<Entry>,
+    skip: &'a HashSet<DirId>,
+    limit: usize,
+    deadline: Instant,
+}
+impl Walk<'_> {
+    /// Queue a directory's entries. `top` marks the checkout's own top level,
+    /// where conventional output folders count as build output.
+    fn enter(&mut self, dir: (OwnedFd, libc::stat), build: bool, top: bool) {
+        let (fd, stat) = dir;
+        if !self.seen.insert(id(&stat)) {
+            return;
         }
-        if !seen.insert((meta.dev(), meta.ino())) {
-            continue;
-        }
-        if meta.is_file() {
-            if build {
-                result.build = result.build.saturating_add(meta.len());
-            } else {
-                result.source = result.source.saturating_add(meta.len());
+        let parent = Rc::new(fd);
+        let device = id(&stat).0;
+        let complete = list(&parent, |name| {
+            if self.stack.len() + self.result.entries >= self.limit
+                || Instant::now() >= self.deadline
+            {
+                return false;
             }
-        } else if meta.is_dir() {
-            let Ok(entries) = fs::read_dir(&path) else {
-                result.incomplete = true;
-                continue;
-            };
-            for entry in entries {
-                if stack.len() + result.entries >= limit || Instant::now() >= deadline {
-                    result.incomplete = true;
-                    break;
-                }
-                let Ok(entry) = entry else {
-                    result.incomplete = true;
-                    continue;
-                };
-                if entry.file_name() == ".git" {
-                    continue;
-                }
+            if name.to_bytes() != b".git" {
                 let output = build
-                    || path == root
-                        && entry
-                            .file_name()
-                            .to_str()
-                            .is_some_and(|s| BUILD_DIRS.contains(&s));
-                stack.push((entry.path(), output));
+                    || top
+                        && std::str::from_utf8(name.to_bytes())
+                            .is_ok_and(|s| BUILD_DIRS.contains(&s));
+                self.stack.push(Entry {
+                    parent: parent.clone(),
+                    name: name.to_owned(),
+                    build: output,
+                    device,
+                });
+            }
+            true
+        });
+        if !complete {
+            self.result.incomplete = true;
+        }
+    }
+    fn visit(&mut self, entry: Entry) {
+        let Ok(stat) = stat_at(entry.parent.as_raw_fd(), &entry.name) else {
+            self.result.incomplete = true;
+            return;
+        };
+        let kind = stat.st_mode & libc::S_IFMT;
+        if kind == libc::S_IFLNK || id(&stat).0 != entry.device || self.skip.contains(&id(&stat)) {
+            return;
+        }
+        if kind == libc::S_IFREG {
+            if self.seen.insert(id(&stat)) {
+                let size = stat.st_size.max(0) as u64;
+                let total = if entry.build {
+                    &mut self.result.build
+                } else {
+                    &mut self.result.source
+                };
+                *total = total.saturating_add(size);
+            }
+        } else if kind == libc::S_IFDIR {
+            // The name may have been replaced since it was read: open it without
+            // following a link and require the directory that was listed.
+            match open_at(entry.parent.as_raw_fd(), &entry.name) {
+                Ok(dir) if id(&dir.1) == id(&stat) => self.enter(dir, entry.build, false),
+                _ => self.result.incomplete = true,
             }
         }
     }
-    Ok(result)
+}
+#[cfg(target_vendor = "apple")]
+unsafe fn errno() -> *mut libc::c_int {
+    unsafe { libc::__error() }
+}
+#[cfg(not(target_vendor = "apple"))]
+unsafe fn errno() -> *mut libc::c_int {
+    unsafe { libc::__errno_location() }
+}
+// `dev_t` and `ino_t` differ in width and sign between macOS and Linux.
+#[allow(clippy::unnecessary_cast)]
+fn id(stat: &libc::stat) -> DirId {
+    (stat.st_dev as u64, stat.st_ino as u64)
+}
+fn checked(fd: libc::c_int) -> io::Result<(OwnedFd, libc::stat)> {
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `fd` was just returned open by the kernel and is owned here alone.
+    let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+    // SAFETY: `stat` is plain data the kernel fills.
+    let mut stat = unsafe { std::mem::zeroed::<libc::stat>() };
+    if unsafe { libc::fstat(fd.as_raw_fd(), &mut stat) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if stat.st_mode & libc::S_IFMT != libc::S_IFDIR {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    Ok((fd, stat))
+}
+const DIR_FLAGS: libc::c_int =
+    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+fn open_root(path: &Path) -> io::Result<(OwnedFd, libc::stat)> {
+    let path = CString::new(path.as_os_str().as_bytes())?;
+    // SAFETY: a valid NUL-terminated path.
+    checked(unsafe { libc::open(path.as_ptr(), DIR_FLAGS) })
+}
+fn open_at(parent: libc::c_int, name: &CStr) -> io::Result<(OwnedFd, libc::stat)> {
+    // SAFETY: `parent` is an open directory and `name` one NUL-terminated component.
+    checked(unsafe { libc::openat(parent, name.as_ptr(), DIR_FLAGS) })
+}
+fn stat_at(parent: libc::c_int, name: &CStr) -> io::Result<libc::stat> {
+    // SAFETY: as in `open_at`; `stat` is plain data the kernel fills.
+    let mut stat = unsafe { std::mem::zeroed::<libc::stat>() };
+    let status =
+        unsafe { libc::fstatat(parent, name.as_ptr(), &mut stat, libc::AT_SYMLINK_NOFOLLOW) };
+    if status == 0 {
+        Ok(stat)
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+/// Calls `each` with every name in the directory except `.` and `..` until it
+/// returns false. Returns false when the listing stopped early or failed.
+fn list(dir: &OwnedFd, mut each: impl FnMut(&CStr) -> bool) -> bool {
+    // SAFETY: `dup` of an open descriptor; `fdopendir` takes ownership of the
+    // duplicate and `closedir` releases both.
+    let copy = unsafe { libc::dup(dir.as_raw_fd()) };
+    if copy < 0 {
+        return false;
+    }
+    let stream = unsafe { libc::fdopendir(copy) };
+    if stream.is_null() {
+        unsafe { libc::close(copy) };
+        return false;
+    }
+    let mut complete = true;
+    loop {
+        // `readdir` returns null both at the end and on an error; only errno differs.
+        // SAFETY: `stream` is open; the entry is read before the next call.
+        unsafe { *errno() = 0 };
+        let entry = unsafe { libc::readdir(stream) };
+        if entry.is_null() {
+            complete &= unsafe { *errno() } == 0;
+            break;
+        }
+        let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+        if matches!(name.to_bytes(), b"." | b"..") {
+            continue;
+        }
+        if !each(name) {
+            complete = false;
+            break;
+        }
+    }
+    unsafe { libc::closedir(stream) };
+    complete
 }
 pub fn measure_retained_cache(
     cache: Option<&Path>,
@@ -112,7 +257,7 @@ pub fn measure_retained_cache(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Size::default()),
         _ => {}
     }
-    let mut result = measure(cache, None, cancelled)?;
+    let mut result = measure(cache, None, &HashSet::new(), cancelled)?;
     result.build = result.total();
     result.source = 0;
     Ok(result)
@@ -120,6 +265,7 @@ pub fn measure_retained_cache(
 pub fn measure_verified(
     key: &Key,
     cache: Option<&Path>,
+    skip: &HashSet<DirId>,
     cancelled: &AtomicBool,
 ) -> Result<Size, String> {
     if let Some(expected) = &key.identity {
@@ -131,7 +277,7 @@ pub fn measure_verified(
             );
         }
     }
-    measure(&key.root, cache, cancelled)
+    measure(&key.root, cache, skip, cancelled)
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Key {
@@ -176,21 +322,23 @@ mod tests {
             assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
         }
         let cancel = AtomicBool::new(false);
-        let full = measure_bounded(&root, None, 100, Duration::from_secs(1), &cancel).unwrap();
+        let none = HashSet::new();
+        let full =
+            measure_bounded(&root, None, &none, 100, Duration::from_secs(1), &cancel).unwrap();
         assert_eq!((full.source, full.build), (100, 200));
         assert!(!full.incomplete);
         assert!(
-            measure_bounded(&root, None, 1, Duration::from_secs(1), &cancel)
+            measure_bounded(&root, None, &none, 1, Duration::from_secs(1), &cancel)
                 .unwrap()
                 .incomplete
         );
         assert!(
-            measure_bounded(&root, None, 100, Duration::ZERO, &cancel)
+            measure_bounded(&root, None, &none, 100, Duration::ZERO, &cancel)
                 .unwrap()
                 .incomplete
         );
         cancel.store(true, Ordering::Relaxed);
-        assert!(measure(&root, None, &cancel).is_err());
+        assert!(measure(&root, None, &none, &cancel).is_err());
         let key = Key {
             root: root.clone(),
             identity: None,
@@ -222,9 +370,103 @@ mod tests {
             }),
             ..key.clone()
         };
-        assert!(measure_verified(&replaced, None, &cancel).is_err());
+        assert!(measure_verified(&replaced, None, &none, &cancel).is_err());
         cache.clear();
         assert!(cache.get(&key).is_none());
         fs::remove_dir_all(root).unwrap();
+    }
+    fn scratch(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("plait-size-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path.canonicalize().unwrap()
+    }
+    fn identity(path: &Path) -> DirId {
+        let meta = fs::symlink_metadata(path).unwrap();
+        (meta.dev(), meta.ino())
+    }
+    #[test]
+    fn links_to_the_root_and_other_checkouts_inside_are_not_walked() {
+        let root = scratch("inside");
+        fs::write(root.join("own"), vec![0; 10]).unwrap();
+        std::os::unix::fs::symlink("/", root.join("everything")).unwrap();
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::write(root.join("nested/.git"), "gitdir: /elsewhere\n").unwrap();
+        fs::write(root.join("nested/big"), vec![0; 1000]).unwrap();
+        let cancel = AtomicBool::new(false);
+        let skip = HashSet::from([identity(&root.join("nested"))]);
+        let size = measure(&root, None, &skip, &cancel).unwrap();
+        assert_eq!((size.source, size.incomplete), (10, false));
+        // Without the other checkout named, it is ordinary content.
+        assert_eq!(
+            measure(&root, None, &HashSet::new(), &cancel)
+                .unwrap()
+                .source,
+            1010
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn unreadable_folders_make_the_size_a_lower_bound() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = scratch("locked");
+        fs::create_dir_all(root.join("closed")).unwrap();
+        fs::write(root.join("closed/file"), vec![0; 5]).unwrap();
+        fs::set_permissions(root.join("closed"), fs::Permissions::from_mode(0o000)).unwrap();
+        let size = measure(&root, None, &HashSet::new(), &AtomicBool::new(false)).unwrap();
+        fs::set_permissions(root.join("closed"), fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(size.incomplete);
+        assert_eq!(size.source, 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+    /// A folder swapped for a symlink while the walk runs must not lead it
+    /// outside: path-based walking counted outside files in a fifth of runs.
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn a_folder_swapped_for_a_symlink_mid_walk_never_leads_outside() {
+        let root = scratch("swap");
+        let outside = scratch("swap-outside");
+        fs::create_dir_all(outside.join("deep")).unwrap();
+        for i in 0..200 {
+            fs::write(outside.join(format!("deep/o{i}")), vec![0; 1000]).unwrap();
+        }
+        let sub = root.join("sub");
+        fs::create_dir_all(sub.join("deep")).unwrap();
+        for i in 0..300 {
+            fs::write(sub.join(format!("s{i}")), [0u8]).unwrap();
+        }
+        let link = root.with_extension("link");
+        let _ = fs::remove_file(&link);
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let (a, b) = (
+            CString::new(sub.as_os_str().as_bytes()).unwrap(),
+            CString::new(link.as_os_str().as_bytes()).unwrap(),
+        );
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let done = stop.clone();
+        let swapper = std::thread::spawn(move || {
+            while !done.load(Ordering::Relaxed) {
+                // SAFETY: two valid paths; swapping them is the point of the test.
+                unsafe { libc::renamex_np(a.as_ptr(), b.as_ptr(), libc::RENAME_SWAP) };
+            }
+        });
+        let cancel = AtomicBool::new(false);
+        let worst = (0..3000)
+            .map(|_| {
+                measure(&root, None, &HashSet::new(), &cancel)
+                    .unwrap()
+                    .source
+            })
+            .max()
+            .unwrap();
+        stop.store(true, Ordering::Relaxed);
+        swapper.join().unwrap();
+        assert!(
+            worst <= 300,
+            "counted {worst} bytes, more than the checkout holds"
+        );
+        let _ = fs::remove_file(&link);
+        let _ = fs::remove_dir_all(&outside);
+        let _ = fs::remove_dir_all(&root);
     }
 }

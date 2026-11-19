@@ -457,6 +457,19 @@ impl Plait {
             .filter(|(i, _)| self.worktrees.sizes[*i].is_none())
             .map(|(i, row)| (i, key(row), row.thread_id.clone(), row.removed))
             .collect();
+        // Another checkout nested in this one is measured once, as itself.
+        let checkouts: Vec<_> = self
+            .worktrees
+            .rows
+            .iter()
+            .filter_map(|row| {
+                let id = row.identity.as_ref()?;
+                Some((
+                    row.path.clone(),
+                    (id.dev.parse().ok()?, id.ino.parse().ok()?),
+                ))
+            })
+            .collect();
         let cancelled = self.worktrees.cancelled.clone();
         let store = self.tabs.host.store.clone();
         let task = cx.background_executor().spawn(async move {
@@ -469,7 +482,12 @@ impl Plait {
                 let size = if removed {
                     worktree_size::measure_retained_cache(cache.as_deref(), &cancelled)
                 } else {
-                    worktree_size::measure_verified(&key, cache.as_deref(), &cancelled)
+                    let others = checkouts
+                        .iter()
+                        .filter(|(path, _)| *path != key.root)
+                        .map(|(_, id)| *id)
+                        .collect();
+                    worktree_size::measure_verified(&key, cache.as_deref(), &others, &cancelled)
                 };
                 results.push((i, key, size));
             }
