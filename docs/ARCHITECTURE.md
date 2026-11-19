@@ -596,8 +596,10 @@ index/blob redesign remains planned work with a separate compatibility review.
 optional captured first-send request. One entry per checkout owns a `legacy`
 mirror in the unchanged `new_draft`/`new_drafts` fields. Opening another empty
 draft cannot overwrite that mirror. Removing its owner promotes an intact
-sibling. An older journal imports its single draft; changed legacy text from an
-older build imports as another draft, preserving both versions. No first send
+sibling. Legacy mirrors also retain the draft's unconfirmed `creation` request,
+so compatible older readers reuse the same thread and worktree identity. An older
+journal imports its single draft and any captured creation; changed legacy text
+from an older build imports as another draft, preserving both versions. No first send
 is replayed at launch; an explicit retry reuses its captured ID and payload.
 Atomic synced replacement and the 4 MiB serialized limit are unchanged. Legacy
 thread/project fields retain their 512-record bound, independent drafts have a

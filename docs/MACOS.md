@@ -1166,8 +1166,9 @@ tracks Developer ID signing and notarization.
 Sending a new draft asks the host where it can start. If the project already has
 a writer, **Project busy** offers **Own worktree** and **Wait**. Own worktree
 creates a new branch and checkout from HEAD, then sends the draft there using
-its chosen harness, model and permissions. Uncommitted files and build outputs
-are not copied. Wait is disabled and marked not yet available; nothing is queued.
+its chosen harness, model and permissions. The draft stays editable during the
+choice; Own worktree sends the text and images shown when you choose it.
+Uncommitted files and build outputs are not copied. Wait is disabled and marked not yet available; nothing is queued.
 Cancel keeps the draft. An unanswered creation keeps the request for safe retry, and the saved
 draft keeps it too: after closing the window or quitting during preparation,
 sending the reopened draft reaches the thread and worktree the host already

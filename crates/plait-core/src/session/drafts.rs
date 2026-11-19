@@ -315,6 +315,44 @@ mod tests {
         );
     }
     #[test]
+    fn legacy_worktree_creation_imports_and_survives_a_sibling_draft() {
+        use crate::host::admission::{Placement, Request};
+        let request = Request::CreateAdmittedThread {
+            request_id: "keep-this-request".into(),
+            checkout: "/project".into(),
+            placement: Placement::Worktree,
+            harness: HarnessId::Pi,
+            provider: "provider".into(),
+            model_id: "model".into(),
+            approval: ApprovalMode::Ask,
+            mode: None,
+            thinking: None,
+            source_thread_id: None,
+        };
+        let mut draft = tab("Keep this first message").draft;
+        draft.creation = Some(super::super::DraftCreation {
+            request: request.clone(),
+            approval: Some(ApprovalMode::Ask),
+            choice: None,
+        });
+        let mut session = Session::empty("/host".into());
+        session.set_new_draft("/project".into(), draft);
+        session.import_legacy_drafts();
+        session.set_draft_tab("sibling".into(), tab("Independent message"));
+        let creation = session.draft_tabs["legacy-0"].creation.as_ref().unwrap();
+        assert_eq!(creation.request_id, "keep-this-request");
+        assert_eq!(creation.placement, Placement::Worktree);
+        assert_eq!(creation.message.text, "Keep this first message");
+        assert!(creation.message.creation.is_none());
+        let bytes = serde_json::to_vec(&session).unwrap();
+        let old = OldSession::decode(&bytes).unwrap();
+        assert_eq!(old.new_draft.unwrap().1.creation.unwrap().request, request);
+        let mut restored: Session = serde_json::from_slice(&bytes).unwrap();
+        restored.import_legacy_drafts();
+        assert_eq!(restored, session);
+    }
+
+    #[test]
     fn clearing_one_draft_keeps_its_siblings_and_legacy_mirror() {
         let mut session = Session::empty("/host".into());
         session.set_draft_tab("a".into(), tab("first"));
