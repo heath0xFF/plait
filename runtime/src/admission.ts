@@ -1,6 +1,6 @@
 // Host-owned placement decisions; a worktree is chosen before a run starts.
 import { resourceFailure, type RunCapacity } from './run-capacity.ts';
-import { createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { acquireCheckout, checkout, checkRoot, rootIdentity, type FileIdentity } from './safety.ts';
 import { fail, failure, HostError, HARNESSES, THINKING_LEVELS, type Snapshot, type Failure, type HarnessId, type ThinkingLevel, type ApprovalMode } from './protocol.ts';
 import { worktreeHelper, type Worktrees, type Parent, type Managed, type Create } from './worktrees.ts';
@@ -44,7 +44,6 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 const policyKey = (root: string, identity: FileIdentity) => `project_isolation:${JSON.stringify([root, identity.dev, identity.ino])}`;
-const internalId = (id: string) => `admission_${createHash('sha256').update(id).digest('hex')}`;
 
 export class Admissions {
   private pending = new Map<string, Promise<Admission>>();
@@ -121,8 +120,9 @@ export class Admissions {
     if (info.busy && !isolated) return { ...result, state: 'choice' };
     if (isolated && !info.parent) fail('worktree_unavailable', info.refusal ?? 'Make a first commit before starting a worktree.');
     const { harness, provider, model_id, approval, mode, thinking } = request;
-    const worktree: Create | null = isolated ? { op: 'create_worktree_thread', request_id: internalId(request.request_id), parent: info.parent!, harness, provider, model_id, approval, ...(mode === undefined ? {} : { mode }), ...(thinking === undefined ? {} : { thinking }) } : null;
-    const plan: Plan = { identity: info.identity, input: request, worktree, here_id: internalId(request.request_id) };
+    const effectId = randomUUID();
+    const worktree: Create | null = isolated ? { op: 'create_worktree_thread', request_id: effectId, parent: info.parent!, harness, provider, model_id, approval, ...(mode === undefined ? {} : { mode }), ...(thinking === undefined ? {} : { thinking }) } : null;
+    const plan: Plan = { identity: info.identity, input: request, worktree, here_id: effectId };
     this.store.db.prepare('INSERT INTO thread_admissions VALUES (?,?,?,?)').run(request.request_id, canonical(request), JSON.stringify(plan), JSON.stringify(result));
     this.start(request.request_id);
     return result;

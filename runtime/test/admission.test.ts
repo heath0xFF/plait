@@ -156,3 +156,13 @@ test('resource syscall failures before acceptance release descriptors and do not
     const lease=await acquireCheckout(h.root);await lease.close();
   }
 });
+
+test('project authorization survives restart but never follows a replaced repository',async t=>{
+  const {rename}=await import('node:fs/promises');const h=await codex(t);await chmod(h.store,0o700);await commit(h.root);
+  const info:any=await h.runtime.reply({op:'admission_info',checkout:h.root});
+  assert.equal((await h.runtime.reply({op:'set_project_isolation',checkout:h.root,identity:info.result.project_identity,auto_worktree:true})).ok,true);
+  await h.close();const next=h.reopen();assert.equal((await next.runtime.reply({op:'admission_info',checkout:h.root}) as any).result.auto_worktree,true);
+  await rename(h.root,h.root+'-original');await mkdir(h.root);await exec('/usr/bin/git',['init','-q',h.root]);await commit(h.root);
+  const replacement:any=await next.runtime.reply({op:'admission_info',checkout:h.root});assert.equal(replacement.result.auto_worktree,false);
+  assert.equal((await next.runtime.reply({op:'set_project_isolation',checkout:h.root,identity:info.result.project_identity,auto_worktree:true})).error?.code,'permission_denied');
+});
