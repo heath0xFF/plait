@@ -28,6 +28,7 @@ pub mod review;
 pub mod selection;
 pub mod session;
 pub mod state;
+pub mod tabs;
 pub mod theme;
 pub mod thread_view;
 pub mod tool_view;

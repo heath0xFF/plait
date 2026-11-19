@@ -12,7 +12,8 @@ use crate::{
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 /// The four workspace views a thread can display.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ThreadView {
     #[default]
     Conversation,
