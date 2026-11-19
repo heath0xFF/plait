@@ -44,8 +44,9 @@ tabs, threads, and drafts.
   never stops its run, and your tabs come back after a restart. See
   [tabs](docs/MACOS.md#tabs).
 - **Several threads in one project.** Start a thread where another is already
-  running and Plait offers it its own worktree: a new branch and checkout made
-  from HEAD, beside the repository. A project can make that automatic. See
+  running and Plait offers it its own worktree, a new branch and checkout made
+  from HEAD beside the repository, or a place in line for the checkout. A
+  project can make the worktree automatic. See
   [a busy project](docs/MACOS.md#starting-a-thread-while-a-project-is-busy).
 - **Worktrees as a branch graph.** A project's Worktrees tab draws each
   worktree's branch off the trunk, with its thread's state, what is

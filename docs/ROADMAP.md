@@ -14,6 +14,8 @@ what that run changed) shipped in v0.1.0-preview.17. Thread tabs shipped in
 v0.1.0-preview.18. A second thread in a busy project, in its own worktree,
 and any number of New thread tabs shipped in v0.1.0-preview.20. The Worktrees
 graph, and draft tabs named by their first line, shipped in v0.1.0-preview.22.
+The checkout queue, which lets a message wait for a busy checkout, shipped in
+v0.1.0-preview.23.
 The rest of
 M9 steps 2 and 3, MCP browser sign-in, and M8 step 3 are the current work.**
 
@@ -603,7 +605,8 @@ exclusion, preparation cancellation, lost replies and resource failures. Live
 provider limits and native focus/accessibility behavior still need separate
 acceptance; headless tests do not claim those results.
 
-**Stage 9, durable checkout queue (built).** Wait explicitly accepts a message
+**Stage 9, durable checkout queue (shipped in v0.1.0-preview.23).** Wait
+explicitly accepts a message
 and its images into host-owned storage, bound to its checkout identity and
 chosen settings. Existing threads offer Wait beside Continue separately. One
 acceptance order covers checkout waiters and eligible follow-ups, preventing a
