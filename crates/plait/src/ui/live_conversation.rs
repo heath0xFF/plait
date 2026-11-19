@@ -30,6 +30,17 @@ impl Reveals {
     pub fn pending_text(&self, total: usize) -> bool {
         self.text.pending(total)
     }
+
+    /// Scene captures choose a prefix instead of depending on time between PNGs.
+    pub fn set_scene_prefixes(&mut self, key: &str, text: usize, reasoning: usize) {
+        let at = Instant::now() + std::time::Duration::from_secs(60);
+        self.text = Reveal::default();
+        self.reasoning = Reveal::default();
+        // A production frame advances at least one byte even at zero elapsed time.
+        self.text.advance(key, text.saturating_sub(1).max(1), at);
+        self.reasoning
+            .advance(key, reasoning.saturating_sub(1).max(1), at);
+    }
 }
 use plait_core::{
     history::{self, Key},

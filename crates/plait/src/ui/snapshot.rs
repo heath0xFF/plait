@@ -137,6 +137,8 @@ fn git(repository: &Path, arguments: &[&str]) {
         .args(arguments)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_DATE", "2030-01-01T00:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2030-01-01T00:00:00Z")
         .status()
         .expect("git is required for snapshots");
     assert!(status.success(), "git {arguments:?} failed");
@@ -524,6 +526,86 @@ fn long_run(snapshot: &mut Snapshot, running: bool) {
 const DRAFT: &str =
     "Also notify when the queue is empty.\nKeep the public signature of refresh() as it is.";
 
+// Real Git reads supply the fixture data; elapsed time is not scene content.
+fn pin_read_times(repository: &mut plait_core::state::RepositoryState, wide: bool) {
+    // Preserve the reference render's measured values, which differed by size.
+    const STATUS_WIDE_MS: u64 = 36;
+    const STATUS_NARROW_MS: u64 = 39;
+    const STAGED_DIFF_MS: u64 = 18;
+    const UNSTAGED_DIFF_MS: u64 = 19;
+    use plait_core::model::{Diff, DiffLine, Snapshot as GitSnapshot};
+    if let Load::Ready(snapshot) = &mut repository.data.snapshot
+        && !snapshot.elapsed.is_zero()
+    {
+        *snapshot = Arc::new(GitSnapshot {
+            root: snapshot.root.clone(),
+            branch: snapshot.branch.clone(),
+            named: snapshot.named,
+            tracking: snapshot.tracking.clone(),
+            changes: snapshot.changes.clone(),
+            elapsed: Duration::from_millis(if wide {
+                STATUS_WIDE_MS
+            } else {
+                STATUS_NARROW_MS
+            }),
+        });
+    }
+    let selected = &repository.view.changes.selected;
+    let diff_ms = if selected
+        .as_ref()
+        .is_some_and(|key| key.mode == DiffMode::Unstaged)
+    {
+        UNSTAGED_DIFF_MS
+    } else {
+        STAGED_DIFF_MS
+    };
+    for (load, elapsed_ms) in [
+        (&mut repository.view.changes.diff, diff_ms),
+        (&mut repository.view.history.patch, STAGED_DIFF_MS),
+    ] {
+        if let Load::Ready(diff) = load
+            && !diff.elapsed.is_zero()
+        {
+            *diff = Arc::new(Diff {
+                lines: diff
+                    .lines
+                    .iter()
+                    .map(|line| DiffLine {
+                        text: line.text.clone(),
+                        kind: line.kind,
+                        old_line: line.old_line,
+                        new_line: line.new_line,
+                    })
+                    .collect(),
+                rows: diff.rows.clone(),
+                widest_row: diff.widest_row,
+                hunks: diff.hunks.clone(),
+                truncated: diff.truncated,
+                elapsed: Duration::from_millis(elapsed_ms),
+            });
+        }
+    }
+}
+
+fn pin_scene_values(plait: &mut Plait, wide: bool, name: &str) {
+    pin_read_times(&mut plait.state.repository, wide);
+    let total = |message: Option<&Arc<plait_core::markdown::Message>>| {
+        message.map_or(0, |message| plait_core::reveal::total(&message.blocks))
+    };
+    let text = match name {
+        "message-roles-streaming-wide" | "message-roles-streaming-narrow" => "I’ll".len(),
+        "palette-no-matches-narrow" => "The edit is applied. Running the tests in the sandb".len(),
+        _ => total(plait.formatted.live.as_ref()),
+    };
+    let reasoning = total(plait.formatted.live_reasoning.as_ref());
+    plait.reveal.set_scene_prefixes(THREAD, text, reasoning);
+    plait.last_render_us = 320;
+    plait.max_render_us = 640;
+    plait.switch_us = 480;
+    plait.first_render_ms = Some(40);
+    plait.interaction = None;
+}
+
 struct Harness {
     cx: HeadlessAppContext,
     window: WindowHandle<Plait>,
@@ -650,14 +732,32 @@ impl Harness {
 
     /// Draw the scene, which runs layout and paint, and save it when rendering.
     fn capture(&mut self, name: &str) {
-        self.draw();
-        let window = self.window.into();
-        if let Some(output) = &self.output {
-            let image = self.cx.capture_screenshot(window).expect("screenshot");
-            image
-                .save(output.join(format!("{name}.png")))
-                .expect("write snapshot");
-        }
+        let Some(output) = &self.output else {
+            self.draw();
+            return;
+        };
+        let handle = self.window.into();
+        self.cx
+            .update_window(handle, |view, window, cx| {
+                view.downcast::<Plait>()
+                    .expect("scene root")
+                    .update(cx, |plait, _| {
+                        pin_scene_values(
+                            plait,
+                            f32::from(window.viewport_size().width) > 1000.,
+                            name,
+                        );
+                    });
+                // Notifying here would draw once before this explicit frame and
+                // replace the pinned diagnostics with that draw's measurements.
+                window.refresh();
+                window.draw(cx).clear(cx);
+            })
+            .expect("draw scene");
+        let image = self.cx.capture_screenshot(handle).expect("screenshot");
+        image
+            .save(output.join(format!("{name}.png")))
+            .expect("write snapshot");
     }
 
     /// Present a connected host without a socket. Labeled sample data only.
@@ -1948,11 +2048,13 @@ fn keys_drive_the_palette_and_picker() {
 
 /// Every view at the default size and at the minimum window size.
 fn walk(output: Option<&Path>) {
-    let scratch = std::env::temp_dir().join(format!(
-        "plait-snapshot-{}-{}",
-        std::process::id(),
-        if output.is_some() { "render" } else { "draw" }
-    ));
+    // Render jobs run serially so visible fixture paths stay the same.
+    let name = if output.is_some() {
+        "plait-snapshot-render".to_owned()
+    } else {
+        format!("plait-snapshot-{}-draw", std::process::id())
+    };
+    let scratch = std::env::temp_dir().join(name);
     let _ = std::fs::remove_dir_all(&scratch);
     let repository = fixture_repository(&scratch);
 
