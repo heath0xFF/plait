@@ -10,7 +10,7 @@
 
 use super::{Harness, git, isolated};
 use gpui::AppContext as _;
-use plait_core::tabs::{CheckoutKey, ThreadTarget};
+use plait_core::tabs::{CheckoutKey, TabTarget};
 use plait_core::{
     host::{
         Approval, ApprovalKind, ApprovalMode, Message, MessageRole, Model, ModelChoice, Snapshot,
@@ -478,7 +478,7 @@ fn open_tabs(plait: &mut crate::ui::Plait) {
             .tabs
             .model
             .open(
-                ThreadTarget::Existing { id, checkout },
+                TabTarget::Existing { id, checkout },
                 Some(plait.host.connection.epoch),
             )
             .expect("sample tab");

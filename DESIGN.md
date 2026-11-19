@@ -19,6 +19,11 @@ when the twenty-entry view history expires. Hidden drafts draw no content, and
 large overflow lists draw only visible rows. Settings and
 Project settings open as window modals over the current workspace.
 
+Worktrees is a second tab content kind, one per project per window. Its neutral
+branch mark replaces the thread state dot, and its title is Worktrees. It has
+no thread-view bar. The same close, reorder, overflow and restore behavior
+applies; hidden content draws and reads nothing.
+
 
 ## Layout
 Compact Project → Machine → Thread rail; conversation or diff workspace;
@@ -39,6 +44,20 @@ conversation keeps a readable minimum width.
   `project / machine · branch` (omitting machine on narrow windows), the
   Conversation / Changes / History / Files switch, and the Git inspector
   toggle. Tabs whose content has no sub-views omit this second bar.
+- **Worktrees.** The main checkout's current branch forms a trunk, newest
+  commits first. Worktrees occupy fixed lanes beside it. One-point neutral
+  lines and small rings follow the conversation turn line; position separates
+  lanes. Filled nodes are commits, hollow head nodes are uncommitted changes.
+  State alone adds color. Short hashes, truncated subjects and age occupy
+  virtualized 28-point rows. Head labels carry thread, state, branch, preservation
+  facts and right-aligned size. Merged heads rejoin; unavailable or rewritten
+  bases say Detached. Selection is a neutral fill. The detail sits beside the
+  graph in wide windows and below it in narrow windows, with actions near its
+  top. Its six-point storage bar shows the selected checkout's share of the
+  largest, split into source and build output in two neutral tones. The project
+  total sits above the graph. Last used and Size order lanes while retaining
+  the main checkout first. Long graphs scroll in both directions. Unknown and
+  bounded measurements say Measuring, Unavailable or over, never zero by default.
 - **Rail.** No in-app logo: the app icon and window carry the brand. The rail
   sits below the 40-point tab bar and starts with two actions, New thread and
   Open repository. New thread names the model it will use; the control beside

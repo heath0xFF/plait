@@ -149,8 +149,8 @@ fn choice_flow() {
         let created=p.host.connection.threads.iter().find(|t|t.id=="12345678-1234-4abc-8abc-123456789abc").unwrap();
         assert_eq!(created.harness,Some(HarnessId::Claude));assert_ne!(created.checkout,root);
         assert_ne!(p.host.thread.selected.as_deref(),Some(created.id.as_str()));
-        let tab=p.tabs.model.tabs().iter().find(|tab|matches!(tab.thread().target(),plait_core::tabs::ThreadTarget::Existing{id,..} if id==&created.id)).unwrap();
-        assert_eq!(tab.thread().target().checkout().root,created.checkout);
+        let tab=p.tabs.model.tabs().iter().find(|tab|matches!(tab.session().target(),plait_core::tabs::TabTarget::Existing{id,..} if id==&created.id)).unwrap();
+        assert_eq!(tab.session().target().checkout().root,created.checkout);
 
         assert!(p.notice.as_deref().unwrap().contains("uncommitted files"));
         assert!(!p.workspace.composers.contains_key(&created.id));
@@ -349,7 +349,7 @@ fn concurrent_drafts() {
             .model
             .tabs()
             .iter()
-            .filter(|t| !t.thread().target().is_draft())
+            .filter(|t| !t.session().target().is_draft())
             .count()
             == 3
     });
@@ -580,7 +580,7 @@ fn reopened_creation() {
     harness.update(|p, w, cx| {
         p.host.connection.status.as_mut().unwrap().protocol_version = 6;
         let (id, tab) = saved.draft_tabs.iter().next().unwrap();
-        let target = plait_core::tabs::ThreadTarget::Draft {
+        let target = plait_core::tabs::TabTarget::Draft {
             id: id.clone(),
             checkout: p.tab_checkout(tab.checkout.clone()),
         };

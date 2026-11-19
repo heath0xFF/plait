@@ -2,7 +2,7 @@
 use super::{Plait, composer::ParkedEditor, tabs::TabNavigation};
 use gpui::*;
 use plait_core::tabs::{
-    TabId, ThreadTarget,
+    TabId, TabTarget,
     bookmark::{self, BookmarkRecord, ThreadBookmark},
 };
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,7 +12,7 @@ static RECORD: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone)]
 pub(super) enum Intent {
-    Open(ThreadTarget),
+    Open(TabTarget),
     Activate(TabId),
     Close(TabId),
     Navigate(TabNavigation),
@@ -30,7 +30,7 @@ pub(super) struct Lifecycle {
     pub hydrating: bool,
     hydrate_generation: u64,
     pending: std::collections::VecDeque<Intent>,
-    pub editors: Vec<(ThreadTarget, EditorRecord)>,
+    pub editors: Vec<(TabTarget, EditorRecord)>,
     pub drafts: std::collections::BTreeMap<String, super::new_thread::Draft>,
 }
 
@@ -44,8 +44,9 @@ impl Lifecycle {
         for intent in &mut self.pending {
             if let Intent::Open(target) = intent {
                 let checkout = match target {
-                    ThreadTarget::Existing { checkout, .. }
-                    | ThreadTarget::Draft { checkout, .. } => checkout,
+                    TabTarget::Existing { checkout, .. }
+                    | TabTarget::Draft { checkout, .. }
+                    | TabTarget::Worktrees { checkout } => checkout,
                 };
                 if &checkout.host == previous {
                     checkout.host = host.clone();
@@ -76,7 +77,7 @@ impl Plait {
             let same_checkout = match &intent {
                 Intent::Open(target) => target.checkout().root == self.host.creation.checkout,
                 Intent::Activate(id) => self.tabs.model.get(*id).is_some_and(|t| {
-                    t.thread().target().checkout().root == self.host.creation.checkout
+                    t.session().target().checkout().root == self.host.creation.checkout
                 }),
                 Intent::Close(id) => self.tabs.model.active() != Some(*id),
                 Intent::Navigate(_) => false,
@@ -92,7 +93,7 @@ impl Plait {
                 .tabs
                 .model
                 .get(*id)
-                .is_some_and(|t| t.thread().target().checkout().host != self.tabs.host)
+                .is_some_and(|t| t.session().target().checkout().host != self.tabs.host)
         {
             self.notice = Some("This tab belongs to a different host store. Open the thread from the current sidebar.".into());
             cx.notify();
@@ -106,7 +107,7 @@ impl Plait {
                 .model
                 .active()
                 .and_then(|id| self.tabs.model.get(id))
-                .is_some_and(|tab| tab.thread().target() == target),
+                .is_some_and(|tab| tab.session().target() == target),
             Intent::Navigate(_) => false,
         };
         if unchanged {
@@ -117,12 +118,16 @@ impl Plait {
             self.perform_tab(intent, window, cx);
             return;
         };
+        if self.worktrees_visible() {
+            self.perform_tab(intent, window, cx);
+            return;
+        }
         let target = self
             .tabs
             .model
             .get(active)
             .unwrap()
-            .thread()
+            .session()
             .target()
             .clone();
         let editor = self
@@ -224,12 +229,7 @@ impl Plait {
         .detach();
     }
 
-    fn remember_editor(
-        &mut self,
-        target: ThreadTarget,
-        editor: EditorRecord,
-        cx: &mut Context<Self>,
-    ) {
+    fn remember_editor(&mut self, target: TabTarget, editor: EditorRecord, cx: &mut Context<Self>) {
         let retired: Vec<_> = self
             .tabs
             .lifecycle
@@ -269,10 +269,10 @@ impl Plait {
             Intent::Activate(id) => self.tabs.model.activate(id),
             Intent::Close(id) => {
                 let nonempty = self.tabs.model.get(id).is_some_and(|tab| {
-                    let ThreadTarget::Draft {
+                    let TabTarget::Draft {
                         id: draft_id,
                         checkout,
-                    } = tab.thread().target()
+                    } = tab.session().target()
                     else {
                         return false;
                     };
@@ -289,7 +289,7 @@ impl Plait {
                             .is_some_and(|tab| tab.creation.is_some() || !tab.draft.text.is_empty() || !tab.draft.images.is_empty())
                     }
                 });
-                let draft = self.tabs.model.get(id).and_then(|tab| match tab.thread().target() { ThreadTarget::Draft { id, .. } => Some(id.clone()), _ => None });
+                let draft = self.tabs.model.get(id).and_then(|tab| match tab.session().target() { TabTarget::Draft { id, .. } => Some(id.clone()), _ => None });
                 let result = self.tabs.model.close(id, nonempty);
                 if result.is_ok() && !nonempty && let Some(draft) = draft {
                     if let Some(data) = &mut self.session.data { data.clear_draft_tab(&draft); }
@@ -302,14 +302,15 @@ impl Plait {
                 TabNavigation::Previous => self.tabs.model.previous_tab(),
                 TabNavigation::Jump(n) => self.tabs.model.jump(n),
                 TabNavigation::Reopen => self.tabs.model.reopen(|target| match target {
-                    ThreadTarget::Existing { id, checkout } => self
+                    TabTarget::Worktrees { .. } => Some(connection),
+                    TabTarget::Existing { id, checkout } => self
                         .host
                         .connection
                         .threads
                         .iter()
                         .any(|t| &t.id == id && t.checkout == checkout.root)
                         .then_some(connection),
-                    ThreadTarget::Draft {
+                    TabTarget::Draft {
                         id: draft_id,
                         checkout,
                     } => self
@@ -323,8 +324,8 @@ impl Plait {
             .and_then(|opened| {
                 if opened.is_none() && matches!(action, TabNavigation::Reopen) {
                     let fallback = self.session.data.as_ref().and_then(|data| data.draft_tabs.iter().find(|(id, tab)| {
-                        (tab.creation.is_some() || !tab.draft.text.is_empty() || !tab.draft.images.is_empty()) && !self.tabs.model.tabs().iter().any(|open| matches!(open.thread().target(), ThreadTarget::Draft { id: open_id, .. } if open_id == *id))
-                    }).map(|(id, tab)| ThreadTarget::Draft { id: id.clone(), checkout: self.tab_checkout(tab.checkout.clone()) }));
+                        (tab.creation.is_some() || !tab.draft.text.is_empty() || !tab.draft.images.is_empty()) && !self.tabs.model.tabs().iter().any(|open| matches!(open.session().target(), TabTarget::Draft { id: open_id, .. } if open_id == *id))
+                    }).map(|(id, tab)| TabTarget::Draft { id: id.clone(), checkout: self.tab_checkout(tab.checkout.clone()) }));
                     if let Some(target) = fallback { self.tabs.model.open(target, connection)?; }
                 }
                 Ok(())
@@ -375,6 +376,7 @@ impl Plait {
     }
 
     pub(super) fn park_workspace(&mut self, cx: &mut Context<Self>) {
+        self.worktrees.park();
         self.tabs.lifecycle.hydrating = false;
         self.tabs.lifecycle.hydrate_generation += 1;
         self.workspace.cancelled.store(true, Ordering::Release);
@@ -396,6 +398,9 @@ impl Plait {
     }
 
     pub(super) fn hydrate_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.worktrees_visible() {
+            return;
+        }
         let Some(tab) = self
             .tabs
             .model
@@ -407,8 +412,8 @@ impl Plait {
         let lifetime = tab.lifetime();
         let view_revision = self.tabs.lifecycle.view_revision;
         let owner = self.host.read_stamp();
-        let target = tab.thread().target().clone();
-        let record = tab.thread().bookmark().clone();
+        let target = tab.session().target().clone();
+        let record = tab.session().bookmark().clone();
         let editor = self
             .tabs
             .lifecycle
@@ -434,6 +439,7 @@ impl Plait {
         let task = cx.background_executor().spawn(async move {
             let bookmark = match record {
                 BookmarkRecord::Inline { .. } => record.inline(),
+                BookmarkRecord::Worktrees { .. } => None,
                 BookmarkRecord::Stored { blob, .. } => journal
                     .read_record_bytes(&blob, bookmark::EXTENDED_BOOKMARK_LIMIT)?
                     .and_then(|bytes| bookmark::decode_extended(&bytes)),
@@ -504,7 +510,7 @@ impl Plait {
         // Closed drafts without an in-flight creation can be restored from the journal.
         self.tabs.lifecycle.drafts.retain(|id, draft| {
             draft.pending.is_some() || self.tabs.model.tabs().iter().any(|tab| {
-                matches!(tab.thread().target(), ThreadTarget::Draft { id: open, .. } if open == id)
+                matches!(tab.session().target(), TabTarget::Draft { id: open, .. } if open == id)
             }) || self.session.data.is_none() && (!draft.saved.text.is_empty() || !draft.saved.images.is_empty())
         });
         let mut removed = Vec::new();

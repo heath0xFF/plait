@@ -189,7 +189,7 @@ impl Plait {
         self.hand_off(launch, cx);
     }
 
-    fn hand_off(&mut self, launch: Result<Launch, String>, cx: &mut Context<Self>) {
+    pub(super) fn hand_off(&mut self, launch: Result<Launch, String>, cx: &mut Context<Self>) {
         match launch {
             Ok(launch) => {
                 // A new attempt replaces the last failure's sentence.

@@ -2,7 +2,7 @@
 use super::{Plait, theme::*, thread_controls::TextTooltip};
 use gpui::{prelude::*, *};
 use plait_core::tabs::{
-    CheckoutKey, HostKey, TabError, TabId, ThreadTarget, WindowId, WindowTabs,
+    CheckoutKey, HostKey, TabError, TabId, TabTarget, WindowId, WindowTabs,
     row::{self as model, RowContext, RowWidths, TabLayout, TabMetadata, TabState},
 };
 use std::{
@@ -298,7 +298,7 @@ impl Plait {
         if !self.save_tab_view(cx) {
             return false;
         }
-        let target = ThreadTarget::Existing {
+        let target = TabTarget::Existing {
             id,
             checkout: self.tab_checkout(checkout),
         };
@@ -317,11 +317,11 @@ impl Plait {
         if self.tabs.model.active().is_some() {
             return true;
         }
-        let target = ThreadTarget::Draft {
+        let target = TabTarget::Draft {
             id: plait_core::host_state::request_id(),
             checkout: self.tab_checkout(self.host.creation.checkout.clone()),
         };
-        if let ThreadTarget::Draft { id, .. } = &target {
+        if let TabTarget::Draft { id, .. } = &target {
             self.draft.id = Some(id.clone());
         }
         let result = self.tabs.model.open(
@@ -353,6 +353,9 @@ impl Plait {
         let Some(id) = self.tabs.model.active() else {
             return true;
         };
+        if self.worktrees_visible() {
+            return true;
+        }
         self.capture_session(cx);
         let bookmark = self.capture_tab_bookmark(None, cx);
         match plait_core::tabs::bookmark::BookmarkRecord::capture(&bookmark) {
@@ -384,8 +387,8 @@ impl Plait {
             .and_then(|id| self.tabs.model.get(id))
             .map(|tab| {
                 (
-                    tab.thread().target().clone(),
-                    tab.thread().bookmark().view(),
+                    tab.session().target().clone(),
+                    tab.session().bookmark().view(),
                 )
             });
         if target
@@ -398,11 +401,18 @@ impl Plait {
             return;
         }
         match target {
-            Some((ThreadTarget::Existing { id, .. }, view)) => {
+            Some((TabTarget::Worktrees { .. }, _)) => {
+                self.host.select(None);
+                self.draft.open = false;
+                window.focus(&self.focus, cx);
+                self.restore_worktrees_bookmark();
+                self.refresh_worktrees_view(false, cx);
+            }
+            Some((TabTarget::Existing { id, .. }, view)) => {
                 self.select_host_thread_content(id, window, cx);
                 self.show_tab(view, window, cx);
             }
-            Some((ThreadTarget::Draft { id, checkout }, view)) => {
+            Some((TabTarget::Draft { id, checkout }, view)) => {
                 if checkout.root != self.host.creation.checkout {
                     self.change_checkout(checkout.root, window, cx);
                 }
@@ -783,7 +793,13 @@ impl Plait {
                     .flex_shrink_0()
                     .flex()
                     .justify_center()
-                    .child(dot(tint(meta.state, meta.active))),
+                    .child(if meta.worktrees {
+                        icon("branch")
+                            .text_color(rgb(colors().muted))
+                            .into_any_element()
+                    } else {
+                        dot(tint(meta.state, meta.active)).into_any_element()
+                    }),
             )
             .child(
                 div()

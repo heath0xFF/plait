@@ -1,6 +1,6 @@
 //! Injected tab states; no fixture data reaches the shipped view.
 use super::*;
-use plait_core::tabs::{CheckoutKey, ThreadTarget};
+use plait_core::tabs::{CheckoutKey, TabTarget};
 
 pub(super) fn install(harness: &mut Harness, count: usize) {
     install_projects(harness, count, false);
@@ -62,7 +62,7 @@ fn install_projects(harness: &mut Harness, count: usize, projects: bool) {
                     .unread
                     .insert(thread.id.clone());
             }
-            let target = ThreadTarget::Existing {
+            let target = TabTarget::Existing {
                 id: thread.id.clone(),
                 checkout: CheckoutKey {
                     host: plait.tabs.host.clone(),
@@ -718,8 +718,8 @@ pub(super) fn created_in_front() {
         super::many_drafts::finish(p, "create-1", Ok(reply), w, cx);
         let active = p.tabs.model.get(p.tabs.model.active().unwrap()).unwrap();
         assert!(matches!(
-            active.thread().target(),
-            ThreadTarget::Existing { id, .. } if id == "created-thread"
+            active.session().target(),
+            TabTarget::Existing { id, .. } if id == "created-thread"
         ));
         assert_eq!(p.host.thread.selected.as_deref(), Some("created-thread"));
         assert_eq!(p.workspace.tab, super::super::Workspace::Changes);

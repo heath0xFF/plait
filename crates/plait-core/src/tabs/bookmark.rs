@@ -158,8 +158,18 @@ pub struct ViewDetails {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "storage", rename_all = "snake_case")]
 pub enum BookmarkRecord {
-    Inline { view: ThreadView, json: Box<str> },
-    Stored { view: ThreadView, blob: String },
+    Worktrees {
+        selected: Option<std::path::PathBuf>,
+        size_sort: bool,
+    },
+    Inline {
+        view: ThreadView,
+        json: Box<str>,
+    },
+    Stored {
+        view: ThreadView,
+        blob: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -202,6 +212,7 @@ impl BookmarkRecord {
     pub fn view(&self) -> ThreadView {
         match self {
             Self::Inline { view, .. } | Self::Stored { view, .. } => *view,
+            Self::Worktrees { .. } => ThreadView::Conversation,
         }
     }
 
@@ -211,7 +222,7 @@ impl BookmarkRecord {
             Self::Inline { view, json } => {
                 decode_extended(json.as_bytes()).filter(|b| b.view == *view)
             }
-            Self::Stored { .. } => None,
+            Self::Stored { .. } | Self::Worktrees { .. } => None,
         }
     }
 
@@ -221,6 +232,11 @@ impl BookmarkRecord {
                 json.len() <= INLINE_BOOKMARK_LIMIT && self.inline().is_some()
             }
             Self::Stored { blob, .. } => blob_id(blob),
+            Self::Worktrees { selected, .. } => selected.as_ref().is_none_or(|p| {
+                p.is_absolute()
+                    && p.as_os_str().len() <= 4096
+                    && p.to_str().is_some_and(|s| !s.contains('\0'))
+            }),
         }
     }
 
@@ -229,6 +245,7 @@ impl BookmarkRecord {
             + match self {
                 Self::Inline { json, .. } => json.len(),
                 Self::Stored { blob, .. } => blob.capacity(),
+                Self::Worktrees { selected, .. } => selected.as_ref().map_or(0, |p| p.capacity()),
             }
     }
 }

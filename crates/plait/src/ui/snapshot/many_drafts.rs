@@ -2,7 +2,7 @@
 use super::*;
 use plait_core::{
     host::admission::{Placement, Request},
-    tabs::ThreadTarget,
+    tabs::TabTarget,
 };
 
 pub(super) fn set_pending(p: &mut Plait, request_id: &str) {
@@ -210,7 +210,7 @@ fn two_creations_complete_once_in_their_tabs_after_switch_and_close() {
         finish(p,"send-a",reply("created-a"),w,cx);
         assert_eq!(p.host.submissions.all("created-a").len(),1);
         p.request_tab(crate::ui::tab_lifecycle::Intent::Navigate(crate::ui::tabs::TabNavigation::Reopen),w,cx);
-        assert!(matches!(p.tabs.model.get(p.tabs.model.active().unwrap()).unwrap().thread().target(),ThreadTarget::Existing { id,.. } if id=="created-a"));
+        assert!(matches!(p.tabs.model.get(p.tabs.model.active().unwrap()).unwrap().session().target(),TabTarget::Existing { id,.. } if id=="created-a"));
     });
     drop(h);
     std::fs::remove_dir_all(scratch).unwrap();
@@ -344,7 +344,7 @@ fn drafts_restart_in_order_with_images_settings_and_evicted_history() {
                 .model
                 .tabs()
                 .iter()
-                .map(|t| t.thread().target().clone())
+                .map(|t| t.session().target().clone())
                 .collect();
             (order, p.flush_tab_preferences(Some(w), cx).unwrap())
         })
@@ -389,7 +389,7 @@ fn drafts_restart_in_order_with_images_settings_and_evicted_history() {
                 .model
                 .tabs()
                 .iter()
-                .map(|t| t.thread().target().clone())
+                .map(|t| t.session().target().clone())
                 .collect::<Vec<_>>(),
             order
         );
@@ -461,6 +461,21 @@ fn drafts_restart_in_order_with_images_settings_and_evicted_history() {
 
 #[core::prelude::v1::test]
 fn restore_forgets_empty_drafts_no_tab_returned() {
+    if !isolated("many_drafts::restore_forgets_empty_drafts_no_tab_returned") {
+        return;
+    }
+    restore_with_open_empty_draft(false);
+}
+
+#[core::prelude::v1::test]
+fn restore_keeps_open_drafts_behind_worktrees() {
+    if !isolated("many_drafts::restore_keeps_open_drafts_behind_worktrees") {
+        return;
+    }
+    restore_with_open_empty_draft(true);
+}
+
+fn restore_with_open_empty_draft(worktrees_front: bool) {
     use plait_core::{
         session::{Draft, DraftSettings, DraftTab, Session},
         tabs::{CheckoutKey, HostKey},
@@ -500,21 +515,38 @@ fn restore_forgets_empty_drafts_no_tab_returned() {
         p.park_workspace(cx);
         p.install_tab_identity(host, vec![checkout.clone()], cx);
         p.session.data = Some(data);
-        p.tabs
+        let draft_tab = p
+            .tabs
             .model
             .open(
-                ThreadTarget::Draft {
+                TabTarget::Draft {
                     id: "open-empty".into(),
-                    checkout,
+                    checkout: checkout.clone(),
                 },
                 None,
             )
             .unwrap();
+        if worktrees_front {
+            p.tabs
+                .model
+                .open(TabTarget::Worktrees { checkout }, None)
+                .unwrap();
+        }
         p.tabs.persistence.edited = true;
         p.tabs.identity.catalog_ready = true;
         p.tabs.persistence.requested = true;
         p.tabs.persistence.loaded = true;
         p.try_restore_tabs(w, cx);
+        assert!(
+            p.tabs
+                .model
+                .get(draft_tab)
+                .unwrap()
+                .session()
+                .target()
+                .is_draft()
+        );
+        assert_eq!(p.worktrees_visible(), worktrees_front);
         let data = p.session.data.as_ref().unwrap();
         let mut ids: Vec<_> = data.draft_tabs.keys().map(String::as_str).collect();
         ids.sort();

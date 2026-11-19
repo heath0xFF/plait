@@ -4,7 +4,7 @@ use gpui::*;
 use plait_core::{
     session::Journal,
     tabs::{
-        self, CheckoutKey, TabId, ThreadTarget,
+        self, CheckoutKey, TabId, TabTarget,
         bookmark::{BookmarkError, BookmarkRecord, ThreadBookmark},
         persistence::{self, RestoreContext, RestoreStatus, SavedWindow},
         storage,
@@ -172,13 +172,13 @@ impl Plait {
         .detach();
     }
 
-    fn recoverable_tab_drafts(&self) -> Vec<ThreadTarget> {
+    fn recoverable_tab_drafts(&self) -> Vec<TabTarget> {
         let Some(data) = &self.session.data else {
             return Vec::new();
         };
         data.draft_tabs
             .iter()
-            .map(|(id, tab)| ThreadTarget::Draft {
+            .map(|(id, tab)| TabTarget::Draft {
                 id: id.clone(),
                 checkout: self.tab_checkout(tab.checkout.clone()),
             })
@@ -249,18 +249,18 @@ impl Plait {
                 // Keep the person's early action in front while restoring the other tabs.
                 let active = self.tabs.model.active();
                 for tab in restored.window.tabs() {
-                    let target = tab.thread().target().clone();
+                    let target = tab.session().target().clone();
                     let already_open = self
                         .tabs
                         .model
                         .tabs()
                         .iter()
-                        .any(|old| old.thread().target() == &target);
+                        .any(|old| old.session().target() == &target);
                     if !already_open && let Ok(id) = self.tabs.model.open(target, connection) {
                         let _ = self
                             .tabs
                             .model
-                            .save_bookmark(id, tab.thread().bookmark().clone());
+                            .save_bookmark(id, tab.session().bookmark().clone());
                     }
                 }
                 if let Some(id) = active {
@@ -282,11 +282,11 @@ impl Plait {
                     .model
                     .tabs()
                     .iter()
-                    .any(|tab| tab.thread().target() == &target)
+                    .any(|tab| tab.session().target() == &target)
             {
                 continue;
             }
-            let ThreadTarget::Draft { id, checkout } = &target else {
+            let TabTarget::Draft { id, checkout } = &target else {
                 continue;
             };
             if !self
@@ -330,9 +330,9 @@ impl Plait {
             .model
             .tabs()
             .iter()
-            .filter_map(|tab| match tab.thread().target() {
-                ThreadTarget::Draft { id, .. } => Some(id.clone()),
-                ThreadTarget::Existing { .. } => None,
+            .filter_map(|tab| match tab.session().target() {
+                TabTarget::Draft { id, .. } => Some(id.clone()),
+                TabTarget::Existing { .. } | TabTarget::Worktrees { .. } => None,
             })
             .collect();
         kept.extend(self.draft.id.clone());
@@ -396,6 +396,7 @@ impl Plait {
                 .tabs
                 .model
                 .active()
+                .filter(|_| !self.worktrees_visible())
                 .map(|id| (id, self.capture_tab_bookmark(window, cx))),
             path: state.path.clone()?,
             journal: self.session.journal.clone()?,

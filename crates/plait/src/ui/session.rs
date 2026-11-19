@@ -370,7 +370,7 @@ impl Plait {
         // Discard clears the content, but an open empty tab still survives restart.
         if self.draft.composer.is_none()
             && let Some(id) = &self.draft.id
-            && self.tabs.model.tabs().iter().any(|tab| matches!(tab.thread().target(), plait_core::tabs::ThreadTarget::Draft { id: open, .. } if open == id))
+            && self.tabs.model.tabs().iter().any(|tab| matches!(tab.session().target(), plait_core::tabs::TabTarget::Draft { id: open, .. } if open == id))
         {
             next.set_draft_tab(id.clone(), plait_core::session::DraftTab {
                 legacy: false,

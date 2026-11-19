@@ -602,9 +602,20 @@ exclusion, preparation cancellation, lost replies and resource failures. Live
 provider limits and native focus/accessibility behavior still need separate
 acceptance; headless tests do not claim those results.
 
-**Still planned:** other tab content kinds, a durable checkout queue (Stage
+**Built next: Worktrees.** One project graph per window is the first tab content
+that is not a thread. It opens from the sidebar project menu, command palette,
+Project settings and a worktree thread's context line. The graph presents actual
+commit ancestry, host-owned preservation facts, bounded cached storage accounting
+and manual safe removal. External and missing worktrees remain visible; removed
+worktrees retain their private cache attribution. Stage 12's visibility and
+manual checkout removal are built; automated cleanup and cache deletion are not.
+Headless scenes, lifecycle tests and a fifty-worktree frame case cover this view;
+installed-window acceptance and performance timings remain separate verification.
+
+**Still planned:** further tab content kinds, a durable checkout queue (Stage
 9), enforced Pi read-in-place (Stage 10), copy-on-write artifact seeding
-(Stage 11), and worktree storage accounting and cleanup (Stage 12).
+(Stage 11), and further worktree storage management (Stage 12).
+
 
 **Agreed concurrency decisions (built in the stages named below):**
 
@@ -619,8 +630,8 @@ acceptance; headless tests do not claim those results.
   reader class, shipping none).
 - **Worktree build artifacts, cleanup, and returning work (Stages 11 and 12):**
   a new worktree's build output is cloned copy-on-write only from a per-project
-  approved list; worktree cleanup is manual first (Stage 12a), then an opt-in
-  rule (Stage 12b); work returns by commit, push, and pull request, with no
+  approved list; worktree cleanup is manual only, with no automatic removal
+  in the current scope; work returns by commit, push, and pull request, with no
   merge, rebase, or cherry-pick added.
 
 The agreed v2 recovery index/blob layout remains planned, with its own
@@ -636,7 +647,7 @@ refuse submission or closing instead of discarding current work.
 - **Agreed proposed host capabilities (for the concurrency stages).** Use additive operations that omit `protocol_version` where existing reply
   shapes are unchanged, with explicit capability flags
   (`worktree_threads_v1`, `checkout_queue_v1`, `execution_class_v1`,
-  `worktree_storage_v1`, and per-harness `shared_reader`), preserving
+  `worktree_inventory_v1` (built), `worktree_storage_v1`, and per-harness `shared_reader`), preserving
   backward compatibility with older hosts and single-writer checkout behavior
   until each capability is complete.
 

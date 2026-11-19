@@ -384,6 +384,7 @@ impl Plait {
             .mx_auto()
             .gap_1()
             .child(controls)
+            .children(self.worktree_context_line(cx))
             .children(self.continuation_control(cx))
             .children(self.admission_context(cx));
         // The controls are the whole line. What a mode allows and why a

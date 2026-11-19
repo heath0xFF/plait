@@ -75,9 +75,9 @@ impl Plait {
     /// Show the draft, with any text it kept, in the active project.
     pub(super) fn open_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_tab_target(
-            plait_core::tabs::ThreadTarget::Draft {
+            plait_core::tabs::TabTarget::Draft {
                 id: plait_core::host_state::request_id(),
-                checkout: self.tab_checkout(self.host.creation.checkout.clone()),
+                checkout: self.tab_checkout(self.visible_project_checkout().to_owned()),
             },
             window,
             cx,
@@ -122,7 +122,7 @@ impl Plait {
             checkout
         };
         self.open_tab_target(
-            plait_core::tabs::ThreadTarget::Draft {
+            plait_core::tabs::TabTarget::Draft {
                 id: plait_core::host_state::request_id(),
                 checkout: self.tab_checkout(root),
             },

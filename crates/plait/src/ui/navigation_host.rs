@@ -140,6 +140,10 @@ impl Plait {
                         }
                         match result {
                             Ok(live) => {
+                                let worktrees_changed = this.worktrees_visible()
+                                    && live.iter().any(|t| {
+                                        this.worktrees.rows.iter().any(|row| row.path == t.checkout)
+                                    });
                                 let review_changed = live.iter().any(|new| {
                                     new.checkout == this.host.creation.checkout
                                         && this
@@ -163,6 +167,9 @@ impl Plait {
                                 }
                                 if review_changed {
                                     this.refresh_turn_review(cx);
+                                }
+                                if worktrees_changed {
+                                    this.refresh_worktrees_view(false, cx);
                                 }
                                 this.apply_thread_activity(false, window, cx);
                                 this.rebuild_projects(cx);

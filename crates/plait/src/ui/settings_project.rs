@@ -1,4 +1,5 @@
 //! Project settings has a fixed target independent of the selected thread.
+use super::theme::ButtonAction;
 use super::{Plait, settings, settings_agent::AgentState, settings_policy::PolicyState};
 use gpui::{prelude::*, *};
 use std::path::{Path, PathBuf};
@@ -91,7 +92,13 @@ impl Plait {
                     .track_scroll(&self.settings_scroll)
                     .child(self.policy_settings(cx))
                     .child(self.agent_settings(cx))
-                    .child(self.isolation_settings(cx)),
+                    .child(self.isolation_settings(cx))
+                    .child(
+                        super::theme::button("project-settings-worktrees", "Worktrees")
+                            .on_activate(cx, |this, window, cx| {
+                                this.open_worktrees(this.settings_checkout().to_owned(), window, cx)
+                            }),
+                    ),
             ),
         )
     }

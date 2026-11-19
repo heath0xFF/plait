@@ -167,7 +167,7 @@ pub(super) fn walk(
                 .tabs
                 .model
                 .open(
-                    plait_core::tabs::ThreadTarget::Existing {
+                    plait_core::tabs::TabTarget::Existing {
                         id: thread.id.clone(),
                         checkout: plait_core::tabs::CheckoutKey {
                             host: plait.tabs.host.clone(),

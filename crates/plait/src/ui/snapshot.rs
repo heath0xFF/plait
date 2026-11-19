@@ -57,6 +57,7 @@ mod turn_review;
 mod undo;
 mod ways_out;
 mod worktrees;
+mod worktrees_view;
 
 const THREAD: &str = "thr_5791c2e4";
 
@@ -2229,6 +2230,7 @@ fn walk(output: Option<&Path>) {
         harness.capture(&format!("no-sidebar-{suffix}"));
         ownership_scenes(&repository, output, suffix, width, height);
         isolation::walk(&repository, output, suffix, width, height);
+        worktrees_view::walk(&repository, output, suffix, width, height);
     }
     let _ = std::fs::remove_dir_all(&scratch);
 }
@@ -6115,8 +6117,8 @@ fn image_drafts_stay_with_their_checkout() {
                     .tabs()
                     .iter()
                     .find(|tab| {
-                        tab.thread().target().is_draft()
-                            && tab.thread().target().checkout().root == a
+                        tab.session().target().is_draft()
+                            && tab.session().target().checkout().root == a
                     })
                     .unwrap()
                     .id();

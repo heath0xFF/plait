@@ -55,14 +55,17 @@ pub struct ThreadKey {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ThreadTarget {
+pub enum TabTarget {
     Existing { id: String, checkout: CheckoutKey },
     Draft { id: String, checkout: CheckoutKey },
+    Worktrees { checkout: CheckoutKey },
 }
-impl ThreadTarget {
+impl TabTarget {
     pub fn checkout(&self) -> &CheckoutKey {
         match self {
-            Self::Existing { checkout, .. } | Self::Draft { checkout, .. } => checkout,
+            Self::Existing { checkout, .. }
+            | Self::Draft { checkout, .. }
+            | Self::Worktrees { checkout } => checkout,
         }
     }
     pub fn thread_key(&self) -> Option<ThreadKey> {
@@ -71,8 +74,11 @@ impl ThreadTarget {
                 host: checkout.host.clone(),
                 id: id.clone(),
             }),
-            Self::Draft { .. } => None,
+            Self::Draft { .. } | Self::Worktrees { .. } => None,
         }
+    }
+    pub fn is_worktrees(&self) -> bool {
+        matches!(self, Self::Worktrees { .. })
     }
     pub fn is_draft(&self) -> bool {
         matches!(self, Self::Draft { .. })
@@ -99,11 +105,18 @@ impl ThreadTarget {
                     checkout: bc,
                 },
             ) => a == b && ac == bc,
+            (Self::Worktrees { checkout: a }, Self::Worktrees { checkout: b }) => {
+                a.host == b.host && a.root == b.root
+            }
             _ => false,
         }
     }
     pub(crate) fn valid(&self) -> bool {
-        let (Self::Existing { id, checkout } | Self::Draft { id, checkout }) = self;
+        let checkout = self.checkout();
+        let id = match self {
+            Self::Existing { id, .. } | Self::Draft { id, .. } => id.as_str(),
+            Self::Worktrees { .. } => "worktrees",
+        };
         identifier(id)
             && identifier(&checkout.host.id)
             && [&checkout.root, &checkout.host.store].iter().all(|p| {
@@ -113,31 +126,34 @@ impl ThreadTarget {
             })
     }
     fn retained_bytes(&self) -> usize {
-        let (Self::Existing { id, checkout } | Self::Draft { id, checkout }) = self;
-        id.capacity()
-            + checkout.host.id.capacity()
-            + checkout.host.store.capacity()
-            + checkout.root.capacity()
+        let checkout = self.checkout();
+        let id = match self {
+            Self::Existing { id, .. } | Self::Draft { id, .. } => id.capacity(),
+            Self::Worktrees { .. } => 0,
+        };
+        id + checkout.host.id.capacity() + checkout.host.store.capacity() + checkout.root.capacity()
     }
 }
 
-/// Exactly one content implementation; add another variant when it ships.
+/// Two content kinds, with explicit dispatch and one implementation each.
 pub enum TabContent {
-    Thread(Box<ThreadTab>),
+    Thread(Box<TabSession>),
+    Worktrees(Box<TabSession>),
 }
 impl TabContent {
-    pub fn thread(&self) -> &ThreadTab {
+    pub fn session(&self) -> &TabSession {
         match self {
-            Self::Thread(t) => t,
+            Self::Thread(t) | Self::Worktrees(t) => t,
         }
     }
-    fn thread_mut(&mut self) -> &mut ThreadTab {
+    fn session_mut(&mut self) -> &mut TabSession {
         match self {
-            Self::Thread(t) => t,
+            Self::Thread(t) | Self::Worktrees(t) => t,
         }
     }
     pub fn view_commands(&self) -> &[ThreadView] {
         match self {
+            Self::Worktrees(_) => &[],
             Self::Thread(_) => &[
                 ThreadView::Conversation,
                 ThreadView::Changes,
@@ -148,14 +164,14 @@ impl TabContent {
     }
 }
 
-pub struct ThreadTab {
-    target: ThreadTarget,
+pub struct TabSession {
+    target: TabTarget,
     bookmark: BookmarkRecord,
     residency: Residency,
     connection: Option<u64>,
 }
-impl ThreadTab {
-    pub fn target(&self) -> &ThreadTarget {
+impl TabSession {
+    pub fn target(&self) -> &TabTarget {
         &self.target
     }
     pub fn bookmark(&self) -> &BookmarkRecord {
@@ -234,21 +250,21 @@ impl TabRecord {
     pub fn content(&self) -> &TabContent {
         &self.content
     }
-    pub fn thread(&self) -> &ThreadTab {
-        self.content.thread()
+    pub fn session(&self) -> &TabSession {
+        self.content.session()
     }
     /// Includes allocated string/path capacities, not just logical lengths.
     pub fn cold_bytes(&self) -> usize {
         std::mem::size_of::<Self>()
-            + std::mem::size_of::<ThreadTab>()
-            + self.thread().target.retained_bytes()
-            + self.thread().bookmark.retained_bytes()
+            + std::mem::size_of::<TabSession>()
+            + self.session().target.retained_bytes()
+            + self.session().bookmark.retained_bytes()
     }
 }
 
 struct ClosedTab {
     index: usize,
-    target: ThreadTarget,
+    target: TabTarget,
     bookmark: BookmarkRecord,
 }
 
@@ -304,8 +320,8 @@ impl WindowTabs {
     }
 
     /// Used to retire private editor caches after closed-history eviction.
-    pub fn retains_target(&self, target: &ThreadTarget) -> bool {
-        self.tabs.iter().any(|tab| tab.thread().target() == target)
+    pub fn retains_target(&self, target: &TabTarget) -> bool {
+        self.tabs.iter().any(|tab| tab.session().target() == target)
             || self.closed.iter().any(|tab| &tab.target == target)
     }
     pub fn get(&self, id: TabId) -> Option<&TabRecord> {
@@ -336,12 +352,12 @@ impl WindowTabs {
         host: &HostKey,
         checkouts: &[CheckoutKey],
     ) -> Result<(), TabError> {
-        let promote = |target: &ThreadTarget| {
+        let promote = |target: &TabTarget| {
             let mut target = target.clone();
             let checkout = match &mut target {
-                ThreadTarget::Existing { checkout, .. } | ThreadTarget::Draft { checkout, .. } => {
-                    checkout
-                }
+                TabTarget::Existing { checkout, .. }
+                | TabTarget::Draft { checkout, .. }
+                | TabTarget::Worktrees { checkout } => checkout,
             };
             if &checkout.host == previous && checkout.directory.is_none() {
                 checkout.host = host.clone();
@@ -360,16 +376,16 @@ impl WindowTabs {
             return Err(TabError::IdentityExhausted);
         }
         for tab in &self.tabs {
-            validate_record(&promote(tab.thread().target()), tab.thread().bookmark())?;
+            validate_record(&promote(tab.session().target()), tab.session().bookmark())?;
         }
         for tab in &self.closed {
             validate_record(&promote(&tab.target), &tab.bookmark)?;
         }
         for index in 0..self.tabs.len() {
-            let target = promote(self.tabs[index].thread().target());
-            if &target != self.tabs[index].thread().target() {
+            let target = promote(self.tabs[index].session().target());
+            if &target != self.tabs[index].session().target() {
                 self.tabs[index].lifetime.generation = self.next_serial()?;
-                let thread = self.tabs[index].content.thread_mut();
+                let thread = self.tabs[index].content.session_mut();
                 thread.target = target;
                 thread.residency = Residency::Cold {
                     reason: ColdReason::Replaced,
@@ -387,20 +403,16 @@ impl WindowTabs {
 
     /// Existing threads deduplicate; each new draft carries its own identity.
     /// Connection generations come from the connection owner, never selection.
-    pub fn open(
-        &mut self,
-        target: ThreadTarget,
-        connection: Option<u64>,
-    ) -> Result<TabId, TabError> {
+    pub fn open(&mut self, target: TabTarget, connection: Option<u64>) -> Result<TabId, TabError> {
         if !target.valid() {
             return Err(TabError::InvalidIdentity);
         }
         if let Some(tab) = self
             .tabs
             .iter()
-            .find(|t| t.thread().target.same_content(&target))
+            .find(|t| t.session().target.same_content(&target))
         {
-            if tab.thread().target.checkout() != target.checkout() {
+            if tab.session().target.checkout() != target.checkout() {
                 return Err(TabError::IdentityMismatch);
             }
             let id = tab.id;
@@ -419,7 +431,7 @@ impl WindowTabs {
 
     fn insert(
         &mut self,
-        target: ThreadTarget,
+        target: TabTarget,
         bookmark: BookmarkRecord,
         index: usize,
         connection: Option<u64>,
@@ -440,7 +452,7 @@ impl WindowTabs {
                     tab: id,
                     generation: serial,
                 },
-                content: TabContent::Thread(Box::new(ThreadTab {
+                content: content_for(Box::new(TabSession {
                     target,
                     bookmark,
                     connection,
@@ -455,7 +467,7 @@ impl WindowTabs {
 
     pub fn activate(&mut self, id: TabId) -> Result<(), TabError> {
         let index = self.index(id)?;
-        if self.active == Some(id) && self.tabs[index].thread().residency.visibility().is_some() {
+        if self.active == Some(id) && self.tabs[index].session().residency.visibility().is_some() {
             return Ok(());
         }
         let visibility = self.next_serial()?;
@@ -463,10 +475,10 @@ impl WindowTabs {
             self.park(old)?;
         }
         self.active = Some(id);
-        let thread = self.tabs[index].content.thread_mut();
+        let thread = self.tabs[index].content.session_mut();
         if thread.connection.is_some() {
             let mut data = ResidentThread::default();
-            if let ThreadTarget::Existing { id, .. } = &thread.target {
+            if let TabTarget::Existing { id, .. } = &thread.target {
                 data.host.selected = Some(id.clone());
             }
             thread.residency = Residency::Loading {
@@ -480,7 +492,7 @@ impl WindowTabs {
     /// Capture/flush bookmarks and drafts before calling this. No run is stopped.
     pub fn park(&mut self, id: TabId) -> Result<(), TabError> {
         let i = self.index(id)?;
-        self.tabs[i].content.thread_mut().residency = Residency::Cold {
+        self.tabs[i].content.session_mut().residency = Residency::Cold {
             reason: ColdReason::Parked,
         };
         Ok(())
@@ -489,12 +501,12 @@ impl WindowTabs {
     /// A view change invalidates its old read demand, including A -> B -> A.
     pub fn save_bookmark(&mut self, id: TabId, bookmark: BookmarkRecord) -> Result<(), TabError> {
         let i = self.index(id)?;
-        validate_record(&self.tabs[i].thread().target, &bookmark)?;
-        let changed_view = self.tabs[i].thread().bookmark.view() != bookmark.view();
+        validate_record(&self.tabs[i].session().target, &bookmark)?;
+        let changed_view = self.tabs[i].session().bookmark.view() != bookmark.view();
         if changed_view && self.active == Some(id) && self.serial == u64::MAX {
             return Err(TabError::IdentityExhausted);
         }
-        self.tabs[i].content.thread_mut().bookmark = bookmark;
+        self.tabs[i].content.session_mut().bookmark = bookmark;
         if changed_view {
             self.park(id)?;
             if self.active == Some(id) {
@@ -506,7 +518,7 @@ impl WindowTabs {
 
     /// The create acknowledgement changes content in place and invalidates reads.
     /// Mutation acknowledgements themselves must go to the operation ledger first.
-    pub fn bind_created(&mut self, id: TabId, target: ThreadTarget) -> Result<(), TabError> {
+    pub fn bind_created(&mut self, id: TabId, target: TabTarget) -> Result<(), TabError> {
         self.bind_creation(id, target, None)
     }
 
@@ -515,7 +527,7 @@ impl WindowTabs {
         &mut self,
         id: TabId,
         source: &CheckoutKey,
-        target: ThreadTarget,
+        target: TabTarget,
     ) -> Result<(), TabError> {
         self.bind_creation(id, target, Some(source))
     }
@@ -523,14 +535,18 @@ impl WindowTabs {
     fn bind_creation(
         &mut self,
         id: TabId,
-        target: ThreadTarget,
+        target: TabTarget,
         source: Option<&CheckoutKey>,
     ) -> Result<(), TabError> {
         let i = self.index(id)?;
-        if !target.valid() || target.is_draft() || !self.tabs[i].thread().target.is_draft() {
+        if !target.valid()
+            || target.is_draft()
+            || target.is_worktrees()
+            || !self.tabs[i].session().target.is_draft()
+        {
             return Err(TabError::InvalidIdentity);
         }
-        let original = self.tabs[i].thread().target.checkout();
+        let original = self.tabs[i].session().target.checkout();
         if let Some(source) = source {
             if source != original
                 || target.checkout().host != original.host
@@ -544,19 +560,19 @@ impl WindowTabs {
         if self
             .tabs
             .iter()
-            .any(|t| t.id != id && t.thread().target.same_content(&target))
+            .any(|t| t.id != id && t.session().target.same_content(&target))
         {
             return Err(TabError::AlreadyOpen);
         }
         let bookmark = if source.is_some() {
             // Repository selections belong to the original root, even when paths happen to match.
             BookmarkRecord::capture(&bookmark::ThreadBookmark {
-                view: self.tabs[i].thread().bookmark.view(),
+                view: self.tabs[i].session().bookmark.view(),
                 ..Default::default()
             })
             .map_err(|_| TabError::InvalidIdentity)?
         } else {
-            self.tabs[i].thread().bookmark.clone()
+            self.tabs[i].session().bookmark.clone()
         };
         validate_record(&target, &bookmark)?;
         if self.serial >= u64::MAX - 1 {
@@ -564,7 +580,7 @@ impl WindowTabs {
         }
         let generation = self.next_serial()?;
         self.tabs[i].lifetime.generation = generation;
-        let thread = self.tabs[i].content.thread_mut();
+        let thread = self.tabs[i].content.session_mut();
         thread.target = target;
         thread.bookmark = bookmark;
         thread.residency = Residency::Cold {
@@ -578,10 +594,10 @@ impl WindowTabs {
 
     pub fn move_draft(&mut self, id: TabId, checkout: CheckoutKey) -> Result<(), TabError> {
         let index = self.index(id)?;
-        let ThreadTarget::Draft { id: draft, .. } = &self.tabs[index].thread().target else {
+        let TabTarget::Draft { id: draft, .. } = &self.tabs[index].session().target else {
             return Err(TabError::InvalidIdentity);
         };
-        let target = ThreadTarget::Draft {
+        let target = TabTarget::Draft {
             id: draft.clone(),
             checkout,
         };
@@ -591,7 +607,7 @@ impl WindowTabs {
         }
         let generation = self.next_serial()?;
         self.tabs[index].lifetime.generation = generation;
-        let thread = self.tabs[index].content.thread_mut();
+        let thread = self.tabs[index].content.session_mut();
         thread.target = target;
         thread.bookmark = BookmarkRecord::default();
         self.park(id)?;
@@ -604,10 +620,10 @@ impl WindowTabs {
     /// Creation owns its draft even after close; never selects another tab.
     pub fn bind_draft_target(
         &mut self,
-        draft: &ThreadTarget,
-        target: ThreadTarget,
+        draft: &TabTarget,
+        target: TabTarget,
     ) -> Result<(), TabError> {
-        if let Some(tab) = self.tabs.iter().find(|tab| tab.thread().target() == draft) {
+        if let Some(tab) = self.tabs.iter().find(|tab| tab.session().target() == draft) {
             let id = tab.id;
             return if draft.checkout() == target.checkout() {
                 self.bind_created(id, target)
@@ -637,7 +653,7 @@ impl WindowTabs {
             return Err(TabError::IdentityExhausted);
         }
         let tab = self.tabs.remove(i);
-        let TabContent::Thread(thread) = tab.content;
+        let (TabContent::Thread(thread) | TabContent::Worktrees(thread)) = tab.content;
         if !thread.target.is_draft() || draft_nonempty {
             // One entry per content: the newest close carries the current bookmark.
             self.closed
@@ -668,7 +684,7 @@ impl WindowTabs {
     /// Missing entries are skipped. `Some(None)` means known but disconnected.
     pub fn reopen(
         &mut self,
-        mut resolve: impl FnMut(&ThreadTarget) -> Option<Option<u64>>,
+        mut resolve: impl FnMut(&TabTarget) -> Option<Option<u64>>,
     ) -> Result<Option<TabId>, TabError> {
         if self.serial >= u64::MAX - 1 {
             return Err(TabError::IdentityExhausted);
@@ -680,10 +696,10 @@ impl WindowTabs {
             if let Some(tab) = self
                 .tabs
                 .iter()
-                .find(|t| t.thread().target.same_content(&closed.target))
+                .find(|t| t.session().target.same_content(&closed.target))
             {
                 let id = tab.id;
-                if tab.thread().target.checkout() != closed.target.checkout() {
+                if tab.session().target.checkout() != closed.target.checkout() {
                     continue;
                 }
                 self.activate(id)?;
@@ -749,7 +765,7 @@ impl WindowTabs {
     pub fn project_removed(&mut self, checkouts: &[CheckoutKey]) -> Result<(), TabError> {
         self.remove_matching(|t| checkouts.contains(t.checkout()))
     }
-    fn remove_matching(&mut self, matches: impl Fn(&ThreadTarget) -> bool) -> Result<(), TabError> {
+    fn remove_matching(&mut self, matches: impl Fn(&TabTarget) -> bool) -> Result<(), TabError> {
         if self.serial == u64::MAX {
             return Err(TabError::IdentityExhausted);
         }
@@ -759,10 +775,10 @@ impl WindowTabs {
             .iter()
             .skip(old)
             .chain(self.tabs[..old].iter().rev())
-            .find(|t| !matches(&t.thread().target))
+            .find(|t| !matches(&t.session().target))
             .map(|t| t.id);
         self.closed.retain(|t| !matches(&t.target));
-        self.tabs.retain(|t| !matches(&t.thread().target));
+        self.tabs.retain(|t| !matches(&t.session().target));
         if self.active.is_some_and(|id| self.get(id).is_none()) {
             self.active = None;
             if let Some(id) = next {
@@ -774,7 +790,7 @@ impl WindowTabs {
 
     pub fn disconnected(&mut self, host: &HostKey) {
         for tab in &mut self.tabs {
-            let thread = tab.content.thread_mut();
+            let thread = tab.content.session_mut();
             if &thread.target.checkout().host == host {
                 thread.connection = None;
                 thread.residency = Residency::Cold {
@@ -790,7 +806,7 @@ impl WindowTabs {
             return Err(TabError::IdentityExhausted);
         }
         for tab in &mut self.tabs {
-            let thread = tab.content.thread_mut();
+            let thread = tab.content.session_mut();
             if &thread.target.checkout().host == host {
                 thread.connection = Some(generation);
                 thread.residency = Residency::Cold {
@@ -801,7 +817,7 @@ impl WindowTabs {
         if let Some(id) = self.active
             && self
                 .get(id)
-                .is_some_and(|t| &t.thread().target.checkout().host == host)
+                .is_some_and(|t| &t.session().target.checkout().host == host)
         {
             self.activate(id)?;
         }
@@ -819,8 +835,8 @@ impl WindowTabs {
         let t = self.get(id)?;
         Some(ReadStamp {
             lifetime: t.lifetime,
-            visibility: t.thread().residency.visibility()?,
-            connection: t.thread().connection?,
+            visibility: t.session().residency.visibility()?,
+            connection: t.session().connection?,
         })
     }
     /// Also check request generation, source revision and path/record on each job.
@@ -832,7 +848,7 @@ impl WindowTabs {
             return None;
         }
         let index = self.index(stamp.lifetime.tab).ok()?;
-        match &mut self.tabs[index].content.thread_mut().residency {
+        match &mut self.tabs[index].content.session_mut().residency {
             Residency::Loading { data, .. } | Residency::Ready { data, .. } => Some(data),
             Residency::Cold { .. } => None,
         }
@@ -844,7 +860,7 @@ impl WindowTabs {
         let Ok(i) = self.index(stamp.lifetime.tab) else {
             return false;
         };
-        let residency = &mut self.tabs[i].content.thread_mut().residency;
+        let residency = &mut self.tabs[i].content.session_mut().residency;
         if matches!(residency, Residency::Loading { .. }) {
             let old = std::mem::replace(
                 residency,
@@ -860,21 +876,31 @@ impl WindowTabs {
     }
 }
 
+fn content_for(session: Box<TabSession>) -> TabContent {
+    if session.target.is_worktrees() {
+        TabContent::Worktrees(session)
+    } else {
+        TabContent::Thread(session)
+    }
+}
+
 pub(crate) fn identifier(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 128
         && s.bytes()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b':' | b'.'))
 }
-fn validate_record(target: &ThreadTarget, bookmark: &BookmarkRecord) -> Result<(), TabError> {
+fn validate_record(target: &TabTarget, bookmark: &BookmarkRecord) -> Result<(), TabError> {
     if !target.valid() {
         return Err(TabError::InvalidIdentity);
     }
-    if !bookmark.valid() {
+    if !bookmark.valid()
+        || (matches!(bookmark, BookmarkRecord::Worktrees { .. }) && !target.is_worktrees())
+    {
         return Err(TabError::InvalidBookmark);
     }
     let size = std::mem::size_of::<TabRecord>()
-        + std::mem::size_of::<ThreadTab>()
+        + std::mem::size_of::<TabSession>()
         + target.retained_bytes()
         + bookmark.retained_bytes();
     if size > COLD_TAB_BYTES {

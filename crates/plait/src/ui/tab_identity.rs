@@ -3,7 +3,7 @@ use super::{Plait, tab_lifecycle::Intent};
 use gpui::*;
 use plait_core::{
     host::{self, Client},
-    tabs::{CheckoutKey, DirectoryIdentity, HostKey, ThreadTarget},
+    tabs::{CheckoutKey, DirectoryIdentity, HostKey, TabTarget},
 };
 use std::{collections::HashMap, os::unix::fs::MetadataExt, path::PathBuf};
 
@@ -49,6 +49,13 @@ impl Plait {
             .collect();
         roots.extend(self.preferences.value.navigation.opened.iter().cloned());
         roots.push(self.host.creation.checkout.clone());
+        roots.extend(
+            self.tabs
+                .model
+                .tabs()
+                .iter()
+                .map(|t| t.session().target().checkout().root.clone()),
+        );
         if let Some(data) = &self.session.data {
             roots.extend(data.draft_tabs.values().map(|tab| tab.checkout.clone()));
             roots.extend(data.new_drafts.keys().cloned());
@@ -112,7 +119,7 @@ impl Plait {
             .model
             .active()
             .and_then(|id| self.tabs.model.get(id))
-            .is_some_and(|t| t.thread().target().checkout().host == self.tabs.host);
+            .is_some_and(|t| t.session().target().checkout().host == self.tabs.host);
         if owned
             && self.workspace.host_watch.is_none()
             && let Some(id) = self.host.thread.selected.clone()
@@ -154,8 +161,9 @@ impl Plait {
                 .verify_pending(&previous, &host, &checkouts);
             for (target, _) in &mut self.tabs.lifecycle.editors {
                 let checkout = match target {
-                    ThreadTarget::Existing { checkout, .. }
-                    | ThreadTarget::Draft { checkout, .. } => checkout,
+                    TabTarget::Existing { checkout, .. }
+                    | TabTarget::Draft { checkout, .. }
+                    | TabTarget::Worktrees { checkout } => checkout,
                 };
                 if checkout.host == previous {
                     checkout.host = host.clone();
@@ -188,16 +196,19 @@ impl Plait {
             self.tabs.model.disconnected(&self.tabs.host);
         }
         self.refresh_tab_rows();
+        if self.worktrees_visible() {
+            self.refresh_worktrees_view(false, cx);
+        }
         cx.notify();
     }
 
     pub(super) fn open_tab_target(
         &mut self,
-        mut target: ThreadTarget,
+        mut target: TabTarget,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.tabs.identity.verified || cfg!(test) {
+        if (!self.tabs.identity.verified && !target.is_worktrees()) || cfg!(test) {
             self.request_tab(Intent::Open(target), window, cx);
             return;
         }
@@ -205,19 +216,28 @@ impl Plait {
         let opening = self.tabs.identity.opening;
         let host = self.tabs.host.clone();
         let root = target.checkout().root.clone();
-        let task = cx
-            .background_executor()
-            .spawn(async move { directory(&root) });
+        let worktrees = target.is_worktrees();
+        let task = cx.background_executor().spawn(async move {
+            let root = if worktrees {
+                plait_core::git::worktree::main_checkout(&root).unwrap_or(root)
+            } else {
+                root
+            };
+            let identity = directory(&root);
+            (root, identity)
+        });
         cx.spawn_in(window, async move |this, cx| {
-            let directory = task.await;
+            let (root, directory) = task.await;
             let _ = this.update_in(cx, |this, window, cx| {
                 if this.tabs.identity.opening != opening || this.tabs.host != host {
                     return;
                 }
                 let checkout = match &mut target {
-                    ThreadTarget::Existing { checkout, .. }
-                    | ThreadTarget::Draft { checkout, .. } => checkout,
+                    TabTarget::Existing { checkout, .. }
+                    | TabTarget::Draft { checkout, .. }
+                    | TabTarget::Worktrees { checkout } => checkout,
                 };
+                checkout.root = root;
                 checkout.directory = directory;
                 if let Some(directory) = directory {
                     this.tabs

@@ -12,7 +12,7 @@ pub const FILE_LIMIT: usize = 16 * 1024 * 1024;
 #[derive(Serialize, Deserialize)]
 struct SavedTab {
     id: TabId,
-    target: ThreadTarget,
+    target: TabTarget,
     bookmark: BookmarkRecord,
 }
 #[derive(Serialize)]
@@ -43,21 +43,22 @@ pub struct RestoreContext<'a> {
     pub checkouts: &'a [CheckoutKey],
     /// Drafts the desktop already knows are recoverable, including empty open
     /// drafts. No journal is read here; an empty list omits unsent draft tabs.
-    pub drafts: &'a [ThreadTarget],
+    pub drafts: &'a [TabTarget],
     pub connection: Option<u64>,
 }
 impl RestoreContext<'_> {
-    pub fn contains(&self, target: &ThreadTarget) -> bool {
+    pub fn contains(&self, target: &TabTarget) -> bool {
         let checkout = target.checkout();
         if &checkout.host != self.host || !self.checkouts.contains(checkout) {
             return false;
         }
         match target {
-            ThreadTarget::Existing { id, .. } => self
+            TabTarget::Existing { id, .. } => self
                 .threads
                 .iter()
                 .any(|t| &t.id == id && t.checkout == checkout.root),
-            ThreadTarget::Draft { .. } => self.drafts.contains(target),
+            TabTarget::Draft { .. } => self.drafts.contains(target),
+            TabTarget::Worktrees { .. } => true,
         }
     }
 }
@@ -76,13 +77,13 @@ pub fn capture(window: &WindowTabs, context: &RestoreContext<'_>) -> SavedWindow
         .tabs
         .iter()
         .filter(|t| {
-            let target = &t.thread().target;
+            let target = &t.session().target;
             !target.is_draft() || context.drafts.contains(target)
         })
         .map(|tab| SavedTab {
             id: tab.id,
-            target: tab.thread().target.clone(),
-            bookmark: tab.thread().bookmark.clone(),
+            target: tab.session().target.clone(),
+            bookmark: tab.session().bookmark.clone(),
         })
         .collect::<Vec<_>>();
     let active = window.active.filter(|id| tabs.iter().any(|t| t.id == *id));
@@ -148,7 +149,7 @@ pub fn decode(bytes: &[u8], window: WindowId, context: &RestoreContext<'_>) -> R
         let Ok(mut saved) = serde_json::from_value::<SavedTab>(entry.clone()) else {
             continue;
         };
-        if let ThreadTarget::Draft { id, checkout } = &saved.target
+        if let TabTarget::Draft { id, checkout } = &saved.target
             && id == "draft"
             && let Some(target) = context.drafts.iter().find(|t| t.checkout() == checkout)
         {
@@ -161,7 +162,7 @@ pub fn decode(bytes: &[u8], window: WindowId, context: &RestoreContext<'_>) -> R
                 .window
                 .tabs
                 .iter()
-                .any(|t| t.thread().target.same_content(&saved.target))
+                .any(|t| t.session().target.same_content(&saved.target))
         {
             continue;
         }
@@ -178,7 +179,7 @@ pub fn decode(bytes: &[u8], window: WindowId, context: &RestoreContext<'_>) -> R
             restored.window.active = Some(id);
         }
         if let Some(tab) = restored.window.tabs.last_mut() {
-            tab.content.thread_mut().residency = Residency::Cold {
+            tab.content.session_mut().residency = Residency::Cold {
                 reason: ColdReason::Restored,
             };
         }
@@ -200,7 +201,7 @@ mod tests {
         host: HostKey,
         threads: Vec<ThreadSummary>,
         checkouts: Vec<CheckoutKey>,
-        drafts: Vec<ThreadTarget>,
+        drafts: Vec<TabTarget>,
     }
     impl Catalog {
         fn new(count: usize) -> Self {
@@ -257,16 +258,16 @@ mod tests {
         assert_eq!(restored.status, RestoreStatus::Restored);
         assert_eq!(restored.window.tabs().len(), 4);
         for (old, new) in w.tabs().iter().zip(restored.window.tabs()) {
-            assert_eq!(old.thread().target(), new.thread().target());
-            assert_eq!(old.thread().bookmark(), new.thread().bookmark());
+            assert_eq!(old.session().target(), new.session().target());
+            assert_eq!(old.session().bookmark(), new.session().bookmark());
         }
         let active = restored.window.active().unwrap();
         assert_eq!(
-            restored.window.get(active).unwrap().thread().target(),
+            restored.window.get(active).unwrap().session().target(),
             &target("t1")
         );
         assert!(restored.window.tabs().iter().all(|t| matches!(
-            t.thread().residency(),
+            t.session().residency(),
             Residency::Cold {
                 reason: ColdReason::Restored
             }
@@ -280,7 +281,7 @@ mod tests {
                 .window
                 .tabs()
                 .iter()
-                .filter(|t| t.thread().residency.visibility().is_some())
+                .filter(|t| t.session().residency.visibility().is_some())
                 .count(),
             1
         );
@@ -297,7 +298,7 @@ mod tests {
         let restored = read(&saved, &catalog);
         assert_eq!(restored.window.tabs().len(), 1);
         assert_eq!(
-            restored.window.tabs()[0].thread().target(),
+            restored.window.tabs()[0].session().target(),
             &draft("legacy-0")
         );
         assert_eq!(
@@ -404,7 +405,7 @@ mod tests {
         for v in variants {
             let r = read(&v, &c);
             assert_eq!(r.window.tabs().len(), 1);
-            assert_eq!(r.window.tabs()[0].thread().target(), &target("t1"));
+            assert_eq!(r.window.tabs()[0].session().target(), &target("t1"));
         }
     }
 
@@ -448,7 +449,7 @@ mod tests {
         let r = read(&saved, &c);
         assert_eq!(r.window.tabs().len(), 1);
         assert_eq!(r.window.closed_len(), 0);
-        assert!(r.window.tabs()[0].thread().target().is_draft());
+        assert!(r.window.tabs()[0].session().target().is_draft());
         assert_eq!(w.active(), Some(d));
         c.drafts.clear();
         assert!(read(&saved, &c).window.tabs().is_empty());
@@ -468,7 +469,7 @@ mod tests {
         r.window.activate(id).unwrap();
         assert_eq!(r.window.tabs().len(), 1);
         assert!(r.window.read_stamp(id).is_none());
-        assert!(!r.window.tabs()[0].thread().connected());
+        assert!(!r.window.tabs()[0].session().connected());
     }
 
     #[test]
@@ -479,7 +480,7 @@ mod tests {
         w.save_bookmark(id, record.clone()).unwrap();
         let v = value(&w, &c);
         let r = read(&v, &c);
-        assert_eq!(r.window.tabs()[0].thread().bookmark(), &record);
+        assert_eq!(r.window.tabs()[0].session().bookmark(), &record);
         assert!(!v.to_string().contains("draft_revision"));
         assert_eq!(v["schema_version"], SCHEMA_VERSION);
     }
@@ -521,7 +522,7 @@ mod tests {
             assert_eq!(saved["tabs"].as_array().unwrap().len(), 2);
             let r = read(&saved, &full);
             assert_eq!(r.window.tabs().len(), 2);
-            assert_eq!(r.window.tabs()[1].thread().target(), &target("t1"));
+            assert_eq!(r.window.tabs()[1].session().target(), &target("t1"));
         }
     }
 
@@ -538,5 +539,44 @@ mod tests {
         assert!(!text.contains("resident-only-sentinel"));
         let r = decode(&bytes, WindowId(99), &c.context());
         assert_eq!(r.window.tabs().len(), 300);
+    }
+    #[test]
+    fn worktrees_round_trip_and_unknown_content_is_dropped_independently() {
+        let (mut w, c) = source(1);
+        let target = TabTarget::Worktrees {
+            checkout: checkout("/repo"),
+        };
+        let id = w.open(target.clone(), Some(2)).unwrap();
+        let bookmark = BookmarkRecord::Worktrees {
+            selected: Some("/repo.worktrees/topic".into()),
+            size_sort: true,
+        };
+        w.save_bookmark(id, bookmark.clone()).unwrap();
+        let mut saved = value(&w, &c);
+        let mut unknown = saved["tabs"][0].clone();
+        unknown["id"] = json!(999);
+        unknown["target"]["kind"] = json!("future_content");
+        saved["tabs"].as_array_mut().unwrap().push(unknown);
+        let restored = read(&saved, &c);
+        assert_eq!(restored.status, RestoreStatus::Restored);
+        assert_eq!(restored.window.tabs().len(), 2);
+        assert_eq!(
+            restored
+                .window
+                .get(restored.window.active().unwrap())
+                .unwrap()
+                .session()
+                .bookmark(),
+            &bookmark
+        );
+        assert_eq!(
+            restored
+                .window
+                .get(restored.window.active().unwrap())
+                .unwrap()
+                .session()
+                .target(),
+            &target
+        );
     }
 }

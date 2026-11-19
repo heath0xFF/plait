@@ -58,6 +58,7 @@ mod update;
 mod ways_out;
 mod window_bar;
 mod worktree;
+mod worktrees_view;
 
 use gpui::{prelude::*, *};
 use plait_core::{
@@ -165,6 +166,7 @@ pub struct Plait {
     /// A worktree is being created or removed.
     admission: admission::State,
     worktree_busy: bool,
+    worktrees: worktrees_view::View,
     worktree_pending: Option<worktree::Pending>,
     approval_keys: live_conversation::ApprovalKeys,
     /// The command palette or model picker, above the workspace.
@@ -233,6 +235,7 @@ impl Plait {
             draft: Default::default(),
             admission: Default::default(),
             worktree_busy: false,
+            worktrees: Default::default(),
             worktree_pending: None,
             approval_keys: Default::default(),
             overlay: None,
@@ -498,6 +501,10 @@ impl Plait {
     }
 
     fn refresh(&mut self, _: &Refresh, window: &mut Window, cx: &mut Context<Self>) {
+        if self.worktrees_visible() {
+            self.refresh_worktrees_view(true, cx);
+            return;
+        }
         window.focus(&self.focus, cx);
         self.fetch_turn_records(window, cx);
         self.refresh_turn_review(cx);
@@ -564,7 +571,7 @@ impl Plait {
 
     /// Open the active project's settings page.
     pub(super) fn show_project_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.show_settings_for_project(self.host.creation.checkout.clone(), window, cx);
+        self.show_settings_for_project(self.visible_project_checkout().to_owned(), window, cx);
     }
 
     /// Cmd-comma: the application page closes when it is the one open;
@@ -631,7 +638,9 @@ impl Plait {
 
     /// The Git inspector beside the conversation: wide windows, unless hidden.
     pub(super) fn shows_inspector(&self, wide: bool) -> bool {
-        wide && self.tabs.model.active().is_some() && !self.preferences.value.hide_inspector
+        wide && !self.worktrees_visible()
+            && self.tabs.model.active().is_some()
+            && !self.preferences.value.hide_inspector
     }
 
     /// Show or hide the Git inspector and remember the choice. A narrow window
@@ -692,6 +701,9 @@ impl Plait {
     }
 
     fn show_tab(&mut self, tab: Workspace, window: &mut Window, cx: &mut Context<Self>) {
+        if self.worktrees_visible() {
+            return;
+        }
         if !self.ensure_view_tab() {
             cx.notify();
             return;
@@ -812,7 +824,7 @@ impl Plait {
         _fullscreen: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if self.tabs.model.active().is_none() {
+        if self.tabs.model.active().is_none() || self.worktrees_visible() {
             return div().into_any_element();
         }
         let header = row()
@@ -1086,6 +1098,11 @@ impl Render for Plait {
             .on_action(cx.listener(Self::open_repository))
             .on_action(cx.listener(Self::refresh))
             .on_action(
+                cx.listener(|this, _: &worktrees_view::Worktrees, window, cx| {
+                    this.open_worktrees(this.visible_project_checkout().to_owned(), window, cx)
+                }),
+            )
+            .on_action(
                 cx.listener(|this, _: &Settings, window, cx| this.toggle_settings(window, cx)),
             )
             .on_action(cx.listener(|this, _: &ProjectSettings, window, cx| {
@@ -1307,7 +1324,9 @@ impl Render for Plait {
                             .when(self.workspace.inspector_note && !wide, |el| {
                                 el.child(self.inspector_note(cx))
                             })
-                            .child(if self.workspace.tab == Workspace::History {
+                            .child(if self.worktrees_visible() {
+                                self.worktrees_view(wide, cx)
+                            } else if self.workspace.tab == Workspace::History {
                                 self.history_view(wide, cx).into_any_element()
                             } else if self.workspace.tab == Workspace::Files {
                                 self.file_view(cx)

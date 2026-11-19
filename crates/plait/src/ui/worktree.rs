@@ -52,7 +52,7 @@ impl Plait {
                 );
                 return cx.notify();
             }
-            if pending.checkout == self.host.creation.checkout {
+            if pending.checkout == self.visible_project_checkout() {
                 pending.connection = self.host.connection.epoch;
                 return self.send_worktree(pending, window, cx);
             }
@@ -104,7 +104,7 @@ impl Plait {
         } else {
             self.default_approval()
         };
-        let root = self.host.creation.checkout.clone();
+        let root = self.visible_project_checkout().to_owned();
         let checkout = root.clone();
         let selection = self.host.thread.watch_epoch;
         let tab = self.tabs.model.active();
@@ -332,7 +332,10 @@ fn completion_visible<T: PartialEq>(
 ) -> bool {
     selection == current && tab.is_some() && tab == active
 }
-fn await_operation(client: &Client, request: &Request) -> Result<Operation, host::Error> {
+pub(super) fn await_operation(
+    client: &Client,
+    request: &Request,
+) -> Result<Operation, host::Error> {
     let expected = match request {
         Request::CreateWorktreeThread { request_id, .. }
         | Request::RemoveWorktree { request_id, .. } => request_id.clone(),

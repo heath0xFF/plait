@@ -230,8 +230,8 @@ impl Plait {
             .active()
             .and_then(|tab| self.tabs.model.get(tab))
             .is_some_and(|tab| {
-                matches!(tab.thread().target(),
-                plait_core::tabs::ThreadTarget::Existing { id: target, .. } if target == &id)
+                matches!(tab.session().target(),
+                plait_core::tabs::TabTarget::Existing { id: target, .. } if target == &id)
             });
         if bound {
             self.select_host_thread_content(id.clone(), window, cx);
@@ -267,7 +267,7 @@ impl Plait {
             return;
         };
         self.open_tab_target(
-            plait_core::tabs::ThreadTarget::Existing {
+            plait_core::tabs::TabTarget::Existing {
                 id,
                 checkout: self.tab_checkout(checkout),
             },

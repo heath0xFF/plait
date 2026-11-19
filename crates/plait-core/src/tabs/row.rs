@@ -93,6 +93,7 @@ pub struct RowContext<'a> {
 pub struct TabMetadata {
     pub id: TabId,
     pub title: String,
+    pub worktrees: bool,
     pub project: String,
     pub state: TabState,
     pub word: &'static str,
@@ -114,19 +115,21 @@ pub fn metadata(window: &WindowTabs, context: &RowContext<'_>) -> Vec<TabMetadat
         .zip(summaries)
         .enumerate()
         .map(|(index, (tab, summary))| {
-            let target = &tab.thread().target;
+            let target = &tab.session().target;
             let checkout = target.checkout();
             let same_host = &checkout.host == context.host;
             let active = window.active == Some(tab.id);
             let unread = summary.is_some_and(|t| context.navigation.unread.contains(&t.id));
-            let state = if !same_host || !tab.thread().connected() {
+            let state = if !same_host || !tab.session().connected() {
                 TabState::Offline
-            } else if target.is_draft() {
+            } else if target.is_draft() || target.is_worktrees() {
                 TabState::Idle
             } else {
                 summary.map_or(TabState::Unavailable, |t| summary_state(t, unread))
             };
-            let title = if target.is_draft() {
+            let title = if target.is_worktrees() {
+                "Worktrees"
+            } else if target.is_draft() {
                 "New thread"
             } else {
                 summary
@@ -141,15 +144,24 @@ pub fn metadata(window: &WindowTabs, context: &RowContext<'_>) -> Vec<TabMetadat
             let hover = format!(
                 "{title} · {project} / {}\n{}{}",
                 crate::display_text::escape(context.machine),
-                state.description(),
+                if target.is_worktrees() && state != TabState::Offline {
+                    "Project branches, worktrees and storage"
+                } else {
+                    state.description()
+                },
                 if archived { "\nArchived" } else { "" }
             );
             TabMetadata {
                 id: tab.id,
+                worktrees: target.is_worktrees(),
                 title,
                 project,
                 state,
-                word: state.word(active),
+                word: if target.is_worktrees() {
+                    ""
+                } else {
+                    state.word(active)
+                },
                 hover,
                 active,
                 unread,
@@ -182,8 +194,8 @@ fn tab_summaries<'a>(
         .tabs
         .iter()
         .enumerate()
-        .filter_map(|(i, tab)| match &tab.thread().target {
-            ThreadTarget::Existing { id, checkout } if &checkout.host == context.host => {
+        .filter_map(|(i, tab)| match &tab.session().target {
+            TabTarget::Existing { id, checkout } if &checkout.host == context.host => {
                 Some((id.as_str(), (i, checkout.root.as_path())))
             }
             _ => None,
@@ -712,7 +724,7 @@ mod tests {
         assert_eq!(rows[9].shortcut, Some(9));
         let mut w = window();
         w.open(
-            ThreadTarget::Draft {
+            TabTarget::Draft {
                 id: "draft".into(),
                 checkout: checkout("/repo"),
             },

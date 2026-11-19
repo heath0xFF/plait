@@ -476,7 +476,9 @@ adds a 36-point view row. Keyboard and sidebar commands dispatch to the
 model, while presentation remains in the single workspace container.
 The desktop hydrates only the active workspace; durable launch integration uses the separate tab-preference codec. `WindowTabs` owns an ordered collection of `TabRecord`s without an interactive count ceiling,
 one active ID, and a session-only stack of up to 20 closed bookmarks.
-`TabContent::Thread` is its only content variant. A thread identity includes
+`TabContent::Thread` and `TabContent::Worktrees` share tab identity, lifetime,
+residency and bounded bookmarks through `TabSession`. `TabTarget` identifies
+either a thread, a draft or one project Worktrees view. A thread identity includes
 its host and store; its expected checkout includes the host-supplied root verbatim
 and, when verified, directory device/inode. The additive `host_identity` read
 verifies the host before a first thread exists. Older hosts fall back to
@@ -556,6 +558,43 @@ virtual list with cached row indices; hidden drafts mount no views and add no
 per-frame work. The frame suite includes 300 open tabs and their virtual
 overflow, measuring CPU draw phases rather than GPU presentation.
 
+### Worktrees graph
+
+`ui/worktrees_view.rs` mounts one project graph only when its tab is active.
+Host inventory, the single hardened Git history read and storage walks run on
+background executors. Read stamps include tab lifetime, activation and host
+connection; a separate generation and cancellation flag retire in-flight work
+on refresh, hiding or closing. Completed old reads never install or start a
+measurement. Host activity events and explicit Refresh initiate reads; there
+is no polling. Hidden tabs retain only bookmarks and bounded size cache entries.
+
+`git/worktree/inventory.rs` supplies live host preservation facts using the
+same function as removal: changed/untracked/ignored paths, hidden index edits,
+remote-tracking publication and commits kept only by worktree refs/reflogs.
+The runtime adds creation ownership, recorded last-use time and busy refusals.
+The desktop never derives its own removal permission from Git status.
+`worktree_removal` owns ask, confirmation, exact request retry and result state;
+mutation replies settle their original operation even after navigation.
+
+`git::log::graph` reads at most 300 commits and parents from all checkout heads
+in one command. Pure `worktree_graph::layout` follows the trunk's first parents,
+assigns worktree segments, preserves merge-parent edges and leaves unavailable
+ancestry detached. Layout and labels are prepared on changes, never during
+render. A uniform list draws only visible commit/head rows, with stable semantic
+IDs and keyboard selection. More lanes widen the scrollable graph. The frame
+suite's fifty-worktree case measures cached graph rendering, layout, prepaint
+and paint with no host, Git or storage work; it does not measure GPU presentation.
+
+`worktree_size` bounds each no-follow walk to 50,000 entries and 250 ms between
+filesystem calls, including private build cache. It excludes `.git`, deduplicates
+hard links within a walk and classifies conventional top-level output directories.
+Values are logical bytes, not exclusive physical allocation. A 256-entry cache
+keys directory identity, head, changed count, last use and removed state.
+Refresh clears it; removed worktrees retain cache-only accounting. Partial
+results remain lower bounds. Cancellation is checked between entries; a blocking
+filesystem call is not preempted. Selected path and sorting use a Worktrees
+bookmark, without loading a thread workspace.
+
 ### Tab preferences codec
 
 `tabs::persistence` supplies pure encode/decode functions for a separate
@@ -567,7 +606,7 @@ examines at most 10,000 entries. These limits bound untrusted disk input. Corrup
 threads, mismatched host/store/checkout identities, invalid bookmarks, and
 duplicates produce a valid window with unrestorable tabs omitted. A missing
 active entry selects the first surviving tab. Every restored tab starts cold.
-Encoding saves every open thread tab whatever the current listing holds, so a
+Encoding saves every open thread or Worktrees tab whatever the current listing holds, so a
 save during loading or reconnection cannot erase tabs; only drafts not known to
 be recoverable are left out.
 

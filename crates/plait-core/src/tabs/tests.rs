@@ -18,14 +18,14 @@ pub(super) fn checkout(root: &str) -> CheckoutKey {
         }),
     }
 }
-pub(super) fn target(id: &str) -> ThreadTarget {
-    ThreadTarget::Existing {
+pub(super) fn target(id: &str) -> TabTarget {
+    TabTarget::Existing {
         id: id.into(),
         checkout: checkout("/repo"),
     }
 }
-pub(super) fn draft(id: &str) -> ThreadTarget {
-    ThreadTarget::Draft {
+pub(super) fn draft(id: &str) -> TabTarget {
+    TabTarget::Draft {
         id: id.into(),
         checkout: checkout("/repo"),
     }
@@ -68,7 +68,7 @@ fn opens_append_and_sidebar_activation_deduplicates_without_resetting() {
     assert_eq!(open(&mut w, "a"), a);
     assert_eq!(w.read_stamp(a), Some(stamp));
     assert_eq!(
-        w.get(a).unwrap().thread().bookmark().view(),
+        w.get(a).unwrap().session().bookmark().view(),
         ThreadView::Files
     );
     assert_eq!(w.get(a).unwrap().content().view_commands().len(), 4);
@@ -87,7 +87,7 @@ fn independent_drafts_and_creation_keeps_tab_but_changes_lifetime() {
     assert!(!w.accepts_lifetime(old.lifetime));
     assert!(!w.accepts_read(old));
     assert_eq!(
-        w.get(a).unwrap().thread().bookmark().view(),
+        w.get(a).unwrap().session().bookmark().view(),
         ThreadView::Changes
     );
     assert_eq!(open(&mut w, "created"), a);
@@ -103,7 +103,7 @@ fn draft_creation_rejects_wrong_checkout_existing_thread_and_stale_ack() {
     assert_eq!(
         w.bind_created(
             a,
-            ThreadTarget::Existing {
+            TabTarget::Existing {
                 id: "c".into(),
                 checkout: checkout("/other")
             }
@@ -124,7 +124,7 @@ fn identical_thread_ids_on_other_hosts_are_distinct_but_checkout_rebinding_is_re
     let mut other = checkout("/other");
     assert_eq!(
         w.open(
-            ThreadTarget::Existing {
+            TabTarget::Existing {
                 id: "a".into(),
                 checkout: other.clone()
             },
@@ -135,7 +135,7 @@ fn identical_thread_ids_on_other_hosts_are_distinct_but_checkout_rebinding_is_re
     other.host.id = "other-host".into();
     let b = w
         .open(
-            ThreadTarget::Existing {
+            TabTarget::Existing {
                 id: "a".into(),
                 checkout: other,
             },
@@ -153,12 +153,12 @@ fn only_active_tab_retains_stage_one_scopes_and_old_reads_cannot_cross_a_b_a() {
     w.resident_mut(old).unwrap().repository.history.selected = Some("loaded-patch".into());
     assert!(w.finish_activation(old));
     assert!(matches!(
-        w.get(a).unwrap().thread().residency(),
+        w.get(a).unwrap().session().residency(),
         Residency::Ready { .. }
     ));
     let b = open(&mut w, "b");
     assert!(matches!(
-        w.get(a).unwrap().thread().residency(),
+        w.get(a).unwrap().session().residency(),
         Residency::Cold { .. }
     ));
     assert!(w.resident_mut(old).is_none());
@@ -175,7 +175,7 @@ fn only_active_tab_retains_stage_one_scopes_and_old_reads_cannot_cross_a_b_a() {
             .is_none()
     );
     assert!(matches!(
-        w.get(b).unwrap().thread().residency(),
+        w.get(b).unwrap().session().residency(),
         Residency::Cold { .. }
     ));
     assert!(w.accepts_lifetime(old.lifetime));
@@ -245,7 +245,7 @@ fn reopen_restores_position_and_bookmark_with_fresh_identity() {
     assert!(!w.accepts_read(old));
     assert!(!w.accepts_lifetime(old.lifetime));
     assert_eq!(
-        w.get(reopened).unwrap().thread().bookmark().view(),
+        w.get(reopened).unwrap().session().bookmark().view(),
         ThreadView::History
     );
 }
@@ -265,7 +265,7 @@ fn reopen_skips_missing_and_deduplicates_newly_opened_tabs_without_overwriting_t
     );
     assert_eq!(w.tabs().len(), 1);
     assert_eq!(
-        w.get(next_a).unwrap().thread().bookmark().view(),
+        w.get(next_a).unwrap().session().bookmark().view(),
         ThreadView::Files
     );
     assert_eq!(w.reopen(|_| Some(None)).unwrap(), None);
@@ -287,7 +287,7 @@ fn closed_history_is_twenty_and_empty_drafts_are_not_retained() {
     for i in (5..25).rev() {
         let a = w.reopen(|_| Some(Some(1))).unwrap().unwrap();
         assert_eq!(
-            w.get(a).unwrap().thread().target(),
+            w.get(a).unwrap().session().target(),
             &target(&format!("t{i}"))
         );
     }
@@ -351,7 +351,7 @@ fn project_removal_purges_only_exact_checkouts_and_their_closed_history() {
     let a = open(&mut w, "a");
     let b = w
         .open(
-            ThreadTarget::Existing {
+            TabTarget::Existing {
                 id: "b".into(),
                 checkout: checkout("/other"),
             },
@@ -378,7 +378,7 @@ fn disconnect_keeps_identity_bookmarks_and_order_but_reconnect_loads_only_active
     assert!(
         w.tabs()
             .iter()
-            .all(|t| matches!(t.thread().residency(), Residency::Cold { .. }))
+            .all(|t| matches!(t.session().residency(), Residency::Cold { .. }))
     );
     w.reconnected(
         &HostKey {
@@ -394,7 +394,7 @@ fn disconnect_keeps_identity_bookmarks_and_order_but_reconnect_loads_only_active
     assert!(!w.accepts_read(stamp));
     assert!(w.read_stamp(a).is_none());
     assert_eq!(
-        w.get(a).unwrap().thread().bookmark().view(),
+        w.get(a).unwrap().session().bookmark().view(),
         ThreadView::Changes
     );
 }
@@ -426,7 +426,7 @@ fn limits_and_invalid_operations_preserve_the_window() {
 fn cold_budget_counts_capacity_not_only_length() {
     let mut w = window();
     let mut oversized = target("a");
-    if let ThreadTarget::Existing { id, .. } = &mut oversized {
+    if let TabTarget::Existing { id, .. } = &mut oversized {
         id.reserve(COLD_TAB_BYTES);
     }
     assert_eq!(w.open(oversized, None), Err(TabError::BookmarkTooLarge));
@@ -449,7 +449,7 @@ fn bookmarks_round_trip_all_views_and_semantic_locations() {
         w.save_bookmark(a, saved.clone()).unwrap();
         open(&mut w, "b");
         w.activate(a).unwrap();
-        assert_eq!(w.get(a).unwrap().thread().bookmark(), &saved);
+        assert_eq!(w.get(a).unwrap().session().bookmark(), &saved);
         assert_eq!(decode_extended(&encode_extended(&b).unwrap()), Some(b));
     }
 }
@@ -555,13 +555,13 @@ fn large_bookmarks_require_explicit_storage_and_keep_full_payload_in_codec() {
 fn invalid_bookmarks_are_rejected_without_replacing_saved_state() {
     let mut w = window();
     let a = open(&mut w, "a");
-    let old = w.get(a).unwrap().thread().bookmark().clone();
+    let old = w.get(a).unwrap().session().bookmark().clone();
     let bad = BookmarkRecord::Inline {
         view: ThreadView::Files,
         json: "{}".into(),
     };
     assert_eq!(w.save_bookmark(a, bad), Err(TabError::InvalidBookmark));
-    assert_eq!(w.get(a).unwrap().thread().bookmark(), &old);
+    assert_eq!(w.get(a).unwrap().session().bookmark(), &old);
     for path in ["../x", "/x", "x/../y", "x//y", "./x", "x\0y"] {
         let mut b = ThreadBookmark::default();
         b.files.path = Some(path.into());
@@ -575,7 +575,7 @@ fn invalid_bookmarks_are_rejected_without_replacing_saved_state() {
 fn removing_many_project_tabs_selects_original_right_survivor() {
     let mut w = window();
     let a = open(&mut w, "a");
-    let external = |id: &str| ThreadTarget::Existing {
+    let external = |id: &str| TabTarget::Existing {
         id: id.into(),
         checkout: checkout("/other"),
     };
@@ -633,12 +633,12 @@ fn mixed_transition_sequences_keep_unique_content_and_at_most_one_resident() {
         assert!(w.closed_len() <= CLOSED_TAB_LIMIT);
         for (index, tab) in w.tabs().iter().enumerate() {
             assert!(tab.cold_bytes() <= COLD_TAB_BYTES);
-            assert!(
-                w.tabs()[index + 1..]
-                    .iter()
-                    .all(|other| !tab.thread().target().same_content(other.thread().target()))
-            );
-            if tab.thread().residency.visibility().is_some() {
+            assert!(w.tabs()[index + 1..].iter().all(|other| {
+                !tab.session()
+                    .target()
+                    .same_content(other.session().target())
+            }));
+            if tab.session().residency.visibility().is_some() {
                 assert_eq!(w.active(), Some(tab.id()));
             }
         }
@@ -697,7 +697,7 @@ fn closing_a_thread_again_replaces_its_older_history_entry() {
     assert_eq!(w.closed_len(), 1);
     let b = w.reopen(|_| Some(Some(1))).unwrap().unwrap();
     assert_eq!(
-        w.get(b).unwrap().thread().bookmark().view(),
+        w.get(b).unwrap().session().bookmark().view(),
         ThreadView::History
     );
     // Nothing else was closed, so a second reopen must not just refocus b.
@@ -713,7 +713,7 @@ fn verifying_a_session_host_preserves_order_bookmarks_and_closed_history() {
         id: "session-1".into(),
         store: "/".into(),
     };
-    let target = |id: &str| ThreadTarget::Existing {
+    let target = |id: &str| TabTarget::Existing {
         id: id.into(),
         checkout: CheckoutKey {
             host: provisional.clone(),
@@ -738,8 +738,8 @@ fn verifying_a_session_host_preserves_order_bookmarks_and_closed_history() {
     w.verify_session_host(&provisional, &host(), std::slice::from_ref(&checkout))
         .unwrap();
     assert_eq!(w.active(), Some(a));
-    assert_eq!(w.get(a).unwrap().thread().bookmark(), &bookmark);
-    assert_eq!(w.get(a).unwrap().thread().target().checkout(), &checkout);
+    assert_eq!(w.get(a).unwrap().session().bookmark(), &bookmark);
+    assert_eq!(w.get(a).unwrap().session().target().checkout(), &checkout);
     assert!(!w.accepts_read(old));
     let reopened = w
         .reopen(|target| (target.checkout() == &checkout).then_some(Some(1)))
@@ -754,7 +754,7 @@ fn worktree_creation_only_binds_the_expected_draft_and_never_steals_focus() {
     let a = w.open(draft("draft"), Some(1)).unwrap();
     let other = open(&mut w, "other");
     let original = checkout("/repo");
-    let target = ThreadTarget::Existing {
+    let target = TabTarget::Existing {
         id: "isolated".into(),
         checkout: checkout("/repo.worktrees/thread"),
     };
@@ -763,7 +763,7 @@ fn worktree_creation_only_binds_the_expected_draft_and_never_steals_focus() {
         Err(TabError::IdentityMismatch)
     );
     let mut foreign = target.clone();
-    if let ThreadTarget::Existing { checkout, .. } = &mut foreign {
+    if let TabTarget::Existing { checkout, .. } = &mut foreign {
         checkout.host.id = "different-host".into();
     }
     assert_eq!(
@@ -771,7 +771,7 @@ fn worktree_creation_only_binds_the_expected_draft_and_never_steals_focus() {
         Err(TabError::IdentityMismatch)
     );
     let mut unknown = target.clone();
-    if let ThreadTarget::Existing { checkout, .. } = &mut unknown {
+    if let TabTarget::Existing { checkout, .. } = &mut unknown {
         checkout.directory = None;
     }
     assert_eq!(
@@ -785,7 +785,7 @@ fn worktree_creation_only_binds_the_expected_draft_and_never_steals_focus() {
     w.bind_worktree_created(a, &original, target.clone())
         .unwrap();
     assert_eq!(w.active(), Some(other));
-    assert_eq!(w.get(a).unwrap().thread().target(), &target);
+    assert_eq!(w.get(a).unwrap().session().target(), &target);
     assert_eq!(
         w.bind_worktree_created(a, &original, target),
         Err(TabError::InvalidIdentity)
@@ -804,7 +804,7 @@ fn three_hundred_drafts_close_in_every_order_without_sharing_identity() {
         assert_eq!(
             w.tabs()
                 .iter()
-                .filter(|t| t.thread().residency.visibility().is_some())
+                .filter(|t| t.session().residency.visibility().is_some())
                 .count(),
             1
         );
@@ -834,7 +834,7 @@ fn closed_draft_creation_reopens_the_created_thread_without_stealing_focus() {
     assert_eq!(w.active(), Some(b));
     let reopened = w.reopen(|_| Some(Some(1))).unwrap().unwrap();
     assert_eq!(
-        w.get(reopened).unwrap().thread().target(),
+        w.get(reopened).unwrap().session().target(),
         &target("created-a")
     );
 }
@@ -849,16 +849,58 @@ fn moving_a_draft_keeps_its_id_and_siblings_and_reserves_read_generations() {
     checkout.root = "/other-project".into();
     w.move_draft(b, checkout.clone()).unwrap();
     assert_eq!(w.active(), Some(b));
-    assert_eq!(w.get(a).unwrap().thread().target(), &draft("a"));
+    assert_eq!(w.get(a).unwrap().session().target(), &draft("a"));
     assert!(
-        matches!(w.get(b).unwrap().thread().target(), ThreadTarget::Draft { id, checkout: root } if id == "b" && root == &checkout)
+        matches!(w.get(b).unwrap().session().target(), TabTarget::Draft { id, checkout: root } if id == "b" && root == &checkout)
     );
     assert!(!w.accepts_read(before));
-    let target = w.get(b).unwrap().thread().target().clone();
+    let target = w.get(b).unwrap().session().target().clone();
     w.serial = u64::MAX - 1;
     assert_eq!(
         w.move_draft(b, draft("b").checkout().clone()),
         Err(TabError::IdentityExhausted)
     );
-    assert_eq!(w.get(b).unwrap().thread().target(), &target);
+    assert_eq!(w.get(b).unwrap().session().target(), &target);
+}
+
+#[test]
+fn worktrees_share_every_window_transition_without_becoming_threads() {
+    let mut w = window();
+    let thread = open(&mut w, "thread");
+    let trees = TabTarget::Worktrees {
+        checkout: checkout("/repo"),
+    };
+    let tab = w.open(trees.clone(), Some(1)).unwrap();
+    assert_eq!(w.open(trees.clone(), Some(1)).unwrap(), tab);
+    assert!(w.get(tab).unwrap().content().view_commands().is_empty());
+    let old = w.read_stamp(tab).unwrap();
+    w.previous_tab().unwrap();
+    assert_eq!(w.active(), Some(thread));
+    assert!(!w.accepts_read(old));
+    w.jump(9).unwrap();
+    assert_eq!(w.active(), Some(tab));
+    assert!(!w.accepts_read(old));
+    w.move_tab(tab, 0).unwrap();
+    w.next_tab().unwrap();
+    w.activate(tab).unwrap();
+    let closed = w.read_stamp(tab).unwrap();
+    w.close(tab, false).unwrap();
+    assert!(!w.accepts_read(closed));
+    let reopened = w.reopen(|_| Some(Some(2))).unwrap().unwrap();
+    assert_ne!(reopened, tab);
+    assert_eq!(w.get(reopened).unwrap().session().target(), &trees);
+    w.disconnected(&host());
+    assert!(w.read_stamp(reopened).is_none());
+    w.reconnected(&host(), 3).unwrap();
+    assert!(w.read_stamp(reopened).is_some());
+    assert!(w.bind_created(reopened, target("another")).is_err());
+    assert!(w.move_draft(reopened, checkout("/elsewhere")).is_err());
+    w.thread_deleted(&ThreadKey {
+        host: host(),
+        id: "thread".into(),
+    })
+    .unwrap();
+    assert_eq!(w.tabs().len(), 1);
+    w.project_removed(&[checkout("/repo")]).unwrap();
+    assert!(w.tabs().is_empty());
 }

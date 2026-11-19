@@ -400,6 +400,13 @@ pub fn run() -> Vec<Row> {
     let _ = std::fs::remove_dir_all(&scratch);
     let mut rows = Vec::new();
     baseline(&scratch, &mut rows);
+    {
+        let repo = fixture_repository(&scratch.join("worktrees"));
+        let mut h = Harness::new(&repo, None, 1380., 860.);
+        h.connect(&repo, false);
+        super::worktrees_view::install(&mut h, 51);
+        rows.push(h.steady("worktrees: fifty lanes, cached graph and sizes, visible rows only"));
+    }
 
     let heavy = heavy_repository(&scratch.join("heavy"));
     let mut harness = Harness::new(&heavy, None, 1380., 860.);

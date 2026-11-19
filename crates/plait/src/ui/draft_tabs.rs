@@ -12,7 +12,7 @@ use plait_core::{
         harness::HarnessId,
     },
     session::{DraftSettings, DraftTabCreation, Thread},
-    tabs::ThreadTarget,
+    tabs::TabTarget,
 };
 
 pub(super) struct Pending {
@@ -456,7 +456,7 @@ impl Plait {
         let (receipt, reply) = ready;
         let draft_id = created.draft_id.unwrap();
         let view = self.workspace.tab;
-        let in_front = active && self.tabs.model.active().and_then(|tab| self.tabs.model.get(tab)).is_some_and(|tab| matches!(tab.thread().target(), ThreadTarget::Draft { id, .. } if id == &draft_id));
+        let in_front = active && self.tabs.model.active().and_then(|tab| self.tabs.model.get(tab)).is_some_and(|tab| matches!(tab.session().target(), TabTarget::Draft { id, .. } if id == &draft_id));
         let id = reply.thread.id.clone();
         let source_root = created.checkout.unwrap();
         let source = self.tab_checkout(source_root.clone());
@@ -484,11 +484,11 @@ impl Plait {
                 .insert(0, host::ThreadSummary::from(&reply.thread));
             self.rebuild_projects(cx);
         }
-        let target = ThreadTarget::Existing {
+        let target = TabTarget::Existing {
             id: id.clone(),
             checkout: self.tab_checkout(reply.thread.checkout.clone()),
         };
-        let draft_target = ThreadTarget::Draft {
+        let draft_target = TabTarget::Draft {
             id: draft_id.clone(),
             checkout: source,
         };

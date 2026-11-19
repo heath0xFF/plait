@@ -376,6 +376,54 @@ cancels the wait before the harness starts. When the machine runs out of a
 resource, the run fails with an explicit error and waits for a deliberate
 retry. There is no hidden queue.
 
+### Worktrees
+
+Choose **Worktrees** from a project's sidebar menu, the command palette,
+Project settings, or the worktree line above a thread. One Worktrees tab opens
+per project per window; opening it again brings that tab forward. Its branch
+mark distinguishes it from thread tabs. Closing it leaves all checkouts intact.
+Tab order, selected lane and lane sorting return after restart.
+
+The graph shows the main checkout's current branch as a trunk and each worktree
+as a lane. Commit rows show hash, subject and age. Head labels show the owning
+thread and its tab state, branch, preservation facts and size. **Merged** means
+the head is reachable from the trunk; **Detached** means the recorded fork
+cannot be connected in the available history. Hollow nodes count uncommitted
+changes. History is capped at 300 commits; a clipped graph says **Older commits
+not shown**. External worktrees are labelled plainly and cannot be removed here.
+
+Select a lane with the pointer or Tab and Return/Space. Its detail appears beside
+the graph in wide windows and below in narrow windows. **Open** brings its thread
+forward. **Finder** shows the checkout folder; **Terminal** uses the terminal
+chosen in Settings. **Remove** is available only when the host's current checks
+permit it. Hover explains a refusal in the host's words. Removal asks once with
+**Remove** and **Cancel**, then reports the result. A later refusal is preserved;
+a lost reply says unconfirmed and **Refresh** recovers the same request.
+Branches, thread history and private build caches remain. Removed records retain
+cache accounting and say **Removed**. Nothing is removed automatically.
+
+**Last used** and **Size** sort lanes, keeping the main checkout first. Last used
+is recorded thread activity, not a filesystem access time. **Refresh** rereads
+state and measures again. Measurements run only while this tab is visible,
+without polling, and are cached until the head, directory identity, recorded
+activity or change count changes. Each walk stops after 50,000 entries or a
+250 ms deadline checked between entries; a blocked filesystem call can finish
+later. A stopped walk says **over** its measured lower bound.
+
+Sizes are logical file bytes, not a promise of reclaimed disk space. Source
+excludes Git metadata and top-level `target`, `build`, `dist`, `.next` and
+`node_modules`; those directories and the thread's private cache count as build
+output. Symlinks are not followed, and hard links within a measurement count
+once. Copy-on-write sharing and caches shared across checkouts cannot be
+apportioned reliably. The neutral split bar compares the selected checkout to
+the largest measured checkout; the header totals the available measurements.
+
+An empty project explains **Own worktree** in the busy-project choice and
+**New Thread in Worktree**. An older or disconnected host explains what is
+needed. Missing folders stay visible and cannot be removed through this view.
+Publication facts reflect the last fetch. Work returns through commit, push
+and pull request.
+
 ### Codex and Claude Code threads
 
 Source builds from `main` with a matching host can run a thread in Codex or
@@ -765,7 +813,7 @@ the default. Both shortcuts can be changed in Settings → Keyboard.
 ### Tabs
 
 The 40-point top row holds the native window buttons, sidebar toggle, thread
-tabs, and New tab control. It stays visible with the sidebar hidden. Drag the
+and Worktrees tabs, and New tab control. It stays visible with the sidebar hidden. Drag the
 empty right end to move the window; double-clicking it follows the system's
 title-bar preference. The 36-point second row holds the active thread's
 project, branch, four views, and inspector toggle. An empty workspace has no

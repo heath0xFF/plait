@@ -113,7 +113,7 @@ impl Plait {
         self.state
             .projects
             .iter()
-            .find(|project| project.checkout == self.project_of(&self.host.creation.checkout))
+            .find(|project| project.checkout == self.project_of(self.visible_project_checkout()))
             .unwrap_or(&self.state.projects[0])
     }
 
@@ -700,9 +700,11 @@ impl Plait {
             let checkout = PathBuf::from(path);
             let select = checkout.clone();
             let configure = checkout.clone();
+            let trees = checkout.clone();
             let hide = checkout.clone();
             panel = panel.child(tag("project-menu-heading", "Project", colors().muted))
                 .child(button("project-open", "Open project").on_activate(cx, move |this, window, cx| { this.navigation.menu = None; this.change_checkout(select.clone(), window, cx); }))
+                .child(button("project-worktrees", "Worktrees").on_activate(cx, move |this,window,cx| this.open_worktrees(trees.clone(),window,cx)))
                 .child(button("project-settings", "Project settings…").on_activate(cx, move |this, window, cx| {
                     this.navigation.menu = None;
                     this.show_settings_for_project(configure.clone(), window, cx);
@@ -723,6 +725,7 @@ impl Plait {
             let rename = id.clone();
             let archive = id.clone();
             let archived = thread.archived == Some(true);
+            let worktrees = thread.checkout.clone();
             let tree = self.preferences.value.navigation.worktree(&thread.checkout);
             let branch = tree.map(|tree| tree.branch.clone());
             let remove = thread.checkout.clone();
@@ -755,6 +758,14 @@ impl Plait {
                             colors().subtle,
                         )
                         .truncate(),
+                    )
+                    .child(
+                        button("thread-worktrees", "Worktrees").on_activate(
+                            cx,
+                            move |this, window, cx| {
+                                this.open_worktrees(worktrees.clone(), window, cx)
+                            },
+                        ),
                     )
                     .child(
                         button("thread-remove-worktree", "Remove worktree…")
