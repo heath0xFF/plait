@@ -3,6 +3,7 @@ mod actions;
 mod appearance;
 mod branches;
 mod changes;
+mod cleanup;
 mod commands;
 mod commit_panel;
 mod commits;
@@ -149,6 +150,7 @@ pub struct Plait {
     /// Open in Editor, Show in Finder, and Open Terminal Here.
     ways_out: ways_out::WaysOut,
     policy: settings_policy::PolicyState,
+    cleanup: cleanup::CleanupState,
     agent: settings_agent::AgentState,
     harnesses: harnesses::HarnessesState,
     providers: settings_providers::ProviderState,
@@ -219,6 +221,7 @@ impl Plait {
             editor_settings: Default::default(),
             ways_out: Default::default(),
             policy: Default::default(),
+            cleanup: Default::default(),
             agent: Default::default(),
             harnesses: Default::default(),
             providers: Default::default(),
@@ -262,6 +265,7 @@ impl Plait {
         cx.observe_self(|this, cx| {
             this.sync_picker(cx);
             this.sync_policy(cx);
+            this.sync_cleanup(cx);
             this.sync_agent(cx);
             this.sync_project_settings(cx);
             this.sync_harnesses(cx);
@@ -850,6 +854,7 @@ impl Plait {
                             .into()
                     }),
             )
+            .children(self.cleanup_control(cx))
             .child(self.workspace_switch(cx))
             .child(
                 icon_button(

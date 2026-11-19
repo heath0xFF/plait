@@ -536,8 +536,20 @@ busy. No control or Git verb was added, and a second run
 in a busy checkout is still refused. Not yet excluded: a Codex or Claude Code
 process that keeps running after its run has ended (Stage 6b).
 
-**Still planned:** other tab content kinds, harness stop/cleanup quiescence and
-quarantine (Stage 6b), busy-checkout
+**Built for concurrency foundation (Stage 6b — cleanup confirmation):**
+run and undo admission persist inode-keyed cleanup markers; unconfirmed cleanup
+blocks both runs and desktop Git changes across host restarts and stores.
+Command/MCP/record guardians verify normal-group absence, Claude cleanup waits
+for actual process exit, and a Codex interrupt timeout retains exclusion until
+a terminal acknowledgement or verified server exit. Late evidence clears the
+state automatically; otherwise the person uses **Stop unconfirmed** → **Confirm
+stopped** after checking remaining processes. Deliberately detached writers in
+trusted and external-harness runs remain an explicit limitation. Clean runs
+are unchanged; unrelated checkouts keep working. Scripted process tests and
+native offscreen scenes cover this behavior; live harness and installed-window
+acceptance are separate. See [the cleanup contract](HOST.md#cleanup-confirmation-and-quarantine).
+
+**Still planned:** other tab content kinds, busy-checkout
 admission and independent multi-checkout capacity (Stage 8), a durable checkout
 queue (Stage 9), enforced Pi read-in-place (Stage 10), copy-on-write artifact
 seeding (Stage 11), and worktree storage accounting and cleanup (Stage 12).

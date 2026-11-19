@@ -434,6 +434,7 @@ impl Plait {
                                 });
                                 this.turn_records_snapshot(window, cx);
                                 if review_changed {
+                                    this.refresh_cleanup(cx);
                                     this.refresh_turn_review(cx);
                                 }
                                 this.conversation_changed(window, cx);
@@ -818,6 +819,7 @@ impl Plait {
                         if matches!(error, host::Error::Rejected(_)) {
                             this.host.submissions.finish(&id, &pending.request_id);
                             this.set_thread_notice(id.clone(), error.to_string(), true);
+                            this.refresh_cleanup(cx);
                         } else {
                             this.host
                                 .submissions

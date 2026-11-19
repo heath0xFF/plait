@@ -168,7 +168,8 @@ follow-ups get new pairs. The `records` and `record_paths` tables in
 coverage exclusions. Before-record failure prevents harness startup and holds
 the queue; after-record failure disables future undo for that run. Startup
 recovery marks a late after record as possibly including changes while the host
-was down, and uses the checkout lease.
+was down, and uses the checkout lease. A durable cleanup marker defers that
+recovery until process cleanup is confirmed.
 
 The Rust host exposes internal `record` and `prune` helpers, running the headless
 core's Git recorder in a macOS Seatbelt process. Private Git stores are separated
@@ -614,6 +615,25 @@ verified identity, which the lease checks under the lock. Turn undo takes the
 same exclusive lease in the runtime, and `plait-host undo` accepts it only if it
 is already exclusive; a run takes the writer class. The hardened Git functions
 underneath are unchanged.
+
+`lease/cleanup.rs` stores private, inode-keyed cleanup markers beside the lease
+files. A run/undo saves its marker before starting effects, and lease admission
+checks it for both runtime and desktop mutations. Unconfirmed cleanup retains
+logical exclusion after OS handles close, including across host stores and
+restarts. Only a matching token under exclusive recovery ownership can clear a
+marker; a damaged save fails closed. `runtime/src/cleanup.ts` collects positive
+cleanup receipts independently from turn/tool outcomes. Guardians acknowledge
+normal process-group absence over a private descriptor; Claude's pinned SDK
+spawn hook exposes actual process exit; Codex retains its terminal route after
+an interrupt timeout without killing a shared server. Late proof clears the
+marker; unavailable proof requires explicit confirmation. External detached
+writers remain outside the normal-group guarantee.
+
+The additive cleanup read/resolve contract is in [HOST](HOST.md#cleanup-confirmation-and-quarantine).
+`ui/cleanup.rs` fetches it on the background executor with checkout identity,
+connection and generation guards. Only an unconfirmed checkout gets a header
+control, with its explanation in hover text; it refreshes while uncertainty is
+visible. Render performs no filesystem, process or socket work.
 
 Branches are read with `for-each-ref` over `refs/heads/`, newest committer
 date first, at most 500, when the branch palette opens, never on a status

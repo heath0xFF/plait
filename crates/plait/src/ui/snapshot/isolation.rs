@@ -60,6 +60,21 @@ pub(super) fn walk(
         plait.state.repository.write_mut().note = Some((CHECKOUT_BUSY.into(), true));
     });
     harness.capture(&format!("isolation-wait-{suffix}"));
+    harness.update(|plait, _, _| {
+        plait.cleanup.key = Some((
+            plait.host.connection.epoch,
+            plait.host.creation.generation,
+            plait.host.creation.checkout.clone(),
+        ));
+        plait.cleanup.value = Some(plait_core::lease::cleanup::Cleanup {
+            token: "sample-cleanup".into(),
+            reason: "Codex did not confirm its turn ended and its app-server has not exited."
+                .into(),
+        });
+        plait.state.repository.write_mut().note =
+            Some((plait.cleanup.value.as_ref().unwrap().message(), true));
+    });
+    harness.capture(&format!("isolation-cleanup-uncertain-{suffix}"));
 
     let mut creation = Harness::new(repository, output, width, height);
     creation.connect(repository, false);

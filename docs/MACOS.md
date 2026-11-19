@@ -873,6 +873,20 @@ stays unavailable until every conflict is marked resolved. If a hook or filter
 takes longer than its limit (60 seconds for staging, 120 for a commit), Plait
 stops it and says so.
 
+If Plait cannot confirm a run's processes stopped, its checkout stays blocked
+for new runs and Git changes. The header shows **Stop unconfirmed**. Hover it
+to see the checkout and what Plait could not confirm. The state clears itself
+when the missing confirmation arrives. This does not affect other checkouts.
+
+If it remains, check for commands, servers, or builds still using that folder
+and stop them. Click **Stop unconfirmed**, then **Confirm stopped** only when
+you have checked. This acknowledges the uncertainty; it does not kill a process
+or bypass a still-held checkout lease. A host restart during a run can require
+this check. Interrupted work is never replayed, and queued inputs remain held.
+Trusted commands and external harnesses may deliberately detach a process that
+Plait cannot see; the [host guide](HOST.md#cleanup-confirmation-and-quarantine)
+describes that boundary.
+
 To ask a thread about specific lines, click a line number in the diff, and
 Shift-click another to extend the pick. **Ask about this** puts a reference such
 as `src/main.rs:10-12` and the picked lines, as a fenced diff, at the end of the

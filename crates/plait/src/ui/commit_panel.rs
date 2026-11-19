@@ -203,6 +203,9 @@ impl Plait {
         owner: plait_core::state::CheckoutId,
         cx: &mut Context<Self>,
     ) {
+        if owner == self.state.checkout_id() {
+            self.refresh_cleanup(cx);
+        }
         let committed = self
             .state
             .write_for(owner)

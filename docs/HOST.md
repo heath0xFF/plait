@@ -1467,7 +1467,8 @@ Caches have no automatic eviction or size quota. To discard one, stop the host
 and remove only that thread's `STORE/build-cache/THREAD_ID` directory.
 
 Commands must not daemonize or start background services. A Rust guardian kills
-the normal shell process group on Stop, host/Node death, timeout, or shell exit.
+the normal shell process group on Stop, host/Node death, timeout, or shell exit,
+then checks that the group no longer exists before issuing a private cleanup receipt.
 An intentionally detached descendant can evade group cleanup, but still cannot
 write the checkout or outside that command's scratch and thread cache. This is
 not a general process container.
@@ -1515,11 +1516,10 @@ those its Git process can outlive the lease. When every holder has exited, by
 a crash included, the kernel releases the lease, and a holder dropping it
 normally releases it for all of them. Harness processes do not hold it: the Codex
 app-server, Claude Code and anything they start run without the descriptors, so
-if one keeps running after its run has ended (a Stop whose interrupt times out,
-or the runtime killed), the checkout is free while it may still write. A Pi
-command that detaches from its process group is the same. Proving that a
-harness has stopped, and keeping the checkout busy until it has, is planned
-work (Stage 6b in `ROADMAP.md`).
+a durable cleanup marker retains exclusion when their turn or process cleanup
+cannot be confirmed, including after runtime death. A Pi command or external
+harness that deliberately detaches from its process group remains the
+explicit limit described in the cleanup contract below.
 
 All shipped runs are writers: one active run per checkout and eight active
 checkouts per host, as before. No reader run ships; the reader class exists in
@@ -1564,6 +1564,71 @@ Use [Contributing](../CONTRIBUTING.md#required-checks) for focused commands and
 and live-model checks. Do not substitute scripted lifecycle fixtures for the
 actual platform containment tests.
 
+## Cleanup confirmation and quarantine
+
+Stop revokes approvals immediately. Completion of a request, an SDK `close()`
+call, a signal being sent, and an elapsed timeout are not evidence that the
+processes stopped. Plait checks the process groups it starts and retains a
+checkout-scoped cleanup obligation until it has positive evidence. Ordinary
+completion and a clean Stop need no additional action.
+
+| Path | Ordinary finish | Stop or timeout | Harness/helper crash | Host restart mid-run |
+| --- | --- | --- | --- | --- |
+| Pi model and file tools | Pi closes; an admitted atomic file helper exits; recording finishes | Authorization is revoked; Pi closes; any admitted atomic edit finishes before release | A closed helper has no writer descendants; failed cleanup remains blocked | Durable marker blocks the checkout; no effect is replayed |
+| Pi trusted command | Guardian kills the shell's remaining group, waits for absence, and acknowledges | EOF on the lifetime pipe triggers group kill; the 15-minute deadline uses the same path | Known group is checked after guardian exit; missing or unverifiable group information remains blocked | Guardian normally kills the group on Node death, but a new host cannot recover its private receipt; confirmation is required |
+| Pi sandboxed command | Same group verification; descendants remain unable to write the checkout even if detached | Same lifetime/deadline path | Same verification; containment does not turn a missing receipt into an exit claim | Same durable exclusion; sandbox policy still restricts surviving descendants |
+| Pi stdio MCP | Guardian checks the server group when its run closes | Revocation closes the lifetime pipe; group is killed and checked | Missing confirmation blocks the checkout | Durable marker survives; external HTTP service effects are not local process-exit proof |
+| Codex | A terminal notification confirms the turn ended; the shared app-server can remain for other checkouts | Interrupt is requested; after 10 seconds without a terminal notification the checkout is blocked, without killing another checkout's shared server | App-server exit kills and checks its normal process group before satisfying cleanup | Marker blocks the checkout; no attempt is made to identify an old server by a reused PID |
+| Claude Code | Session is closed; actual child exit and normal process-group absence are observed through the pinned SDK's spawn hook | Interrupt is requested; after 10 seconds the session closes; a close without observed exit remains blocked | Normal group is killed and checked after process exit | Marker blocks the checkout; an SDK close from the old host is not evidence |
+| Checkout record and undo helpers | The supervisor verifies its worker group disappeared | The bounded deadline kills the group; an absent receipt remains uncertain | Worker lifetime EOF kills its group; known-group absence supplies proof | In-flight run/undo markers block new mutations; recovery does not replay an undo |
+
+The precise boundary is cooperating Plait processes and the normal process
+groups it supervises. Codex's shared-server protocol provides a terminal
+acknowledgement for each turn, not a per-turn descendant inventory. Trusted
+commands and external harnesses can deliberately detach writers into another
+process group; Plait cannot prove those exited. Such writers remain an explicit
+limit, as do unrelated editors and commands. Sandboxed command descendants
+retain Seatbelt restrictions even after detaching: they cannot write the
+checkout, although Plait does not claim they all exited. This is not a general
+process container. Tests use scripted harnesses and processes; they do not
+establish the behavior of every installed harness, hook, or extension.
+
+Before a run or undo starts, the host synchronously saves a private marker keyed
+by the checkout directory's device and inode, beside the shared lease files.
+Every new run and desktop Git mutation checks that marker under its OS lease.
+A clean run removes it only after cleanup and the after record. An uncertain
+run updates its reason, releases its OS handles, and retains exclusion through
+the durable marker (quarantine). A host/store restart cannot erase it. Other
+checkouts continue normally. Use current Plait versions for all cooperating
+hosts and desktops; older versions do not understand these markers.
+
+A late terminal acknowledgement, observed session exit, or proof that the
+known group is absent clears that run's marker automatically. A failed probe,
+missing helper receipt, or restart without transferable proof needs the person
+to check for remaining commands, servers, and builds, stop them, and explicitly
+confirm. Confirmation does not kill processes and cannot override a still-held
+OS lease. Tokens prevent a stale confirmation or callback from clearing a newer
+run's marker. A damaged marker fails closed and can be explicitly confirmed.
+After a quarantine is resolved, any missing after record is marked
+`after_restart`, since its observation includes the uncertain interval. Held
+inputs are not automatically replayed by a confirmation.
+
+These owner-authenticated operations are additive and omit `protocol_version`:
+
+```json
+{"op":"checkout_cleanup","checkout":"/absolute/checkout"}
+{"op":"resolve_checkout_cleanup","checkout":"/absolute/checkout","token":"TOKEN_FROM_READ","confirm_stopped":true}
+```
+
+Both return `{"checkout":"/canonical/checkout","cleanup":null}` when clear,
+or `cleanup: {"token":"...","reason":"..."}` when unconfirmed. A live run's
+crash marker is hidden by its owning runtime until it becomes uncertain.
+Unknown fields, relative paths, invalid tokens, and missing or false
+`confirm_stopped` are refused. Resolution acquires the exclusive checkout lease
+and compares the token before clearing. A quarantined admission returns
+`cleanup_uncertain` with the specific reason; the desktop shows **Stop
+unconfirmed**, then **Confirm stopped** when the person chooses that control.
+
 ## Checkout records
 
 The runtime records the checkout before and after every run in Pi, Codex,
@@ -1579,8 +1644,9 @@ If the before record cannot be made, the run ends in `error` with
 `record_failed` and its queue remains held. Versions 1 and 2 see the existing
 `runtime_error` code with the same explanation. Nothing in that run reaches a
 harness. A failed after record is stored as failed, so future undo cannot use
-it. After a host crash, a missing after record is attempted in the background
-under the checkout lease. If another writer holds the lease, the next run
+it. After a host crash, a missing after record waits while checkout cleanup is
+unconfirmed. Resolving cleanup schedules recovery in the background under the
+checkout lease. If another writer holds the lease, the next run
 retries the recovery immediately before its own before record. Recovery is
 marked `after_restart`: the recorded changes may include work done while the
 host was down. Interrupted work is never resumed or repeated automatically.
