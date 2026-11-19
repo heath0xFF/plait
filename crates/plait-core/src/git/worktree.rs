@@ -605,11 +605,26 @@ fn create_managed_inner(
         Ok(()) => record.stage = ManagedStage::Ready,
         Err(error) => {
             record.stage = ManagedStage::Failed;
-            record.error = Some(error);
+            record.error = Some(failed_creation(&record, &error));
         }
     }
     save(&record)?;
     Ok(record)
+}
+/// Git keeps a worktree it made when a later hook or filter fails, so say
+/// that it exists: "not created" would invite a second one.
+fn failed_creation(record: &ManagedWorktree, error: &str) -> String {
+    if verify_managed(record).is_ok() {
+        format!(
+            "Git made the worktree at {} on branch {}, but a checkout hook or filter then failed or ran too long, so no thread was started. The worktree and branch were kept; remove them with Git if you do not need them. Git said: {error}",
+            record.path.display(),
+            record.branch
+        )
+    } else {
+        format!(
+            "Git could not create the worktree. Any files and branch it made were kept. Git said: {error}"
+        )
+    }
 }
 fn verify_managed(record: &ManagedWorktree) -> Result<()> {
     record
@@ -1048,6 +1063,15 @@ mod managed_tests {
             )
             .unwrap();
             assert_eq!(tree.stage, ManagedStage::Failed, "{name}");
+            // Git kept the finished checkout; the person is told where it is.
+            let error = tree.error.as_deref().unwrap();
+            assert!(tree.path.join("file").is_file(), "{name}");
+            assert!(
+                error.contains(&tree.path.display().to_string())
+                    && error.contains(&tree.branch)
+                    && error.contains("were kept"),
+                "{name}: {error}"
+            );
             let retry =
                 create_managed_worktree(&parent, ID, Some(tree.clone()), |_| Ok(())).unwrap();
             assert_eq!(retry, tree);
