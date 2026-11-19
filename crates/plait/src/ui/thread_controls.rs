@@ -419,7 +419,7 @@ impl Plait {
                     } else {
                         colors().muted
                     }))
-                    .child(note.clone()),
+                    .child(a11y_text("thread-control-note", note.clone())),
             );
         }
         content.into_any_element()

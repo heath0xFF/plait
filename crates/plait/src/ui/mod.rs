@@ -4,6 +4,7 @@ mod admission;
 mod appearance;
 mod branches;
 mod changes;
+mod checkout_queue;
 mod cleanup;
 mod commands;
 mod commit_panel;

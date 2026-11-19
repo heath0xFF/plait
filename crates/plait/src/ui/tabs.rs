@@ -117,9 +117,9 @@ impl Default for Tabs {
 
 fn tint(state: TabState, active: bool) -> u32 {
     match state {
-        TabState::Approve | TabState::Interrupted => colors().amber,
+        TabState::Approve | TabState::Interrupted | TabState::Held => colors().amber,
         TabState::Failed => colors().red,
-        TabState::Working => colors().blue,
+        TabState::Working | TabState::Waiting => colors().blue,
         TabState::Finished => colors().mint,
         TabState::Idle if active => colors().mint,
         _ => colors().subtle,

@@ -135,7 +135,7 @@ fresh lease-protected preservation checks, and never forces removal. Work
 returns by commit, push and pull request; no integration command is added.
 A busy project's choice of a worktree, and the project setting that makes it
 automatic, are under [Thread tabs](#several-threads-in-one-project). The
-checkout queue is planned.
+checkout queue is built in Stage 9.
 
 **Agreed for M4 file viewer:** open any file in a checkout read-only, with
 line numbers and the same syntax highlighting as the conversation, from a
@@ -585,8 +585,7 @@ cleanup is added.
 
 **Stage 8, busy-project choice and capacity.** New drafts negotiate placement before the first run. A busy project asks each
 time whether to use an own worktree; the project modal can authorize that choice
-automatically for that project. Wait is visibly unavailable until the durable
-checkout queue ships. Existing threads remain bound to their checkout and can
+automatically for that project. Stage 9 supplies the durable Wait choice. Existing threads remain bound to their checkout and can
 explicitly start a linked continuation with a fresh harness session. The original
 history and draft remain intact. Capabilities are additive and strictly probed.
 
@@ -604,6 +603,21 @@ exclusion, preparation cancellation, lost replies and resource failures. Live
 provider limits and native focus/accessibility behavior still need separate
 acceptance; headless tests do not claim those results.
 
+**Stage 9, durable checkout queue (built).** Wait explicitly accepts a message
+and its images into host-owned storage, bound to its checkout identity and
+chosen settings. Existing threads offer Wait beside Continue separately. One
+acceptance order covers checkout waiters and eligible follow-ups, preventing a
+follow-up chain from starving another thread. Independent checkouts drain
+independently. Revalidation occurs at start; failures leave a reason and advance
+the line. Queues are bounded to 32 pending inputs and 32 MiB per checkout.
+Restart holds not-started inputs until Resume releases the checkout's line;
+interrupted effects are never re-queued. Cancel after start requests Stop.
+Additive operations and `checkout_queue_v1` preserve older reply shapes. Tabs,
+sidebar rows and the composer show Waiting or Held from the shared summary
+stream, without per-waiter desktop polling. Scripted host, parser, draft/image
+recovery and headless accessibility checks cover the contract; installed-window
+and live-provider acceptance remain separate.
+
 **Shipped in v0.1.0-preview.22: Worktrees.** One project graph per window is the first tab content
 that is not a thread. It opens from the sidebar project menu, command palette,
 Project settings and a worktree thread's context line. The graph presents actual
@@ -614,8 +628,7 @@ manual checkout removal are built; automated cleanup and cache deletion are not.
 Headless scenes, lifecycle tests and a fifty-worktree frame case cover this view;
 installed-window acceptance and performance timings remain separate verification.
 
-**Still planned:** further tab content kinds, a durable checkout queue (Stage
-9), enforced Pi read-in-place (Stage 10), copy-on-write artifact seeding
+**Still planned:** further tab content kinds, enforced Pi read-in-place (Stage 10), copy-on-write artifact seeding
 (Stage 11), and further worktree storage management (Stage 12).
 
 
@@ -625,7 +638,7 @@ installed-window acceptance and performance timings remain separate verification
   thread is started there, Plait offers a choice between its own worktree or
   waiting in a checkout queue; a per-project switch can make the worktree
   automatic, never automatic everywhere. Stage 8 shipped the worktree choice
-  and the switch; waiting is shown, disabled, until Stage 9.
+  and the switch; Stage 9 builds the explicit durable queue.
 - **Reading in place (Stage 10):** sharing a busy checkout to read while another
   thread writes comes later, and only as a host-enforced mode for Pi. Until
   then, all runs are writers (with the lifecycle lease prepared and tested for a

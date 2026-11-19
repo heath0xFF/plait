@@ -1268,6 +1268,7 @@ Tone::Filled,
                 .pt_2()
                 .pb_3()
                 .gap_2()
+                .children(self.checkout_wait_control(cx))
                 .children(self.queued_inputs(cx))
                 .children(self.thread_files_card(cx))
                 .when_some(composer.cloned(), |el, composer| {

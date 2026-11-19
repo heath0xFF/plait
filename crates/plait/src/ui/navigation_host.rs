@@ -73,6 +73,7 @@ impl Plait {
     pub(super) fn watch_all_threads(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.refresh_host_worktrees(cx);
         self.navigation.watch = None;
+        self.admission.queue = false;
         self.navigation.generation += 1;
         let generation = self.navigation.generation;
         self.navigation.loading = true;
@@ -81,13 +82,14 @@ impl Plait {
         let task = cx.background_executor().spawn(async move {
             let client = Client::from_environment()?;
             // Subscribe first, so changes during pagination remain in the inbox.
-            let lists = client.subscribe_threads(true)?;
+            let queue = host::checkout_queue::available(&client)?;
+            let lists = client.subscribe_threads_queue(true, queue)?;
             let lease = WatchLease { cancel: Some(lists.cancel_handle()), executor };
             let mut all = Vec::new();
             let mut cursor = None;
             let mut cursors = HashSet::new();
             loop {
-                let reply: host::ThreadsPage = client.request(&Request::list_threads_page(None, Some(200), cursor, true))?;
+                let reply: host::ThreadsPage = client.request(&if queue { Request::ListThreadsQueue { archived: true, limit: 200, cursor } } else { Request::list_threads_page(None, Some(200), cursor, true) })?;
                 navigation::merge_threads(&mut all, reply.threads).map_err(host::Error::Protocol)?;
                 cursor = reply.next_cursor;
                 if cursor.is_none() { break; }
@@ -95,10 +97,10 @@ impl Plait {
                     return Err(host::Error::Protocol("Thread listing exceeded its pagination limit. Refine the host's stored threads.".into()));
                 }
             }
-            Ok::<_, host::Error>((lists, lease, all))
+            Ok::<_, host::Error>((lists, lease, all, queue))
         });
         cx.spawn_in(window, async move |this, cx| {
-            let (mut lists, lease, all) = match task.await {
+            let (mut lists, lease, all, queue) = match task.await {
                 Ok(value) => value,
                 Err(error) => {
                     let _ = this.update_in(cx, |this, _, cx| {
@@ -113,6 +115,7 @@ impl Plait {
                         return false;
                     }
                     this.navigation.watch = Some(lease);
+                    this.admission.queue = queue;
                     this.navigation.loading = false;
                     this.host.connection.threads = all;
                     this.apply_thread_activity(true, window, cx);

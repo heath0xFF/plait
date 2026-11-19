@@ -1182,6 +1182,37 @@ paint, excluding decode, transport, GPU submission, and native input latency.
 See [Verification](VERIFICATION.md#images-in-messages) for results and the
 explicit clipboard allocation measurements.
 
+### Durable checkout waiting
+
+`runtime/src/checkout-queue.ts` owns durable queue metadata in `checkout_waiters`;
+message payloads and image associations use the existing private request store.
+`runtime.ts` admits the lowest eligible acceptance order for each checkout,
+sharing that order with same-thread follow-ups. Startup holds every not-started
+input. Explicit Resume releases the checkout line, while interrupted runs keep
+the existing recovery path. Identity, settings, policy, availability and
+cancellation are checked again at admission, before the run's ordinary record.
+See [the host contract](HOST.md#durable-checkout-queue) for states, limits and
+fairness, including steering and held follow-ups.
+
+The core's `host/checkout_queue.rs` validates the additive operations and compact
+summaries. A capability probe chooses `watch_threads_queue` and its paged listing;
+older hosts keep the old operations and unavailable Wait. The daemon uses the
+existing coalesced summary invalidation and change-event path. Queue descriptions
+are prepared when summaries decode, tab metadata is rebuilt when the catalog
+changes, and visible rows draw cached facts. No per-waiter desktop task, polling,
+filesystem read, image decode or transcript projection is added. Host drains wake
+on completion and queue actions; one shared contention timer covers external
+lease release, which has no runtime completion event.
+
+`ui/checkout_queue.rs` presents Waiting/Held above the message box with Cancel
+and Resume. The same summary supplies tab/sidebar state and position on hover.
+`ui/draft_tabs.rs` journals explicit Wait placement with the originating draft;
+its first message binds to that draft's created thread even after navigation.
+`PendingSubmit.checkout_wait` preserves the additive operation across lost
+replies and restart, with the original request ID, revision and image references.
+It is distinct from the desktop's `queued_submissions` cache. Acceptance clears
+only the sent draft revision, and closing or restoring tabs schedules no run.
+
 ### Queue and per-thread controls
 
 A version 3 composer can send during a run: Enter follows up, Option-Enter

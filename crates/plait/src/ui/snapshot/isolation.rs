@@ -118,6 +118,7 @@ pub(super) fn walk(
     let mut busy = Harness::new(repository, output, width, height);
     busy.connect(repository, false);
     busy.update(|plait, window, cx| {
+        plait.admission.queue = true;
         plait.open_draft(window, cx);
         // The choice follows a Send, so the draft always holds its message.
         let composer = plait.draft.composer.clone().unwrap();
@@ -199,6 +200,22 @@ pub(super) fn walk(
         ));
     });
     many.capture(&format!("isolation-resource-wait-{suffix}"));
+    let mut queue = Harness::new(repository, output, width, height);
+    queue.connect(repository, false);
+    for (name, state) in [
+        (
+            "isolation-queued",
+            Some(plait_core::host::checkout_queue::State::Waiting),
+        ),
+        (
+            "isolation-queue-held",
+            Some(plait_core::host::checkout_queue::State::Held),
+        ),
+        ("isolation-queue-cancelled", None),
+    ] {
+        install_queue(&mut queue, state);
+        queue.capture(&format!("{name}-{suffix}"));
+    }
 }
 
 /// Holding a host writer lease on the open checkout must never block desktop
@@ -278,4 +295,45 @@ fn host_locking_never_blocks_desktop_render() {
 
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();
+}
+
+/// Queue facts are injected only into this test scene, just as catalog events arrive.
+pub(super) fn install_queue(
+    harness: &mut Harness,
+    state: Option<plait_core::host::checkout_queue::State>,
+) {
+    harness.change_snapshot(|snapshot| {
+        snapshot.status = ThreadStatus::Idle;
+        snapshot.error = None;
+    });
+    harness.update(|plait, _, cx| {
+        plait.admission.queue = true;
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 6;
+        let thread = plait
+            .host
+            .connection
+            .threads
+            .iter_mut()
+            .find(|t| t.id == super::THREAD)
+            .unwrap();
+        thread.status = ThreadStatus::Idle;
+        thread.pending_approval = Some(false);
+        thread.checkout_queue = state.map(|state| {
+            plait_core::host::checkout_queue::Summary::new("queued-first".into(), state, 3, 1)
+        });
+        if state.is_none() {
+            plait.set_thread_notice(
+                super::THREAD.into(),
+                "Cancelled. Your waiting message will not run.".into(),
+                false,
+            );
+        }
+        plait.rebuild_projects(cx);
+    });
 }

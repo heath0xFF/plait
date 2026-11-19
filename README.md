@@ -204,10 +204,11 @@ The latest release is **v0.1.0-preview.22**.
   servers, with per-project switches and per-call approvals. MCP browser sign-in
   and named CLIs are planned (M8).
 - **One thread writes a checkout at a time.** A second thread in a busy
-  project runs in its own worktree, which starts cold: uncommitted files and
-  build output are not copied, and removing it is manual. Waiting in a queue
-  for the checkout, reading it while another thread writes, and cleanup rules
-  are [planned](docs/ROADMAP.md).
+  project can use its own worktree or explicitly wait in a durable queue.
+  Worktrees start cold: uncommitted files and build output are not copied, and
+  removing them is manual. A host restart holds queued messages for Resume.
+  Reading while another thread writes and cleanup rules are
+  [planned](docs/ROADMAP.md).
 - **Not an IDE.** There is no file editor, embedded terminal, merge, or rebase.
   The Files view is read-only. Instead Plait hands off: Open in Editor opens the
   file on screen at its line in your editor, Show in Finder reveals it, and

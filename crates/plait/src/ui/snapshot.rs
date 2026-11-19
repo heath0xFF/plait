@@ -797,6 +797,7 @@ impl Harness {
             plait.host.creation.new_model = Some(choice());
             plait.host.connection.threads = vec![
                 ThreadSummary {
+                    checkout_queue: None,
                     id: THREAD.into(),
                     checkout: checkout.clone(),
                     model: choice(),
@@ -804,6 +805,7 @@ impl Harness {
                     ..Default::default()
                 },
                 ThreadSummary {
+                    checkout_queue: None,
                     id: "thr_0c44a9d1".into(),
                     checkout: checkout.clone(),
                     model: choice(),
@@ -4487,6 +4489,7 @@ fn composer_v3_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
             plait.host.submissions.restore_accepted(
                 THREAD.into(),
                 plait_core::host_state::PendingSubmit {
+                    checkout_wait: false,
                     images: Vec::new(),
                     request_id: queued.request_id.clone(),
                     text: queued.text.clone(),
@@ -4887,6 +4890,7 @@ fn navigation_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
                     _ => root.join("sample-long-project-name-that-must-truncate"),
                 };
                 ThreadSummary {
+                    checkout_queue: None,
                     id: if index == 0 {
                         THREAD.into()
                     } else {
@@ -6246,6 +6250,7 @@ fn image_queued_edit_preserves_attachments() {
         plait.host.submissions.restore_accepted(
             THREAD.into(),
             plait_core::host_state::PendingSubmit {
+            checkout_wait: false,
                 text: "Edit this image".into(),
                 images: vec![reference.clone()],
                 request_id: "queued-image".into(),

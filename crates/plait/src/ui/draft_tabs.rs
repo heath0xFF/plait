@@ -291,6 +291,19 @@ impl Plait {
     }
 
     pub(super) fn accept_draft_isolation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.choose_draft_placement(Placement::Worktree, window, cx);
+    }
+    pub(super) fn accept_draft_wait(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.admission.queue {
+            self.choose_draft_placement(Placement::Wait, window, cx);
+        }
+    }
+    fn choose_draft_placement(
+        &mut self,
+        chosen: Placement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self
             .draft
             .pending
@@ -321,7 +334,7 @@ impl Plait {
             ..
         }) = &mut self.draft.pending
         {
-            *placement = Placement::Worktree;
+            *placement = chosen;
         }
         self.start_draft_creation(window, cx);
     }
@@ -454,6 +467,15 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let checkout_wait = draft.pending.as_ref().is_some_and(|pending| {
+            matches!(
+                pending.request,
+                Request::CreateAdmittedThread {
+                    placement: Placement::Wait,
+                    ..
+                }
+            )
+        });
         let (receipt, reply) = ready;
         let draft_id = created.draft_id.unwrap();
         let view = self.workspace.tab;
@@ -563,7 +585,14 @@ impl Plait {
             Some(sending.revision),
             sending.images,
         ) {
-            Ok(pending) => self.retry_submission_id(&id, &pending.request_id, window, cx),
+            Ok(pending) => {
+                if checkout_wait {
+                    self.host
+                        .submissions
+                        .wait_for_checkout(&id, &pending.request_id);
+                }
+                self.retry_submission_id(&id, &pending.request_id, window, cx);
+            }
             Err(error) => self.set_thread_notice(id.clone(), error, true),
         }
         self.record_recent_model(&created.choice, cx);

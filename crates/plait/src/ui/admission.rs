@@ -12,6 +12,8 @@ use std::{
 
 #[derive(Default)]
 pub(super) struct State {
+    pub queue: bool,
+    pub refused_busy: Option<String>,
     pub origin: Option<(String, Option<String>)>,
     pub preparing: Option<(String, Option<admission::Phase>)>,
     pub capabilities: Option<(u64, PathBuf, bool)>,
@@ -248,7 +250,7 @@ impl Plait {
             .threads
             .iter()
             .any(|thread| thread.checkout == snapshot.checkout && thread.status.busy());
-        if !busy {
+        if !busy && self.admission.refused_busy.as_ref() != Some(&snapshot.id) {
             return None;
         }
         if self.admission.continuation.as_ref() == Some(&snapshot.id) {
@@ -257,10 +259,15 @@ impl Plait {
                     .child(button("continue-worktree-cancel","Cancel").tooltip(|_,cx| hover(cx,CONTINUE_CANCEL)).aria_description(CONTINUE_CANCEL).on_activate(cx,|this,_,cx| {this.admission.continuation=None;cx.notify();})))
                 .into_any_element());
         }
+        let wait_detail = if self.admission.queue {
+            WAIT_CHECKOUT
+        } else {
+            WAIT_UNAVAILABLE
+        };
         Some(row().gap_2().child(button("continue-worktree","Continue separately")
             .tooltip(|_,cx| cx.new(|_| super::thread_controls::TextTooltip("Create a linked thread in a new worktree from HEAD. This thread and its draft stay here.".into())).into())
             .on_activate(cx,|this,_,cx| {this.admission.continuation=this.host.thread.selected.clone();cx.notify();}))
-            .child(button("continue-wait","Wait").disabled(true).tooltip(|_,cx| hover(cx,WAIT_UNAVAILABLE)).aria_description(WAIT_UNAVAILABLE))
+            .child(button("continue-wait","Wait").disabled(!self.admission.queue).tooltip(move |_,cx| hover(cx,wait_detail)).aria_description(wait_detail).on_activate(cx,|this,window,cx| this.wait_in_checkout(window,cx)))
             .into_any_element())
     }
     fn start_continuation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -354,11 +361,17 @@ impl Plait {
                 harness,
                 provider,
                 model_id,
+                placement,
                 ..
             } = &request
             else {
                 unreachable!()
             };
+            if *placement == Placement::Wait && !host::checkout_queue::available(&client)? {
+                return Err(host::Error::Protocol(
+                    "Wait needs a newer host. The draft and its original request are kept.".into(),
+                ));
+            }
             if admission::info(&client, checkout.clone())?.is_none() {
                 if source_thread_id.is_some() {
                     return Err(host::Error::Protocol(
@@ -490,21 +503,26 @@ impl Plait {
         if !self.draft_isolation_choice() {
             return None;
         }
+        let wait_detail = if self.admission.queue {
+            WAIT_CHECKOUT
+        } else {
+            WAIT_UNAVAILABLE
+        };
         Some(column().w_full().max_w(px(CONTENT_WIDTH)).mx_auto().gap_2().p_3()
             .child(div().text_size(px(13.)).child(a11y_text("isolation-choice-heading", "Project busy")))
             .child(div().text_size(px(12.)).text_color(rgb(colors().muted)).child(a11y_text("isolation-choice-detail", "Start from HEAD in a new worktree. Uncommitted files and build output are not copied. The busy thread stays in its checkout. Your message starts the new thread.")))
             .child(row().gap_2()
                 .child(button("isolation-worktree", "Own worktree").tooltip(|_,cx| cx.new(|_| super::thread_controls::TextTooltip("Create a separate branch and checkout from HEAD, then send this draft there.".into())).into()).aria_description("Create a separate branch and checkout from HEAD, then send this draft there.").on_activate(cx, |this, window, cx| this.accept_isolation(window,cx)))
-                .child(button("isolation-wait", "Wait").disabled(true).tooltip(|_,cx| hover(cx,WAIT_UNAVAILABLE)).aria_description(WAIT_UNAVAILABLE))
+                .child(button("isolation-wait", "Wait").disabled(!self.admission.queue).tooltip(move |_,cx| hover(cx,wait_detail)).aria_description(wait_detail).on_activate(cx,|this,window,cx| this.accept_draft_wait(window,cx)))
                 .child(button("isolation-cancel", "Cancel").tooltip(|_,cx| cx.new(|_| super::thread_controls::TextTooltip("Keep this draft without starting a thread.".into())).into()).on_activate(cx, |this,_,cx| this.cancel_isolation(cx))))
-            .child(div().text_size(px(11.)).text_color(rgb(colors().muted)).child(a11y_text("isolation-choice-wait-detail", "Wait is not yet available. Nothing is queued.")))
+            .when(!self.admission.queue, |el| el.child(div().text_size(px(11.)).text_color(rgb(colors().muted)).child(a11y_text("isolation-choice-wait-detail", "Wait needs a newer host. Nothing is queued."))))
             .into_any_element())
     }
 }
 /// A failed capability probe is asked again after this long.
 const CAPABILITY_RETRY: Duration = Duration::from_secs(5);
-/// Both Wait controls say the same thing: nothing is accepted as queued.
-const WAIT_UNAVAILABLE: &str = "Not yet available. No run is queued.";
+const WAIT_CHECKOUT: &str = "Send this message to the checkout queue. It starts in order when the checkout is free; a host restart holds it for Resume.";
+const WAIT_UNAVAILABLE: &str = "Wait needs a newer host. Nothing is queued.";
 const CONTINUE_WORKTREE: &str =
     "Create a linked thread in a new branch and checkout from HEAD. This thread stays here.";
 const CONTINUE_CANCEL: &str = "Keep this thread as it is without creating anything.";

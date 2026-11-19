@@ -392,6 +392,7 @@ fn threads(checkout: &Path, current: ThreadStatus) -> Vec<ThreadSummary> {
     let site = checkout.with_file_name("field-notes");
     let now = now();
     let summary = |id: &str, checkout: &Path, title: &str, status, minutes: u64| ThreadSummary {
+        checkout_queue: None,
         id: id.into(),
         checkout: checkout.to_owned(),
         model: choice(),

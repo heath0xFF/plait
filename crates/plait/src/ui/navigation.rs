@@ -479,6 +479,15 @@ impl Plait {
                 .w_auto()
                 .flex_1()
                 .min_w_0()
+                .when_some(
+                    thread
+                        .checkout_queue
+                        .as_ref()
+                        .map(|q| q.detail().to_owned()),
+                    |el, detail| {
+                        el.tooltip(move |_, cx| cx.new(|_| TextTooltip(detail.clone())).into())
+                    },
+                )
                 .role(Role::TreeItem)
                 .aria_level(2)
                 .aria_selected(selected)

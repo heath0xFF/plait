@@ -1098,3 +1098,76 @@ fn escape_closes_only_a_draft_that_holds_nothing() {
     drop(h);
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+#[core::prelude::v1::test]
+fn waiting_first_send_binds_only_its_draft_with_images_and_exact_retry() {
+    if !isolated("many_drafts::waiting_first_send_binds_only_its_draft_with_images_and_exact_retry")
+    {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-wait-draft-{}", std::process::id()));
+    let repo = fixture_repository(&scratch);
+    let mut h = Harness::new(&repo, None, 900., 600.);
+    h.connect(&repo, false);
+    let image = plait_core::images::persist(include_bytes!(
+        "../../../../../runtime/test/support/images/0.png"
+    ))
+    .unwrap();
+    h.update(|p, w, cx| {
+        p.host.connection.status.as_mut().unwrap().protocol_version = 6;
+        p.admission.queue = true;
+        p.open_draft(w, cx);
+        p.draft.composer.clone().unwrap().update(cx, |c, cx| {
+            c.restore_draft("Wait with this picture".into(), 7, None, cx);
+            c.restore_images(vec![image.clone()], cx);
+        });
+        set_pending(p, "wait-create");
+        if let Request::CreateAdmittedThread { placement, .. } =
+            &mut p.draft.pending.as_mut().unwrap().request
+        {
+            *placement = Placement::Wait;
+        }
+        p.draft.sending = Some(crate::ui::new_thread::Sending {
+            generation: p.draft.generation,
+            request_id: "wait-create".into(),
+            text: "Wait with this picture".into(),
+            revision: 7,
+            images: vec![image.clone()],
+            approval: Some(ApprovalMode::Auto),
+            choice: Some(ApprovalMode::Auto),
+        });
+        let saved = p.draft.saved_creation().unwrap();
+        assert_eq!(saved.placement, Placement::Wait);
+        assert_eq!(saved.message.images, vec![image.clone()]);
+        p.open_draft(w, cx);
+        p.draft.composer.clone().unwrap().update(cx, |c, cx| {
+            c.restore_draft("Other draft stays here".into(), 9, None, cx)
+        });
+        let mut snapshot = thread_snapshot(&repo, false);
+        snapshot.id = "waiting-new-thread".into();
+        snapshot.status = ThreadStatus::Idle;
+        finish(
+            p,
+            "wait-create",
+            Ok(plait_core::host::ThreadReply { thread: snapshot }),
+            w,
+            cx,
+        );
+        assert!(p.draft_visible());
+        assert_eq!(
+            p.draft.composer.as_ref().unwrap().read(cx).saved_draft().0,
+            "Other draft stays here"
+        );
+        let pending = p.host.submissions.pending("waiting-new-thread").unwrap();
+        assert!(pending.checkout_wait);
+        assert_eq!(pending.text, "Wait with this picture");
+        assert_eq!(pending.images, vec![image]);
+        assert_eq!(pending.draft_revision, Some(7));
+        assert!(matches!(
+            pending.request("waiting-new-thread"),
+            plait_core::host::Request::SubmitCheckout { .. }
+        ));
+    });
+    drop(h);
+    std::fs::remove_dir_all(scratch).unwrap();
+}

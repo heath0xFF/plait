@@ -337,7 +337,10 @@ offers **Own worktree**, **Wait**, and **Cancel**.
   draft there with its chosen harness, model, and permissions. The draft stays
   editable while the choice is open; what is sent is the text and images shown
   when you choose. Uncommitted files and build output are not copied.
-- **Wait** is disabled and marked not yet available. Nothing is queued.
+- **Wait** sends the current message and images to the durable checkout queue,
+  keeping the chosen harness, model and permissions. It starts in order when
+  that checkout is free. Wait is always an explicit choice for a new thread;
+  an older host leaves it unavailable.
 - **Cancel** keeps the draft.
 
 Another draft can send while the first is preparing its worktree, and drafts
@@ -363,18 +366,36 @@ project only. The finished checkout's path and branch are shown, and removing
 it stays manual. Cmd-Option-N still creates a worktree thread directly, whether
 or not the project is busy.
 
-A thread already bound to a busy checkout offers **Continue separately**.
+A thread already bound to a busy checkout offers **Wait** beside **Continue
+separately**. Wait sends its draft to the same checkout's queue.
 Confirming **Own worktree** there creates a linked thread from HEAD with a new
 harness session. The original history and draft stay where they are, and
 **Original thread** opens the source. No conversation is replayed or moved. A
 disconnected or older host does not offer choices it cannot carry out.
+
+A queued thread says **Waiting** in its tab, sidebar row and above its message
+box. Hover shows its place in line and that it waits for the checkout. **Cancel**
+removes its first waiting message; if that message just started, it requests
+Stop for that run. Following messages keep their order. A host restart changes
+not-started messages to **Held**. **Resume** releases the whole checkout's held
+line in order; interrupted runs are never replayed. Closing a tab or the desktop
+leaves a running host's queue alone. Messages and images remain with their own
+thread or pending draft through a lost reply and an explicit retry.
+
+Changing a queued thread's model, thinking, permissions or command policy makes
+that waiter fail with a reason when its turn comes. Send again with the choices
+you intend. A removed or replaced checkout, unavailable harness/model or
+unconfirmed cleanup also cannot start it; a failed waiter does not strand the
+rest of the line. A checkout holds at most 32 pending messages and 32 MiB of
+queued text and images, including held messages and follow-ups. A full queue
+refuses the extra send plainly and keeps its draft.
 
 Checkouts that share no files have no default limit on how many run at once.
 Before a run starts, the host records the checkout; on one filesystem those
 recordings take turns. The selected thread says it is waiting, and Stop
 cancels the wait before the harness starts. When the machine runs out of a
 resource, the run fails with an explicit error and waits for a deliberate
-retry. There is no hidden queue.
+retry. Only messages explicitly sent with Wait join the checkout queue.
 
 ### Worktrees
 
@@ -928,7 +949,10 @@ Steering joins the current run at its next step and uses that run's approval
 mode; if it is not taken in time, it becomes a follow-up. Stop stays beside the
 send control and clears the host queue as well as stopping the run.
 
-The stack above the composer lists waiting messages in order. Cancel removes
+The stack above the composer lists this thread's **Follow-up** and **Steering**
+messages in order. These wait on its own run, distinct from **Waiting** for the
+checkout. Follow-ups and checkout waiters share acceptance order, so a chain of
+follow-ups cannot jump ahead of another thread's waiter. Cancel removes
 one; Edit cancels it back into an empty draft. Edit is offered for messages sent by this desktop, whose complete text is
 saved locally; the host only sends a bounded preview. If the
 draft changes while cancellation is in flight, the cancelled text is copied to

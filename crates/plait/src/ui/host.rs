@@ -50,18 +50,28 @@ impl Plait {
         let identity = self.host.identity.clone();
         let acknowledgement = matches!(
             request,
-            Request::Submit { .. } | Request::CreateThread { .. }
+            Request::Submit { .. } | Request::SubmitCheckout { .. } | Request::CreateThread { .. }
         );
-        let expected = if let Request::Submit { thread_id, .. } = &request {
+        let expected = if let Request::Submit { thread_id, .. }
+        | Request::SubmitCheckout { thread_id, .. } = &request
+        {
             self.host.expected_checkout(thread_id).cloned()
         } else {
             None
         };
-        let persist = matches!(request, Request::Submit { .. }) && self.session.required;
+        let persist = matches!(
+            request,
+            Request::Submit { .. } | Request::SubmitCheckout { .. }
+        ) && self.session.required;
         if persist {
             self.capture_session(cx);
         }
         let uploads = if let Request::Submit {
+            thread_id,
+            request_id,
+            ..
+        }
+        | Request::SubmitCheckout {
             thread_id,
             request_id,
             ..
@@ -775,7 +785,8 @@ impl Plait {
         let Some(pending) = self.host.submissions.get(id, request_id).cloned() else {
             return;
         };
-        if (!pending.images.is_empty() && self.host.protocol() < 6)
+        if (pending.checkout_wait && !self.admission.queue)
+            || (!pending.images.is_empty() && self.host.protocol() < 6)
             || (pending.when_busy.is_some() && self.host.protocol() < 3)
             || (pending.approval.is_some() && self.host.protocol() < 2)
         {
@@ -802,6 +813,9 @@ impl Plait {
                             && reply.thread_id == id
                             && reply.request_id == pending.request_id =>
                     {
+                        if this.admission.refused_busy.as_ref() == Some(&id) {
+                            this.admission.refused_busy = None;
+                        }
                         this.host.submissions.confirm(&id, &pending.request_id);
                         this.acknowledge_saved_draft(
                             &id,
@@ -821,6 +835,7 @@ impl Plait {
                     ),
                     Err(error) => {
                         if matches!(error, host::Error::Rejected(_)) {
+                            if matches!(&error, host::Error::Rejected(reason) if reason.code == "busy") { this.admission.refused_busy = Some(id.clone()); }
                             this.host.submissions.finish(&id, &pending.request_id);
                             this.set_thread_notice(id.clone(), error.to_string(), true);
                             this.refresh_cleanup(cx);

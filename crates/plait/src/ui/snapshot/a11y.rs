@@ -819,7 +819,7 @@ fn button_with(frame: &A11yFrame, label: &str, description: Option<&str>) -> boo
 }
 
 fn assert_admission_controls(harness: &mut Harness) {
-    const WAIT: &str = "Not yet available. No run is queued.";
+    const WAIT: &str = "Wait needs a newer host. Nothing is queued.";
     // An idle thread whose checkout another thread is writing.
     harness.change_snapshot(|snapshot| {
         snapshot.status = plait_core::host::ThreadStatus::Idle;
@@ -943,4 +943,74 @@ fn assert_admission_controls(harness: &mut Harness) {
         plait.draft.pending = None;
         cx.notify();
     });
+}
+
+#[core::prelude::v1::test]
+fn checkout_queue_states_remain_accessible_wide_and_narrow() {
+    if !isolated("a11y::checkout_queue_states_remain_accessible_wide_and_narrow") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-queue-a11y-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    for (width, height) in [(1380., 860.), (900., 600.)] {
+        let mut h = Harness::new(&repository, None, width, height);
+        h.connect(&repository, false);
+        for (label, state) in [
+            (
+                "Waiting",
+                Some(plait_core::host::checkout_queue::State::Waiting),
+            ),
+            ("Held", Some(plait_core::host::checkout_queue::State::Held)),
+            ("Cancelled", None),
+        ] {
+            super::isolation::install_queue(&mut h, state);
+            let frame = steady_frame(&mut h, label);
+            if state.is_some() {
+                assert!(frame.has_node(Role::Button, |node| node.label.as_deref() == Some(label)));
+                assert!(
+                    frame.has_node(Role::Button, |node| node.label.as_deref() == Some("Cancel"))
+                );
+                if label == "Held" {
+                    assert!(
+                        frame
+                            .has_node(Role::Button, |node| node.label.as_deref() == Some("Resume"))
+                    );
+                }
+            } else {
+                assert!(
+                    !frame.has_node(Role::Button, |node| node.label.as_deref() == Some("Resume"))
+                );
+                assert!(
+                    frame
+                        .nodes
+                        .iter()
+                        .any(|node| node
+                            .value
+                            .as_deref()
+                            .is_some_and(|value| value
+                                .contains("Cancelled. Your waiting message will not run.")))
+                );
+            }
+        }
+        h.update(|plait, _, _| {
+            let snapshot = plait.host.thread.snapshot.as_ref().unwrap();
+            plait.admission.refused_busy = Some(snapshot.id.clone());
+            plait.admission.capabilities =
+                Some((plait.host.connection.epoch, snapshot.checkout.clone(), true));
+            plait
+                .host
+                .connection
+                .status
+                .as_mut()
+                .unwrap()
+                .protocol_version = 6;
+            for thread in &mut plait.host.connection.threads {
+                thread.status = plait_core::host::ThreadStatus::Idle;
+            }
+        });
+        let frame = steady_frame(&mut h, "stale-idle-summary");
+        assert!(button_with(&frame, "Wait", None));
+        assert!(button_with(&frame, "Continue separately", None));
+    }
+    std::fs::remove_dir_all(scratch).unwrap();
 }
