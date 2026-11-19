@@ -28,7 +28,8 @@ ui/                     GPUI layout, actions, focus, lists, theme
   branches.rs           the branch control and its palette: switch to or create a branch
   palette.rs            search field over a ranked list; ranking off the UI thread
   model_picker.rs       model catalog as a palette; default, favorites, new thread
-  new_thread.rs         the new-thread draft: created on its first send, reply guards
+  new_thread.rs         the mounted new-thread draft and its controls
+  draft_tabs.rs         independent draft configuration, creation owners and late replies
   new_thread_view.rs    the draft's project, model, harness, permissions row, and menus
   harnesses.rs          agent harnesses: the host's list, setup, Settings → Agents, mode lines
   permissions.rs        the Permissions chip and menu of a harness's own modes
@@ -93,7 +94,7 @@ crates/plait-core/src/
 host.rs                 bounded Unix-socket framing and requests; background only
 host/watch.rs           cancellable reader and bounded async snapshot delivery
 host_state.rs           scoped host connection, selected-thread state, and submission ledger
-checkout_state.rs       checkout-scoped creation state and shared repository data/caches
+checkout_state.rs       legacy creation selection and shared repository data/caches
 thread_view.rs          presentation-independent thread view enum and Git view selection
 ownership.rs            host/thread/checkout identities and read lifetimes
 operations.rs           thread-owned undo acknowledgements and uncertain retries
@@ -439,7 +440,7 @@ Refresh clears that cache. Threads within a checkout share its Git state.
 Plain core state separates ownership while preserving one selected thread slot:
 
 - **`HostState`** (`host_state.rs`) groups host connection, catalog, and
-  default-model settings (`HostConnection`), checkout-scoped new-thread
+  default-model settings (`HostConnection`), legacy direct-thread
   creation (`CheckoutCreationState` in `checkout_state.rs`), selected-thread
   read/control state (`SelectedThreadState` in `thread_view.rs`), and the
   per-thread submission ledger (`Submissions`) and undo ledger (`UndoLedger`).
@@ -473,7 +474,7 @@ implemented.
 only width or metadata changes rerun measured layout. The active thread
 adds a 36-point view row. Keyboard and sidebar commands dispatch to the
 model, while presentation remains in the single workspace container.
-The desktop hydrates only the active workspace; durable launch integration uses the separate tab-preference codec. `WindowTabs` owns at most 100 ordered `TabRecord`s,
+The desktop hydrates only the active workspace; durable launch integration uses the separate tab-preference codec. `WindowTabs` owns an ordered collection of `TabRecord`s without an interactive count ceiling,
 one active ID, and a session-only stack of up to 20 closed bookmarks.
 `TabContent::Thread` is its only content variant. A thread identity includes
 its host and store; its expected checkout includes the host-supplied root verbatim
@@ -482,8 +483,12 @@ verifies the host before a first thread exists. Older hosts fall back to
 `turn_review_info` once a thread exists; until verification, tabs work silently
 for the session and are neither saved nor restored. A replaced checkout is
 reported on sidebar open, with instructions to close its old tab and reopen. Opening a thread activates
-its existing tab. New-thread drafts deduplicate by exact checkout; a creation
-acknowledgement replaces the draft in place without changing its tab position.
+its existing tab. New-thread drafts have distinct IDs, even in one checkout; a creation
+acknowledgement replaces only its originating draft without changing its tab
+position or taking focus. Closed draft entries can also bind to their created
+thread. Empty drafts close without entering history. Nonempty drafts outlive
+the twenty-entry bookmark history in the private journal and can be reopened
+at the end with Cmd-Shift-T after that history is exhausted.
 
 The pure transitions cover activation, parking, close/reopen, reorder, cycling,
 numbered selection, confirmed deletion, project removal, and reconnect.
@@ -545,7 +550,11 @@ or infer a current tool, exact approval call, or error body from a summary.
 Activating Files does not mark a conversation read. Its layout function takes
 measured widths and returns a contiguous visible range, hidden counts, and all
 tabs grouped as Needs me, Failed, Working, Finished, and Idle. The UI supplies
-measurements and draws the returned data.
+measurements and draws the returned data. The strip indexes its cached visible
+slice without scanning hidden tabs. Overflow lists above 32 entries use a
+virtual list with cached row indices; hidden drafts mount no views and add no
+per-frame work. The frame suite includes 300 open tabs and their virtual
+overflow, measuring CPU draw phases rather than GPU presentation.
 
 ### Tab preferences codec
 
@@ -553,8 +562,8 @@ measurements and draws the returned data.
 `tabs.json` beside desktop preferences. Schema 1 holds ordered tab IDs, the
 active ID, content identities, and bookmark records. Keeping it separate avoids
 rewriting unrelated preferences or risking draft/submission recovery when only
-a tab order or scroll position changes. The file is bounded to 2 MiB; restore
-examines at most 100 entries. Corrupt input, unsupported versions, missing
+a tab order or scroll position changes. The file is bounded to 16 MiB; restore
+examines at most 10,000 entries. These limits bound untrusted disk input. Corrupt input, unsupported versions, missing
 threads, mismatched host/store/checkout identities, invalid bookmarks, and
 duplicates produce a valid window with unrestorable tabs omitted. A missing
 active entry selects the first surviving tab. Every restored tab starts cold.
@@ -564,8 +573,8 @@ be recoverable are left out.
 
 Restoration requires a validated complete catalog and known checkout identities,
 not a newest-200 watch subset. Archived threads may restore. Known disconnected
-identities can remain offline; missing identities drop silently. Nonempty draft
-tabs restore only when their caller already knows the draft is recoverable;
+identities can remain offline; missing identities drop silently. Draft tabs,
+including empty ones, restore when their caller knows the draft is recoverable;
 these codecs neither read nor require the recovery journal. Closed history,
 resident payloads, and submission data are never serialized. The desktop uses
 bounded no-follow reads and private (0600) atomic writes on its background
@@ -581,10 +590,18 @@ a file or commit explicitly replaces that pending location. Leaving Conversation
 detaches its snapshot watch and cancels projection work; returning reloads its
 saved history window before restoring the anchor.
 
-**The v1 draft and submission recovery journal is unchanged.** Its proposed v2
+**The draft journal remains schema 1 with additive fields.** Its proposed v2
 index/blob redesign remains planned work with a separate compatibility review.
-It allows at most 4 MiB of serialized recovery data, 512 saved thread/draft
-records, and 256 KiB per draft. Exceeding a limit keeps the previous good file;
+`draft_tabs` maps stable draft IDs to checkout, text/image draft, choices, and an
+optional captured first-send request. One entry per checkout owns a `legacy`
+mirror in the unchanged `new_draft`/`new_drafts` fields. Opening another empty
+draft cannot overwrite that mirror. Removing its owner promotes an intact
+sibling. An older journal imports its single draft; changed legacy text from an
+older build imports as another draft, preserving both versions. No first send
+is replayed at launch; an explicit retry reuses its captured ID and payload.
+Atomic synced replacement and the 4 MiB serialized limit are unchanged. Legacy
+thread/project fields retain their 512-record bound, independent drafts have a
+10,000-record bound, and each draft allows 256 KiB of text. Exceeding a limit keeps the previous good file;
 submission and required close/park saves fail explicitly while the current work
 stays in memory. Twenty maximal drafts and a separate 4 MiB resident submission
 cache are not supported capacity promises of this release.
@@ -993,8 +1010,8 @@ The desktop saves originals in `session/images/<sha256>` under its private
 state directory, mode 0700 with mode 0600 files. On macOS this defaults to
 `~/Library/Application Support/Plait/session/images`; `PLAIT_DESKTOP_STATE_DIR`
 can move the enclosing session directory. The journal holds only references
-in existing-thread drafts, new-thread drafts scoped to each checkout, and pending
-submissions. Changing checkout saves and sets aside its new-thread draft;
+in existing-thread drafts, independently identified new-thread drafts, and pending
+submissions. Changing tabs saves and sets aside the current new-thread draft;
 Discard saves the removal immediately. Editing a queued message reserves the
 empty composer until cancellation returns, so text and attachments restore together.
 Original files are synced before references enter a draft. Sending flushes the
@@ -1368,12 +1385,16 @@ change needs explicit confirmation; the host's response determines the shown val
 ### New threads
 
 New Thread (`Cmd-N`) opens an unsent draft in the active checkout (`ui/new_thread.rs`)
-and focuses its composer, preserving one draft per checkout in the desktop recovery
-journal (`core/session.rs`). Nothing is sent to the host until the first message
+and focuses its composer. Each invocation opens a fresh draft, even if another
+empty draft is in front. Draft identity owns text, image references, configuration
+and its pending admission in the desktop recovery journal (`core/session.rs`).
+Parking drops the composer and retains only plain draft state; the mounted draft
+is the only one presented. `ui/draft_tabs.rs` routes acknowledgements by draft
+and creation IDs independently of the selected checkout. Nothing is sent to the host until the first message
 is submitted; the desktop then sends `create_thread` and submits that message to
 the created thread. An unconfirmed creation keeps its request ID: the workspace
-shows a retry that reuses that ID, and a new request is not sent while it is
-pending. A model is recorded as recently used only after the host confirms the
+shows a retry that reuses that ID, and that draft sends no new creation request while it is
+pending. Other drafts can create independently. A model is recorded as recently used only after the host confirms the
 thread. `New Thread in Worktree` (`ui/worktree.rs`) sends the additive
 `create_worktree_thread` operation with a captured base and parent identity.
 The host reserves one UUID and durably binds the selected harness/model before

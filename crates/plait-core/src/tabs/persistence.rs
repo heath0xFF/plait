@@ -287,6 +287,26 @@ mod tests {
     }
 
     #[test]
+    fn legacy_draft_tab_restores_as_one_imported_identity() {
+        let mut w = window();
+        w.open(draft("draft"), None).unwrap();
+        let mut catalog = Catalog::new(0);
+        catalog.drafts = vec![draft("draft")];
+        let saved = value(&w, &catalog);
+        catalog.drafts = vec![draft("legacy-0")];
+        let restored = read(&saved, &catalog);
+        assert_eq!(restored.window.tabs().len(), 1);
+        assert_eq!(
+            restored.window.tabs()[0].thread().target(),
+            &draft("legacy-0")
+        );
+        assert_eq!(
+            restored.window.active(),
+            Some(restored.window.tabs()[0].id())
+        );
+    }
+
+    #[test]
     fn malformed_torn_unknown_old_and_oversized_documents_are_valid_empty_windows() {
         let c = Catalog::new(1);
         for bytes in [

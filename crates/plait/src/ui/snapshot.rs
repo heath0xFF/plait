@@ -2973,9 +2973,8 @@ fn picker_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
 fn new_thread_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.connect(repository, false);
     harness.update(|plait, _, _| {
-        many_drafts::set_pending(plait, "sample-request");
-        plait.draft.pending.as_mut().unwrap().creating = false;
-        plait.draft.error =
+        plait.host.creation.pending_create = Some(("sample-request".into(), choice()));
+        plait.host.connection.error =
             Some("Sample error. Retry creation to reuse the same request ID.".into());
     });
     harness.capture(&format!("new-thread-unconfirmed-{suffix}"));

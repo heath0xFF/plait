@@ -255,11 +255,16 @@ The Mac recovery journal is
 JSON, not encrypted by Plait, and can contain sensitive prompt text. Normal
 window close and Cmd-Q wait for a save. Force quit and power loss can lose the
 last unsaved keystrokes. Accepted work remains in the independent host store.
-The journal holds at most 4 MiB of serialized recovery data, 512 saved
-thread/draft records and 256 KiB per draft. If it would exceed a limit, the
+The journal holds at most 4 MiB of serialized recovery data and 256 KiB per
+draft. Independent drafts have a 10,000-record decoding bound. The legacy
+thread and project-draft fields retain their 512-record bound for older builds. If it would exceed a limit, the
 previous good file stays intact and current work stays in memory. Sending and
 required close or tab-switch saves report the failure and keep the work open.
-Twenty drafts of the maximum size are not a supported capacity.
+A draft that would take the journal over 4 MiB stays in memory with **Workspace
+not saved** and the reason. Required saves refuse sending, switching tabs, or
+closing until it fits; the previous file is unchanged. Shorten or explicitly
+discard drafts to free space. Force quit can lose the unsaved changes. Twenty
+drafts of the maximum size are not a supported capacity.
 
 If recovery reports an error, do not delete or reset the journal. Close duplicate
 Plait clients first. Keep a copy of the file before repair; malformed or unknown
@@ -710,13 +715,26 @@ future versions are left untouched. A host that cannot yet provide its identity
 still supports tabs for the current session without an extra prompt.
 
 Clicking a sidebar thread opens it at the end or switches to its existing tab.
-Cmd-T and Cmd-N open the project's New thread draft. Cmd-1 through Cmd-8 select
+New tab (+), Cmd-T, Cmd-N, the sidebar's New thread, and a project's New thread
+control always append a fresh, empty draft and bring it to the front, even when
+the current draft is empty. Each tab keeps its own text, images, project, model,
+harness, permissions, thinking level, and Project busy choice. Sending creates
+a thread in that tab; other drafts stay as they are. Cmd-1 through Cmd-8 select
 tabs by position; Cmd-9 selects the last. Cmd-Shift-[ and Cmd-Shift-] cycle
 through tabs; Control-Shift-Left and Control-Shift-Right move the active tab.
-Drag a tab to reorder it. The overflow control opens all tabs grouped by state.
+Drag a tab to reorder it. The overflow control opens all tabs grouped by state;
+large lists draw only the visible rows. Opening tabs has no count ceiling.
+Restore reads at most 10,000 entries and 16 MiB of tab preferences to bound damaged
+input. All saved open drafts, including empty ones, return in their saved order;
+recovered drafts without tab records append after them. Draft content still uses
+the separate 4 MiB recovery journal and its visible save-failure rules.
 
 Cmd-W or middle-click closes a tab without stopping its run. Cmd-Shift-T reopens
-the most recently closed tab, including a nonempty draft. Closing the last tab
+the most recently closed tab, including a nonempty draft or pending creation.
+Empty drafts close immediately. The last twenty closes retain their original
+position and view for this session. Older nonempty drafts remain in the private
+journal: after that history is exhausted, Cmd-Shift-T reopens those drafts at the
+end with their content and choices. They also return after restart. Closing the last tab
 leaves an empty workspace; another Cmd-W closes the window. Cmd-Shift-W closes
 the window directly.
 
@@ -1155,8 +1173,10 @@ draft keeps it too: after closing the window or quitting during preparation,
 sending the reopened draft reaches the thread and worktree the host already
 made instead of creating a second one;
 a refused creation keeps the draft. Completing it never selects a tab the person
-has moved away from. While a first-message creation remains unresolved, the
-window keeps its checkout fixed; other threads in that checkout remain available.
+has moved away from. Another draft can send while the first is preparing its
+worktree, and drafts can close or switch projects independently. Pending first
+messages and placement choices are saved with the draft; restart never sends
+them automatically. Retry reuses the same creation ID and captured message.
 
 If cleanup is unconfirmed, the host refuses placement with **Stop unconfirmed**
 and the recorded reason. Resolve that checkout through its cleanup controls

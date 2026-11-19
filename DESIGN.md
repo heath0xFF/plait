@@ -11,7 +11,12 @@ measured responsiveness. Keep controls useful and state easy to inspect.
 
 [Thread tabs](docs/ROADMAP.md#thread-tabs) keep recent work available without
 keeping hidden views loaded. Tab state belongs to the model; the native rows
-present it with measured widths, words, and accessible names. Settings and
+present it with measured widths, words, and accessible names. Every New tab or
+New thread action appends a fresh draft, even when the current one is empty.
+Drafts keep independent text, images, choices, and pending creation. Closing a
+nonempty draft preserves it for reopening; older closed drafts remain recoverable
+when the twenty-entry view history expires. Hidden drafts draw no content, and
+large overflow lists draw only visible rows. Settings and
 Project settings open as window modals over the current workspace.
 
 

@@ -1,5 +1,5 @@
 //! Checkout-scoped plain Rust state: shared repository data, write jobs, and
-//! per-checkout thread-creation state.
+//! the legacy direct-creation selection. Independent drafts own their requests.
 
 use crate::{
     git,
@@ -11,7 +11,7 @@ use crate::{
 };
 use std::{path::PathBuf, sync::Arc};
 
-/// Checkout-scoped thread creation state: active checkout path, chosen model,
+/// Direct-creation selection: active checkout path, chosen model,
 /// and any unconfirmed creation request waiting for acknowledgement or retry.
 pub struct CheckoutCreationState {
     pub checkout: PathBuf,

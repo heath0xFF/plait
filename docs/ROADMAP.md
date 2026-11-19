@@ -501,8 +501,10 @@ network access or the person's own credentials.
 **Shipped in v0.1.0-preview.18:** one thread per tab, a 40-point top row that stays visible with the
 sidebar hidden, a 36-point row for the thread's Conversation, Changes, History
 and Files views, and a state-grouped overflow list. Sidebar clicks open or
-activate a thread's tab. Each checkout has one New thread draft tab; creating
-its thread replaces the draft in place. Closing never stops a run or removes
+activate a thread's tab. **Built next:** every New tab or New thread action
+appends an independent, empty draft, including in the same checkout; creating
+its thread replaces that draft in place. There is no interactive tab-count
+ceiling. Only visible tab-strip and overflow rows are drawn. Closing never stops a run or removes
 a worktree. Closing the last tab leaves an empty workspace. Settings and
 Project settings open as window modals over the unchanged tab rows and content.
 Tab controls remain inactive until the modal closes.
@@ -575,7 +577,10 @@ seeding (Stage 11), and worktree storage accounting and cleanup (Stage 12).
 
 The agreed v2 recovery index/blob layout remains planned, with its own
 compatibility review and retained v1 backup. The shipped v1 journal is limited
-to 4 MiB serialized, 512 records and 256 KiB per draft. Twenty maximal drafts
+to 4 MiB serialized and 256 KiB per draft. Its additive `draft_tabs` field keeps
+independent drafts and pending first sends; legacy snapshots stay readable by
+older builds and retain their 512-record bound. The new field decodes at most
+10,000 drafts; tab preferences decode at most 10,000 entries and 16 MiB. Twenty maximal drafts
 and a separate 4 MiB resident submission cache are not supported capacity
 promises. At a limit, the last good journal remains intact; required saves
 refuse submission or closing instead of discarding current work.

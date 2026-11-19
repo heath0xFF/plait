@@ -473,6 +473,11 @@ pub fn run() -> Vec<Row> {
             });
         },
     ));
+    super::tabs::install(&mut harness, 300);
+    rows.push(harness.steady("tabs300 conversation, bounded visible strip, 299 cold tabs"));
+    harness.update(|p, _, _| p.tabs.list_open = true);
+    rows.push(harness.steady("tabs300 virtual overflow, visible rows only"));
+    harness.update(|p, _, _| p.tabs.list_open = false);
     super::tabs::install(&mut harness, 1);
     scroll_conversation(&mut harness, 0.5);
     rows.push(harness.steady("c2 conversation, middle (steady)"));
