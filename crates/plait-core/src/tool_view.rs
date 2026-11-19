@@ -58,6 +58,19 @@ pub struct ToolView {
 }
 
 impl ToolView {
+    pub fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.name.capacity()
+            + self.input.capacity()
+            + self.output.capacity()
+            + self.facts.as_ref().map_or(0, String::capacity)
+            + self.sections.capacity() * std::mem::size_of::<Section>()
+            + self
+                .sections
+                .iter()
+                .map(|s| s.block.retained_bytes() + s.note.as_ref().map_or(0, String::capacity))
+                .sum::<usize>()
+    }
     pub fn new(tool: &Tool) -> Self {
         Self::build(tool, false)
     }
@@ -327,6 +340,21 @@ pub struct Runs {
 }
 
 impl Runs {
+    pub fn retained_bytes(&self) -> usize {
+        use std::mem::size_of;
+        self.runs.capacity() * size_of::<Run>()
+            + self
+                .runs
+                .iter()
+                .map(|r| {
+                    r.summary.capacity()
+                        + r.tools.capacity() * size_of::<String>()
+                        + r.tools.iter().map(String::capacity).sum::<usize>()
+                })
+                .sum::<usize>()
+            + self.members.capacity() * (size_of::<(String, (usize, usize))>() + 2)
+            + self.members.keys().map(String::capacity).sum::<usize>()
+    }
     /// A finished run of [`GROUP_MIN`] or more calls folds completely. The run
     /// a busy thread is still adding to keeps its latest [`LIVE_VISIBLE`]
     /// calls in view and folds the earlier ones.

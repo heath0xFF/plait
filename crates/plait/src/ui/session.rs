@@ -30,6 +30,47 @@ impl SessionState {
 }
 
 impl Plait {
+    pub(super) fn acknowledge_saved_draft(
+        &mut self,
+        id: &str,
+        text: &str,
+        revision: Option<u64>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(data) = self.session.data.as_mut() {
+            if let Some(thread) = data.threads.get_mut(id) {
+                let draft = &mut thread.draft;
+                let revision = revision.or_else(|| {
+                    draft
+                        .submitted
+                        .as_ref()
+                        .filter(|(s, _)| s == text)
+                        .map(|(_, r)| *r)
+                });
+                if revision == Some(draft.revision) && draft.text == text {
+                    draft.text.clear();
+                    draft.images.clear();
+                    draft.submitted = None;
+                    draft.revision += 1;
+                }
+                thread.pending = self.host.submissions.pending(id).cloned();
+                thread.pending_submissions = self
+                    .host
+                    .submissions
+                    .all(id)
+                    .iter()
+                    .skip(1)
+                    .cloned()
+                    .collect();
+                thread.queued_submissions = self.host.submissions.accepted(id).to_vec();
+            }
+            if let Some(journal) = &self.session.journal {
+                journal.queue(data.clone());
+            }
+            self.schedule_session_save(false, cx);
+        }
+    }
+
     pub fn restore_desktop(
         &mut self,
         requested: Option<PathBuf>,

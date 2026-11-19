@@ -134,6 +134,37 @@ pub(super) fn walk(
         p.sidebar = true;
     });
     h.capture(&format!("tabs-empty-{suffix}"));
+    h.connect(repository, false);
+    install(&mut h, 3);
+    for (name, view) in [
+        ("conversation", super::super::Workspace::Conversation),
+        ("changes", super::super::Workspace::Changes),
+        ("history", super::super::Workspace::History),
+        ("files", super::super::Workspace::Files),
+    ] {
+        h.update(|p, w, cx| {
+            p.sidebar = true;
+            p.show_tab(view, w, cx);
+            if name == "files" {
+                p.open_file("src/review.rs".into(), Some(2), cx);
+            }
+        });
+        h.capture(&format!("tabs-all-views-restored-{name}-{suffix}"));
+    }
+    h.update(|p, _, _| {
+        p.workspace.tab = super::super::Workspace::Conversation;
+        p.workspace.history = Default::default();
+        p.workspace.formatted = Default::default();
+        p.host.thread.snapshot = None;
+        p.refresh_live_list(None);
+    });
+    h.capture(&format!("tabs-cold-loading-{suffix}"));
+    h.update(|p, _, _| {
+        p.notice = Some(
+            "The saved view is unavailable. Showing this thread from its latest messages.".into(),
+        )
+    });
+    h.capture(&format!("tabs-bookmark-evicted-{suffix}"));
 }
 
 pub(super) fn exercise() {
@@ -181,4 +212,99 @@ pub(super) fn exercise() {
         assert!(p.host.thread.selected.is_none());
     });
     let _ = std::fs::remove_dir_all(scratch);
+}
+
+pub(super) fn cold_workspaces() {
+    let scratch = std::env::temp_dir().join(format!("plait-cold-tabs-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut h = Harness::new(&repository, None, 900., 600.);
+    h.connect(&repository, false);
+    install(&mut h, 3);
+    h.update(|p, _, cx| {
+        p.host.connection.connected = false;
+        p.workspace.composers[THREAD].update(cx, |c, cx| {
+            c.restore_draft("Draft survives parking".into(), 9, None, cx)
+        });
+    });
+    for view in [
+        super::super::Workspace::Conversation,
+        super::super::Workspace::Changes,
+        super::super::Workspace::History,
+        super::super::Workspace::Files,
+    ] {
+        let old = h
+            .window
+            .update(&mut h.cx, |p, _, cx| {
+                p.workspace.tab = view;
+                p.workspace.thread_files.collapsed = true;
+                p.workspace.thread_controls.usage_open = true;
+                p.workspace
+                    .commit_message
+                    .update(cx, |f, cx| f.set_text("Preserve this commit message", cx));
+                p.restore_find_bookmark(
+                    super::super::file_view::FindIn::Conversation,
+                    &plait_core::tabs::bookmark::FindBookmark {
+                        open: true,
+                        query: "queue".into(),
+                        current: None,
+                    },
+                    cx,
+                );
+                (
+                    p.host.read_stamp(),
+                    p.tabs
+                        .model
+                        .read_stamp(p.tabs.model.active().unwrap())
+                        .unwrap(),
+                )
+            })
+            .unwrap();
+        h.draw();
+        h.keystroke("cmd-2");
+        h.update(|p, _, _| {
+            assert!(!p.host.accepts_read(&old.0));
+            assert!(!p.tabs.model.accepts_read(old.1));
+            assert_eq!(p.workspace.composers.len(), 1);
+            assert!(p.workspace.formatted.messages.is_empty());
+            assert!(p.workspace.history.cache.entries.is_empty());
+            assert!(p.workspace.host_watch.is_none());
+        });
+        h.draw();
+        h.keystroke("cmd-1");
+        h.update(|p, _, cx| {
+            assert_eq!(p.workspace.tab, view);
+            assert_eq!(
+                p.workspace.composers[THREAD].read(cx).saved_draft().0,
+                "Draft survives parking"
+            );
+            assert!(p.workspace.thread_files.collapsed && p.workspace.thread_controls.usage_open);
+            assert_eq!(
+                p.workspace.commit_message.read(cx).text(),
+                "Preserve this commit message"
+            );
+            assert_eq!(
+                p.workspace
+                    .conversation_find
+                    .field
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .text(),
+                "queue"
+            );
+            assert!(!p.host.accepts_read(&old.0));
+        });
+    }
+    h.draw();
+    h.keystroke("cmd-w");
+    h.draw();
+    h.keystroke("cmd-shift-t");
+    h.update(|p, _, cx| {
+        assert_eq!(
+            p.workspace.composers[THREAD].read(cx).saved_draft().0,
+            "Draft survives parking"
+        )
+    });
+    drop(h);
+    std::fs::remove_dir_all(scratch).unwrap();
 }

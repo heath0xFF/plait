@@ -12,6 +12,8 @@ mod images;
 mod input;
 mod mentions;
 mod parent;
+mod parking;
+pub(super) use parking::ParkedEditor;
 mod trigger;
 
 pub use commands::{AgentCommand, CommandId};

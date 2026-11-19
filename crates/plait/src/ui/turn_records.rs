@@ -21,7 +21,7 @@ pub(super) struct Stamp {
 pub(super) use plait_core::operations::UndoAttempt as Attempt;
 pub(super) struct Blocked {
     run: String,
-    reply: UndoTurnReply,
+    pub(super) reply: UndoTurnReply,
     coverage: Vec<SharedString>,
     changed: Vec<SharedString>,
     omitted: usize,

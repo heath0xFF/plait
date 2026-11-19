@@ -291,6 +291,12 @@ impl WindowTabs {
     pub fn active(&self) -> Option<TabId> {
         self.active
     }
+
+    /// Used to retire private editor caches after closed-history eviction.
+    pub fn retains_target(&self, target: &ThreadTarget) -> bool {
+        self.tabs.iter().any(|tab| tab.thread().target() == target)
+            || self.closed.iter().any(|tab| &tab.target == target)
+    }
     pub fn get(&self, id: TabId) -> Option<&TabRecord> {
         self.tabs.iter().find(|tab| tab.id == id)
     }

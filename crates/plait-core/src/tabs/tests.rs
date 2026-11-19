@@ -463,6 +463,7 @@ pub(super) fn rich_bookmark(view: ThreadView) -> ThreadBookmark {
         hunk: 3,
         line: 6,
         offset_millipoints: 500,
+        horizontal_millipoints: 0,
     };
     ThreadBookmark {
         view,
@@ -488,6 +489,7 @@ pub(super) fn rich_bookmark(view: ThreadView) -> ThreadBookmark {
                 compare_current: true,
             },
             anchor: Some(anchor.clone()),
+            selection: Some((3, 5)),
             list_offset_millipoints: 4200,
         },
         history: HistoryBookmark {
@@ -500,6 +502,7 @@ pub(super) fn rich_bookmark(view: ThreadView) -> ThreadBookmark {
             line: 90,
             column: 4,
             offset_millipoints: 800,
+            horizontal_millipoints: 0,
             find: FindBookmark {
                 open: true,
                 query: "match".into(),

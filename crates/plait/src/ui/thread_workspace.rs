@@ -18,6 +18,9 @@ use std::{
 
 /// Presentation container for the currently selected thread workspace.
 pub(super) struct ThreadWorkspace {
+    pub(super) restore: Option<plait_core::tabs::bookmark::ThreadBookmark>,
+    pub(super) restore_pending: [bool; 4],
+    pub(super) cancelled: Arc<std::sync::atomic::AtomicBool>,
     /// Existing per-thread editors; selection keeps their drafts and IME state.
     pub(super) composers: HashMap<String, Entity<super::composer::Composer>>,
     pub(super) host_watch: Option<host::WatchLease>,
@@ -54,6 +57,9 @@ pub(super) struct ThreadWorkspace {
 impl ThreadWorkspace {
     pub(super) fn new(commit_message: Entity<text_field::TextField>) -> Self {
         Self {
+            restore: None,
+            restore_pending: [false; 4],
+            cancelled: Arc::default(),
             composers: HashMap::new(),
             host_watch: None,
             live_scroll: ListState::new(0, ListAlignment::Bottom, px(300.)),

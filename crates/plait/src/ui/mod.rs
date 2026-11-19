@@ -35,6 +35,8 @@ mod settings_project;
 mod settings_providers;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod snapshot;
+mod tab_bookmark;
+mod tab_lifecycle;
 mod tabs;
 mod text_field;
 pub mod theme;
@@ -302,6 +304,7 @@ impl Plait {
                 this.deliver_files(cx);
                 this.deliver_quick_open(cx);
                 this.deliver_branches(cx);
+                this.restore_ready_bookmarks(cx);
                 this.pump(cx);
                 cx.notify();
             });

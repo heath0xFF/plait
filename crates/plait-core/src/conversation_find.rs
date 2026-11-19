@@ -154,6 +154,15 @@ pub fn segments(block: &Block) -> Vec<Range<usize>> {
 /// projection yet are skipped. Past `FIND_LIMIT` the newest matches are
 /// kept: the end of a conversation is where it is usually read.
 pub fn search(snapshot: &Snapshot, transcript: &Transcript, query: &str) -> Matches {
+    search_cancellable(snapshot, transcript, query, &|| false)
+}
+
+pub fn search_cancellable(
+    snapshot: &Snapshot,
+    transcript: &Transcript,
+    query: &str,
+    cancelled: &impl Fn() -> bool,
+) -> Matches {
     let mut matches = Matches::default();
     if query.is_empty() {
         return matches;
@@ -167,6 +176,9 @@ pub fn search(snapshot: &Snapshot, transcript: &Transcript, query: &str) -> Matc
     let mut newest_first = Vec::new();
     let mut total = 0;
     for (index, message) in snapshot.messages.iter().enumerate().rev() {
+        if cancelled() {
+            return Matches::default();
+        }
         if total >= FIND_LIMIT {
             break;
         }

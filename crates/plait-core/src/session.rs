@@ -3,6 +3,7 @@
 //! Open and flush only on a background executor. Queueing replaces an in-memory
 //! snapshot; disk writes are serialized so an older save cannot replace newer work.
 
+mod blobs;
 use crate::host::ModelChoice;
 use crate::host_state::PendingSubmit;
 use serde::{Deserialize, Serialize};

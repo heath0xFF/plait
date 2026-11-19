@@ -212,11 +212,14 @@ impl Plait {
             cx.notify();
             return;
         }
-        if !self.open_thread_tab(id.clone(), checkout, cx) {
-            cx.notify();
-            return;
-        }
-        self.present_tab(window, cx);
+        self.request_tab(
+            super::tab_lifecycle::Intent::Open(plait_core::tabs::ThreadTarget::Existing {
+                id,
+                checkout: self.tab_checkout(checkout),
+            }),
+            window,
+            cx,
+        );
     }
 
     pub(super) fn select_host_thread_content(
@@ -729,7 +732,7 @@ impl Plait {
             return;
         }
         let id = id.to_owned();
-        let composer = self.workspace.composers.get(&id).cloned();
+        let composer = self.workspace.composers.get(&id).map(Entity::downgrade);
         self.host.thread.submitting = true;
         self.host.connection.error = None;
         self.sync_composer(cx);
@@ -745,8 +748,14 @@ impl Plait {
                             && reply.request_id == pending.request_id =>
                     {
                         this.host.submissions.confirm(&id, &pending.request_id);
+                        this.acknowledge_saved_draft(
+                            &id,
+                            &pending.text,
+                            pending.draft_revision,
+                            cx,
+                        );
                         if let Some(composer) = composer {
-                            composer.update(cx, |composer, cx| {
+                            let _ = composer.update(cx, |composer, cx| {
                                 composer.acknowledge(&pending.text, pending.draft_revision, cx);
                             });
                         }

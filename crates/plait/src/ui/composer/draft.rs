@@ -10,7 +10,7 @@ const UNDO_LIMIT: usize = 100;
 /// Full-draft undo steps for a large paste would otherwise hold 100 copies of it.
 const UNDO_BYTES: usize = 4 * 1024 * 1024;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub(super) struct Snapshot {
     pub text: String,
     pub anchor: usize,
@@ -18,8 +18,10 @@ pub(super) struct Snapshot {
 }
 
 /// A sent prompt shown in place of the draft while the user walks history.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Recall {
     /// History as it was when recall began, oldest first; later sends cannot shift it.
+    #[serde(with = "super::parking::strings")]
     entries: Arc<[String]>,
     index: usize,
     /// The draft being written, returned unchanged when recall ends.
@@ -29,7 +31,7 @@ struct Recall {
     untouched: bool,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub(super) struct Draft {
     pub value: Snapshot,
     pub marked: Option<Range<usize>>,
@@ -50,6 +52,27 @@ fn floor_char_boundary(text: &str, mut offset: usize) -> usize {
 }
 
 impl Draft {
+    pub(super) fn retained_bytes(&self) -> usize {
+        let snapshot = |s: &Snapshot| s.text.capacity();
+        std::mem::size_of::<Self>()
+            + snapshot(&self.value)
+            + self.undo.capacity() * std::mem::size_of::<Snapshot>()
+            + self.redo.capacity() * std::mem::size_of::<Snapshot>()
+            + self
+                .undo
+                .iter()
+                .chain(&self.redo)
+                .map(snapshot)
+                .sum::<usize>()
+            + self.composition_start.as_ref().map_or(0, snapshot)
+            + self.submitted.as_ref().map_or(0, |(s, _)| s.capacity())
+            + self.history.retained_bytes()
+            + self.recall.as_ref().map_or(0, |r| {
+                snapshot(&r.stash)
+                    + r.entries.len() * std::mem::size_of::<String>()
+                    + r.entries.iter().map(String::capacity).sum::<usize>()
+            })
+    }
     pub fn restored(
         text: String,
         revision: u64,
@@ -174,9 +197,9 @@ impl Draft {
         }
         self.undo.push(before);
         self.redo.clear();
-        let mut bytes: usize = self.undo.iter().map(|step| step.text.len()).sum();
+        let mut bytes: usize = self.undo.iter().map(|step| step.text.capacity()).sum();
         while self.undo.len() > UNDO_LIMIT || (bytes > UNDO_BYTES && self.undo.len() > 1) {
-            bytes -= self.undo.remove(0).text.len();
+            bytes -= self.undo.remove(0).text.capacity();
         }
     }
 

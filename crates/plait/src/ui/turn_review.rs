@@ -241,6 +241,7 @@ impl Plait {
             }
         }
         self.sync_recorded_current(cx);
+        self.restore_ready_bookmarks(cx);
         self.pump_turn_review(cx);
         cx.notify();
     }

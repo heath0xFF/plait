@@ -219,6 +219,39 @@ pub struct Snapshot {
     pub image_input: Option<String>,
 }
 
+impl Snapshot {
+    /// Capacity of retained text plus a conservative allowance for the bounded wire envelope.
+    pub fn retained_bytes(&self) -> usize {
+        use std::mem::size_of;
+        2 * 1024 * 1024
+            + self.messages.capacity() * size_of::<Message>()
+            + self.tools.capacity() * size_of::<Tool>()
+            + self
+                .messages
+                .iter()
+                .map(|m| {
+                    m.id.capacity()
+                        + m.text.capacity()
+                        + m.reasoning.capacity()
+                        + m.images.capacity() * size_of::<crate::images::ImageRef>()
+                        + m.images
+                            .iter()
+                            .map(|i| i.id.capacity() + i.media_type.capacity())
+                            .sum::<usize>()
+                })
+                .sum::<usize>()
+            + self
+                .tools
+                .iter()
+                .map(|t| {
+                    t.id.capacity() + t.name.capacity() + t.input.capacity() + t.output.capacity()
+                })
+                .sum::<usize>()
+            + self.live_text.capacity()
+            + self.live_reasoning.capacity()
+    }
+}
+
 /// What a submission does when its thread already has an active run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

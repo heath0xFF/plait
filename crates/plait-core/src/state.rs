@@ -146,6 +146,17 @@ impl WriteState {
 }
 
 impl RepositoryState {
+    fn bound_payload_cache(&mut self) {
+        const LIMIT: usize = 16 * 1024 * 1024;
+        self.data
+            .cache
+            .trim_weight(LIMIT, |diff| diff.retained_bytes());
+        let remaining = LIMIT.saturating_sub(self.data.cache.weight(|diff| diff.retained_bytes()));
+        self.data
+            .commits
+            .shows
+            .trim_weight(remaining, |diff| diff.retained_bytes());
+    }
     pub fn new(path: PathBuf) -> Self {
         let mut state = Self {
             data: CheckoutRepositoryData::new(path),
@@ -251,6 +262,37 @@ impl RepositoryState {
     pub fn refresh(&mut self) {
         self.refresh_status();
         self.reset_history();
+    }
+
+    /// Retire presentation reads; an accepted write still completes for its owner.
+    pub fn park_view(&mut self) {
+        self.view_generation += 1;
+        self.view = ThreadRepositoryView::default();
+        self.data.pending = self
+            .data
+            .pending
+            .take()
+            .filter(|job| matches!(job, Job::Status { .. }));
+        self.data.prefetch = None;
+        self.data.files_queued = false;
+        self.data.files = Load::Empty;
+        self.data.cache.clear();
+        self.data.commits = CommitLogData {
+            epoch: self.data.commits.epoch + 1,
+            ..Default::default()
+        };
+    }
+
+    pub fn restore_path(&mut self, path: PathBuf, mode: DiffMode) {
+        if let Some(index) = self
+            .snapshot()
+            .ready()
+            .and_then(|s| s.changes.iter().position(|c| c.path == path))
+        {
+            self.select(index, mode);
+        } else {
+            self.view.changes.restore = Some((path, mode));
+        }
     }
 
     /// Reread status and diffs only. Staging changes the index, not history,
@@ -621,6 +663,7 @@ impl RepositoryState {
             (Job::Diff { epoch, key, .. }, Reply::Diff(result)) if epoch == self.data.epoch => {
                 if let Ok(diff) = &result {
                     self.data.cache.insert(key.clone(), diff.clone());
+                    self.bound_payload_cache();
                 }
                 if self.view.changes.selected.as_ref() == Some(&key) {
                     let ok = result.is_ok();
@@ -679,6 +722,7 @@ impl RepositoryState {
             {
                 if let Ok(patch) = &result {
                     self.data.commits.shows.insert(id.clone(), patch.clone());
+                    self.bound_payload_cache();
                 }
                 if self.view.history.selected.as_ref() == Some(&id) {
                     self.view.history.patch = match result {

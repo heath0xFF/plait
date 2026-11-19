@@ -24,6 +24,7 @@ pub(super) struct ConversationFind {
     pub field: Option<Entity<TextField>>,
     pub matches: Arc<Matches>,
     pub current: usize,
+    pub(super) restore_match: Option<plait_core::tabs::bookmark::TextPosition>,
     /// A loaded message shows only part of its text.
     pub partial: bool,
     /// The query `matches` answer. A different one moves to a match; the
@@ -56,7 +57,30 @@ pub(super) struct Found {
     pub partial: bool,
 }
 
+impl ConversationFind {
+    pub(super) fn bookmark_match(&self) -> Option<plait_core::tabs::bookmark::TextPosition> {
+        self.matches
+            .hits
+            .get(self.current)
+            .map(|hit| plait_core::tabs::bookmark::TextPosition {
+                source: hit.message.clone(),
+                block: hit.block as u32,
+                byte: hit.range.start as u32,
+            })
+    }
+}
+
 impl Plait {
+    pub(super) fn restore_conversation_find(
+        &mut self,
+        field: Entity<TextField>,
+        events: Subscription,
+        open: bool,
+    ) {
+        self.workspace.conversation_find.field = Some(field);
+        self.workspace.conversation_find._events = Some(events);
+        self.workspace.conversation_find.open = open;
+    }
     /// Cmd-F over the conversation: show the bar and search what is loaded.
     pub(super) fn open_conversation_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.host.thread.selected.is_none() {
@@ -122,6 +146,7 @@ impl Plait {
     }
 
     fn start_search(&mut self, cx: &mut Context<Self>) {
+        let owner = self.host.read_stamp();
         let find = &mut self.workspace.conversation_find;
         let query = match (&find.field, find.open) {
             (Some(field), true) => field.read(cx).text().to_owned(),
@@ -138,9 +163,14 @@ impl Plait {
             .or_else(|| self.host.thread.snapshot.clone());
         let transcript = self.workspace.formatted.clone();
         let history = self.workspace.history.cache.clone();
+        let cancelled = self.workspace.cancelled.clone();
         let task = cx.background_executor().spawn(async move {
             let matches = match &snapshot {
-                Some(snapshot) => conversation_find::search(snapshot, &transcript, &query),
+                Some(snapshot) => {
+                    conversation_find::search_cancellable(snapshot, &transcript, &query, &|| {
+                        cancelled.load(std::sync::atomic::Ordering::Acquire)
+                    })
+                }
                 None => Matches::default(),
             };
             Found {
@@ -154,6 +184,9 @@ impl Plait {
         cx.spawn(async move |this, cx| {
             let found = task.await;
             let _ = this.update(cx, |this, cx| {
+                if !this.host.accepts_read(&owner) {
+                    return;
+                }
                 this.workspace.conversation_find.searching = false;
                 this.land_search(found, cx);
             });
@@ -178,6 +211,21 @@ impl Plait {
         find.query = found.query;
         find.partial = found.partial;
         find.matches = Arc::new(found.matches);
+        if let Some(saved) = find.restore_match.take() {
+            find.current = find
+                .matches
+                .hits
+                .iter()
+                .position(|h| {
+                    h.message == saved.source
+                        && h.block == saved.block as usize
+                        && h.range.start == saved.byte as usize
+                })
+                .unwrap_or(0);
+            find.reveal = None;
+            cx.notify();
+            return;
+        }
         let count = find.matches.len();
         if typed {
             // A new query starts at the first match from the top of the view,

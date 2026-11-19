@@ -71,12 +71,14 @@ impl Plait {
 
     /// Show the draft, with any text it kept, in the active project.
     pub(super) fn open_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.open_draft_tab(cx) {
-            cx.notify();
-            return;
-        }
-        self.open_draft_content(window, cx);
-        self.refresh_tab_rows();
+        self.request_tab(
+            super::tab_lifecycle::Intent::Open(plait_core::tabs::ThreadTarget::Draft {
+                id: "draft".into(),
+                checkout: self.tab_checkout(self.host.creation.checkout.clone()),
+            }),
+            window,
+            cx,
+        );
     }
 
     pub(super) fn open_draft_content(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -477,16 +479,55 @@ impl Plait {
             return;
         };
         let visible = self.draft_visible();
-        let Some(composer) = self.draft.composer.take() else {
-            return;
-        };
+        let draft_tab = self.tabs.model.tabs().iter().find(|tab| {
+            matches!(tab.thread().target(), plait_core::tabs::ThreadTarget::Draft { checkout, .. } if checkout.root == self.host.creation.checkout)
+        }).map(|tab| (tab.id(), tab.thread().target().checkout().clone()));
+        let composer = self.draft.composer.take();
+        if composer.is_none()
+            && let Some(data) = &mut self.session.data
+            && let Some(summary) = self.host.connection.threads.iter().find(|t| t.id == id)
+        {
+            let draft = data
+                .new_draft_for(&summary.checkout)
+                .cloned()
+                .unwrap_or_default();
+            let result = data.update_thread(
+                id.clone(),
+                plait_core::session::Thread {
+                    checkout: summary.checkout.clone(),
+                    model: summary.model.clone(),
+                    title: plait_core::session::title(&sending.text),
+                    draft,
+                    pending: None,
+                    pending_submissions: Vec::new(),
+                    queued_submissions: Vec::new(),
+                    approval: sending.choice,
+                },
+            );
+            if let Err(error) = result {
+                self.session.note = Some(error);
+            }
+        }
         // The next New Thread starts afresh.
         self.clear_new_draft(cx);
         self.draft = super::new_thread::Draft {
             generation: self.draft.generation + 1,
             ..Default::default()
         };
-        self.attach_composer(id.clone(), composer, window, cx);
+        if let Some(composer) = composer {
+            self.attach_composer(id.clone(), composer, window, cx);
+        }
+        if let Some((tab, checkout)) = draft_tab {
+            let result = self.tabs.model.bind_created(
+                tab,
+                plait_core::tabs::ThreadTarget::Existing {
+                    id: id.clone(),
+                    checkout,
+                },
+            );
+            self.tab_error(result);
+            self.refresh_tab_rows();
+        }
         if sending.choice.is_some() {
             self.set_thread_approval(id.clone(), sending.choice, cx);
         }
@@ -503,7 +544,7 @@ impl Plait {
             Err(error) => self.set_thread_notice(id.clone(), error, true),
         }
         if visible {
-            self.select_host_thread(id, window, cx);
+            self.select_host_thread_content(id, window, cx);
             self.focus_composer(window, cx);
         } else {
             self.capture_session(cx);

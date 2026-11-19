@@ -16,11 +16,13 @@ use std::{
 #[derive(Clone)]
 pub(super) enum Load {
     Latest,
+    Restore(Option<String>),
     Older,
     Part(Key, HistoryField, bool),
 }
 #[derive(Default)]
 pub(super) struct HistoryView {
+    pub retained_bytes: usize,
     pub cache: Arc<History>,
     pub display: Option<Arc<Snapshot>>,
     pub enabled: bool,
@@ -66,6 +68,16 @@ impl Plait {
     }
     pub(super) fn conversation_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.workspace.history.enabled = self.host.protocol() >= 3;
+        if self.workspace.restore_pending[0]
+            && !self.workspace.history.cache.loaded
+            && let Some(before) = self
+                .workspace
+                .restore
+                .as_ref()
+                .and_then(|b| b.conversation.before.clone())
+        {
+            self.load_history(Load::Restore(Some(before)), window, cx);
+        }
         self.workspace.history.revision += 1;
         self.workspace.history.now = millis();
         self.prepare_conversation(window, cx);
@@ -135,34 +147,71 @@ impl Plait {
         let previous = self.workspace.formatted.clone();
         let records = self.workspace.turn_records.data.clone();
         let record_generation = self.workspace.turn_records.data_generation;
+        let cancelled = self.workspace.cancelled.clone();
+        let anchor = self
+            .conversation_snapshot()
+            .and_then(|s| {
+                self.workspace
+                    .live_layout
+                    .get(self.workspace.live_scroll.logical_scroll_top().item_ix)
+                    .and_then(|slot| transcript::resolve(s, *slot))
+            })
+            .and_then(Key::row);
         let task = cx.background_executor().spawn(async move {
-            let display = if enabled {
-                cache.project(&snapshot)
-            } else {
-                (*snapshot).clone()
-            };
-            let stored = cache
-                .entries
-                .iter()
-                .filter_map(|entry| match &entry.item {
-                    plait_core::host::HistoryItem::Tool { id, status, .. }
-                        if *status != plait_core::host::ToolStatus::Running
-                            && display
-                                .tools
-                                .iter()
-                                .any(|tool| tool.id == *id && tool.status == *status) =>
-                    {
-                        Some(id.clone())
-                    }
-                    _ => None,
-                })
-                .collect();
-            let formatted = markdown::Transcript::update_stored(&previous, &display, &stored);
-            let lines = history::records::project(&display, &records, !cache.detached);
-            (Arc::new(display), Arc::new(formatted), Arc::new(lines))
+            let mut cache = (*cache).clone();
+            loop {
+                if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                    return None;
+                }
+                let display = if enabled {
+                    cache.project(&snapshot)
+                } else {
+                    (*snapshot).clone()
+                };
+                let stored = cache
+                    .entries
+                    .iter()
+                    .filter_map(|entry| match &entry.item {
+                        plait_core::host::HistoryItem::Tool { id, status, .. }
+                            if *status != plait_core::host::ToolStatus::Running
+                                && display
+                                    .tools
+                                    .iter()
+                                    .any(|tool| tool.id == *id && tool.status == *status) =>
+                        {
+                            Some(id.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let formatted = markdown::Transcript::update_cancellable(
+                    &previous,
+                    &display,
+                    &stored,
+                    &|| cancelled.load(std::sync::atomic::Ordering::Acquire),
+                )?;
+                let retained = cache.retained_bytes()
+                    + display.retained_bytes()
+                    + snapshot.retained_bytes()
+                    + formatted.retained_bytes();
+                if retained > 96 * 1024 * 1024 {
+                    if cache.evict_for_budget(anchor.as_ref()) { continue; }
+                    return Some(Err("This conversation part exceeds the reading memory limit. Its stored history is unchanged."));
+                }
+                let lines = history::records::project(&display, &records, !cache.detached);
+                return Some(Ok((
+                    Arc::new(cache),
+                    Arc::new(display),
+                    Arc::new(formatted),
+                    Arc::new(lines),
+                    retained,
+                )));
+            }
         });
         cx.spawn_in(window, async move |this, cx| {
-            let (display, formatted, lines) = task.await;
+            let Some(result) = task.await else {
+                return;
+            };
             let _ = this.update_in(cx, |this, window, cx| {
                 if !this.host.accepts_watch(epoch, watch_epoch, &id) {
                     return;
@@ -172,6 +221,17 @@ impl Plait {
                     this.prepare_conversation(window, cx);
                     return;
                 }
+                let (cache, display, formatted, lines, retained) = match result {
+                    Ok(value) => value,
+                    Err(error) => {
+                        this.workspace.history.error = Some(error.into());
+                        this.notice = Some(error.into());
+                        cx.notify();
+                        return;
+                    }
+                };
+                this.workspace.history.cache = cache;
+                this.workspace.history.retained_bytes = retained;
                 let previous = this.workspace.history.display.replace(display);
                 let before = std::mem::replace(&mut this.workspace.formatted, formatted);
                 if this.reconcile_live_list(previous.as_deref()) {
@@ -179,6 +239,8 @@ impl Plait {
                 }
                 this.install_record_lines(lines, record_generation);
                 this.conversation_rows_changed(cx);
+                this.restore_ready_bookmarks(cx);
+                this.restore_tab_image(window, cx);
                 if this.workspace.history.enabled
                     && this.workspace.history.loading.is_none()
                     && let Some(live) = this.host.thread.snapshot.as_ref()
@@ -224,6 +286,15 @@ impl Plait {
             let client = Client::from_environment()?;
             let mut cache = (*cache).clone();
             match operation {
+                Load::Restore(before) => {
+                    cache.latest(history::read_page_version(
+                        &client,
+                        &thread,
+                        before.clone(),
+                        protocol,
+                    )?);
+                    cache.detached = before.is_some();
+                }
                 Load::Latest => cache.latest(history::read_page_version(
                     &client, &thread, None, protocol,
                 )?),

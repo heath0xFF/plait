@@ -123,6 +123,63 @@ pub(super) struct Reading {
 }
 
 impl Reading {
+    pub(super) fn bookmark_selection(
+        &self,
+    ) -> Option<(
+        plait_core::tabs::bookmark::TextPosition,
+        plait_core::tabs::bookmark::TextPosition,
+    )> {
+        let selection = self.selection.as_ref()?;
+        let position = |a: &Anchor| plait_core::tabs::bookmark::TextPosition {
+            source: match &a.owner {
+                Owner::Message(id) => format!("message:{id}"),
+                Owner::Reasoning(id) => format!("reasoning:{id}"),
+                Owner::Tool(id) => format!("tool:{id}"),
+                Owner::Stream => "stream".into(),
+                Owner::LiveReasoning => "live-reasoning".into(),
+            },
+            block: a.block as u32,
+            byte: a.offset as u32,
+        };
+        Some((position(&selection.anchor), position(&selection.head)))
+    }
+
+    pub(super) fn restore_selection(
+        &mut self,
+        thread: &str,
+        details: &plait_core::tabs::bookmark::ViewDetails,
+    ) {
+        self.groups_thread = thread.into();
+        self.open_groups = details.folded.iter().cloned().collect();
+        let anchor = |p: &plait_core::tabs::bookmark::TextPosition| -> Option<Anchor> {
+            let owner = if let Some(id) = p.source.strip_prefix("message:") {
+                Owner::Message(id.to_owned().into())
+            } else if let Some(id) = p.source.strip_prefix("reasoning:") {
+                Owner::Reasoning(id.to_owned().into())
+            } else if let Some(id) = p.source.strip_prefix("tool:") {
+                Owner::Tool(id.to_owned().into())
+            } else if p.source == "stream" {
+                Owner::Stream
+            } else if p.source == "live-reasoning" {
+                Owner::LiveReasoning
+            } else {
+                return None;
+            };
+            Some(Anchor {
+                owner,
+                block: p.block as usize,
+                offset: p.byte as usize,
+            })
+        };
+        self.selection = details.selection.as_ref().and_then(|(a, b)| {
+            Some(Selection {
+                thread: thread.into(),
+                anchor: anchor(a)?,
+                head: anchor(b)?,
+            })
+        });
+    }
+
     /// The selected part of a block's `range`, relative to that range.
     pub(super) fn selected(
         &self,

@@ -85,6 +85,28 @@ pub struct Block {
 }
 
 impl Block {
+    pub fn retained_bytes(&self) -> usize {
+        use std::mem::size_of;
+        let kind = match &self.kind {
+            Kind::Code(s) => s.capacity(),
+            Kind::Diff(lines) => lines.capacity() * size_of::<DiffLine>(),
+            Kind::Table(table) => {
+                table.columns.capacity() * size_of::<Column>()
+                    + table.rows.capacity() * size_of::<Vec<Range<usize>>>()
+                    + table
+                        .rows
+                        .iter()
+                        .map(|row| row.capacity() * size_of::<Range<usize>>())
+                        .sum::<usize>()
+            }
+            _ => 0,
+        };
+        self.text.capacity()
+            + self.spans.capacity() * size_of::<(Range<usize>, Style)>()
+            + self.links.capacity() * size_of::<String>()
+            + self.links.iter().map(String::capacity).sum::<usize>()
+            + kind
+    }
     /// A code block with syntax tokens for `language`, or plain when unknown.
     pub fn code(language: &str, text: impl Into<String>) -> Self {
         let text = text.into();
@@ -146,6 +168,12 @@ const BLOCK_LIMIT: usize = 512;
 const CELL_LIMIT: usize = 1500;
 
 impl Message {
+    pub fn retained_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.source.capacity()
+            + self.blocks.capacity() * std::mem::size_of::<Block>()
+            + self.blocks.iter().map(Block::retained_bytes).sum::<usize>()
+    }
     pub fn parse(source: &str) -> Self {
         let mut projection = Projection::default();
         let options =
@@ -565,6 +593,44 @@ pub struct Transcript {
 }
 
 impl Transcript {
+    pub fn retained_bytes(&self) -> usize {
+        use std::mem::size_of;
+        let messages = |map: &HashMap<String, Arc<Message>>| {
+            map.capacity() * (size_of::<(String, Arc<Message>)>() + 2)
+                + map
+                    .iter()
+                    .map(|(id, message)| id.capacity() + message.retained_bytes())
+                    .sum::<usize>()
+        };
+        size_of::<Self>()
+            + self.id.capacity()
+            + messages(&self.messages)
+            + messages(&self.reasoning)
+            + self
+                .live
+                .iter()
+                .chain(&self.live_reasoning)
+                .map(|m| m.retained_bytes())
+                .sum::<usize>()
+            + self.tools.capacity() * (size_of::<(String, Arc<ToolView>)>() + 2)
+            + self
+                .tools
+                .iter()
+                .map(|(id, t)| id.capacity() + t.retained_bytes())
+                .sum::<usize>()
+            + self.turn_summaries.capacity()
+                * (size_of::<(String, crate::history::TurnSummary)>() + 2)
+            + self
+                .turn_summaries
+                .iter()
+                .map(|(id, t)| {
+                    id.capacity()
+                        + t.files.capacity() * size_of::<String>()
+                        + t.files.iter().map(String::capacity).sum::<usize>()
+                })
+                .sum::<usize>()
+            + self.runs.retained_bytes()
+    }
     pub fn update(previous: &Self, snapshot: &Snapshot) -> Self {
         Self::update_stored(previous, snapshot, &std::collections::HashSet::new())
     }
@@ -574,11 +640,27 @@ impl Transcript {
         snapshot: &Snapshot,
         stored: &std::collections::HashSet<String>,
     ) -> Self {
+        Self::update_cancellable(previous, snapshot, stored, &|| false)
+            .expect("uncancelled projection")
+    }
+
+    pub fn update_cancellable(
+        previous: &Self,
+        snapshot: &Snapshot,
+        stored: &std::collections::HashSet<String>,
+        cancelled: &impl Fn() -> bool,
+    ) -> Option<Self> {
+        if cancelled() {
+            return None;
+        }
         let previous = (previous.id == snapshot.id).then_some(previous);
         let messages = snapshot
             .messages
             .iter()
             .map(|message| {
+                if cancelled() {
+                    return None;
+                }
                 let cached = previous
                     .and_then(|p| p.messages.get(&message.id))
                     .filter(|cached| cached.source == message.text);
@@ -588,9 +670,12 @@ impl Transcript {
                         MessageRole::Assistant => Message::parse(&message.text),
                     })
                 });
-                (message.id.clone(), parsed)
+                Some((message.id.clone(), parsed))
             })
-            .collect();
+            .collect::<Option<HashMap<_, _>>>()?;
+        if cancelled() {
+            return None;
+        }
         let live = (!snapshot.live_text.is_empty()).then(|| {
             previous
                 .and_then(|p| p.live.as_ref())
@@ -603,17 +688,23 @@ impl Transcript {
             .iter()
             .filter(|message| !message.reasoning.is_empty())
             .map(|message| {
+                if cancelled() {
+                    return None;
+                }
                 let cached = previous
                     .and_then(|p| p.reasoning.get(&message.id))
                     .filter(|cached| cached.source == message.reasoning);
-                (
+                Some((
                     message.id.clone(),
                     cached
                         .cloned()
                         .unwrap_or_else(|| Arc::new(Message::parse(&message.reasoning))),
-                )
+                ))
             })
-            .collect();
+            .collect::<Option<HashMap<_, _>>>()?;
+        if cancelled() {
+            return None;
+        }
         let live_reasoning = (!snapshot.live_reasoning.is_empty()).then(|| {
             previous
                 .and_then(|p| p.live_reasoning.as_ref())
@@ -625,6 +716,9 @@ impl Transcript {
             .tools
             .iter()
             .map(|tool| {
+                if cancelled() {
+                    return None;
+                }
                 let cached = previous
                     .and_then(|p| p.tools.get(&tool.id))
                     .filter(|cached| {
@@ -637,10 +731,13 @@ impl Transcript {
                         ToolView::new(tool)
                     })
                 });
-                (tool.id.clone(), view)
+                Some((tool.id.clone(), view))
             })
-            .collect();
-        Self {
+            .collect::<Option<HashMap<_, _>>>()?;
+        if cancelled() {
+            return None;
+        }
+        Some(Self {
             id: snapshot.id.clone(),
             messages,
             live,
@@ -649,7 +746,7 @@ impl Transcript {
             turn_summaries: crate::history::turn_summaries(snapshot),
             tools,
             runs: Runs::plan(snapshot),
-        }
+        })
     }
 }
 
@@ -977,7 +1074,22 @@ mod tests {
             "tools":[{"id":"t1","name":"read","status":"running","input":"{\"path\":\"a.rs\"}","output":""}]
         }))
         .unwrap();
+        let checks = std::cell::Cell::new(0);
+        assert!(
+            Transcript::update_cancellable(
+                &Transcript::default(),
+                &snapshot,
+                &std::collections::HashSet::new(),
+                &|| {
+                    checks.set(checks.get() + 1);
+                    checks.get() >= 3
+                }
+            )
+            .is_none()
+        );
+        assert_eq!(checks.get(), 3, "retired work stops between messages");
         let first = Transcript::update(&Transcript::default(), &snapshot);
+        assert!(first.retained_bytes() > snapshot.messages[0].text.capacity());
         assert_eq!(first.messages["message"].blocks[0].text, "hello");
         assert_eq!(first.messages["mine"].blocks[0].text, "**as written**");
         snapshot.live_text.push_str(" world");

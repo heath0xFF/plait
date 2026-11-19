@@ -134,6 +134,35 @@ pub struct Diff {
 }
 
 impl Diff {
+    pub fn retained_bytes(&self) -> usize {
+        use std::mem::size_of;
+        size_of::<Self>()
+            + self.lines.capacity() * size_of::<DiffLine>()
+            + self.lines.iter().map(|line| line.text.len()).sum::<usize>()
+            + self.rows.capacity() * size_of::<crate::patch::PatchRow>()
+            + self
+                .rows
+                .iter()
+                .map(|row| match row {
+                    crate::patch::PatchRow::File {
+                        name, directory, ..
+                    } => name.len() + directory.len(),
+                    _ => 0,
+                })
+                .sum::<usize>()
+            + self.hunks.capacity() * size_of::<usize>()
+    }
+    /// Semantic bookmark guard; independent of presentation indexes.
+    pub fn fingerprint(&self) -> String {
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        for line in &self.lines {
+            line.text.hash(&mut hash);
+            line.old_line.hash(&mut hash);
+            line.new_line.hash(&mut hash);
+        }
+        format!("patch-{:016x}", hash.finish())
+    }
     pub fn message(text: &str, elapsed: Duration) -> Self {
         Self {
             lines: vec![DiffLine {

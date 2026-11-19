@@ -9,10 +9,12 @@ use std::sync::Arc;
 /// Oldest prompts beyond this are dropped from recall.
 const ENTRY_LIMIT: usize = 200;
 const LOCAL_LIMIT: usize = 50;
+const SOURCE_BYTES: usize = 512 * 1024;
 /// The host shows at most this many trailing UTF-16 units of a prompt, and may
 /// drop one more unit to avoid splitting a surrogate pair.
 const HOST_PREVIEW_UNITS: usize = 4096;
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct Sent {
     text: String,
     /// How many host prompts existed when this one was sent; places it in
@@ -20,10 +22,11 @@ struct Sent {
     after: usize,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub(super) struct PromptHistory {
     host: Vec<String>,
     local: Vec<Sent>,
+    #[serde(with = "super::parking::strings")]
     merged: Arc<[String]>,
 }
 
@@ -37,12 +40,31 @@ fn same_prompt(listed: &str, sent: &str) -> bool {
 }
 
 impl PromptHistory {
+    pub(super) fn retained_bytes(&self) -> usize {
+        self.host.capacity() * std::mem::size_of::<String>()
+            + self.host.iter().map(String::capacity).sum::<usize>()
+            + self.local.capacity() * std::mem::size_of::<Sent>()
+            + self.local.iter().map(|s| s.text.capacity()).sum::<usize>()
+            + self.merged.len() * std::mem::size_of::<String>()
+            + self.merged.iter().map(String::capacity).sum::<usize>()
+    }
     /// Replace the host's list, oldest first. Returns whether anything changed;
     /// an unchanged list costs comparisons only, so every snapshot can call this.
     pub fn set_host(&mut self, prompts: impl IntoIterator<Item = impl AsRef<str>>) -> bool {
+        let prompts: Vec<_> = prompts.into_iter().collect();
+        let mut bytes = 0;
+        let keep = prompts
+            .iter()
+            .rev()
+            .take(ENTRY_LIMIT)
+            .take_while(|p| {
+                bytes += p.as_ref().len();
+                bytes <= SOURCE_BYTES
+            })
+            .count();
         let mut changed = false;
         let mut count = 0;
-        for prompt in prompts {
+        for prompt in &prompts[prompts.len().saturating_sub(keep)..] {
             let prompt = prompt.as_ref();
             match self.host.get_mut(count) {
                 Some(existing) if existing == prompt => {}
@@ -79,6 +101,10 @@ impl PromptHistory {
             text: prompt.to_owned(),
             after: self.host.len(),
         });
+        let mut bytes: usize = self.local.iter().map(|p| p.text.capacity()).sum();
+        while bytes > SOURCE_BYTES && self.local.len() > 1 {
+            bytes -= self.local.remove(0).text.capacity();
+        }
         self.merge();
     }
 

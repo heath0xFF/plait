@@ -120,6 +120,89 @@ pub struct History {
     pub detached: bool,
 }
 impl History {
+    pub fn retained_bytes(&self) -> usize {
+        use std::mem::size_of;
+        self.entries.capacity() * size_of::<Arc<Entry>>()
+            + self
+                .entries
+                .iter()
+                .map(|e| {
+                    let item = match &e.item {
+                        HistoryItem::Message {
+                            id,
+                            text,
+                            reasoning,
+                            images,
+                            more,
+                            ..
+                        } => {
+                            id.capacity()
+                                + text.capacity()
+                                + reasoning.capacity()
+                                + images.capacity() * size_of::<crate::images::ImageRef>()
+                                + images
+                                    .iter()
+                                    .map(|i| i.id.capacity() + i.media_type.capacity())
+                                    .sum::<usize>()
+                                + more.capacity() * size_of::<crate::host::More>()
+                        }
+                        HistoryItem::Tool {
+                            id,
+                            name,
+                            input,
+                            output,
+                            more,
+                            ..
+                        } => {
+                            id.capacity()
+                                + name.capacity()
+                                + input.capacity()
+                                + output.capacity()
+                                + more.capacity() * size_of::<crate::host::More>()
+                        }
+                    };
+                    size_of::<Entry>()
+                        + item
+                        + e.cursor.as_ref().map_or(0, String::capacity)
+                        + e.parts.capacity() * size_of::<Part>()
+                        + e.parts
+                            .iter()
+                            .map(|p| p.reference.capacity())
+                            .sum::<usize>()
+                        + e.item
+                            .more()
+                            .iter()
+                            .map(|m| m.reference.capacity())
+                            .sum::<usize>()
+                })
+                .sum::<usize>()
+    }
+
+    /// Drop the farthest retained entry, keeping the visible semantic anchor.
+    pub fn evict_for_budget(&mut self, anchor: Option<&Key>) -> bool {
+        if self.entries.len() <= 1 {
+            return false;
+        }
+        let at = anchor
+            .and_then(|key| self.entries.iter().position(|e| e.key() == *key))
+            .unwrap_or(self.entries.len() - 1);
+        if at < self.entries.len() / 2 {
+            self.entries.pop();
+            self.detached = true;
+        } else {
+            self.entries.remove(0);
+            self.older = self.entries.first().map(|e| e.cursor.clone());
+        }
+        self.entries.shrink_to_fit();
+        true
+    }
+    /// Re-read the page containing the visible row, not the oldest retained page.
+    pub fn restore_cursor(&self, anchor: Option<&Key>) -> Option<String> {
+        anchor
+            .and_then(|key| self.get(key))
+            .and_then(|entry| entry.cursor.clone())
+    }
+
     pub fn latest(&mut self, mut page: Page) {
         for entry in &mut page.entries {
             if let Some(previous) = self.get(&entry.key()) {
@@ -669,6 +752,24 @@ mod tests {
         )
         .unwrap()
     }
+    #[test]
+    fn cold_restore_uses_the_anchor_page_and_budget_eviction_keeps_it() {
+        let mut history = History::default();
+        history.latest(page(&["old", "middle", "new"], None));
+        Arc::make_mut(&mut history.entries[0]).cursor = Some("old-page".into());
+        Arc::make_mut(&mut history.entries[1]).cursor = Some("middle-page".into());
+        let anchor = Key::Message("middle".into());
+        assert_eq!(
+            history.restore_cursor(Some(&anchor)).as_deref(),
+            Some("middle-page")
+        );
+        let before = history.retained_bytes();
+        assert!(history.evict_for_budget(Some(&anchor)));
+        assert!(history.get(&anchor).is_some());
+        assert!(history.retained_bytes() < before);
+        assert_eq!(history.restore_cursor(None), None);
+    }
+
     fn live(ids: &[&str]) -> Snapshot {
         Snapshot {
             id: "thread".into(),

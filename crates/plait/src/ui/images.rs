@@ -230,10 +230,17 @@ impl Plait {
             self.workspace.images.pending.insert(reference.id.clone());
             let expected = key.clone();
             let id = reference.id.clone();
+            let cancelled = self.workspace.cancelled.clone();
             let task = cx.background_executor().spawn(async move {
+                if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                    return Err("Image read retired.".into());
+                }
                 let bytes = Client::from_environment()
                     .and_then(|client| client.image(&expected.2, &reference))
                     .map_err(|error| error.to_string())?;
+                if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                    return Err("Image decode retired.".into());
+                }
                 decode_image(&bytes, 192)
             });
             let key = key.clone();
@@ -253,7 +260,12 @@ impl Plait {
             .detach();
         }
     }
-    fn enlarge_image(&mut self, reference: ImageRef, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn enlarge_image(
+        &mut self,
+        reference: ImageRef,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(thread) = self.host.thread.selected.clone() else {
             return;
         };
@@ -268,10 +280,17 @@ impl Plait {
         window.focus(&self.focus, cx);
         cx.notify();
         let expected = key.clone();
+        let cancelled = self.workspace.cancelled.clone();
         let task = cx.background_executor().spawn(async move {
+            if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                return Err("Image read retired.".into());
+            }
             let bytes = Client::from_environment()
                 .and_then(|client| client.image(&expected.2, &reference))
                 .map_err(|error| error.to_string())?;
+            if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                return Err("Image read retired.".into());
+            }
             decode_image(&bytes, 1600)
         });
         cx.spawn(async move |this, cx| {

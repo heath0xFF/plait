@@ -42,6 +42,17 @@ impl<K: PartialEq, V> Recent<K, V> {
         self.entries.clear();
     }
 
+    pub fn weight(&self, weight: impl Fn(&V) -> usize) -> usize {
+        self.entries.iter().map(|(_, v)| weight(v)).sum()
+    }
+
+    pub fn trim_weight(&mut self, limit: usize, weight: impl Fn(&V) -> usize) {
+        let mut total = self.weight(&weight);
+        while total > limit && !self.entries.is_empty() {
+            total -= weight(&self.entries.remove(0).1);
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }

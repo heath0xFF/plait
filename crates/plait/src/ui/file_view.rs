@@ -78,11 +78,60 @@ pub(super) struct Find {
     pub field: Option<Entity<TextField>>,
     pub matches: Arc<Vec<Range<usize>>>,
     pub current: usize,
+    restore_match: Option<plait_core::tabs::bookmark::TextPosition>,
     generation: u64,
     _events: Option<Subscription>,
 }
 
+impl Find {
+    pub(super) fn bookmark_match(&self) -> Option<plait_core::tabs::bookmark::TextPosition> {
+        self.matches
+            .get(self.current)
+            .map(|hit| plait_core::tabs::bookmark::TextPosition {
+                source: "file".into(),
+                block: 0,
+                byte: hit.start as u32,
+            })
+    }
+}
+
 impl Plait {
+    pub(super) fn restore_find_bookmark(
+        &mut self,
+        target: FindIn,
+        bookmark: &plait_core::tabs::bookmark::FindBookmark,
+        cx: &mut Context<Self>,
+    ) {
+        let name = match target {
+            FindIn::File => "Find in file",
+            FindIn::Conversation => "Find in conversation",
+        };
+        let field = cx.new(|cx| {
+            let mut field = TextField::new(name, name, cx).search();
+            field.set_text(&bookmark.query, cx);
+            field
+        });
+        let events = cx.subscribe(
+            &field,
+            move |this, _, _: &TextFieldEvent, cx| match target {
+                FindIn::File => this.update_find(cx),
+                FindIn::Conversation => this.search_conversation(cx),
+            },
+        );
+        match target {
+            FindIn::File => {
+                let find = &mut self.workspace.file_viewer.find;
+                find.open = bookmark.open;
+                find.restore_match = bookmark.current.clone();
+                find.field = Some(field);
+                find._events = Some(events);
+            }
+            FindIn::Conversation => {
+                self.restore_conversation_find(field, events, bookmark.open);
+                self.workspace.conversation_find.restore_match = bookmark.current.clone();
+            }
+        }
+    }
     /// The root quick-open paths are relative to: the repository's top level.
     pub(super) fn file_root(&self) -> PathBuf {
         self.state.repository.snapshot().ready().map_or_else(
@@ -116,6 +165,7 @@ impl Plait {
 
     fn read_file(&mut self, reload: bool, cx: &mut Context<Self>) {
         let owner = self.host.read_stamp();
+        let cancelled = self.workspace.cancelled.clone();
         let expected = self.state.checkout_key().cloned();
         let viewer = &mut self.workspace.file_viewer;
         let Some(path) = viewer.path.clone() else {
@@ -138,7 +188,9 @@ impl Plait {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                if !same_file_owner(&owner, &this.host.read_stamp()) {
+                if cancelled.load(std::sync::atomic::Ordering::Acquire)
+                    || !same_file_owner(&owner, &this.host.read_stamp())
+                {
                     return;
                 }
                 let viewer = &mut this.workspace.file_viewer;
@@ -163,6 +215,7 @@ impl Plait {
                             this.update_find(cx);
                         }
                         this.reveal_line(cx);
+                        this.restore_ready_bookmarks(cx);
                     }
                     // A reload that fails keeps the last good text on screen.
                     Err(error) if reload && viewer.opened.is_some() => {
@@ -179,6 +232,7 @@ impl Plait {
     /// Reread the open file if its size or time changed. Cheap: one stat.
     pub(super) fn check_file(&mut self, cx: &mut Context<Self>) {
         let owner = self.host.read_stamp();
+        let cancelled = self.workspace.cancelled.clone();
         let expected = self.state.checkout_key().cloned();
         let viewer = &self.workspace.file_viewer;
         if self.workspace.tab == Workspace::Files
@@ -207,7 +261,8 @@ impl Plait {
         cx.spawn(async move |this, cx| {
             let stamp = task.await;
             let _ = this.update(cx, |this, cx| {
-                if same_file_owner(&owner, &this.host.read_stamp())
+                if !cancelled.load(std::sync::atomic::Ordering::Acquire)
+                    && same_file_owner(&owner, &this.host.read_stamp())
                     && this.workspace.file_viewer.generation == generation
                     && stamp.as_ref().ok() != Some(&opened.stamp)
                 {
@@ -344,6 +399,8 @@ impl Plait {
 
     /// Search off the UI thread; a large file with no match scans it all.
     fn update_find(&mut self, cx: &mut Context<Self>) {
+        let owner = self.host.read_stamp();
+        let cancelled = self.workspace.cancelled.clone();
         let find = &mut self.workspace.file_viewer.find;
         find.generation += 1;
         let generation = find.generation;
@@ -364,11 +421,25 @@ impl Plait {
         cx.spawn(async move |this, cx| {
             let matches = task.await;
             let _ = this.update(cx, |this, cx| {
+                if cancelled.load(std::sync::atomic::Ordering::Acquire)
+                    || !same_file_owner(&owner, &this.host.read_stamp())
+                {
+                    return;
+                }
                 let find = &mut this.workspace.file_viewer.find;
                 if find.generation != generation {
                     return;
                 }
                 find.matches = Arc::new(matches);
+                if let Some(saved) = find.restore_match.take() {
+                    find.current = find
+                        .matches
+                        .iter()
+                        .position(|range| range.start == saved.byte as usize)
+                        .unwrap_or(0);
+                    cx.notify();
+                    return;
+                }
                 find.current = 0;
                 this.show_match(cx);
             });

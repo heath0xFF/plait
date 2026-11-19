@@ -3,7 +3,6 @@ use super::{Plait, theme::*, thread_controls::TextTooltip};
 use gpui::{prelude::*, *};
 use plait_core::tabs::{
     CheckoutKey, HostKey, TabError, TabId, ThreadTarget, WindowId, WindowTabs,
-    bookmark::{BookmarkRecord, ThreadBookmark},
     row::{self as model, RowContext, RowWidths, TabLayout, TabMetadata, TabState},
 };
 use std::{
@@ -38,6 +37,9 @@ actions!(
 
 pub(super) struct Tabs {
     pub model: WindowTabs,
+    pub lifecycle: super::tab_lifecycle::Lifecycle,
+    strip: Option<Entity<TabStrip>>,
+    strip_theme: u32,
     pub host: HostKey,
     pub rows: Vec<TabMetadata>,
     layout: Option<TabLayout>,
@@ -46,6 +48,17 @@ pub(super) struct Tabs {
     pub list_open: bool,
     drag: Option<Drag>,
 }
+struct TabStrip {
+    owner: WeakEntity<Plait>,
+}
+impl Render for TabStrip {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.owner
+            .update(cx, |p, cx| p.tab_strip(cx).into_any_element())
+            .unwrap_or_else(|_| div().into_any_element())
+    }
+}
+
 struct Drag {
     id: TabId,
     start: Pixels,
@@ -57,6 +70,9 @@ impl Default for Tabs {
         // Unverified hosts can use session tabs; this identity is never durable.
         Self {
             model: WindowTabs::new(WindowId(window)),
+            lifecycle: Default::default(),
+            strip: None,
+            strip_theme: 0,
             host: HostKey {
                 id: format!("session-{window}"),
                 store: PathBuf::from("/"),
@@ -161,7 +177,7 @@ impl Plait {
             TabJump5 => 5, TabJump6 => 6, TabJump7 => 7, TabJump8 => 8, TabJump9 => 9)
     }
 
-    fn tab_error(&mut self, result: Result<(), TabError>) -> bool {
+    pub(super) fn tab_error(&mut self, result: Result<(), TabError>) -> bool {
         match result {
             Ok(()) => true,
             Err(TabError::IdentityMismatch) => {
@@ -175,6 +191,7 @@ impl Plait {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn open_thread_tab(
         &mut self,
         id: String,
@@ -198,25 +215,7 @@ impl Plait {
         self.tab_error(result.map(|_| ()))
     }
 
-    pub(super) fn open_draft_tab(&mut self, cx: &mut Context<Self>) -> bool {
-        if !self.save_tab_view(cx) {
-            return false;
-        }
-        let target = ThreadTarget::Draft {
-            id: "draft".into(),
-            checkout: self.tab_checkout(self.host.creation.checkout.clone()),
-        };
-        let result = self.tabs.model.open(
-            target,
-            self.host
-                .connection
-                .connected
-                .then_some(self.host.connection.epoch),
-        );
-        self.tab_error(result.map(|_| ()))
-    }
-
-    fn tab_checkout(&self, root: PathBuf) -> CheckoutKey {
+    pub(super) fn tab_checkout(&self, root: PathBuf) -> CheckoutKey {
         CheckoutKey {
             host: self.tabs.host.clone(),
             root,
@@ -224,16 +223,14 @@ impl Plait {
         }
     }
 
+    #[cfg(test)]
     fn save_tab_view(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(id) = self.tabs.model.active() else {
             return true;
         };
         self.capture_session(cx);
-        let bookmark = ThreadBookmark {
-            view: self.workspace.tab,
-            ..Default::default()
-        };
-        match BookmarkRecord::capture(&bookmark) {
+        let bookmark = self.capture_tab_bookmark(None, cx);
+        match plait_core::tabs::bookmark::BookmarkRecord::capture(&bookmark) {
             Ok(bookmark) => {
                 let result = self.tabs.model.save_bookmark(id, bookmark);
                 self.tab_error(result)
@@ -247,18 +244,7 @@ impl Plait {
     }
 
     fn activate_tab(&mut self, id: TabId, window: &mut Window, cx: &mut Context<Self>) {
-        if self.tabs.model.active() == Some(id) {
-            self.tabs.list_open = false;
-            cx.notify();
-            return;
-        }
-        if !self.save_tab_view(cx) {
-            return;
-        }
-        let result = self.tabs.model.activate(id);
-        if self.tab_error(result) {
-            self.present_tab(window, cx);
-        }
+        self.request_tab(super::tab_lifecycle::Intent::Activate(id), window, cx);
     }
 
     pub(super) fn present_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -294,62 +280,17 @@ impl Plait {
                 window.focus(&self.focus, cx);
             }
         }
+        self.hydrate_tab(window, cx);
         self.refresh_tab_rows();
         cx.notify();
     }
 
     fn close_tab(&mut self, id: TabId, window: &mut Window, cx: &mut Context<Self>) {
-        if self.tabs.model.active() == Some(id) && !self.save_tab_view(cx) {
-            return;
-        }
-        let active = self.tabs.model.active();
-        let nonempty = self
-            .draft
-            .composer
-            .as_ref()
-            .is_some_and(|c| !c.read(cx).is_empty());
-        let result = self.tabs.model.close(id, nonempty);
-        if self.tab_error(result) {
-            if active != self.tabs.model.active() {
-                self.present_tab(window, cx);
-            }
-            self.refresh_tab_rows();
-            cx.notify();
-        }
+        self.request_tab(super::tab_lifecycle::Intent::Close(id), window, cx);
     }
 
     fn navigate_tab(&mut self, action: TabNavigation, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.save_tab_view(cx) {
-            return;
-        }
-        let connection = self
-            .host
-            .connection
-            .connected
-            .then_some(self.host.connection.epoch);
-        let result = match action {
-            TabNavigation::Next => self.tabs.model.next_tab(),
-            TabNavigation::Previous => self.tabs.model.previous_tab(),
-            TabNavigation::Jump(n) => self.tabs.model.jump(n),
-            TabNavigation::Reopen => self.tabs.model.reopen(|target| match target {
-                ThreadTarget::Existing { id, checkout } => self
-                    .host
-                    .connection
-                    .threads
-                    .iter()
-                    .any(|t| &t.id == id && t.checkout == checkout.root)
-                    .then_some(connection),
-                ThreadTarget::Draft { .. } => Some(connection),
-            }),
-        };
-        match result {
-            Ok(Some(_)) => self.present_tab(window, cx),
-            Ok(None) => {}
-            Err(error) => {
-                self.tab_error(Err(error));
-                cx.notify();
-            }
-        }
+        self.request_tab(super::tab_lifecycle::Intent::Navigate(action), window, cx);
     }
 
     fn move_active_tab(&mut self, right: bool, cx: &mut Context<Self>) {
@@ -400,21 +341,32 @@ impl Plait {
     }
 
     pub(super) fn tab_row(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let redraw = self.tabs.strip_theme != colors().bg
+            || self.tabs.measured
+                != Some((
+                    f32::from(window.viewport_size().width),
+                    window.is_fullscreen(),
+                ))
+            || self.tabs.drag.is_some();
         self.measure_tabs(window);
+        self.tabs.strip_theme = colors().bg;
         let layout = self.tabs.layout.as_ref().expect("measured tab row");
-        let mut strip = row()
-            .id("tab-row")
-            .role(Role::TabList)
-            .aria_label("Open tabs")
-            .gap_0()
-            .min_w_0()
-            .h_full()
-            .items_end();
-        for id in &layout.visible {
-            if let Some(meta) = self.tabs.rows.iter().find(|t| t.id == *id) {
-                strip = strip.child(self.tab_control(meta, layout.tab_width, cx));
-            }
+        let strip = self
+            .tabs
+            .strip
+            .get_or_insert_with(|| {
+                let owner = cx.weak_entity();
+                cx.new(|_| TabStrip { owner })
+            })
+            .clone();
+        if redraw {
+            strip.update(cx, |_, cx| cx.notify());
         }
+        let strip = strip.cached(
+            StyleRefinement::default()
+                .h_full()
+                .w(px(layout.visible.len() as f32 * layout.tab_width)),
+        );
         let bar = self
             .window_drag(row(), cx)
             .id("window-tab-bar")
@@ -490,6 +442,7 @@ impl Plait {
                     ..
                 }) = this.tabs.drag.take()
                 {
+                    this.tabs.measured = None;
                     let result = this.tabs.model.move_tab(id, to);
                     this.tab_error(result);
                     this.refresh_tab_rows();
@@ -501,9 +454,28 @@ impl Plait {
             MouseButton::Left,
             cx.listener(|this, _, _, cx| {
                 this.tabs.drag = None;
+                this.tabs.measured = None;
                 cx.notify();
             }),
         )
+    }
+
+    fn tab_strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let layout = self.tabs.layout.as_ref().expect("measured strip");
+        let mut strip = row()
+            .id("tab-row")
+            .role(Role::TabList)
+            .aria_label("Open tabs")
+            .gap_0()
+            .min_w_0()
+            .h_full()
+            .items_end();
+        for id in &layout.visible {
+            if let Some(meta) = self.tabs.rows.iter().find(|t| t.id == *id) {
+                strip = strip.child(self.tab_control(meta, layout.tab_width, cx));
+            }
+        }
+        strip
     }
 
     fn tab_control(
@@ -740,7 +712,8 @@ impl Plait {
     }
 }
 
-enum TabNavigation {
+#[derive(Clone, Copy)]
+pub(super) enum TabNavigation {
     Next,
     Previous,
     Jump(usize),

@@ -65,6 +65,7 @@ pub struct ChangesBookmark {
     pub staged: bool,
     pub scope: ChangeScope,
     pub anchor: Option<PatchAnchor>,
+    pub selection: Option<(u32, u32)>,
     pub list_offset_millipoints: i32,
 }
 
@@ -87,6 +88,8 @@ pub struct PatchAnchor {
     pub hunk: u32,
     pub line: u32,
     pub offset_millipoints: i32,
+    #[serde(default)]
+    pub horizontal_millipoints: i32,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +107,7 @@ pub struct FileBookmark {
     pub line: u32,
     pub column: u32,
     pub offset_millipoints: i32,
+    pub horizontal_millipoints: i32,
     pub find: FindBookmark,
 }
 
@@ -249,14 +253,15 @@ pub fn decode_extended(bytes: &[u8]) -> Option<ThreadBookmark> {
 
 fn valid_bookmark(b: &ThreadBookmark) -> bool {
     let text = |s: &str| s.len() <= 4096 && !s.contains('\0');
-    let position = |p: &TextPosition| super::identifier(&p.source);
+    let semantic_id = |s: &str| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control);
+    let position = |p: &TextPosition| semantic_id(&p.source);
     let find = |f: &FindBookmark| text(&f.query) && f.current.as_ref().is_none_or(position);
     let patch = |p: &PatchAnchor| super::identifier(&p.fingerprint);
     let path = |p: &String| relative_path(p);
     let oid = |s: &String| matches!(s.len(), 40 | 64) && s.bytes().all(|c| c.is_ascii_hexdigit());
     let scroll = match &b.conversation.scroll {
         ConversationScroll::Latest => true,
-        ConversationScroll::Anchored { row, .. } => super::identifier(row),
+        ConversationScroll::Anchored { row, .. } => semantic_id(row),
     };
     let scope = match &b.changes.scope {
         ChangeScope::Current => true,
@@ -288,7 +293,7 @@ fn valid_bookmark(b: &ThreadBookmark) -> bool {
             .expanded
             .iter()
             .chain(&b.details.folded)
-            .all(|s| super::identifier(s))
+            .all(|s| semantic_id(s))
         && b.details
             .selection
             .as_ref()

@@ -147,7 +147,7 @@ pub(super) fn walk(h: &mut Harness, repository: &Path, suffix: &str) {
             .repository
             .snapshot()
             .ready()
-            .unwrap()
+            .unwrap_or_else(|| panic!("recorded scene status: {:?}", p.state.repository.snapshot()))
             .changes
             .clone();
         for change in &mut changes {

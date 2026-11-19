@@ -492,15 +492,28 @@ and path capacities. Inline bookmark JSON is at most 8 KiB, stored without
 spare capacity and decoded only when requested for activation or validation.
 A larger bookmark returns an explicit storage requirement; an opaque blob
 reference and bounded 1 MiB extended-bookmark codecs provide the handoff for
-future UI storage. No state is silently truncated on parking.
+private UI storage. No state is silently truncated on parking.
 
-`Residency::Cold` explicitly means reload is required. Only the active tab
-can own `Loading` or `Ready` read state, using Stage 1's `SelectedThreadState`
-and `ThreadRepositoryView`. Parking drops those payloads. The UI integration
-must also release history/projections, loaded diffs/files, images, shaped text,
-watch subscriptions, tasks, timers, and pointer geometry. Actual cancellation,
-editor undo retention, active payload budgets, and allocation/frame measurements
-remain UI-stage work; this headless model does not establish their performance.
+`Residency::Cold` explicitly means reload is required. The desktop mounts one
+thread presentation. Parking settles composition and captures semantic view
+state, then flushes the existing draft journal and any extended bookmark before
+switching. A save failure keeps the tab open. The old workspace releases its
+transcript watch, history, Markdown, file/diff views, decoded images, find scans,
+focus handles and pointer geometry. Read replies retain the owner guards;
+submission and Git acknowledgements still complete into their owner ledgers.
+
+Inactive editor undo/recall is stored in bounded private cache records, without
+retaining GPUI composers. An unavailable editor cache leaves the saved draft
+intact and reports that editor history could not be restored. Projections check
+cancellation between messages and tools; already executing bounded reads may
+retire, but cannot install into a different workspace. Cold activation reloads
+content, restores anchors where they survive, and explains a missing position.
+
+The active conversation accounts retained text, projection and container
+capacities against 96 MiB and evicts farthest history entries while retaining the
+visible anchor. Repository diff/patch caches share a 16 MiB byte budget. The
+editor cache is limited to 8 MiB; prompt recall also has byte limits. These are
+payload budgets, not total process RSS or GPU-memory guarantees.
 
 `TabLifetime` changes on close/reopen and draft replacement. `ReadStamp` adds
 visibility and connection generations, rejecting old activation replies even
@@ -544,6 +557,11 @@ future tab-preferences version untouched instead of overwriting it.
 
 **The v1 draft and submission recovery journal is unchanged.** Its proposed v2
 index/blob redesign remains planned work with a separate compatibility review.
+It allows at most 4 MiB of serialized recovery data, 512 saved thread/draft
+records, and 256 KiB per draft. Exceeding a limit keeps the previous good file;
+submission and required close/park saves fail explicitly while the current work
+stays in memory. Twenty maximal drafts and a separate 4 MiB resident submission
+cache are not supported capacity promises of this release.
 The new tab codecs are tested without touching saved preferences or a journal;
 they do not yet restore tabs in the desktop window.
 

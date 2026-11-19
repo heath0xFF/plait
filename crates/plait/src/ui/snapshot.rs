@@ -1537,8 +1537,15 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
         plait.finish_create(created("left"), reply("thr_left"), window, cx);
         assert_eq!(plait.host.thread.selected.as_deref(), Some(THREAD));
         assert!(
-            plait.workspace.composers.contains_key("thr_left"),
-            "the draft's composer moved"
+            !plait.workspace.composers.contains_key("thr_left")
+                && plait
+                    .session
+                    .data
+                    .as_ref()
+                    .unwrap()
+                    .threads
+                    .contains_key("thr_left"),
+            "a hidden creation retains recovery data, not a composer"
         );
         assert_eq!(
             plait.host.submissions.all("thr_left")[0].text,
@@ -5101,10 +5108,9 @@ fn project_switching_keeps_each_draft_and_rejects_the_old_watch() {
             "Original draft"
         );
         assert_eq!(
-            plait.workspace.composers["other-thread"]
-                .read(cx)
-                .saved_draft()
-                .0,
+            plait.session.data.as_ref().unwrap().threads["other-thread"]
+                .draft
+                .text,
             "Separate draft"
         );
         assert_eq!(plait.host.connection.threads.len(), 3);
@@ -6396,7 +6402,9 @@ fn thread_workspace_preserves_selection_and_reconnect_resets() {
         assert_eq!(plait.workspace.live_scroll.item_count(), 0);
         assert!(plait.workspace.expanded_live_tools.is_empty());
         assert_eq!(
-            plait.workspace.composers[THREAD].read(cx).saved_draft().0,
+            plait.session.data.as_ref().unwrap().threads[THREAD]
+                .draft
+                .text,
             "Keep this draft"
         );
         assert!(plait.workspace.composers.contains_key("second-thread"));
@@ -6704,4 +6712,12 @@ fn tab_shortcuts_drive_window_transitions() {
         return;
     }
     tabs::exercise();
+}
+
+#[core::prelude::v1::test]
+fn cold_tabs_restore_views_and_reject_retired_reads() {
+    if !isolated("cold_tabs_restore_views_and_reject_retired_reads") {
+        return;
+    }
+    tabs::cold_workspaces();
 }

@@ -15,6 +15,7 @@ use std::{
 
 pub(super) struct Navigation {
     pub filter: Entity<TextField>,
+    cached_rows: HashMap<String, (ThreadRowKey, Entity<ThreadRow>)>,
     pub scroll: UniformListScrollHandle,
     pub collapsed: HashSet<PathBuf>,
     pub available: HashMap<PathBuf, bool>,
@@ -33,6 +34,7 @@ pub(super) struct Navigation {
 impl Navigation {
     pub fn new(cx: &mut Context<Plait>) -> Self {
         Self {
+            cached_rows: HashMap::new(),
             scroll: UniformListScrollHandle::new(),
             filter: cx.new(|cx| {
                 TextField::new("Filter projects and threads", "Find a thread…", cx).search()
@@ -50,6 +52,30 @@ impl Navigation {
             generation: 0,
             watch: None,
         }
+    }
+}
+
+#[derive(PartialEq, Eq)]
+struct ThreadRowKey {
+    summary: ThreadSummary,
+    title: String,
+    selected: bool,
+    unread: bool,
+    worktree: bool,
+    protocol: u32,
+    theme: u32,
+    age: String,
+    index: usize,
+}
+struct ThreadRow {
+    owner: WeakEntity<Plait>,
+    index: usize,
+}
+impl Render for ThreadRow {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.owner
+            .update(cx, |p, cx| p.host_thread_row(self.index, cx))
+            .unwrap_or_else(|_| div().into_any_element())
     }
 }
 
@@ -265,6 +291,66 @@ impl Plait {
             .into_any_element()
     }
 
+    fn cached_thread_row(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+        let thread = &self.host.connection.threads[index];
+        if self
+            .navigation
+            .rename
+            .as_ref()
+            .is_some_and(|(id, _)| id == &thread.id)
+        {
+            return self.host_thread_row(index, cx);
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let key = ThreadRowKey {
+            summary: thread.clone(),
+            title: self.thread_title(&thread.id),
+            selected: self.host.thread.selected.as_ref() == Some(&thread.id),
+            unread: self
+                .preferences
+                .value
+                .navigation
+                .unread
+                .contains(&thread.id),
+            worktree: self
+                .preferences
+                .value
+                .navigation
+                .worktree(&thread.checkout)
+                .is_some(),
+            protocol: self.host.protocol(),
+            theme: colors().bg,
+            age: nav::age(thread.updated_at, now),
+            index,
+        };
+        let id = thread.id.clone();
+        if self.navigation.cached_rows.len() >= 128
+            && !self.navigation.cached_rows.contains_key(&id)
+        {
+            self.navigation.cached_rows.clear();
+        }
+        let view = if let Some((old, view)) = self.navigation.cached_rows.get_mut(&id) {
+            if old != &key {
+                *old = key;
+                view.update(cx, |row, cx| {
+                    row.index = index;
+                    cx.notify();
+                });
+            }
+            view.clone()
+        } else {
+            let owner = cx.weak_entity();
+            let view = cx.new(|_| ThreadRow { owner, index });
+            self.navigation.cached_rows.insert(id, (key, view.clone()));
+            view
+        };
+        view.cached(StyleRefinement::default().w_full().h(px(ROW_HEIGHT)))
+            .into_any_element()
+    }
+
     fn host_thread_row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let thread = &self.host.connection.threads[index];
         let id = thread.id.clone();
@@ -476,7 +562,7 @@ impl Plait {
                                         after,
                                         folded,
                                     } => this.project_row(index, after, folded, cx),
-                                    Row::Thread(ti) => this.host_thread_row(ti, cx),
+                                    Row::Thread(ti) => this.cached_thread_row(ti, cx),
                                     Row::Draft => this.draft_row(cx),
                                 })
                                 .collect::<Vec<_>>()
