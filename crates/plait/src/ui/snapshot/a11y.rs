@@ -403,6 +403,9 @@ fn a11y_tree_has_no_duplicates_and_exposes_required_nodes() {
     // Changes, History, Files, approval, and the open tab overflow list.
     assert_views_and_overlays(&mut harness, &repository);
 
+    // Busy-project placement, linked continuation and the project switch.
+    assert_admission_controls(&mut harness);
+
     drop(harness);
     let _ = std::fs::remove_dir_all(&scratch);
 }
@@ -722,4 +725,137 @@ fn every_accessible_element_is_audited() {
          or build them with an audited helper:\n{}",
         hits.join("\n")
     );
+}
+
+fn button_with(frame: &A11yFrame, label: &str, description: Option<&str>) -> bool {
+    frame.has_node(Role::Button, |node| {
+        node.label.as_deref() == Some(label)
+            && description.is_none_or(|text| node.description.as_deref() == Some(text))
+    })
+}
+
+fn assert_admission_controls(harness: &mut Harness) {
+    const WAIT: &str = "Not yet available. No run is queued.";
+    // An idle thread whose checkout another thread is writing.
+    harness.change_snapshot(|snapshot| {
+        snapshot.status = plait_core::host::ThreadStatus::Idle;
+        snapshot.pending_approval = None;
+    });
+    harness.update(|plait, _, _| {
+        let snapshot = plait.host.thread.snapshot.clone().unwrap();
+        let other = plait
+            .host
+            .connection
+            .threads
+            .iter_mut()
+            .find(|thread| thread.id != snapshot.id)
+            .unwrap();
+        other.checkout = snapshot.checkout.clone();
+        other.status = plait_core::host::ThreadStatus::Running;
+        let other = other.id.clone();
+        plait.admission.capabilities =
+            Some((plait.host.connection.epoch, snapshot.checkout.clone(), true));
+        plait.admission.origin = Some((snapshot.id.clone(), Some(other)));
+        plait.workspace.tab = Workspace::Conversation;
+        // The controls line needs a host that reports per-thread settings.
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 6;
+    });
+    let frame = steady_frame(harness, "admission-continuation");
+    for label in ["Continue separately", "Original thread"] {
+        assert!(
+            button_with(&frame, label, None),
+            "continuation: missing {label:?}"
+        );
+    }
+    assert!(
+        button_with(&frame, "Wait", Some(WAIT)),
+        "continuation: Wait must say nothing is queued"
+    );
+    harness.update(|plait, _, _| plait.admission.continuation = plait.host.thread.selected.clone());
+    let frame = steady_frame(harness, "admission-continuation-confirm");
+    for label in ["Own worktree", "Cancel"] {
+        assert!(
+            frame.has_node(Role::Button, |node| node.label.as_deref() == Some(label)
+                && node.description.is_some()),
+            "continuation confirm: {label:?} must explain itself"
+        );
+    }
+    harness.update(|plait, _, _| {
+        plait.admission = Default::default();
+    });
+
+    // The project switch, once its setting is loaded.
+    harness.update(|plait, window, cx| {
+        plait.show_project_settings(window, cx);
+        let checkout = plait.settings_checkout().to_owned();
+        let identity = plait_core::git::worktree::Identity {
+            dev: "1".into(),
+            ino: "2".into(),
+        };
+        plait.admission.settings_key = Some((plait.host.connection.epoch, checkout.clone()));
+        plait.admission.info = Some(plait_core::host::admission::Info {
+            schema: 1,
+            worktree_at_start_v1: true,
+            linked_continuation_v1: true,
+            queue: false,
+            strict_reader: false,
+            checkout: checkout.clone(),
+            identity: identity.clone(),
+            project: checkout,
+            project_identity: identity,
+            busy: false,
+            auto_worktree: false,
+            parent: None,
+            refusal: None,
+        });
+    });
+    let frame = steady_frame(harness, "admission-project-switch");
+    for label in ["Ask", "Own worktree"] {
+        assert!(
+            frame
+                .nodes
+                .iter()
+                .any(|node| node.label.as_deref() == Some(label)),
+            "project switch: missing {label:?}"
+        );
+    }
+    harness.update(|plait, window, cx| {
+        plait.admission = Default::default();
+        plait.show_settings(false, window, cx);
+    });
+    harness.update(|plait, window, cx| {
+        plait.open_draft(window, cx);
+        plait.admission.choice = true;
+        plait.host.creation.pending_create = Some(("guard-choice".into(), super::choice()));
+    });
+    let frame = steady_frame(harness, "admission-busy-choice");
+    for label in ["Own worktree", "Cancel"] {
+        assert!(
+            button_with(&frame, label, None),
+            "busy choice: missing {label:?}"
+        );
+    }
+    assert!(
+        button_with(&frame, "Wait", Some(WAIT)),
+        "busy choice: Wait must say nothing is queued"
+    );
+    assert!(frame.has_node(Role::Label, |node| node.value.as_deref()
+        == Some("Project busy")));
+    harness.update(|plait, _, _| plait.draft.open = false);
+    let frame = steady_frame(harness, "admission-choice-elsewhere");
+    assert!(
+        button_with(&frame, "Choose checkout", None),
+        "missing Choose checkout"
+    );
+    harness.update(|plait, _, cx| {
+        plait.admission.choice = false;
+        plait.host.creation.pending_create = None;
+        cx.notify();
+    });
 }

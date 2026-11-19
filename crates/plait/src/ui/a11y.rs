@@ -34,6 +34,7 @@ mod collector {
         pub role: Role,
         pub label: Option<String>,
         pub value: Option<String>,
+        pub description: Option<String>,
     }
 
     impl A11yNode {
@@ -172,6 +173,7 @@ mod collector {
                 role,
                 label: node.label().map(str::to_owned),
                 value: node.value().map(str::to_owned),
+                description: node.description().map(str::to_owned),
             });
         });
     }
