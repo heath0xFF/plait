@@ -40,12 +40,17 @@ tabs, threads, and drafts.
 - **Tabs.** Keep several threads open and switch with Cmd-1 to Cmd-9. Each tab
   says whether its thread is working, needs you, finished, or failed, and keeps
   its own view, scroll position, find, and draft. Open as many New thread tabs
-  as you like; each is its own draft. Closing a tab never stops its run, and
-  your tabs come back after a restart. See [tabs](docs/MACOS.md#tabs).
+  as you like; each is its own draft, named by its first line. Closing a tab
+  never stops its run, and your tabs come back after a restart. See
+  [tabs](docs/MACOS.md#tabs).
 - **Several threads in one project.** Start a thread where another is already
   running and Plait offers it its own worktree: a new branch and checkout made
   from HEAD, beside the repository. A project can make that automatic. See
   [a busy project](docs/MACOS.md#starting-a-thread-while-a-project-is-busy).
+- **Worktrees as a branch graph.** A project's Worktrees tab draws each
+  worktree's branch off the trunk, with its thread's state, what is
+  uncommitted or not pushed, and the space it holds. Remove one from there
+  when nothing would be lost. See [worktrees](docs/MACOS.md#worktrees).
 - **Images in messages.** Paste or drop PNG/JPEG images, remove
   attachments before sending, and open conversation thumbnails larger. Drafts
   and sent originals persist privately. Requires host protocol 6; see the
