@@ -86,11 +86,16 @@ fn path(path: &std::path::Path) -> bool {
         && path.as_os_str().len() <= 4096
         && path.to_str().is_some_and(|s| {
             !s.chars().any(char::is_control)
+                && !s.contains("//")
                 && !s.split('/').any(|part| part == "." || part == "..")
         })
 }
 fn identity(identity: &Identity) -> bool {
-    identity.dev.parse::<u64>().is_ok() && identity.ino.parse::<u64>().is_ok()
+    [&identity.dev, &identity.ino].into_iter().all(|value| {
+        value
+            .parse::<u64>()
+            .is_ok_and(|number| number.to_string() == *value)
+    })
 }
 fn parent(parent: &Parent) -> bool {
     [&parent.root, &parent.main, &parent.common]
@@ -114,10 +119,13 @@ impl Operation {
         let hex = self.thread_id.replace('-', "");
         if !bounded_id(&self.request_id)
             || self.thread_id.len() != 36
-            || hex.len() != 32
-            || !hex
-                .bytes()
-                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            || !self.thread_id.bytes().enumerate().all(|(index, byte)| {
+                if [8, 13, 18, 23].contains(&index) {
+                    byte == b'-'
+                } else {
+                    byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()
+                }
+            })
         {
             return Err(invalid());
         }
@@ -126,11 +134,18 @@ impl Operation {
             if tree.thread_id != self.thread_id
                 || !parent(&tree.parent)
                 || !path(&tree.path)
-                || suffix.len() < 12
+                || !matches!(suffix.len(), 12 | 16 | 20 | 24 | 28 | 32)
                 || !hex.starts_with(suffix)
                 || tree.path.file_name().and_then(|p| p.to_str()) != Some(suffix)
                 || tree.identity.as_ref().is_some_and(|id| !identity(id))
                 || tree.error.as_ref().is_some_and(|e| e.len() > 8192)
+            {
+                return Err(invalid());
+            }
+            if matches!(self.state, Stage::Ready)
+                && tree.stage != crate::git::worktree::ManagedStage::Ready
+                || matches!(self.state, Stage::Removed)
+                    && tree.stage != crate::git::worktree::ManagedStage::Removed
             {
                 return Err(invalid());
             }
@@ -259,5 +274,34 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn worktree_reply_requires_canonical_ids_and_consistent_stages() {
+        let good = ready();
+        let mut bad = good.clone();
+        bad["thread_id"] = json!("123456781234-4abc-8abc-123456789abc-");
+        let mut variants = vec![bad];
+        for (field, value) in [
+            ("stage", json!("removed")),
+            ("identity", json!({"dev":"+1","ino":"2"})),
+            ("identity", json!({"dev":"1","ino":"02"})),
+            ("path", json!("/repo.worktrees//123456781234")),
+        ] {
+            let mut bad = good.clone();
+            bad["worktree"][field] = value;
+            variants.push(bad);
+        }
+        let mut bad = good;
+        bad["worktree"]["branch"] = json!("plait/1234567812344");
+        bad["worktree"]["path"] = json!("/repo.worktrees/1234567812344");
+        variants.push(bad);
+        for bad in variants {
+            assert!(
+                serde_json::from_value::<Operation>(bad)
+                    .unwrap()
+                    .verified()
+                    .is_err()
+            );
+        }
     }
 }
