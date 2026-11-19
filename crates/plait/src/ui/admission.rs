@@ -162,7 +162,7 @@ impl Plait {
             };
             if let Some(label) = label {
                 shown = true;
-                content = content.child(tag(label, colors().muted));
+                content = content.child(tag("admission-preparation-detail", label, colors().muted));
             }
         }
         shown.then(|| content.into_any_element())
@@ -222,7 +222,7 @@ impl Plait {
             return None;
         }
         if self.admission.continuation.as_ref() == Some(&snapshot.id) {
-            return Some(column().gap_2().child(tag("Starts a linked thread from HEAD. Uncommitted files are not copied; this thread's history and draft stay here.",colors().muted))
+            return Some(column().gap_2().child(tag("admission-continuation-detail", "Starts a linked thread from HEAD. Uncommitted files are not copied; this thread's history and draft stay here.",colors().muted))
                 .child(row().gap_2().child(button("continue-worktree-confirm","Own worktree").on_activate(cx,|this,window,cx| this.start_continuation(window,cx)))
                     .child(button("continue-worktree-cancel","Cancel").on_activate(cx,|this,_,cx| {this.admission.continuation=None;cx.notify();})))
                 .into_any_element());
@@ -433,13 +433,13 @@ impl Plait {
             return None;
         }
         Some(column().w_full().max_w(px(CONTENT_WIDTH)).mx_auto().gap_2().p_3()
-            .child(div().text_size(px(13.)).child("Project busy"))
-            .child(div().text_size(px(12.)).text_color(rgb(colors().muted)).child("Start from HEAD in a new worktree. Uncommitted files and build output are not copied. The busy thread stays in its checkout. Your message starts the new thread."))
+            .child(div().text_size(px(13.)).child(a11y_text("isolation-choice-heading", "Project busy")))
+            .child(div().text_size(px(12.)).text_color(rgb(colors().muted)).child(a11y_text("isolation-choice-detail", "Start from HEAD in a new worktree. Uncommitted files and build output are not copied. The busy thread stays in its checkout. Your message starts the new thread.")))
             .child(row().gap_2()
                 .child(button("isolation-worktree", "Own worktree").tooltip(|_,cx| cx.new(|_| super::thread_controls::TextTooltip("Create a separate branch and checkout from HEAD, then send this draft there.".into())).into()).aria_description("Create a separate branch and checkout from HEAD, then send this draft there.").on_activate(cx, |this, window, cx| this.accept_isolation(window,cx)))
                 .child(button("isolation-wait", "Wait").disabled(true).tooltip(|_,cx| cx.new(|_| super::thread_controls::TextTooltip("Not yet available. No run is queued.".into())).into()).aria_description("Not yet available. No run is queued."))
                 .child(button("isolation-cancel", "Cancel").tooltip(|_,cx| cx.new(|_| super::thread_controls::TextTooltip("Keep this draft without starting a thread.".into())).into()).on_activate(cx, |this,_,cx| this.cancel_isolation(cx))))
-            .child(div().text_size(px(11.)).text_color(rgb(colors().muted)).child("Wait is not yet available. Nothing is queued."))
+            .child(div().text_size(px(11.)).text_color(rgb(colors().muted)).child(a11y_text("isolation-choice-wait-detail", "Wait is not yet available. Nothing is queued.")))
             .into_any_element())
     }
 }

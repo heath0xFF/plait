@@ -189,3 +189,30 @@ test('a checkout replaced during model discovery cannot receive an admitted thre
   assert.equal(result!.state,'failed');assert.equal(result!.error?.code,'permission_denied');assert.match(result!.error!.message,/identity changed/);
   assert.equal(h.runtime.store.list(h.root).length,0);assert.equal(await h.turns(),0);
 });
+
+
+test('held cleanup refuses busy and automatic worktree placement without changing protected state',async t=>{
+  const {cleanupHelper}=await import('../src/cleanup.ts');const h=await codex(t);await chmod(h.store,0o700);await commit(h.root);
+  const info:any=await h.runtime.reply({op:'admission_info',checkout:h.root});
+  assert.equal((await h.runtime.reply({op:'set_project_isolation',checkout:h.root,identity:info.result.project_identity,auto_worktree:true})).ok,true);
+  const lease=await acquireCheckout(h.root);const token='admission-held';
+  await cleanupHelper('begin',h.root,token,'A process still owns this checkout.',lease);
+  await cleanupHelper('mark',h.root,token,'A process still owns this checkout.',lease);
+  await lease.close();
+  try {
+    for(const busy of [false,true]) {
+      if(busy) h.runtime.active.set(h.root,'finishing');
+      for(const placement of ['project','worktree']) {
+        const reply=await h.runtime.reply({...start(h.root,`held-${busy}-${placement}`,'codex'),placement});
+        assert.equal(reply.ok,false);assert.equal(reply.error?.code,'cleanup_uncertain');assert.match(reply.error!.message,/A process still owns this checkout/);
+      }
+      h.runtime.active.delete(h.root);
+    }
+    assert.equal(h.runtime.store.db.prepare('SELECT count(*) AS n FROM thread_admissions').get()!.n,0);
+    assert.equal(h.runtime.store.db.prepare('SELECT count(*) AS n FROM worktree_operations').get()!.n,0);
+    assert.equal((await cleanupHelper('read',h.root)).cleanup?.token,token);
+    assert.equal(await readFile(join(h.root,'source.txt'),'utf8'),'committed\n');
+  }finally{h.runtime.active.delete(h.root);await cleanupHelper('resolve',h.root,token);}
+  assert.equal((await h.runtime.reply({...start(h.root,'held-false-worktree','codex'),placement:'worktree'})).ok,true);
+  assert.ok((await admitted(h.runtime,'held-false-worktree')).worktree);
+});

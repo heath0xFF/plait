@@ -2581,6 +2581,15 @@ most 256 bytes, modes at most 32 lowercase letters/underscores, paths at most
 reject unknown reply states, inconsistent ready receipts and forged worktree
 paths. No queue, live reader, build-output copy or automatic removal is offered.
 
+A checkout held for unconfirmed cleanup is refused with `cleanup_uncertain`
+before placement is offered, including when a cached active-run summary says
+busy or this project authorizes automatic worktrees. The refusal names the
+recorded cleanup reason. It creates no admission, directory or branch and never
+clears, removes or reuses protected checkout state. A held checkout must be
+resolved through the existing cleanup controls before a fresh placement request.
+Worktree effects also recheck the checkout under their lifecycle and repository
+metadata leases, closing the gap after the admission probe.
+
 ### Run capacity and preparation
 
 `run-capacity.ts` replaces the fixed eight-checkout limit. Execution has no
@@ -2597,9 +2606,10 @@ across restart.
 Recognized process/descriptor/memory/space/quota errors produce
 `resource_exhausted`, identify the exhausted resource and say no automatic retry
 was scheduled. Before acceptance, reservations and descriptors are released and
-no input is recorded. After acceptance, the run records an error, closes the
-harness and releases its lease through normal cleanup; the person's draft and
-recorded input remain recoverable. Errors are never converted into automatic
+no input is recorded. After acceptance, the run records an error and closes the harness. Confirmed
+cleanup releases the checkout; uncertain cleanup retains its durable hold and
+reports that reason instead. The person's draft and recorded input remain
+recoverable. Errors are never converted into automatic
 worktree creation or a claim that work is queued.
 
 A host-supplied run header states actual cwd, branch and HEAD at run start,

@@ -471,7 +471,10 @@ impl Plait {
             }
             return Some(
                 bar()
-                    .child("Project busy. Choose where the new thread starts.")
+                    .child(a11y_text(
+                        "admission-choice-notice",
+                        "Project busy. Choose where the new thread starts.",
+                    ))
                     .child(
                         button("admission-return", "Choose checkout")
                             .on_activate(cx, |this, window, cx| this.open_draft(window, cx)),

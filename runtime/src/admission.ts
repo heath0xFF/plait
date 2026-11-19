@@ -1,5 +1,6 @@
 // Host-owned placement decisions; a worktree is chosen before a run starts.
 import { resourceFailure, type RunCapacity } from './run-capacity.ts';
+import { cleanupHelper } from './cleanup.ts';
 import { randomUUID } from 'node:crypto';
 import { acquireCheckout, checkout, checkRoot, rootIdentity, type FileIdentity } from './safety.ts';
 import { fail, failure, HostError, HARNESSES, THINKING_LEVELS, type Snapshot, type Failure, type HarnessId, type ThinkingLevel, type ApprovalMode } from './protocol.ts';
@@ -43,6 +44,10 @@ function canonical(value: unknown): string {
   if (value && typeof value === 'object' && !Array.isArray(value)) return JSON.stringify(Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, part]) => [key, part])));
   return JSON.stringify(value);
 }
+async function requireCleanup(root: string) {
+  const state = await cleanupHelper('read', root);
+  if (state.cleanup) fail('cleanup_uncertain', `Stop unconfirmed. ${state.cleanup.reason} New threads from this checkout are blocked until cleanup is confirmed.`);
+}
 const policyKey = (root: string, identity: FileIdentity) => `project_isolation:${JSON.stringify([root, identity.dev, identity.ino])}`;
 
 export class Admissions {
@@ -85,6 +90,7 @@ export class Admissions {
   }
   async info(path: string) {
     const root = await checkout(path); const identity = await rootIdentity(root);
+    await requireCleanup(root);
     let parent: Parent | null = null; let refusal: string | null = null;
     try { parent = await worktreeHelper<Parent>({ action: 'parent', root }); }
     catch (error) { refusal = error instanceof Error ? error.message : 'Worktree base is unavailable.'; }
@@ -145,7 +151,7 @@ export class Admissions {
     try {
       if (plan.worktree) {
         const reply = await this.worktrees.handle({ op: 'worktree_status', request_id: plan.worktree.request_id }).catch(error => {
-          if (error instanceof HostError && error.code === 'not_found') return this.worktrees.handle(plan.worktree);
+          if (error instanceof HostError && error.code === 'not_found') return requireCleanup(plan.input.checkout).then(() => this.worktrees.handle(plan.worktree));
           throw error;
         }) as { operation: { state: string; thread_id: string; worktree: Managed | null; error: Failure | null } };
         result.thread_id = reply.operation.thread_id; result.worktree = reply.operation.worktree;
@@ -154,6 +160,7 @@ export class Admissions {
         if (result.worktree) result.checkout = result.worktree.path;
       } else {
         await checkRoot(plan.input.checkout, plan.identity);
+        await requireCleanup(plan.input.checkout);
         const { checkout, harness, provider, model_id, mode, thinking } = plan.input;
         const reply = await this.createHere({ op: 'create_thread', protocol_version: 6, request_id: plan.here_id, checkout, harness, provider, model_id, ...(mode === undefined ? {} : { mode }), ...(thinking === undefined ? {} : { thinking }) }, plan.identity) as { thread: Snapshot };
         result.thread_id = reply.thread.id; result.checkout = reply.thread.checkout; result.state = 'ready';

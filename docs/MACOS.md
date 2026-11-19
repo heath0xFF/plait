@@ -1155,6 +1155,11 @@ a refused creation keeps the draft. Completing it never selects a tab the person
 has moved away from. While a first-message creation remains unresolved, the
 window keeps its checkout fixed; other threads in that checkout remain available.
 
+If cleanup is unconfirmed, the host refuses placement with **Stop unconfirmed**
+and the recorded reason. Resolve that checkout through its cleanup controls
+before starting another thread from it; automatic worktree authorization does
+not bypass that hold.
+
 Project settings → New threads → **When this project is busy** defaults to
 **Ask** (each time). **Own worktree** authorizes automatic worktrees for new
 threads in that project only. The completed checkout path and branch are shown;

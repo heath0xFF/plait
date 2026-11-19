@@ -106,15 +106,30 @@ fn choice_flow() {
         p.send_draft("Keep my first message".into(), 3, w, cx);
     });
     wait(&mut harness, |p| p.admission.choice);
-    harness.update(|p, w, cx| {
+    harness.update(|p, _, cx| {
         assert!(p.isolation_choice(cx).is_some());
         assert!(p.draft.sending.is_some());
         assert!(p.creation_bar(cx).is_none());
         p.draft.open = false;
         assert!(p.creation_bar(cx).is_some());
         p.draft.open = true;
-        p.accept_isolation(w, cx);
     });
+    #[cfg(debug_assertions)]
+    for _ in 0..2 {
+        let frame = harness.draw_a11y();
+        frame.assert_no_duplicates("admission busy choice");
+        for label in ["Own worktree", "Wait", "Cancel"] {
+            assert!(
+                frame.has_node(gpui::Role::Button, |node| node.label.as_deref()
+                    == Some(label))
+            );
+        }
+        assert!(
+            frame.has_node(gpui::Role::Label, |node| node.value.as_deref()
+                == Some("Project busy"))
+        );
+    }
+    harness.update(|p, w, cx| p.accept_isolation(w, cx));
     wait(&mut harness, |p| !p.host.creation.creating);
     harness.update(|p, w, cx| {
         assert!(p.admission.pending.is_some());

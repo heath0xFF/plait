@@ -105,12 +105,17 @@ impl Plait {
         let control = if current.is_some() {
             control.into_any_element()
         } else {
-            tag("Unavailable", colors().muted).into_any_element()
+            tag(
+                "isolation-setting-unavailable",
+                "Unavailable",
+                colors().muted,
+            )
+            .into_any_element()
         };
         settings::section("New threads")
             .child(settings::setting("When this project is busy", "Applies only to new threads in this project. Worktrees start from HEAD; cleanup is manual.", control))
-            .when(self.admission.settings_busy, |el| el.child(tag("Loading isolation setting…",colors().muted)))
-            .when_some(self.admission.note.clone(),|el,note| el.child(tag(note,colors().amber)))
+            .when(self.admission.settings_busy, |el| el.child(tag("isolation-setting-loading", "Loading isolation setting…",colors().muted)))
+            .when_some(self.admission.note.clone(),|el,note| el.child(tag("isolation-setting-note", note,colors().amber)))
             .when(current.is_none() && !self.admission.settings_busy, |el| el.child(button("isolation-settings-retry","Retry").on_activate(cx,|this,_,cx| this.request_isolation_setting(None,cx))))
     }
 }
