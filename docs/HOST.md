@@ -2359,7 +2359,11 @@ the full UUID. Existing branches, paths and symlinks are never reused. The root
 is `<main-repository>.worktrees/<suffix>`; no artifacts or dirty files are copied.
 
 Creation holds the parent's shared lifecycle lease and the common Git metadata
-lease. Removal holds exclusive lifecycle and writer leases on the recorded
+lease to reserve the destination. It then releases metadata exclusion, takes
+the new root's exclusive lifecycle/writer leases and reacquires common metadata
+before Git starts, retaining the parent lifecycle lease throughout. This keeps
+lock ordering intact and prevents another host from running in a partial checkout.
+Removal holds exclusive lifecycle and writer leases on the recorded
 checkout, followed by common metadata exclusion. Parent/common identities,
 worktree membership and branch are rechecked under those leases. Removal also
 refuses queued work, record recovery, uncommitted/untracked/ignored content and

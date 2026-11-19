@@ -411,10 +411,13 @@ fn create_managed_inner(
         &parent.root,
         Some(parent.identity.lease()?),
         crate::lease::LeaseClass::Reader,
-        Some(crate::lease::COMMON_METADATA_WAIT),
+        None,
     )
     .map_err(String::from)?;
     verify_parent(parent)?;
+    let common =
+        crate::lease::acquire_common_metadata(&parent.common, crate::lease::COMMON_METADATA_WAIT)
+            .map_err(String::from)?;
     let base = owned_base(&parent.main)?;
     let mut record = match previous {
         Some(record) => {
@@ -466,6 +469,40 @@ fn create_managed_inner(
             record
         }
     };
+    if matches!(
+        record.stage,
+        ManagedStage::Removed | ManagedStage::Removing | ManagedStage::Failed
+    ) {
+        return Ok(record);
+    }
+    if record.stage == ManagedStage::Reserved && record.identity.is_none() {
+        if branch_exists(&parent.root, &record.branch)? {
+            return Err("The reserved branch already exists; it was left untouched.".into());
+        }
+        // Never take ownership of an existing directory, even when empty.
+        fs::create_dir(&record.path)
+            .map_err(|e| format!("Cannot reserve the worktree folder: {e}"))?;
+        record.identity = Some(Identity::read(&record.path)?);
+        save(&record)?;
+    }
+    // Release metadata before taking the new root's lower-level locks. The
+    // persisted reservation keeps the selected name during this brief gap.
+    drop(common);
+    let _target = crate::lease::acquire_checkout(
+        &record.path,
+        Some(
+            record
+                .identity
+                .as_ref()
+                .ok_or("No reserved worktree identity.")?
+                .lease()?,
+        ),
+        crate::lease::LeaseClass::Exclusive,
+    )
+    .map_err(String::from)?
+    .with_common_metadata(&parent.common, crate::lease::COMMON_METADATA_WAIT)
+    .map_err(String::from)?;
+    verify_parent(parent)?;
     match record.stage {
         ManagedStage::Ready => {
             verify_managed(&record)?;
@@ -504,9 +541,16 @@ fn create_managed_inner(
     if branch_exists(&parent.root, &record.branch)? {
         return Err("The reserved branch already exists; it was left untouched.".into());
     }
-    // create_dir refuses even an empty existing directory or dangling symlink.
-    fs::create_dir(&record.path).map_err(|e| format!("Cannot reserve the worktree folder: {e}"))?;
-    record.identity = Some(Identity::read(&record.path)?);
+    if fs::read_dir(&record.path)
+        .map_err(|e| e.to_string())?
+        .next()
+        .is_some()
+    {
+        return Err(
+            "The reserved worktree folder is no longer empty. Existing files were preserved."
+                .into(),
+        );
+    }
     record.stage = ManagedStage::Creating;
     save(&record)?;
     let target = record
@@ -998,6 +1042,42 @@ mod managed_tests {
                 .stage,
             ManagedStage::Removed
         );
+        clean(&tree);
+    }
+    #[test]
+    fn reserved_identity_resumes_and_new_checkout_is_excluded_during_git() {
+        let repo = repository();
+        let parent = worktree_parent(&repo.0).unwrap();
+        let mut journal = None;
+        let stopped = create_managed_worktree(&parent, ID, None, |record| {
+            journal = Some(record.clone());
+            if record.stage == ManagedStage::Reserved && record.identity.is_some() {
+                Err("crash after reservation".into())
+            } else {
+                Ok(())
+            }
+        });
+        assert!(stopped.is_err());
+        let saved = journal.unwrap();
+        let tree = create_managed_supervised(
+            &parent,
+            ID,
+            Some(saved),
+            |_| Ok(()),
+            &mut |root, args, timeout| {
+                let target = Path::new(args[5]);
+                assert!(
+                    crate::lease::acquire_checkout(target, None, crate::lease::LeaseClass::Writer)
+                        .is_err()
+                );
+                assert!(
+                    crate::lease::acquire_common_metadata(&parent.common, Duration::ZERO).is_err()
+                );
+                git(root, args, None, timeout)
+            },
+        )
+        .unwrap();
+        assert_eq!(tree.stage, ManagedStage::Ready);
         clean(&tree);
     }
     #[test]
