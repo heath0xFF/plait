@@ -505,9 +505,6 @@ impl WindowTabs {
         &mut self,
         mut resolve: impl FnMut(&ThreadTarget) -> Option<Option<u64>>,
     ) -> Result<Option<TabId>, TabError> {
-        if self.tabs.len() == MAX_TABS {
-            return Err(TabError::Capacity);
-        }
         if self.serial >= u64::MAX - 1 {
             return Err(TabError::IdentityExhausted);
         }
@@ -526,6 +523,11 @@ impl WindowTabs {
                 }
                 self.activate(id)?;
                 return Ok(Some(id));
+            }
+            // Only a new tab needs room; keep the entry for a later attempt.
+            if self.tabs.len() == MAX_TABS {
+                self.closed.push(closed);
+                return Err(TabError::Capacity);
             }
             let id = self.insert(closed.target, closed.bookmark, closed.index, connection)?;
             self.activate(id)?;

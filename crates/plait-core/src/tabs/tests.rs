@@ -662,3 +662,22 @@ fn extended_payload_and_collection_limits_are_enforced() {
     };
     assert_eq!(encode_extended(&b), Err(BookmarkError::Invalid));
 }
+#[test]
+fn reopen_at_capacity_activates_an_already_open_thread() {
+    let mut w = window();
+    for i in 0..MAX_TABS {
+        open(&mut w, &format!("t{i}"));
+    }
+    let first = ids(&w)[0];
+    w.close(first, false).unwrap();
+    let again = open(&mut w, "t0");
+    w.activate(ids(&w)[0]).unwrap();
+    assert_eq!(w.reopen(|_| Some(Some(1))), Ok(Some(again)));
+    assert_eq!(w.active(), Some(again));
+    // A thread that needs a new tab still refuses, keeping its history entry.
+    let last = *ids(&w).last().unwrap();
+    w.close(last, false).unwrap();
+    open(&mut w, "full");
+    assert_eq!(w.reopen(|_| Some(Some(1))), Err(TabError::Capacity));
+    assert_eq!(w.closed_len(), 1);
+}
