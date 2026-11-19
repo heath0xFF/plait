@@ -497,7 +497,7 @@ network access or the person's own credentials.
 
 ## Thread tabs
 
-**Built:** one thread per tab, a 40-point top row that stays visible with the
+**Shipped in v0.1.0-preview.18:** one thread per tab, a 40-point top row that stays visible with the
 sidebar hidden, a 36-point row for the thread's Conversation, Changes, History
 and Files views, and a state-grouped overflow list. Sidebar clicks open or
 activate a thread's tab. Each checkout has one New thread draft tab; creating

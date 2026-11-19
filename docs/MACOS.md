@@ -165,7 +165,7 @@ definition; a changed entry is off again and says **Changed**.
 Hover shows the defining file and executable with an argument count, or only
 the URL host for HTTP. Argument values, env/header values, and credential
 commands are hidden. Read the file before opting in; **Open file** opens a
-project definition or override in the Files tab in one action. Files outside
+project definition or override in the Files view in one action. Files outside
 the checkout show their paths only. A stale enable request is rejected, so
 Refresh and read the changed file before enabling it again. Invalid entries
 and Pi's disabled MCP extension must be fixed in Pi first.
@@ -669,6 +669,8 @@ Git inspector on the right, and that choice is remembered. On a window too narro
 for the inspector it explains where Git is instead. Drag either panel's inner
 edge to resize it; the width is remembered, and double-clicking the edge restores
 the default. Both shortcuts can be changed in Settings → Keyboard.
+
+### Tabs
 
 The 40-point top row holds the native window buttons, sidebar toggle, thread
 tabs, and New tab control. It stays visible with the sidebar hidden. Drag the

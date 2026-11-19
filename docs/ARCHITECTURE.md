@@ -53,8 +53,8 @@ ui/                     GPUI layout, actions, focus, lists, theme
   turn_records.rs       guarded record pages, closing-line undo, conflict panel
   changes.rs            changed-file list and diff view
   commit_panel.rs       staging buttons, commit message, and write results
-  commits.rs            the History tab: commit list and a commit's patch
-  file_view.rs          the Files tab: quick open, virtualized lines, find, reload
+  commits.rs            the History view: commit list and a commit's patch
+  file_view.rs          the Files view: quick open, virtualized lines, find, reload
   panels.rs             sidebar and inspector widths and their drag handles
   window_bar.rs         the traffic lights' place, header inset, and window dragging
   jump.rs               Cmd-1 to Cmd-9 and the desktop preferences file
@@ -756,7 +756,7 @@ does nothing. Jumping expands collapsed parents.
 
 Open in Editor, Show in Finder, and Open Terminal Here are the only places the
 desktop starts a program of the person's choosing. `ui/ways_out.rs` picks the
-file and line on screen (the Files tab's current find match or first visible
+file and line on screen (the Files view's current find match or first visible
 line; in Changes the picked line or the diff's first change, mapped to the
 file's own line numbers) and the open checkout. `plait_core::handoff` turns the
 choice saved in Settings → Editor into a program and arguments:
@@ -1215,7 +1215,7 @@ accepts one hover style per element and reports a second one only at draw time.
 
 The sidebar defaults to 272 points on wide windows and 240 on narrow windows.
 Below 1150 points, the conversation's Git inspector (280 points by default) is
-removed; Git remains available in the Changes tab. The minimum window is
+removed; Git remains available in the Changes view. The minimum window is
 900 × 600. Cmd-B hides the sidebar.
 
 Both panels resize by dragging their inner edge (`ui/panels.rs`): the sidebar

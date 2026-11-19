@@ -352,7 +352,7 @@ recorded here:
 - [ ] Pull fast-forwards from Changes and refuses a diverged branch.
 - [ ] The sidebar's filter chips, bell, and refresh controls work with the pointer
       and show their names on hover.
-- [ ] Cmd-P opens a file in the Files tab; Cmd-F, Cmd-G, and Cmd-Shift-G find
+- [ ] Cmd-P opens a file in the Files view; Cmd-F, Cmd-G, and Cmd-Shift-G find
       and step; a file an agent edits rereads when the window is focused again.
 
 ## Native acceptance check
@@ -490,10 +490,10 @@ seven Settings tabs each have separate results):
 | Inspector toggle and shortcut | AXPress and Cmd-L hide and restore it; skipped on a display too narrow for it | No |
 | Resize sidebar | Edge moves and new width is saved in private preferences | Yes |
 | Resize inspector | Edge moves and new width is saved; skipped on a narrow display | Yes |
-| Conversation tab | Selected state and message field | No |
-| Changes tab | Selected state and commit field | No |
-| History tab | Selected state and fixture baseline commit | No |
-| Files tab | Selected state and Open File control | No |
+| Conversation view | Selected state and message field | No |
+| Changes view | Selected state and commit field | No |
+| History view | Selected state and fixture baseline commit | No |
+| Files view | Selected state and Open File control | No |
 | Settings | Cmd-comma opens Settings and Done is available | No |
 | New threads settings | Selected tab and Models section | No |
 | Providers settings | Selected tab and Find provider field | No |
@@ -1811,3 +1811,111 @@ respectively. Repeats on the shared machine showed broad load-dependent spikes;
 these numbers do not establish the final performance gate. A quiet comparison
 against the baseline, including uncached Git reads, remains required before
 release. GPU submission is excluded from every frame measurement here.
+
+## Release check for v0.1.0-preview.18
+
+On 2026-11-19, on the tree that was tagged, `bash scripts/check.sh` exited 0
+with the Git that CI's fixtures use first on the path: 789 Rust tests (229
+desktop, 538 core, 14 host, 8 helper integration), 505 runtime tests,
+TypeScript checks, and release builds.
+
+This release carries thread tabs, Settings and Project settings as modals, the
+redesigned conversation, and the first part of Linear in the host, which
+nothing in the desktop uses yet. Each piece was read before release by a
+reviewer who had not written it, and each finding was confirmed by a failing
+test or an experiment before it was fixed.
+
+- **The refactor under tabs** (a thread's workspace state moved out of the
+  window, and every background result routed to the thread or checkout that
+  owns it): three defects. Send did nothing until the checkout's Git status
+  had been read, and never if that read failed. A file read during a host
+  reconnect left Files on Reading. And scene renders that ran at the same time
+  shared one fixture directory. All were fixed with regression tests. Every
+  existing scene rendered byte for byte the same before and after the
+  refactor; to make that comparison possible the scene harness now pins what
+  varied between two renders of the same code (measured read times, fixture
+  paths, how much streamed text is revealed, a diagnostics render time).
+- **The tab model** (headless): five defects. Saving dropped tabs whose thread
+  was missing from the thread list at that moment; a tab row that fitted
+  exactly hid one tab; row data scanned the thread list once per tab; and two
+  edges of reopening a closed tab. All were fixed with regression tests.
+- **The tab row, hidden tabs and restore:** eight defects. A hidden tab's
+  changed-file counts could land on the tab in front. A New thread tab showed
+  nothing after its thread was created if it was not on Conversation. At the
+  draft journal's size limit the tab set stopped being saved at all. A large
+  view bookmark wrote a new record on every save. Restoring saved tabs closed
+  an open Settings modal. The rest were a misaligned overflow summary, close
+  controls that shared one accessible name, and design rules dropped from
+  `DESIGN.md`. All were fixed with regression tests.
+- **Settings and Project settings as modals:** four defects. A thread created
+  while the modal was open closed it and took the keyboard; a new-thread draft
+  counted as off screen behind the modal; Escape skipped the trusted-commands
+  confirmation; and accessibility actions reached the workspace behind the
+  modal. All were fixed with regression tests. An accessibility action in a
+  live window was not exercised; the test platform cannot deliver one.
+- **The conversation redesign** (You and Plait labels, a neutral panel for
+  requests, quoted context beside a rule): seven defects before it merged,
+  among them empty quote lines dropped from the screen and text below the
+  contrast floors against the new panel in twelve bundled themes. All were
+  fixed with regression tests.
+- **Linear in the host** (key sign-in, cached reads, thread-to-issue links,
+  and two writes made only on a person's action): fifteen defects in the first
+  review, among them the key leaking when a server echoed the request's
+  authorization header into issue data, and a sign-in in flight overwriting a
+  later sign-out. A later design pass found that a write was sent before
+  anything was recorded, so a lost reply could post it twice; writes now
+  record their intent first, and an unknown outcome is never replayed. A
+  review of that correction found two smaller defects. All were fixed with
+  regression tests. Nothing has been tried against Linear itself.
+
+Frame cost was measured with nothing else running, 90 frames a case, twice
+each, against the tree before tabs. No existing case is slower. A long
+conversation at rest costs 1.03 ms a frame against 1.03 to 1.04 ms, and 2.10 to
+2.11 ms against 2.17 to 2.18 ms while scrolling; Changes at rest 1.05 ms
+against 1.11 to 1.12 ms; History at rest 0.90 ms against 0.93 ms; switching
+views 3.7 to 3.8 ms against 3.9 ms; a real Git read to its frame 8.2 to 8.5 ms
+against 8.4 to 8.5 ms. Twenty open tabs with five running threads cost 1.39 to
+1.40 ms a frame, about 0.37 ms more than one thread, which is more than the
+0.1 ms the design allowed. Drawing the tab strip and the sidebar's thread rows
+as cached views had held that case to 1.08 ms, but left them out of the
+accessibility tree (see below), so they are drawn each frame; getting that
+time back without losing accessibility is open. The streaming case measured
+2.7 to 3.3 ms against 3.0 to 3.5 ms; it follows the machine's power state and
+is reported, not used as a gate.
+
+Saved tabs live in a file of their own, `tabs.json`. The draft and submission
+journal is unchanged, including its 4 MiB limit, and its redesign remains
+planned. Over that limit a tab switch is refused and the tab stays in front,
+because the work in it could not be saved; before tabs, switching threads over
+the limit was allowed and the draft stayed in memory. Tabs themselves are
+still saved over the limit.
+
+The native acceptance check was run against a real window on the release
+build of the tagged code: 40 of 44 items passed, among them the tab row and
+its keys, all four views, every Settings page, the command palette, find,
+branches, staging and committing, the editor and terminal hand-offs, typing,
+text selection, both approval shortcuts, a streaming reply, and Undo and Redo
+from the closing line. Three failures are the check's own pointer steps, which
+still drag and double-click the bar where the tab row now is; the window is
+moved by the row's empty end. The fourth is known: Redo by shortcut pressed
+straight after Undo by shortcut does nothing.
+
+That check found one defect before release. The sidebar's thread rows and the
+tab strip were drawn as cached views, and a view reused from the last frame
+contributes no accessibility nodes: assistive technology could not reach a
+thread row at all, and saw the tabs only on frames that redrew them. Both are
+ordinary views again. Every scene rendered byte for byte the same before and
+after that change.
+
+One defect it found is not fixed. On a debug build the check stops at Settings
+→ Editor: the framework's debug assertion reports a duplicate accessibility
+node id and the app exits, so the items after it do not run. A release build
+drops the duplicate node and carries on, which is how the run above passed
+that page. The two elements have not been identified. Text elements take their
+accessibility id from their own text, so two identical strings under the same
+ancestors collide. Until it is fixed, the check on CI, which drives a debug
+build, will fail from that item on.
+
+Not exercised: a live model in more than one tab at once; VoiceOver itself;
+dragging a tab and middle-click on a tab; a host that reconnects under several
+tabs; and the installed app.

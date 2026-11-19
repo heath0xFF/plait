@@ -27,7 +27,7 @@
 Plait is written in Rust and drawn with [GPUI](https://www.gpui.rs/). There is no
 web view. Agents run in a separate host process on your Mac, so closing the
 window never stops accepted work, and reopening it returns you to the same
-thread and draft.
+tabs, threads, and drafts.
 
 ## What you get
 
@@ -37,6 +37,10 @@ thread and draft.
 - **Work that outlives the window.** The host owns each run and its history.
   Quit, update, or reboot the app; threads, drafts, and pending approvals are
   there when you come back.
+- **Tabs.** Keep several threads open and switch with Cmd-1 to Cmd-9. Each tab
+  says whether its thread is working, needs you, finished, or failed, and keeps
+  its own view, scroll position, find, and draft. Closing a tab never stops its
+  run, and your tabs come back after a restart. See [tabs](docs/MACOS.md#tabs).
 - **Images in messages.** Paste or drop PNG/JPEG images, remove
   attachments before sending, and open conversation thumbnails larger. Drafts
   and sent originals persist privately. Requires host protocol 6; see the
@@ -67,12 +71,12 @@ thread and draft.
 
 ### Review and commit
 
-The Changes tab shows staged and unstaged changes side by side with the
+The Changes view shows staged and unstaged changes side by side with the
 conversation that made them. Commit without leaving the thread.
 
 </td>
 <td width="50%">
-<img src="docs/images/changes.png" width="100%" alt="The Changes tab with four staged files and the diff of src/client.rs, ready to commit" />
+<img src="docs/images/changes.png" width="100%" alt="The Changes view with four staged files and the diff of src/client.rs, ready to commit" />
 </td>
 </tr>
 <tr>
@@ -98,7 +102,7 @@ reloads when the agent changes it on disk.
 
 </td>
 <td width="50%">
-<img src="docs/images/files.png" width="100%" alt="The Files tab showing src/retry.rs with find open on the word delay" />
+<img src="docs/images/files.png" width="100%" alt="The Files view showing src/retry.rs with find open on the word delay" />
 </td>
 </tr>
 <tr>
@@ -162,7 +166,7 @@ Dashed boxes are planned, not shipped.
 ## Status
 
 Plait is an early preview, built in the open and used daily to build itself.
-The latest release is **v0.1.0-preview.17**.
+The latest release is **v0.1.0-preview.18**.
 
 - **Mac only, local only.** Remote hosts and Linux execution are
   [planned](docs/ROADMAP.md).
@@ -175,8 +179,12 @@ The latest release is **v0.1.0-preview.17**.
   Pi threads find and call tools from configured stdio and header-auth HTTP MCP
   servers, with per-project switches and per-call approvals. MCP browser sign-in
   and named CLIs are planned (M8).
+- **One run per checkout.** Tabs keep many threads open, but a checkout runs
+  one thread at a time; a second thread in a busy project needs its own
+  worktree today. Running several in one project is
+  [planned](docs/ROADMAP.md).
 - **Not an IDE.** There is no file editor, embedded terminal, merge, or rebase.
-  The Files tab is read-only. Instead Plait hands off: Open in Editor opens the
+  The Files view is read-only. Instead Plait hands off: Open in Editor opens the
   file on screen at its line in your editor, Show in Finder reveals it, and
   Open Terminal Here opens the project's checkout, each with what you choose in
   Settings → Editor.

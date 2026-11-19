@@ -1238,7 +1238,7 @@ reply budget. Each row has this shape:
 the configured executable, never its arguments; `argument_count` is a count
 only. Hover text directs the person to read those hidden arguments in the
 defining file before turning the server on. For an in-checkout definition or
-override, **Open file** uses the existing Files tab; files outside the checkout
+override, **Open file** uses the existing Files view; files outside the checkout
 are shown as paths only. `host` is only the URL host,
 never credentials, path, query, or fragment. `source` names the defining file;
 `override_source` names a restricted project override. `problem` explains an

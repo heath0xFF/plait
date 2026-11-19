@@ -108,7 +108,7 @@ conversation keeps a readable minimum width.
   bottom edge of the conversation before a click. Lists hang their wrapped
   lines from the text, not the marker. Tables size columns to their content with a
   quiet header row and scroll sideways when wide.
-- **Find.** Cmd-F opens the Files tab's find bar over the conversation: the
+- **Find.** Cmd-F opens the Files view's find bar over the conversation: the
   field, a count ("3 of 17", "No matches"), previous, next, and close, under
   the window bar. Every match in view, here and in Files, is drawn on the
   selection's neutral fill; the current one is the same fill at twice the
