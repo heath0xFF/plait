@@ -356,6 +356,15 @@ fn owned_base(main: &Path) -> Result<PathBuf> {
     Ok(base)
 }
 
+/// Only a path and branch derived from the thread's UUID, in the main
+/// repository's worktree folder, can be one Plait made.
+fn owned_shape(record: &ManagedWorktree, base: &Path, hex: &str) -> bool {
+    let suffix = record.branch.strip_prefix("plait/");
+    record.path.parent() == Some(base)
+        && suffix.is_some_and(|suffix| suffix.len() >= 12 && hex.starts_with(suffix))
+        && record.path.file_name().and_then(|s| s.to_str()) == suffix
+}
+
 /// `save` must commit and sync the journal before returning. A retry uses that
 /// same journal, never an inferred association or an existing unrecognized path.
 pub fn create_managed_worktree(
@@ -428,13 +437,7 @@ fn create_managed_inner(
         Some(record) => {
             if record.thread_id != thread_id
                 || &record.parent != parent
-                || record.path.parent() != Some(base.as_path())
-                || !record
-                    .branch
-                    .strip_prefix("plait/")
-                    .is_some_and(|suffix| suffix.len() >= 12 && hex.starts_with(suffix))
-                || record.path.file_name().and_then(|s| s.to_str())
-                    != record.branch.strip_prefix("plait/")
+                || !owned_shape(&record, &base, &hex)
             {
                 return Err(
                     "Worktree journal does not match the requested parent and UUID.".into(),
@@ -631,6 +634,17 @@ pub fn remove_managed_supervised(
 ) -> Result<ManagedWorktree> {
     if record.identity.as_ref() != Some(expected) {
         return Err("Removal identity does not match the host-owned worktree.".into());
+    }
+    // Recheck what creation checked: a journal naming any other folder or
+    // branch was not written by a creation and grants no deletion.
+    if !owned_shape(
+        &record,
+        &worktree_base(&record.parent.main)?,
+        &uuid_hex(&record.thread_id)?,
+    ) {
+        return Err(
+            "This record does not name a worktree Plait created. Nothing was removed.".into(),
+        );
     }
     if record.stage == ManagedStage::Removed {
         return Ok(record);
@@ -1256,6 +1270,39 @@ mod managed_tests {
         git_in(&tree.path, &["branch", "kept-ref", "refs/worktree/keep"]);
         let removed = remove_managed_worktree(tree.clone(), identity, true, |_| Ok(())).unwrap();
         assert_eq!(removed.stage, ManagedStage::Removed);
+        clean(&tree);
+    }
+    #[test]
+    fn removal_refuses_a_record_naming_another_worktree() {
+        let repo = repository();
+        let tree = create(&repo);
+        let base = worktree_base(&repo.0).unwrap();
+        // A worktree the person made with Git, beside Plait's own.
+        let mine = base.join("mine");
+        repo.git(&[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "mine",
+            mine.to_str().unwrap(),
+        ]);
+        let mine = mine.canonicalize().unwrap();
+        let identity = Identity::read(&mine).unwrap();
+        for (path, branch) in [
+            (mine.clone(), "mine".to_owned()),
+            (mine.clone(), "plait/mine".to_owned()),
+        ] {
+            git_in(&mine, &["checkout", "-q", "-B", &branch]);
+            let mut forged = tree.clone();
+            forged.path = path;
+            forged.branch = branch.clone();
+            forged.identity = Some(identity.clone());
+            let error = remove_managed_worktree(forged, &identity, true, |_| Ok(())).unwrap_err();
+            assert!(error.contains("Plait created"), "{branch}: {error}");
+            assert!(mine.join("file").exists());
+        }
+        repo.git(&["worktree", "remove", mine.to_str().unwrap()]);
         clean(&tree);
     }
     fn git_in(root: &Path, args: &[&str]) {
