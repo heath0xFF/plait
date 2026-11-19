@@ -1685,6 +1685,8 @@ Unknown fields, relative paths, invalid tokens, and missing or false
 `confirm_stopped` or `confirm_stop` are refused. Resolution acquires the exclusive checkout lease
 and compares the token before clearing. Stopping a recorded Git group uses its
 private record lock instead, since the group may hold the checkout lease.
+A lock file or record that cannot be opened or read refuses that lease or
+read with its own reason, never `cleanup_uncertain`, and holds nothing.
 A quarantined admission returns
 `cleanup_uncertain` with the specific reason; the desktop shows **Stop
 unconfirmed**, then **Confirm stopped** when the person chooses that control.

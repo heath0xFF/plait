@@ -413,3 +413,37 @@ try { await (await acquireCheckout(root, mode)).close(); } catch (error) { proce
     await assertPrivateLeases(leases);
   }
 });
+
+// Opening a lock file can fail for reasons of its own. That is not evidence
+// that a cleanup is unconfirmed, so it must not hold the checkout.
+test('a lock file that cannot be opened fails the lease with its reason and holds nothing', async t => {
+  const { cleanupHelper, RESTART_REASON } = await import('../src/cleanup.ts');
+  const { root } = await setup(t);
+  const name = checkoutLockName(await rootIdentity(root));
+  const record = join(process.env.PLAIT_LEASE_DIR!, name.replace(/^checkout-/, 'cleanup-'));
+  const gitRecord = join(process.env.PLAIT_LEASE_DIR!, name.replace(/^checkout-/, 'git-cleanup-'));
+  const unopenable = (code: string) => (error: { code?: string; message: string }) => {
+    assert.equal(error.code, code, error.message);
+    if (code !== 'busy') assert.match(error.message, /Cannot open lease lock file/);
+    return true;
+  };
+  // A directory where a record's lock file belongs cannot be opened.
+  await mkdir(record);
+  try {
+    for (const mode of ['writer', 'exclusive', 'reader'] as const) await assert.rejects(acquireCheckout(root, mode), unopenable('permission_denied'));
+    await assert.rejects(cleanupHelper('read', root), unopenable('permission_denied'));
+  } finally { await rm(record, { recursive: true }); }
+  const writer = await acquireCheckout(root, 'writer');
+  try {
+    // Saving a run's record when it starts can fail the same way.
+    await rm(record); await mkdir(record);
+    await assert.rejects(cleanupHelper('begin', root, 'run-one', RESTART_REASON, writer), unopenable('permission_denied'));
+    await rm(record, { recursive: true });
+    // A busy checkout stays busy when its Git record cannot be read.
+    await rm(gitRecord); await mkdir(gitRecord);
+    await assert.rejects(acquireCheckout(root, 'writer'), unopenable('busy'));
+  } finally { await rm(gitRecord, { recursive: true, force: true }); await writer.close(); }
+  // The refusals released their locks and saved nothing that holds the checkout.
+  assert.equal((await cleanupHelper('read', root)).cleanup, null);
+  await (await acquireCheckout(root, 'exclusive')).close();
+});

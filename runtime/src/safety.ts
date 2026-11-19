@@ -148,7 +148,7 @@ function lockFailure(stderr: string, fallback: string): HostError {
   const busyIndex = line.indexOf('busy:');
   if (busyIndex >= 0) return new HostError('busy', line.slice(busyIndex + 5).trim() || fallback);
   if (line.includes('identity:')) return new HostError('permission_denied', 'Checkout changed while taking its lease.');
-  return new HostError('permission_denied', 'Checkout lease could not be acquired safely.');
+  return new HostError('permission_denied', line ? `Checkout lease could not be acquired: ${line}` : 'Checkout lease could not be acquired safely.');
 }
 
 /** The per-user lease directory, as `plait_core::lease::default_lease_dir` finds it. */

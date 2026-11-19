@@ -90,7 +90,10 @@ export function cleanupHelper(action: 'read' | 'begin' | 'mark' | 'finish' | 're
     child.stderr!.setEncoding('utf8').on('data', data => { diagnostic = (diagnostic + data).slice(-2048); });
     child.once('error', reject);
     child.once('close', code => {
-      if (code !== 0) return reject(new HostError('cleanup_uncertain', diagnostic.trim().replace(/^plait-host:\s*/, '') || 'Cleanup state could not be verified.'));
+      // Failing to read a record, or to save one before a run starts, leaves
+      // nothing unconfirmed: only a saved record holds the checkout.
+      const failure = action === 'read' || action === 'begin' ? 'permission_denied' : 'cleanup_uncertain';
+      if (code !== 0) return reject(new HostError(failure, diagnostic.trim().replace(/^plait-host:\s*/, '') || 'Cleanup state could not be verified.'));
       try { resolve(JSON.parse(out)); } catch { reject(new HostError('internal', 'Invalid cleanup helper reply.')); }
     });
   });

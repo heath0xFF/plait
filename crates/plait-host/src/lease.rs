@@ -1,8 +1,8 @@
 use plait_core::lease::{
-    CHECKOUT_BUSY, COMMON_METADATA_BUSY, DirIdentity, LIFECYCLE_BUSY, MAX_COMMON_METADATA_WAIT,
-    WRITER_BUSY, checkout_lock_name, common_lock_name, default_lease_dir, flock_fd_wait,
-    open_lease_dir, open_lock_file, open_verified_dir, prepare_checkout_lock, prepare_common_lock,
-    try_flock_fd, verify_dir_still,
+    CHECKOUT_BUSY, COMMON_METADATA_BUSY, DirIdentity, LIFECYCLE_BUSY, LeaseError, LeaseErrorKind,
+    MAX_COMMON_METADATA_WAIT, WRITER_BUSY, checkout_lock_name, common_lock_name, default_lease_dir,
+    flock_fd_wait, open_lease_dir, open_lock_file, open_verified_dir, prepare_checkout_lock,
+    prepare_common_lock, try_flock_fd, verify_dir_still,
 };
 use plait_core::lease::{acquire_for_cleanup, cleanup, git_cleanup};
 use serde_json::json;
@@ -86,10 +86,13 @@ pub fn acquire(args: Vec<String>) -> io::Result<()> {
         .map_err(|error| io::Error::other(error.to_string()))?;
     verify_inherited_lock_fd(3, expected_lock_id)?;
     if let Err(error) = lock_mode(mode, id, timeout_ms) {
-        // A lent Git child may hold these locks: explain its saved state.
-        if mode != "common" {
-            git_cleanup::require_clear(id)
-                .map_err(|error| io::Error::other(format!("cleanup_uncertain: {error}")))?;
+        // A lent Git child may hold these locks: explain its saved state. A
+        // record that cannot be read explains nothing: keep the refusal.
+        if mode != "common"
+            && let Err(held) = git_cleanup::require_clear(id)
+            && held.kind == LeaseErrorKind::CleanupUncertain
+        {
+            return Err(admission_error(held));
         }
         return Err(error);
     }
@@ -124,7 +127,7 @@ pub fn acquire(args: Vec<String>) -> io::Result<()> {
         unsafe {
             libc::flock(3, libc::LOCK_UN);
         }
-        return Err(io::Error::other(format!("cleanup_uncertain: {error}")));
+        return Err(admission_error(error));
     }
     if owner_fd {
         let (_, owner_id) = open_lock_file(&lease_dir_fd, &cleanup::owner_lock_name(id))
@@ -283,9 +286,21 @@ fn acquire_legacy() -> io::Result<()> {
         unsafe {
             libc::flock(3, libc::LOCK_UN);
         }
-        return Err(io::Error::other(format!("cleanup_uncertain: {error}")));
+        return Err(admission_error(error));
     }
     Ok(())
+}
+
+/// The runtime holds a checkout for `cleanup_uncertain`, so only a saved
+/// cleanup record that is unconfirmed is reported that way. Any other failure,
+/// such as a record's lock file that cannot be opened, refuses this lease with
+/// its own message.
+fn admission_error(error: LeaseError) -> io::Error {
+    if error.kind == LeaseErrorKind::CleanupUncertain {
+        io::Error::other(format!("cleanup_uncertain: {error}"))
+    } else {
+        io::Error::other(error.message)
+    }
 }
 
 /// Guard held by `plait-host undo` across working-tree restoration.

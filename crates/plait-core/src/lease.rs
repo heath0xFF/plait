@@ -1584,4 +1584,37 @@ mod tests {
         }
         take_leases_at_once(&scratch.join("fresh/leases"), &scratch.join("repo"), index).unwrap();
     }
+
+    /// A record that cannot be opened is a failure to read it, not evidence
+    /// that a cleanup is unconfirmed, and must not hide the true refusal.
+    #[test]
+    fn an_unopenable_cleanup_record_is_reported_as_itself() {
+        let scratch = Scratch::new("record-io");
+        let leases = scratch.0.join("leases");
+        let root = scratch.0.join("repo");
+        fs::create_dir(&root).unwrap();
+        let held = acquire_checkout_in(&leases, &root, None, LeaseClass::Writer).unwrap();
+        let id = held.identity();
+        // A directory where the Git cleanup record's lock file belongs cannot be opened.
+        let record = default_lease_dir()
+            .unwrap()
+            .join(format!("git-cleanup-{:016x}-{:016x}.lock", id.dev, id.ino));
+        fs::remove_file(&record).unwrap();
+        fs::create_dir(&record).unwrap();
+        let busy = acquire_checkout_in(&leases, &root, None, LeaseClass::Writer).unwrap_err();
+        drop(held);
+        let unreadable = acquire_checkout_in(&leases, &root, None, LeaseClass::Writer).unwrap_err();
+        fs::remove_dir(&record).unwrap();
+        assert_eq!(busy.kind, LeaseErrorKind::CheckoutBusy, "{busy:?}");
+        assert_eq!(busy.message, WRITER_BUSY);
+        assert_ne!(unreadable.kind, LeaseErrorKind::CleanupUncertain);
+        assert!(
+            unreadable
+                .message
+                .starts_with("Cannot open lease lock file:"),
+            "{unreadable:?}"
+        );
+        // The refusal released its locks.
+        drop(acquire_checkout_in(&leases, &root, None, LeaseClass::Exclusive).unwrap());
+    }
 }

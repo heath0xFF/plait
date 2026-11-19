@@ -392,9 +392,13 @@ pub(super) fn check_lease(
         }
         Err(error) => {
             // A lent child may own the very lock needed for admission. Explain
-            // its saved state even though that lock could not be acquired.
-            if let Ok((_, _, id)) = open_verified_dir(root) {
-                require_clear(id)?;
+            // its saved state even though that lock could not be acquired. A
+            // record that cannot be read explains nothing: keep the refusal.
+            if let Ok((_, _, id)) = open_verified_dir(root)
+                && let Err(held) = require_clear(id)
+                && held.kind == LeaseErrorKind::CleanupUncertain
+            {
+                return Err(held);
             }
             Err(error)
         }
