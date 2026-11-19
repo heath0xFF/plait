@@ -302,7 +302,12 @@ impl Plait {
                 TabNavigation::Previous => self.tabs.model.previous_tab(),
                 TabNavigation::Jump(n) => self.tabs.model.jump(n),
                 TabNavigation::Reopen => self.tabs.model.reopen(|target| match target {
-                    TabTarget::Worktrees { .. } => Some(connection),
+                    // As on restore: only a project the sidebar still verifies.
+                    TabTarget::Worktrees { checkout } => (checkout.host == self.tabs.host
+                        && self.tabs.identity.checkouts.iter().any(|(root, identity)| {
+                            *root == checkout.root && checkout.directory == Some(*identity)
+                        }))
+                    .then_some(connection),
                     TabTarget::Existing { id, checkout } => self
                         .host
                         .connection

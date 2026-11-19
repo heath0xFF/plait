@@ -406,3 +406,69 @@ fn an_unconfirmed_removal_stays_with_its_project() {
     drop(h);
     let _ = std::fs::remove_dir_all(scratch);
 }
+/// Reopen follows restore: a Worktrees tab returns only for a project the
+/// sidebar still verifies.
+#[core::prelude::v1::test]
+fn reopen_returns_worktrees_only_for_a_present_project() {
+    if !isolated("worktrees_view::reopen_returns_worktrees_only_for_a_present_project") {
+        return;
+    }
+    use crate::ui::{tab_lifecycle::Intent, tabs::TabNavigation};
+    let scratch =
+        std::env::temp_dir().join(format!("plait-worktree-reopen-{}", std::process::id()));
+    let repo = fixture_repository(&scratch);
+    let mut h = Harness::new(&repo, None, 1380., 860.);
+    h.connect(&repo, false);
+    install(&mut h, 4);
+    let count = |p: &Plait| {
+        p.tabs
+            .model
+            .tabs()
+            .iter()
+            .filter(|t| t.session().target().is_worktrees())
+            .count()
+    };
+    for present in [true, false] {
+        h.update(|p, window, cx| {
+            use std::os::unix::fs::MetadataExt;
+            let open: Vec<_> = p
+                .tabs
+                .model
+                .tabs()
+                .iter()
+                .filter(|t| t.session().target().is_worktrees())
+                .map(|t| t.id())
+                .collect();
+            for id in open {
+                p.tabs.model.close(id, false).unwrap();
+            }
+            let root = p.host.creation.checkout.clone();
+            let meta = std::fs::metadata(&root).unwrap();
+            let identity = plait_core::tabs::DirectoryIdentity {
+                device: meta.dev(),
+                inode: meta.ino(),
+            };
+            p.tabs.identity.checkouts.insert(root.clone(), identity);
+            let checkout = p.tab_checkout(root.clone());
+            assert_eq!(checkout.directory, Some(identity));
+            let id = p
+                .tabs
+                .model
+                .open(
+                    TabTarget::Worktrees { checkout },
+                    Some(p.host.connection.epoch),
+                )
+                .unwrap();
+            p.tabs.model.close(id, false).unwrap();
+            if !present {
+                // The project left the sidebar after its tab was closed.
+                p.tabs.identity.checkouts.remove(&root);
+            }
+            assert_eq!(count(p), 0);
+            p.request_tab(Intent::Navigate(TabNavigation::Reopen), window, cx);
+        });
+        h.update(|p, _, _| assert_eq!(count(p), usize::from(present), "present {present}"));
+    }
+    drop(h);
+    let _ = std::fs::remove_dir_all(scratch);
+}
