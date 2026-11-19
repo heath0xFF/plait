@@ -403,3 +403,36 @@ fn reopened_creation() {
     server.join().unwrap();
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+/// A failed capability probe is forgotten, so continuation returns once the
+/// checkout's hold is resolved; a fresh answer in between is kept.
+#[core::prelude::v1::test]
+fn failed_capability_probe_is_retried() {
+    if !isolated("admission::failed_capability_probe_is_retried") {
+        return;
+    }
+    let scratch =
+        std::env::temp_dir().join(format!("plait-admission-retry-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.update(|p, _, cx| {
+        let epoch = p.host.connection.epoch;
+        let root = p.host.creation.checkout.clone();
+        p.admission.capabilities = Some((epoch, root.clone(), false));
+        p.retry_admission_capability(epoch, root, Duration::ZERO, cx);
+    });
+    wait(&mut harness, |p| p.admission.capabilities.is_none());
+    harness.update(|p, _, cx| {
+        let epoch = p.host.connection.epoch;
+        let root = p.host.creation.checkout.clone();
+        p.admission.capabilities = Some((epoch, root.clone(), false));
+        p.retry_admission_capability(epoch, root.clone(), Duration::from_millis(50), cx);
+        p.admission.capabilities = Some((epoch, root, true));
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    harness.settle();
+    harness.update(|p, _, _| assert!(p.admission.capabilities.as_ref().is_some_and(|c| c.2)));
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}

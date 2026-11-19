@@ -190,8 +190,38 @@ impl Plait {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 if this.host.connection.epoch == epoch && this.host.creation.checkout == root {
+                    let failed = result.is_err();
                     this.admission.capabilities =
-                        Some((epoch, root, result.is_ok_and(|info| info.is_some())));
+                        Some((epoch, root.clone(), result.is_ok_and(|info| info.is_some())));
+                    // An older host answers; a refusal (such as a held checkout) or a
+                    // transient error does not mean the host lacks the capability.
+                    if failed {
+                        this.retry_admission_capability(epoch, root, CAPABILITY_RETRY, cx);
+                    }
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+    /// Forget a failed probe after `delay`, so the next sync asks again.
+    pub(super) fn retry_admission_capability(
+        &mut self,
+        epoch: u64,
+        root: PathBuf,
+        delay: Duration,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(delay).await;
+            let _ = this.update(cx, |this, cx| {
+                if this
+                    .admission
+                    .capabilities
+                    .as_ref()
+                    .is_some_and(|(e, p, yes)| *e == epoch && *p == root && !*yes)
+                {
+                    this.admission.capabilities = None;
                     cx.notify();
                 }
             });
@@ -506,6 +536,8 @@ impl Plait {
             .into_any_element())
     }
 }
+/// A failed capability probe is asked again after this long.
+const CAPABILITY_RETRY: Duration = Duration::from_secs(5);
 /// Both Wait controls say the same thing: nothing is accepted as queued.
 const WAIT_UNAVAILABLE: &str = "Not yet available. No run is queued.";
 const CONTINUE_WORKTREE: &str =
