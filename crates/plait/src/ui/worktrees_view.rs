@@ -51,6 +51,9 @@ pub(super) struct View {
     pub cache: Cache,
     pub sort_size: bool,
     pub removal: plait_core::worktree_removal::Removal,
+    /// The project whose view asked for `removal`: one window has one removal
+    /// state, and another project's Worktrees tab must not show or resend it.
+    pub removal_project: Option<PathBuf>,
     /// One inventory at a time: its helper and Git reads run to the end even
     /// when their result is retired, so overlapping refreshes would stack.
     pub reading: bool,
@@ -270,6 +273,11 @@ impl Plait {
                 &tab.session().target().checkout().root
             })
     }
+    /// Whether the visible Worktrees tab is the project that asked for removal.
+    pub(super) fn removal_here(&self) -> bool {
+        self.worktrees_visible()
+            && self.worktrees.removal_project.as_deref() == Some(self.visible_project_checkout())
+    }
     pub(super) fn worktrees_visible(&self) -> bool {
         self.tabs
             .model
@@ -309,7 +317,11 @@ impl Plait {
         self.worktrees.generation += 1;
         let generation = self.worktrees.generation;
         self.worktrees.error = None;
-        if force && self.worktrees.removal.pending.is_some() && !self.worktree_busy {
+        if force
+            && self.worktrees.removal.pending.is_some()
+            && self.removal_here()
+            && !self.worktree_busy
+        {
             self.finish_view_removal(cx);
             return;
         }
@@ -616,6 +628,7 @@ impl Plait {
         ) {
             return;
         }
+        self.worktrees.removal_project = Some(self.visible_project_checkout().to_owned());
         let answer=window.prompt(PromptLevel::Warning,"Remove this worktree?",Some(&format!("Delete {}? Its branch and thread history stay. Private build cache stays. The host will check for work to preserve again.",path.display())),&[PromptButton::Other("Remove".into()),PromptButton::Cancel("Cancel".into())],cx);
         cx.spawn(async move |this, cx| {
             let confirmed = answer.await == Ok(0);

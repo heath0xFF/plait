@@ -58,7 +58,7 @@ impl Plait {
                     "worktrees-empty", "No worktrees yet. Choose Own worktree when a project is busy, or New Thread in Worktree."
                 )))
             })
-            .when_some(self.worktrees.removal.message.clone(), |el, result| {
+            .when_some(self.worktrees.removal.message.clone().filter(|_| self.removal_here()), |el, result| {
                 el.child(div().px_4().py_2().child(a11y_text("worktrees-result", result)))
             })
             .child(content)
@@ -298,6 +298,8 @@ impl Plait {
             .filter(|_| self.worktrees.openable[n]);
         let remove_reason = if facts.refusal.is_some() {
             reason.clone()
+        } else if self.worktrees.removal.pending.is_some() && !self.removal_here() {
+            "Another project's removal is unconfirmed. Refresh its Worktrees tab first.".into()
         } else if self.worktrees.removal.pending.is_some() {
             self.worktrees
                 .removal

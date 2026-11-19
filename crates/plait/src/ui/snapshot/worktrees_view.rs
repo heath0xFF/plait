@@ -304,7 +304,11 @@ fn removal_here_marks_the_folder_missing_for_the_sidebar() {
     h.update(|p, _, cx| {
         let row = p.worktrees.rows[3].clone();
         p.navigation.available.insert(row.path.clone(), true);
-        assert!(p.worktrees.removal.ask(&row, p.tabs.host.clone(), "removal".into()));
+        assert!(
+            p.worktrees
+                .removal
+                .ask(&row, p.tabs.host.clone(), "removal".into())
+        );
         let attempt = p.worktrees.removal.answer(true).unwrap();
         let removed = plait_core::host::worktree::Operation {
             request_id: "creation-3".into(),
@@ -321,7 +325,11 @@ fn removal_here_marks_the_folder_missing_for_the_sidebar() {
         p.navigation.available.insert(other.clone(), true);
         p.worktrees.rows[1].preservation.refusal = None;
         let row = p.worktrees.rows[1].clone();
-        assert!(p.worktrees.removal.ask(&row, p.tabs.host.clone(), "refused".into()));
+        assert!(
+            p.worktrees
+                .removal
+                .ask(&row, p.tabs.host.clone(), "refused".into())
+        );
         let attempt = p.worktrees.removal.answer(true).unwrap();
         let refused = plait_core::host::worktree::Operation {
             request_id: "creation-1".into(),
@@ -336,6 +344,65 @@ fn removal_here_marks_the_folder_missing_for_the_sidebar() {
         p.settle_view_removal(&attempt, Ok(refused), cx);
         assert_eq!(p.navigation.available.get(&other), Some(&true));
     });
+    drop(h);
+    let _ = std::fs::remove_dir_all(scratch);
+}
+/// One window holds one removal state. A removal whose reply was lost in one
+/// project stays with that project's Worktrees tab.
+#[core::prelude::v1::test]
+fn an_unconfirmed_removal_stays_with_its_project() {
+    if !isolated("worktrees_view::an_unconfirmed_removal_stays_with_its_project") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-worktree-scope-{}", std::process::id()));
+    let repo = fixture_repository(&scratch);
+    let other = scratch.join("other-project");
+    std::fs::create_dir_all(&other).unwrap();
+    let mut h = Harness::new(&repo, None, 1380., 860.);
+    h.connect(&repo, false);
+    install(&mut h, 4);
+    let shown = |frame: &crate::ui::a11y::A11yFrame| {
+        frame
+            .nodes
+            .iter()
+            .any(|n| n.path.ends_with("worktrees-result"))
+    };
+    let (mut here, mut there) = (None, None);
+    h.update(|p, window, cx| {
+        p.worktrees.selected = 3;
+        let row = p.worktrees.rows[3].clone();
+        p.ask_remove_view_worktree(&row.path, row.identity.as_ref(), window, cx);
+        let attempt = p.worktrees.removal.answer(true).unwrap();
+        assert!(
+            p.worktrees
+                .removal
+                .finish(&attempt, Err("Connection lost.".into()))
+        );
+        here = p.tabs.model.active();
+        let checkout = p.tab_checkout(other.clone());
+        let id = p
+            .tabs
+            .model
+            .open(
+                TabTarget::Worktrees { checkout },
+                Some(p.host.connection.epoch),
+            )
+            .unwrap();
+        p.tabs.model.activate(id).unwrap();
+        there = Some(id);
+        assert!(p.worktrees_visible() && !p.removal_here());
+        // Refresh here reads this project; it does not resend the other's removal.
+        p.refresh_worktrees_view(true, cx);
+        assert!(!p.worktree_busy);
+        assert!(p.worktrees.removal.pending.is_some());
+    });
+    assert!(!shown(&h.draw_a11y()), "another project's removal is shown");
+    h.update(|p, _, _| {
+        assert_ne!(here, there);
+        p.tabs.model.activate(here.unwrap()).unwrap();
+        assert!(p.removal_here());
+    });
+    assert!(shown(&h.draw_a11y()));
     drop(h);
     let _ = std::fs::remove_dir_all(scratch);
 }
