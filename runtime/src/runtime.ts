@@ -1,5 +1,8 @@
+import { runHeader } from './safety.ts';
 import { Worktrees, type Create as WorktreeCreate } from './worktrees.ts';
 import { CleanupProof, NEVER, RESTART_REASON, cleanupHelper, resolveProvedCleanup, handlesCleanup, validateCleanup } from './cleanup.ts';
+import { Admissions, handlesAdmission } from './admission.ts';
+import { RunCapacity, resourceError, resourceFailure } from './run-capacity.ts';
 import type { ImageData } from './images.ts';
 import { TurnReview } from './turn-review.ts';
 import { LinearService } from './linear/service.ts';
@@ -81,6 +84,8 @@ export class Runtime {
   turnReview: TurnReview;
   linear: LinearService;
   worktrees: Worktrees;
+  admissions: Admissions;
+  capacity = new RunCapacity();
   sessions = new Map<string, Session>();
   active = new Map<string, string>();
   models: Models;
@@ -125,6 +130,7 @@ export class Runtime {
     this.codex = new CodexHarness(this.store);
     this.claude = new ClaudeHarness(this.store, { sdk: sdkDirectory(directory), cwd: directory });
     this.worktrees = new Worktrees(this.store, directory, (request, id) => this.prepareWorktreeThread(request, id), () => this.changed('#'), root => this.active.has(root) || this.records.busy(root));
+    this.admissions = new Admissions(this.store, this.worktrees, this.capacity, input => this.handle(input), root => this.active.has(root) || this.records.busy(root));
   }
   /** Validate the selected harness before reserving filesystem effects. */
   private async prepareWorktreeThread(request: WorktreeCreate, id: string): Promise<Snapshot> {
@@ -248,6 +254,7 @@ export class Runtime {
     if (this.turnReview.handles(input)) return this.turnReview.handle(input);
     if (this.linear.handles(input)) return this.linear.handle(input);
     if (this.worktrees.handles(input)) return this.worktrees.handle(input);
+    if (handlesAdmission(input)) return this.admissions.handle(input);
     const request = validate(input);
     const protocol = version(request);
     const result = await this.dispatch(request, protocol);
@@ -548,12 +555,15 @@ export class Runtime {
     // A provider reload swaps the registry; this run keeps the one it started with.
     const models = this.models;
     const database = await openNodeSqliteDatabase(join(this.directory, `${snapshot.id}.sqlite`));
-    await database.exec('PRAGMA synchronous=FULL');
-    const harness = await Harness.open(await SqliteStorage.open(database), {
-      models: () => session.authorization.active ? models : createModels(), registry: this.registry(session),
-      // Read at each use. Only model requests retry; a tool call is `replay: unsafe` and runs once.
-      settings: () => ({ retry: this.retry, stream: { timeoutMs: 60000 }, toolExecution: 'sequential', steeringMode: 'all' }),
-    }, context);
+    let harness: Harness;
+    try {
+      await database.exec('PRAGMA synchronous=FULL');
+      harness = await Harness.open(await SqliteStorage.open(database), {
+        models: () => session.authorization.active ? models : createModels(), registry: this.registry(session),
+        // Only model requests retry; a tool call is unsafe to replay.
+        settings: () => ({ retry: this.retry, stream: { timeoutMs: 60000 }, toolExecution: 'sequential', steeringMode: 'all' }),
+      }, context);
+    } catch (error) { await database.close(); throw error; }
     session.harness = harness;
     session.root = await harness.root(context, { agent: { model: { provider: snapshot.model.provider, modelId: snapshot.model.model_id }, cwd: snapshot.checkout, maxTurns: this.maxTurns } });
     // Fence recovery before enabling scheduling: no model or tool can run here.
@@ -598,9 +608,10 @@ export class Runtime {
   private async start(snapshot: Snapshot, requestId: string, text: string, mode: ApprovalMode, accept: () => boolean) {
     const id = snapshot.id;
     if (this.active.has(snapshot.checkout)) fail('busy', 'This checkout already has an active run.');
-    if (this.active.size >= 8) fail('busy', 'Host already has eight active checkouts.');
+    this.capacity.admit(this.active.size);
     // Reserve before async baseline reads so two admissions cannot race.
     this.active.set(snapshot.checkout, id);
+    this.capacity.phases.set(id, 'preparing');
     let accepted = false;
     let lease: LeaseHandle | undefined;
     let authorization: RunAuthorization | undefined;
@@ -638,7 +649,7 @@ export class Runtime {
           if (admitted?.cleanupToken && lease) await cleanupHelper('finish', snapshot.checkout, admitted.cleanupToken, undefined, lease);
         } finally {
           if (authorization) this.sessions.delete(id);
-          try { await lease?.close(); } finally { this.active.delete(snapshot.checkout); }
+          try { await lease?.close(); } finally { this.active.delete(snapshot.checkout); this.capacity.phases.delete(id); }
         }
       }
     }
@@ -739,16 +750,19 @@ export class Runtime {
       }
       await this.beginCleanup(session);
       // Before any harness starts: a run the host cannot record does not run.
-      record = await this.records.before(snapshot.id, requestId, snapshot.checkout, session.lease);
+      record = await this.capacity.prepare(session.rootIdentity.dev, snapshot.id, session.authorization.signal,
+        () => this.records.before(snapshot.id, requestId, snapshot.checkout, session.lease));
       if (session.authorization.signal.aborted) return;
-      if (snapshot.harness?.id === 'codex') return await this.runCodex(session, requestId, text);
-      if (snapshot.harness?.id === 'claude') return await this.runClaude(session, requestId, text);
+      const header = await runHeader(snapshot.checkout);
+      if (snapshot.harness?.id === 'codex') return await this.runCodex(session, requestId, text, header);
+      if (snapshot.harness?.id === 'claude') return await this.runClaude(session, requestId, text, header);
       const baseline = await dirtyPaths(snapshot.checkout);
       session.owned = await restoreOwned(snapshot.checkout, baseline, this.store.owned(snapshot.id), session.rootIdentity, session.lease?.fd, session.lease?.lifecycleFd);
       session.baseline = baseline.filter(path => !session.owned.has(pathKey(path)));
       session.protected = await identities(snapshot.checkout, session.baseline);
       let instructions = 'You are Plait, a local coding assistant. File tools are the only checkout writers; edits and commands may require the user\'s approval. Commands read the checkout and write only private scratch (HOME/TMPDIR) and this thread\'s private build cache (CARGO_HOME/CARGO_TARGET_DIR), with no external network and a 15 minute limit. Tests may use scratch-local Git repositories and Unix sockets. Use offline locked builds. Unchanged files this thread previously wrote can be edited again. Never modify other dirty or ignored paths, bypass approval, or start daemons. Read project instructions below.\n';
       if (session.commandPolicy === 'trusted') instructions = TRUSTED_INSTRUCTIONS;
+      instructions = header + `Pi private build output: CARGO_TARGET_DIR=${JSON.stringify(join(this.directory, 'build-cache', snapshot.id, 'target'))}; CARGO_HOME=${JSON.stringify(join(this.directory, 'build-cache', snapshot.id, 'cargo'))}. Sandboxed commands receive these variables.\n` + instructions;
       // The person's own Pi setup: user-level instructions, then the project's, then skills.
       // Project skills need the trust that trusted command mode already expresses.
       const resources = await this.resources(snapshot.checkout, session.commandPolicy === 'trusted');
@@ -788,13 +802,13 @@ export class Runtime {
       if (session.authorization.signal.aborted) return;
       session.authorization.activate();
       const submission = await session.root!.submit(await this.draft(session, requestId, text), context);
-      session.started = true;
+      session.started = true; this.capacity.phases.set(snapshot.id, 'running');
       await this.steer(session);
       await submission.wait(context);
       await session.root!.waitForIdle(context);
     } catch (error) {
       if (snapshot.status !== 'stopped' && snapshot.status !== 'interrupted') {
-        snapshot.error = failure(error);
+        snapshot.error = resourceFailure(error) ?? failure(error);
       }
     } finally {
       session.authorization.revoke();
@@ -808,6 +822,7 @@ export class Runtime {
       await this.finishCleanup(session, record).catch(() => { snapshot.error = { code: 'cleanup_uncertain', message: 'Stop unconfirmed. The host could not save cleanup confirmation. New runs and Git changes remain blocked.' }; });
       await session.lease?.close(); session.lease = undefined;
       this.active.delete(snapshot.checkout);
+      this.capacity.phases.delete(snapshot.id);
       // Idle means a following submit can acquire the checkout immediately.
       if (snapshot.status !== 'stopped' && snapshot.status !== 'interrupted') snapshot.status = snapshot.error ? 'error' : 'idle';
       session.save(); this.sessions.delete(snapshot.id);
@@ -815,7 +830,7 @@ export class Runtime {
     }
   }
   /** A Codex thread's run: one Codex turn, under Codex's own sandbox and Plait's approvals. */
-  private async runCodex(session: Session, requestId: string, text: string) {
+  private async runCodex(session: Session, requestId: string, text: string, instructions: string) {
     const snapshot = session.snapshot;
     const id = snapshot.id;
     // Shown on edit approvals only; Codex does not honor Plait's guard on these files.
@@ -834,7 +849,7 @@ export class Runtime {
       snapshot.queued = this.store.queue(id).map(queuedView);
     };
     const run = new CodexRun({
-      snapshot, mode, lease, entries, cleanup: session.lease?.cleanup,
+      snapshot, mode, lease, entries, instructions, cleanup: session.lease?.cleanup,
       approvals: session.approvals, signal: session.authorization.signal, dirty,
       inputs: () => session.inputs, place: placed, persist: head => this.save(snapshot, head), publish: () => this.changed(id),
       changed: path => this.store.recordWrite(id, path),
@@ -844,12 +859,12 @@ export class Runtime {
     if (session.authorization.signal.aborted) return;
     session.authorization.activate();
     const turn = run.run(requestId, text, model.id, codexEffort(snapshot.thinking_level, model.efforts), this.imageData(id, requestId));
-    session.started = true;
+    session.started = true; this.capacity.phases.set(snapshot.id, 'running');
     await this.steer(session);
     await turn;
   }
   /** A Claude Code thread's run: one Claude Code process, in the thread's mode, with Plait's approvals. */
-  private async runClaude(session: Session, requestId: string, text: string) {
+  private async runClaude(session: Session, requestId: string, text: string, instructions: string) {
     const snapshot = session.snapshot;
     const id = snapshot.id;
     // Shown on edit approvals only; Claude Code does not honor Plait's guard on these files.
@@ -860,7 +875,7 @@ export class Runtime {
     const entries = await this.gate(id, async () => new CodexEntries(join(this.directory, `${id}.claude.sqlite`)));
     session.claude = { entries };
     const run = new ClaudeRun({
-      snapshot, mode, launch, cleanup: session.lease?.cleanup, model: snapshot.model.model_id, level: snapshot.thinking_level, entries,
+      snapshot, mode, launch, instructions, cleanup: session.lease?.cleanup, model: snapshot.model.model_id, level: snapshot.thinking_level, entries,
       approvals: session.approvals, signal: session.authorization.signal, dirty,
       inputs: () => session.inputs,
       place: (request, entry) => {
@@ -878,7 +893,7 @@ export class Runtime {
     if (session.authorization.signal.aborted) return;
     session.authorization.activate();
     const turn = run.run(requestId, text, this.imageData(id, requestId));
-    session.started = true;
+    session.started = true; this.capacity.phases.set(snapshot.id, 'running');
     await turn;
   }
   async close() {
@@ -897,13 +912,14 @@ export class Runtime {
     }
     await this.providers?.close();
     await this.codex.close();
+    await this.admissions.close();
     await this.worktrees.close();
     await this.records.close();
     this.store.close();
   }
   async reply(input: unknown) {
     try { return { ok: true, result: await this.handle(input) }; }
-    catch (error) { return { ok: false, error: failure(error) }; }
+    catch (error) { return { ok: false, error: failure(resourceError(error)) }; }
   }
 }
 

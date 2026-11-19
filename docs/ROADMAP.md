@@ -735,3 +735,27 @@ and refuses changed identities, active leases, uncommitted or unknown ignored
 files. Unpushed or unknown publication status requires an explicit preservation
 exception. No force removal, branch deletion, integration verb or automatic
 cleanup is added. Busy-checkout choices and queue admission remain Stage 8/9.
+
+
+### Busy-project choice and independent-run capacity
+
+New drafts negotiate placement before the first run. A busy project asks each
+time whether to use an own worktree; the project modal can authorize that choice
+automatically for that project. Wait is visibly unavailable until the durable
+checkout queue ships. Existing threads remain bound to their checkout and can
+explicitly start a linked continuation with a fresh harness session. The original
+history and draft remain intact. Capabilities are additive and strictly probed.
+
+Worktree creation retains the agreed `plait/<UUID-prefix>` branch naming and
+explicit HEAD commit base. It excludes original dirty files and build outputs,
+shows the actual checkout and branch, and never removes worktrees automatically.
+Commit, push and pull request remain the integration path. No merge, rebase,
+cherry-pick, shared live reader, artifact cloning or fake queue is added.
+
+The fixed eight-checkout cap is removed. There is no default run-count ceiling;
+a host can set `PLAIT_MAX_ACTIVE_CHECKOUTS`. Before-record preparation is
+serialized by filesystem and resource exhaustion fails explicitly with cleanup.
+Scripted harness tests cover twenty simultaneous independent writers, same-root
+exclusion, preparation cancellation, lost replies and resource failures. Live
+provider limits and native focus/accessibility behavior still need separate
+acceptance; headless tests do not claim those results.

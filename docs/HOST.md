@@ -102,7 +102,8 @@ identical input returns the original acceptance; changed input returns `conflict
 A client must retain an uncertain submission's ID, including across reconnect.
 Never retry an uncertain submission with a fresh ID. At most one active
 run is permitted for a canonical checkout, including across different host stores.
-A host admits at most eight active checkouts. Empty submissions are rejected.
+There is no default active-checkout count limit. The optional positive integer
+`PLAIT_MAX_ACTIVE_CHECKOUTS` sets an explicit host limit. Empty submissions are rejected.
 A submission to a thread with an active run returns `busy`, unless a version 3
 client asks to [queue it](#messages-during-a-run).
 
@@ -1523,8 +1524,8 @@ cannot be confirmed, including after runtime death. A Pi command or external
 harness that deliberately detaches a writer remains the explicit limit
 in the cleanup contract below.
 
-All shipped runs are writers: one active run per checkout and eight active
-checkouts per host, as before. No reader run ships; the reader class exists in
+All shipped runs are writers: one active run per checkout, with no default
+count limit across independent checkouts. No reader run ships; the reader class exists in
 the lease layer for later stages. Editors and other programs outside Plait do
 not take these locks.
 File edits use a synced temporary file and atomic rename, with original mode and
@@ -2520,3 +2521,93 @@ parent is available and Git no longer registers the missing checkout; a missing
 volume alone is not success. Branches and thread history remain after removal.
 Legacy desktop worktree associations remain imported presentation metadata and
 never authorize deletion. External programs do not participate in these leases.
+
+
+## Busy-project admission
+
+These additive operations omit `protocol_version`. They do not change existing
+request, snapshot or summary shapes, so the protocol remains version 6. Probe
+`admission_info` before offering placement or linked continuation; an older host's
+`invalid_request` means unavailable, never permission to imitate the operation.
+An older desktop continues to receive the existing `busy` refusal.
+
+- `admission_info {checkout}` returns schema 1, `worktree_at_start_v1:true`,
+  `linked_continuation_v1:true`, `queue:false`, `strict_reader:false`, canonical
+  `checkout`, its `identity`, main `project`, `project_identity`, `busy`,
+  `auto_worktree`, nullable Stage 7 `parent` and nullable `refusal`. Busy checks
+  both current host state and the actual writer lease; a stale summary is not
+  authority. An unborn repository can use its own checkout but has no worktree
+  base until its first commit.
+- `set_project_isolation {checkout,identity,auto_worktree}` returns that info.
+  `identity` is the main project's identity from the probe. Authorization is
+  stored against canonical main path plus device/inode; replacing a repository
+  cannot inherit it. Default is false, meaning ask each time. It applies to new
+  threads only, including requests from the project's linked worktrees.
+- `create_admitted_thread {request_id,checkout,placement,harness,provider,
+  model_id,approval,mode?,thinking?,source_thread_id?}` returns
+  `{schema:1,admission}`. Placement is `project` or `worktree`. Approval is `ask`
+  or `auto`; harness/model/mode/thinking are preserved. A busy project with no
+  authorization returns `choice` without creating a receipt or thread. The
+  same request ID may then be explicitly resubmitted with `worktree`.
+  Otherwise the exact input, checkout identity, explicit HEAD base and chosen
+  placement are recorded before effects. After that, changing the payload under
+  that ID is refused. Automatic placement happens only when this project is
+  busy and its switch authorizes it. A race after an in-place creation may still
+  make its first submission return `busy`; the bound thread is never moved.
+- `admission_status {request_id}` recovers an unanswered operation. A receipt
+  has `request_id`, state (`choice`, `preparing`, `ready`, `failed`), nullable
+  `thread_id`, actual `checkout`, nullable managed `worktree`, nullable
+  `source_thread_id`, and nullable `error`. Ready requires a thread. Startup
+  resumes recorded preparation using the same Stage 7 request; it never creates
+  a second worktree or sends a model prompt. A failed receipt remains failed;
+  inspect the cause before a new request. Removal continues to use the original
+  Stage 7 creation receipt, not the admission request ID.
+- `thread_origin {thread_id}` returns `{schema:1,admission}` with a nullable
+  receipt. A linked continuation requires explicit worktree placement and a
+  source thread bound to the same verified checkout. It creates a new harness
+  session; source history, records and draft are untouched. No old session or
+  prompt is replayed.
+- `run_preparation {thread_id}` returns `{schema:1,thread_id,phase}`; phase is
+  `preparing`, `resource_wait`, `running`, or null after release. This is a
+  resource-preparation state of an admitted run, not a queued checkout writer.
+  The desktop reads it only for the selected running thread until preparation
+  ends; it adds no hidden transcript watch.
+
+Admission requests reject unknown fields, protocol versions, invalid enum values
+and relative/control/dot-component paths. They are bounded to 16,384 bytes;
+IDs are 1–128 ASCII letters, digits, underscores or hyphens, model fields at
+most 256 bytes, modes at most 32 lowercase letters/underscores, paths at most
+4096 UTF-8 bytes, and identities canonical unsigned 64-bit decimals. Parsers
+reject unknown reply states, inconsistent ready receipts and forged worktree
+paths. No queue, live reader, build-output copy or automatic removal is offered.
+
+### Run capacity and preparation
+
+`run-capacity.ts` replaces the fixed eight-checkout limit. Execution has no
+default count ceiling, but operating-system processes, file descriptors, memory,
+disk space and provider limits remain finite. `PLAIT_MAX_ACTIVE_CHECKOUTS`, when
+set, must be a positive safe integer; reaching it refuses admission with
+`resource_exhausted` and explicitly says nothing was queued. One before-record
+scan per filesystem device runs at a time; independent devices can prepare
+concurrently. Stop while waiting removes the preparation ticket and releases
+its writer lease; no harness starts. A failed before record also starts no
+harness. This semaphore is not a durable queue and does not promise a future run
+across restart.
+
+Recognized process/descriptor/memory/space/quota errors produce
+`resource_exhausted`, identify the exhausted resource and say no automatic retry
+was scheduled. Before acceptance, reservations and descriptors are released and
+no input is recorded. After acceptance, the run records an error, closes the
+harness and releases its lease through normal cleanup; the person's draft and
+recorded input remain recoverable. Errors are never converted into automatic
+worktree creation or a claim that work is queued.
+
+A host-supplied run header states actual cwd, branch and HEAD at run start,
+writer capability, private-output guidance, changing external observations and
+host ownership of worktree management. Pi retains user/project instructions and
+gets its private Cargo paths. Codex receives `developerInstructions` on both
+start and resume, verified with the pinned 0.169.0 generated protocol. Claude
+uses the pinned 0.3.326 SDK's `claude_code` preset with `append` and
+`snapshot:false`, refreshing metadata on resume while retaining its normal
+settings sources and project instructions. These instructions describe policy;
+leases, harness permissions and containment enforce it.

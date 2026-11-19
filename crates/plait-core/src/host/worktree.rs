@@ -74,14 +74,14 @@ struct Listing {
 fn invalid() -> Error {
     Error::Protocol("Invalid worktree reply. Reconnect before retrying.".into())
 }
-fn bounded_id(id: &str) -> bool {
+pub(super) fn bounded_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 128
         && id
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
-fn path(path: &std::path::Path) -> bool {
+pub(super) fn path(path: &std::path::Path) -> bool {
     path.is_absolute()
         && path.as_os_str().len() <= 4096
         && path.to_str().is_some_and(|s| {
@@ -90,14 +90,14 @@ fn path(path: &std::path::Path) -> bool {
                 && !s.split('/').any(|part| part == "." || part == "..")
         })
 }
-fn identity(identity: &Identity) -> bool {
+pub(super) fn identity(identity: &Identity) -> bool {
     [&identity.dev, &identity.ino].into_iter().all(|value| {
         value
             .parse::<u64>()
             .is_ok_and(|number| number.to_string() == *value)
     })
 }
-fn parent(parent: &Parent) -> bool {
+pub(super) fn parent(parent: &Parent) -> bool {
     [&parent.root, &parent.main, &parent.common]
         .into_iter()
         .all(|p| path(p))

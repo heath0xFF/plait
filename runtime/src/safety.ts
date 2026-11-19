@@ -1,3 +1,4 @@
+import { resourceError } from './run-capacity.ts';
 import { execFile, spawn } from 'node:child_process';
 import { realpath, lstat, mkdir, open } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
@@ -23,7 +24,7 @@ export async function checkout(path: string): Promise<string> {
   try {
     const root = await realpath(path);
     return await realpath((await git(root, ['rev-parse', '--show-toplevel'])).trim());
-  } catch { fail('invalid_request', 'Checkout must be an accessible Git working tree.'); }
+  } catch (error) { const classified = resourceError(error); if (classified !== error) throw classified; fail('invalid_request', 'Checkout must be an accessible Git working tree.'); }
 }
 /** A linked worktree keeps its objects and refs in the main repository's Git
  * directory, outside its own root. Returns that directory, or undefined when
@@ -177,6 +178,7 @@ async function openLifecycle(root: string): Promise<{ root: string; identity: Fi
     const lifecycle = await open(join(directory, checkoutLockName(identity)), constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
     return { root: canonical, identity, lifecycle };
   } catch (error) {
+    const classified = resourceError(error); if (classified !== error) throw classified;
     fail('permission_denied', `Checkout lease could not be prepared: ${(error as NodeJS.ErrnoException).code ?? 'error'}.`);
   }
 }
@@ -300,4 +302,16 @@ export async function fileAction<T = FileResult>(root: string, action: string, p
     if (error instanceof HostError) throw error;
     fail('permission_denied', 'File operation failed safely.');
   }
+}
+
+/** Metadata only: no working-tree filters, project hooks, or optional locks. */
+export async function runHeader(root: string): Promise<string> {
+  const branch = (await git(root, ['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(error => {
+    if ((error as { code?: number }).code === 1) return '(detached)'; throw error;
+  })).trim();
+  const base = (await git(root, ['rev-parse', '--verify', 'HEAD']).catch(error => {
+    if ((error as { code?: number }).code === 128) return '(unborn)'; throw error;
+  })).trim();
+  const shared = await sharedGitDir(root);
+  return `Plait run context (host supplied):\nWorking directory: ${JSON.stringify(root)}\nBranch: ${JSON.stringify(branch)}\nBase at run start: ${base}\nCheckout: ${shared ? 'isolated linked worktree' : 'project checkout'}. Execution capability: writer; one Plait writer owns this checkout for this run. External tools and people may still change observations. Pre-existing dirty files belong to the person; do not present them as your work. Worktrees start from a committed base; original uncommitted files and build outputs are not copied. Use only the private build locations supplied by this harness; do not share mutable output with another checkout. A refused write is an error or approval request, never permission to bypass the harness. Plait manages worktrees; do not create, remove, or move them yourself. Return work by commits, push, and pull request. Project instructions remain in effect.\n`;
 }

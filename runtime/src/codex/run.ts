@@ -35,6 +35,7 @@ const INTERRUPT_WAIT_MS = 10_000;
 export type CodexRunContext = {
   snapshot: Snapshot;
   cleanup?: CleanupProof;
+  instructions?: string;
   /** The thread's Codex mode for this turn. */
   mode: string;
   lease: Lease;
@@ -101,13 +102,13 @@ export class CodexRun {
     const saved = this.context.entries.thread();
     let reply: ThreadStartResponse;
     if (saved) {
-      const params: ThreadResumeParams = { threadId: saved, cwd, approvalPolicy, sandbox, approvalsReviewer, model, excludeTurns: true };
+      const params: ThreadResumeParams = { threadId: saved, cwd, approvalPolicy, sandbox, approvalsReviewer, model, excludeTurns: true, developerInstructions: this.context.instructions };
       reply = await lease.server.request<ThreadStartResponse>('thread/resume', params).catch(() => {
         fail('runtime_error', 'Codex could not continue this thread. Its session may have been removed; start a new thread.');
       });
       this.thread = saved;
     } else {
-      const params: ThreadStartParams = { model, cwd, approvalPolicy, sandbox, approvalsReviewer };
+      const params: ThreadStartParams = { model, cwd, approvalPolicy, sandbox, approvalsReviewer, developerInstructions: this.context.instructions };
       reply = await lease.server.request<ThreadStartResponse>('thread/start', params);
       this.thread = reply.thread.id;
       this.context.entries.setThread(this.thread);

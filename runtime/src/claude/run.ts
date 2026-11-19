@@ -38,6 +38,7 @@ const TURN_FAILED = 'Claude Code ended the turn with an error. Its own logs have
 export type ClaudeRunContext = {
   snapshot: Snapshot;
   cleanup?: CleanupProof;
+  instructions?: string;
   /** The thread's Plait mode ID when the run starts; a change during the run goes through `setMode`. */
   mode: string;
   launch: ClaudeLaunch;
@@ -127,7 +128,7 @@ export class ClaudeRun {
     const session = new ClaudeSession({
       cleanup: this.context.cleanup, query: launch.sdk.query, path: launch.install.path, env: launch.env, cwd: snapshot.checkout,
       model: this.context.model, modelInfo: known, level: this.context.level, mode: claudeMode(this.context.mode),
-      resume, canUseTool: canUseToolFrom(ask),
+      resume, instructions: this.context.instructions, canUseTool: canUseToolFrom(ask),
     });
     this.session = session;
     const stop = () => void this.interrupt();

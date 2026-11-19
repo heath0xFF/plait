@@ -48,6 +48,7 @@ export type ClaudeSessionOptions = {
   /** The login environment; the SDK passes it to Claude Code as is. */
   env: NodeJS.ProcessEnv;
   cwd: string;
+  instructions?: string;
   /** A model from the catalog; `default` or none leaves Claude Code's own choice. */
   model?: string;
   modelInfo?: ClaudeModel;
@@ -122,6 +123,8 @@ export class ClaudeSession {
       },
       env,
       cwd: options.cwd,
+      // Refresh run metadata on resume without replacing Claude or project instructions.
+      ...(options.instructions ? { systemPrompt: { type: 'preset' as const, preset: 'claude_code' as const, append: options.instructions, snapshot: false } } : {}),
       ...(model ? { model } : {}),
       ...claudeThinking(options.level, options.modelInfo),
       permissionMode: options.mode,

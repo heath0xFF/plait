@@ -1106,6 +1106,7 @@ pub use history::{HistoryField, HistoryItem, HistoryPage, HistoryText, More};
 pub use threads::ThreadWatch;
 pub use watch::{CancelWatch, Snapshots, ThreadLists, Updates};
 
+pub mod admission;
 pub mod agent;
 pub mod cleanup;
 pub mod harness;
