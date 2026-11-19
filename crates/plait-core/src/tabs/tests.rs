@@ -2,13 +2,13 @@ use super::*;
 use crate::host::{ThreadStatus, ThreadSummary};
 use bookmark::*;
 
-fn host() -> HostKey {
+pub(super) fn host() -> HostKey {
     HostKey {
         id: "host-one".into(),
         store: "/store".into(),
     }
 }
-fn checkout(root: &str) -> CheckoutKey {
+pub(super) fn checkout(root: &str) -> CheckoutKey {
     CheckoutKey {
         host: host(),
         root: root.into(),
@@ -18,7 +18,7 @@ fn checkout(root: &str) -> CheckoutKey {
         }),
     }
 }
-fn target(id: &str) -> ThreadTarget {
+pub(super) fn target(id: &str) -> ThreadTarget {
     ThreadTarget::Existing {
         id: id.into(),
         checkout: checkout("/repo"),
@@ -30,10 +30,10 @@ fn draft(id: &str) -> ThreadTarget {
         checkout: checkout("/repo"),
     }
 }
-fn window() -> WindowTabs {
+pub(super) fn window() -> WindowTabs {
     WindowTabs::new(WindowId(7))
 }
-fn open(w: &mut WindowTabs, id: &str) -> TabId {
+pub(super) fn open(w: &mut WindowTabs, id: &str) -> TabId {
     w.open(target(id), Some(1)).unwrap()
 }
 fn ids(w: &WindowTabs) -> Vec<TabId> {
@@ -46,7 +46,7 @@ fn bookmark(view: ThreadView) -> BookmarkRecord {
     })
     .unwrap()
 }
-fn summary(id: &str, status: ThreadStatus) -> ThreadSummary {
+pub(super) fn summary(id: &str, status: ThreadStatus) -> ThreadSummary {
     ThreadSummary {
         id: id.into(),
         checkout: "/repo".into(),
