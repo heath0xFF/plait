@@ -135,8 +135,11 @@ impl Plait {
             .data
             .as_ref()
             .and_then(|data| data.new_draft_for(&self.host.creation.checkout))
+            .cloned()
         {
-            let draft = draft.clone();
+            if let Some(creation) = draft.creation.clone() {
+                self.restore_draft_creation(creation, &draft);
+            }
             composer.update(cx, |composer, cx| {
                 composer.restore_draft(draft.text, draft.revision, draft.submitted, cx);
                 composer.restore_images(draft.images, cx);

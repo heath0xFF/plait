@@ -28,6 +28,20 @@ pub struct Draft {
     pub text: String,
     pub revision: u64,
     pub submitted: Option<(String, u64)>,
+    /// A first-message creation the host may already have made. Sending the
+    /// draft again retransmits it, so one thread and worktree are made, not two.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub creation: Option<DraftCreation>,
+}
+
+/// The admission request a draft is waiting on, and the approvals it was sent with.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DraftCreation {
+    pub request: crate::host::admission::Request,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<crate::host::ApprovalMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choice: Option<crate::host::ApprovalMode>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -453,6 +467,7 @@ mod tests {
                 text: "unfinished 🙂".into(),
                 revision: 7,
                 submitted: None,
+                creation: None,
             },
             pending: Some(PendingSubmit {
                 images: Vec::new(),

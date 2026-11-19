@@ -187,6 +187,7 @@ fn scripted_busy_host(
     listener: UnixListener,
     seen: Arc<Mutex<Vec<Value>>>,
     done: Arc<AtomicBool>,
+    mut lose_first: bool,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let parent = plait_core::git::worktree::worktree_parent(&root).unwrap();
@@ -228,6 +229,9 @@ fn scripted_busy_host(
                         snapshot = json!({"id":id,"checkout":tree.path,"model":{"provider":request["provider"],"model_id":request["model_id"]},"status":"idle","messages":[],"live_text":"","tools":[],"pending_approval":null,"error":null,"truncated":false,"harness":{"id":request["harness"],"mode":request["mode"],"version":null,"reported":null}});
                         receipt = json!({"schema":1,"admission":{"request_id":request["request_id"],"state":"ready","thread_id":id,"checkout":tree.path,"worktree":tree,"source_thread_id":null,"error":null}});
                     }
+                    if std::mem::take(&mut lose_first) {
+                        continue;
+                    }
                     receipt.clone()
                 }
                 "watch" => json!({"thread":snapshot}),
@@ -265,7 +269,13 @@ fn edited_choice_draft() {
     listener.set_nonblocking(true).unwrap();
     let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
     let stop = Arc::new(AtomicBool::new(false));
-    let server = scripted_busy_host(root.clone(), listener, requests.clone(), stop.clone());
+    let server = scripted_busy_host(
+        root.clone(),
+        listener,
+        requests.clone(),
+        stop.clone(),
+        false,
+    );
     let mut harness = Harness::new(&repository, None, 900., 600.);
     harness.connect(&repository, false);
     harness.update(|p, w, cx| {
@@ -302,6 +312,93 @@ fn edited_choice_draft() {
         std::thread::sleep(Duration::from_millis(5));
     };
     assert_eq!(submitted["text"], "Edited wording");
+    stop.store(true, Ordering::Relaxed);
+    server.join().unwrap();
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+/// A window closed while its worktree thread was being made leaves the request
+/// with the saved draft; sending it again reaches that thread, not a second one.
+#[core::prelude::v1::test]
+fn reopened_creation() {
+    if !isolated("admission::reopened_creation") {
+        return;
+    }
+    let scratch =
+        std::env::temp_dir().join(format!("plait-admission-reopen-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let root = repository.canonicalize().unwrap();
+    let store = PathBuf::from(std::env::var_os("PLAIT_HOST_STORE").unwrap());
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let socket = store.join("host.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let requests = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let stop = Arc::new(AtomicBool::new(false));
+    let server = scripted_busy_host(root.clone(), listener, requests.clone(), stop.clone(), true);
+    let mut saved = None;
+    {
+        let mut harness = Harness::new(&repository, None, 900., 600.);
+        harness.connect(&repository, false);
+        harness.update(|p, w, cx| {
+            p.host.connection.status.as_mut().unwrap().protocol_version = 6;
+            p.open_draft(w, cx);
+            let composer = p.draft.composer.clone().unwrap();
+            composer.update(cx, |composer, cx| {
+                composer.restore_draft("Only once".into(), 3, None, cx)
+            });
+            p.send_draft("Only once".into(), 3, w, cx);
+        });
+        wait(&mut harness, |p| p.admission.choice);
+        harness.update(|p, w, cx| p.accept_isolation(w, cx));
+        // The worktree exists on the host; its reply never arrives.
+        wait(&mut harness, |p| !p.host.creation.creating);
+        harness.update(|p, _, cx| {
+            p.capture_session(cx);
+            saved = p.session.data.clone();
+        });
+    }
+    let saved = saved.unwrap();
+    let draft = saved.new_draft_for(&root).unwrap();
+    assert_eq!(draft.text, "Only once");
+    assert!(draft.creation.is_some());
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.update(|p, w, cx| {
+        p.host.connection.status.as_mut().unwrap().protocol_version = 6;
+        p.session.data = Some(saved);
+        p.draft.composer = None;
+        p.open_draft(w, cx);
+        assert!(p.draft_pending());
+        p.retry_draft(w, cx);
+    });
+    let end = Instant::now() + Duration::from_secs(10);
+    loop {
+        harness.settle();
+        if requests.lock().unwrap().iter().any(|r| r["op"] == "submit") {
+            break;
+        }
+        assert!(Instant::now() < end, "no submit");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let seen = requests.lock().unwrap();
+    let creates: Vec<_> = seen
+        .iter()
+        .filter(|r| r["op"] == "create_admitted_thread" && r["placement"] == "worktree")
+        .collect();
+    assert_eq!(creates.len(), 2);
+    assert_eq!(creates[0], creates[1]);
+    let submits: Vec<_> = seen.iter().filter(|r| r["op"] == "submit").collect();
+    assert_eq!(submits.len(), 1);
+    assert_eq!(submits[0]["text"], "Only once");
+    assert_eq!(
+        submits[0]["thread_id"],
+        "22345678-1234-4abc-8abc-123456789abc"
+    );
+    drop(seen);
+    drop(harness);
     stop.store(true, Ordering::Relaxed);
     server.join().unwrap();
     std::fs::remove_dir_all(scratch).unwrap();

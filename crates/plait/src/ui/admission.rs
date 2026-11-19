@@ -406,6 +406,68 @@ impl Plait {
             });
         }).detach();
     }
+    /// The draft's admission the host may already have made, for the saved draft.
+    pub(super) fn draft_creation(&self) -> Option<plait_core::session::DraftCreation> {
+        let sending = self.draft.sending.as_ref()?;
+        // A choice records nothing on the host; there is nothing to retransmit.
+        if self.admission.choice || !self.draft_pending() {
+            return None;
+        }
+        let request = self.admission.pending.clone()?;
+        matches!(&request, Request::CreateAdmittedThread { request_id, .. } if *request_id == sending.request_id)
+            .then(|| plait_core::session::DraftCreation {
+                request,
+                approval: sending.approval,
+                choice: sending.choice,
+            })
+    }
+    /// A reopened draft waits on the creation it was sent with, so sending it
+    /// again reaches the thread and worktree the host may already have made.
+    pub(super) fn restore_draft_creation(
+        &mut self,
+        creation: plait_core::session::DraftCreation,
+        draft: &plait_core::session::Draft,
+    ) {
+        let Request::CreateAdmittedThread {
+            request_id,
+            checkout,
+            harness,
+            provider,
+            model_id,
+            mode,
+            thinking,
+            source_thread_id: None,
+            ..
+        } = &creation.request
+        else {
+            return;
+        };
+        if self.host.creation.pending_create.is_some()
+            || self.admission.pending.is_some()
+            || *checkout != self.host.creation.checkout
+        {
+            return;
+        }
+        self.host.creation.pending_create = Some((
+            request_id.clone(),
+            host::ModelChoice {
+                provider: provider.clone(),
+                model_id: model_id.clone(),
+            },
+        ));
+        self.host.creation.pending_thinking = *thinking;
+        self.set_pending_harness(*harness, mode.clone());
+        self.draft.sending = Some(super::new_thread::Sending {
+            generation: self.draft.generation,
+            request_id: request_id.clone(),
+            text: draft.text.clone(),
+            images: draft.images.clone(),
+            revision: draft.revision,
+            approval: creation.approval,
+            choice: creation.choice,
+        });
+        self.admission.pending = Some(creation.request);
+    }
     pub(super) fn accept_isolation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.admission.choice {
             return;

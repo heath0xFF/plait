@@ -354,6 +354,7 @@ impl Plait {
                     revision,
                     submitted: submitted.clone(),
                     images: composer.saved_images().to_vec(),
+                    creation: self.draft_creation(),
                 },
             );
         }
@@ -403,6 +404,7 @@ impl Plait {
                         text: text.to_owned(),
                         revision,
                         submitted: submitted.clone(),
+                        creation: None,
                     },
                     pending: self.host.submissions.pending(&summary.id).cloned(),
                     pending_submissions: self
