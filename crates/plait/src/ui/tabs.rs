@@ -124,6 +124,9 @@ fn urgent_hidden(hidden: impl Iterator<Item = TabState>) -> Option<TabState> {
         .min_by_key(|(r, _)| *r)
         .map(|(_, state)| state)
 }
+fn close_name(title: &str) -> String {
+    format!("Close {title}")
+}
 fn tooltip(value: String, cx: &mut App) -> AnyView {
     cx.new(|_| TextTooltip(value)).into()
 }
@@ -748,18 +751,20 @@ impl Plait {
                         .flex_shrink_0(),
                 )
             })
-            .child(self.tab_close_control(id, close_hover, close, group, cx))
+            .child(self.tab_close_control(id, &meta.title, close_hover, close, group, cx))
     }
 
     fn tab_close_control(
         &self,
         id: TabId,
+        title: &str,
         hover: &'static str,
         visible: bool,
         group: String,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        icon_button(("close-tab", id.get()), "close", "Close tab")
+        // Twenty identical "Close tab" names would not say which tab closes.
+        icon_button(("close-tab", id.get()), "close", close_name(title))
             .size(px(18.))
             .map(|el| self.covered_tab_control(el))
             .when(!visible, |el| {
@@ -874,7 +879,14 @@ impl Plait {
                         .when_some(meta.shortcut, |el, n| {
                             el.child(tag(format!("⌘{n}"), colors().subtle))
                         })
-                        .child(self.tab_close_control(id, meta.close_hover, false, group, cx))
+                        .child(self.tab_close_control(
+                            id,
+                            &meta.title,
+                            meta.close_hover,
+                            false,
+                            group,
+                            cx,
+                        ))
                         .on_activate(cx, move |this, window, cx| {
                             this.activate_tab(id, window, cx)
                         }),
@@ -905,5 +917,13 @@ mod tests {
         assert_eq!(urgent(&[Working, Failed, Interrupted]), Some(Interrupted));
         assert_eq!(urgent(&[Idle, Working, Finished]), Some(Working));
         assert_eq!(urgent(&[Idle, Stopped, Finished]), None);
+    }
+
+    #[core::prelude::v1::test]
+    fn close_controls_name_their_tab() {
+        assert_eq!(
+            close_name("Run the parser tests"),
+            "Close Run the parser tests"
+        );
     }
 }
