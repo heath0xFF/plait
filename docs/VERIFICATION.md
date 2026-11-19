@@ -412,12 +412,19 @@ AX top-left points are converted to AppKit bottom-left points without pixel
 scaling. The development window ID and accessibility owner must both match;
 Dock, another window, the menu bar and unknown targets are still refused.
 
-**The third native run has not happened.** Selection timing, mouse targeting,
-full-screen settling, text selection, streaming and closing-line Undo/Redo still
-need that run's evidence. On the same narrow display the two inspector items
-should skip, along with Finder activation and following a link, which would open
-external applications. The other 41 items are intended checks, not a pass claim.
-Failures remain failures, with no pointer substitute for a broken AXPress.
+**Subsequent real-window runs established a sharper picture.**
+
+- **Local release build (with thread tabs):** **40 passed, 4 failed, and 2 skipped** (46 total items: 40 of the 44 non-skipped items passed; the narrow-window inspector items did not skip on the wider display). Every workspace view, every Settings page, the tab row and shortcuts, Find, branches, staging and committing, handoffs, long-message typing, text selection, approvals, streaming (41 distinct lengths), and closing-line Undo/Redo passed. Three failures were the bar pointer items (`drag-sidebar-bar`, `drag-header-bar`, `double-click-system-setting`), and the fourth was the known Redo-by-shortcut defect (`turn-undo-redo-shortcut`). A local debug build additionally aborted at Settings → Editor on a framework duplicate-accessibility-node assertion, after which the runner failed each of the remaining 23 items with `development app is not running`.
+- **CI runner on the same code:** **23 passed, 19 failed, and 4 skipped** (the two inspector items on the 984-point window, Show in Finder, and Follow conversation link). Sixteen failures were `reset: axdrive ['select', …] exited 1: timed out after 3.0s waiting for selected …` on `Files` (4) or `Conversation` (12) — the same pattern seen on CI runs before tabs (16 and 17 `select` timeouts respectively, including one outside `reset` on `Changes`). Across all three CI runs, 49 of 49 timed-out `AXPress` selections were on a present `AXRadioButton/AXTabButton` whose `AXValue` stayed `false(0)` for the full 3.0s poll and in the immediate post-timeout AX dump, yet had already switched to the pressed tab by the start of the next item (~1.4s later, after window activation, placement, and `Escape`). Every passing `select` on CI finished within 0.45s (almost all within 0.23s), and several failure screenshots still showed an earlier view's pixels after a preceding AX update had landed. The remaining three CI failures were: `drag-header-bar` reporting that the sidebar button stopped responding after dragging (the check ran an instantaneous `count` 14 ms after `AXPress`; the failure capture 18 ms later showed `Resize sidebar` present), `streaming-reply` observing only one 30-character length of `Plait is writing:` before the label disappeared when the turn finished ~8 s later, and the known `turn-undo-redo-shortcut` defect.
+
+**Changed in the acceptance check (not the app):**
+
+- **Tab-row pointer items:** There is no separate bar over the sidebar; a single 40-point tab bar spans the window, and its empty right end moves the window and handles title-bar double-clicks. `drag-sidebar-bar` and `drag-header-bar` are replaced by `drag-tab-bar` (sidebar shown) and `drag-tab-bar-sidebar-hidden` (sidebar hidden), alongside `double-click-system-setting`. All three find the empty right end from the accessibility tree's own frames (`tab-bar-end`: strictly right of the rightmost control in the 40-point top band, centered vertically at +20 pt) rather than fixed offsets from the window edge, keep drag endpoints in bounds even with a full row of tabs, and skip explicitly with measurements (exit code 4) if no empty right end remains.
+- **Post-drag sidebar check:** `bar_drag` now waits for `Resize sidebar` to appear or disappear instead of checking instantaneously with `count`.
+- **Reset and selection/streaming diagnostics:** `reset` now closes an open Find bar on the active tab before switching and only visits `Files` when a prior check actually visited `Files`, avoiding gratuitous `Files` → `Conversation` flips on unrelated items without weakening Find cleanup. Because the evidence shows CI `select` stalls are bimodal rather than uniformly slow — and also affected a non-reset `Changes` selection and streaming growth — ordinary timeouts are not lengthened blindly. Instead, `waitSelected` records deduplicated poll traces (role, name, `AXSelected`, `AXValue`, frame, sibling tab states, and window focus/frontmost state); post-failure capture probes whether a timed-out selection flips passively after 1.5 s or after `front`, and the following `reset` traces tab states around `front`, `place`, and `Escape`. `growth` now records timestamped length/frame samples and distinguishes early label disappearance from a timeout.
+- **Mid-run process exit:** `axdrive` stops polling immediately when the target PID exits, and the runner reports the exit code or signal plus the last lines of `app.log` once, fails only the crashing item, and marks all remaining items `SKIPPED` (`not run: app exited`) with `incomplete=true`.
+
+**Unverified until the next CI run:** The updated tab-row drag/double-click gestures on a real window, the post-drag sidebar wait, the reduction in CI `reset` failures, whether the underlying CI `select` and streaming-growth stalls are passive delays or frame-wake stalls on the virtualized runner, and live mid-run app-exit reporting. On the narrow CI display the two inspector items plus Finder and URL activation remain expected skips; the remaining 42 items are intended checks, not a pass claim. Failures remain failures, with no pointer substitute for a broken `AXPress`.
 
 Build the normal development executables and runtime dependencies with
 `bash scripts/check.sh`, then run the check when the computer is free:
@@ -481,10 +488,11 @@ seven Settings tabs each have separate results):
 | --- | --- | --- |
 | Fixture isolation | Private host and desktop state, test Git identity, scripted conversation | No |
 | Native setup / permissions | PID-owned window and seeded assistant message; permission state recorded | No |
-| Traffic lights, sidebar hidden | All three light frames centered within 3 points of the 44-point bar, first about 14 points in, header toggle at least 4 points clear | No |
-| Drag sidebar bar | Empty rail strip moves the window; header control still activates | Yes |
-| Drag header bar | Empty header moves the window with sidebar hidden; header control still activates | Yes |
-| Double-click bar | Current system setting produces minimize, no movement, or resize; setting never changed | Yes |
+| Traffic lights, sidebar hidden | All three light frames centered within 3 points of the 40-point bar, first about 14 points in, sidebar toggle at least 4 points clear | No |
+| Thread tab row and keys | Tab row stays visible; Cmd-T opens a draft, Cmd-1/Cmd-9 switch, and Cmd-W closes the empty draft tab | No |
+| Drag tab bar | Tab row's empty right end (from AX frames) moves the window with sidebar shown; sidebar toggle still responds; skips if no empty end | Yes |
+| Drag tab bar, sidebar hidden | Tab row's empty right end moves the window with sidebar hidden; sidebar toggle still responds; skips if no empty end | Yes |
+| Double-click tab bar | Current system setting on the tab row's empty right end produces minimize, no movement, or resize; setting never changed; skips if no empty end | Yes |
 | Full screen and back | Native full-screen state changes both ways; header control responds afterwards | No |
 | Sidebar toggle and shortcut | AXPress and Cmd-B hide and restore it | No |
 | Inspector toggle and shortcut | AXPress and Cmd-L hide and restore it; skipped on a display too narrow for it | No |
@@ -545,14 +553,16 @@ Live models, authentication, recovery, Stop, updates, signed commits, hooks,
 Git LFS and older systems remain separate checks.
 
 Output has a `START` line and one `PASS`, `FAIL` or `SKIPPED` result for each
-attempted item, plus a summary covering all 45 items. The check has its own
+attempted item, plus a summary covering all 46 items. The check has its own
 390-second deadline, including compilation and setup, within the unchanged
-eight-minute workflow limit. A deadline or termination signal records the
-interrupted item, marks unattempted items as skipped with the reason, prints
-`SUMMARY ... incomplete=true`, and exits nonzero. Reducing fourteen exhausted
-selection waits from fifteen to three seconds saves at least 168 seconds;
-the remaining margin allows evidence capture and cleanup. A hard kill cannot
-print a summary, but evidence already written survives it.
+eight-minute workflow limit. A deadline, termination signal, or mid-run app
+exit records the affected item (printing the exit status and the last lines of
+`app.log` once when the app dies), marks unattempted items as skipped with the
+reason (`not run: app exited` after a crash), prints `SUMMARY ...
+incomplete=true`, and exits nonzero. Reducing fourteen exhausted selection
+waits from fifteen to three seconds saves at least 168 seconds; the remaining
+margin allows evidence capture and cleanup. A hard kill cannot print a summary,
+but evidence already written survives it.
 
 Results, the failure digest, per-item step traces, AX trees, screenshots and
 window inventories are written directly into `--artifacts` as items finish;
@@ -576,16 +586,20 @@ finished package without installing it. Tagged releases skip both steps; there
 is no additional macOS job or Rust build.
 
 Verified without a window: Swift compilation and pure selector, flag decoding,
+tab-bar empty-right-end geometry (one tab, full row, wide window, crowded
+no-empty-end skip, missing controls), wait-trace and growth-trace formatting,
 full-screen stability, coordinate and ownership tests; Python tests of named
-waits, deadlines and termination, immediate artifact persistence, item ordering,
-reset after failure, skip reasons, disposable Git reset, isolation and replay;
-and `bash scripts/check.sh` (format, Clippy, workspace and runtime tests, release
-builds). The fixture's production-host checks separately cover independent
-allow/deny effects, stopped-run reset, recorded undo/redo, growing stream and
-argument recording without a desktop process. The existing smoke AppleScript was compiled
-with `osacompile`, not executed; this check adds no AppleScript or JXA.
-ShellCheck was not installed during this verification. The check's own
-windowless entry points are:
+waits, deadlines and termination, mid-run app-exit reporting and `not run: app
+exited` skipping, tab-bar-end skips, post-drag sidebar waits, conditional
+`Files` reset, post-failure selection diagnostics, immediate artifact
+persistence, item ordering, reset after failure, skip reasons, disposable Git
+reset, isolation and replay; and `bash scripts/check.sh` (format, Clippy,
+workspace and runtime tests, release builds). The fixture's production-host
+checks separately cover independent allow/deny effects, stopped-run reset,
+recorded undo/redo, growing stream and argument recording without a desktop
+process. The existing smoke AppleScript was compiled with `osacompile`, not
+executed; this check adds no AppleScript or JXA. ShellCheck was not installed
+during this verification. The check's own windowless entry points are:
 
 ```sh
 bash scripts/acceptance-macos.sh --self-test
@@ -597,7 +611,7 @@ helper and runs its pure self-test. Neither windowless entry point launches
 the desktop, reads an accessibility tree, or sends keyboard/pointer events.
 They do not replace the next native run. On a display as narrow as the first
 runner, the two inspector items plus Finder and URL activation are expected
-to skip with reasons; the other 41 items can attempt their checks. This is an
+to skip with reasons; the other 42 items can attempt their checks. This is an
 expectation, not a passing result.
 
 ## Manual release acceptance

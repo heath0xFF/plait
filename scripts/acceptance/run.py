@@ -24,6 +24,13 @@ class Skipped(Exception):
     pass
 
 
+class CommandError(AssertionError):
+    def __init__(self, message, returncode, detail):
+        super().__init__(message)
+        self.returncode = returncode
+        self.detail = detail
+
+
 class RunInterrupted(BaseException):
     """Leave the run loop, but still persist results and close owned processes."""
 
@@ -39,8 +46,38 @@ def command(args, timeout=30, env=None):
         result = subprocess.run([str(arg) for arg in args], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, env=env)
     except subprocess.TimeoutExpired as error:
         raise AssertionError(f'timed out after {timeout:g}s waiting for {Path(str(args[0])).name} {list(args[1:])!r}; last observed: process did not finish; output={error.stdout!r}') from error
-    require(result.returncode == 0, f'{Path(str(args[0])).name} {args[1:3]} exited {result.returncode}: {result.stderr.strip() or result.stdout.strip()}')
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise CommandError(f'{Path(str(args[0])).name} {args[1:3]} exited {result.returncode}: {detail}', result.returncode, detail)
     return result.stdout.strip()
+
+
+def format_exit(returncode):
+    if returncode is None:
+        return 'unknown status'
+    if returncode < 0:
+        try:
+            name = signal.Signals(-returncode).name
+            return f'signal {-returncode} ({name})'
+        except ValueError:
+            return f'signal {-returncode}'
+    return f'code {returncode}'
+
+
+def tail_log(path, max_lines=25, max_chars=2500):
+    if not path.is_file():
+        return '(app.log missing)'
+    try:
+        text = path.read_text(errors='replace')
+    except OSError as error:
+        return f'(could not read app.log: {error})'
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return '(app.log is empty)'
+    tail = '\n'.join(lines[-max_lines:])
+    if len(tail) > max_chars:
+        tail = '…' + tail[-max_chars:]
+    return tail
 
 
 def check_lights(values, toggle):
@@ -86,6 +123,9 @@ class Acceptance:
         self.phase = 'setup'
         self.started = time.monotonic()
         self.interruption = None
+        self.app_exited = None
+        self.files_dirty = False
+        self.prev_select_failed = False
         self.finished = False
 
     def trace(self, detail):
@@ -93,6 +133,13 @@ class Acceptance:
         if self.current:
             with (self.output / f'{self.current}-steps.log').open('a') as log:
                 log.write(f'{time.monotonic() - self.started:.3f}s {self.phase}: {detail}\n')
+
+    def trace_tab_states(self, label):
+        try:
+            state = self.ax('tab-states', timeout=4)
+            self.trace(f'select-diag {label}: {state}')
+        except Exception as error:
+            self.trace(f'select-diag {label}: error={error}')
 
     def ax(self, action, *args, timeout=15):
         require(self.app is not None and self.app.poll() is None, 'development app is not running')
@@ -137,6 +184,8 @@ class Acceptance:
         if self.exists('Done', 'AXButton'):
             self.press('Done')
             self.ax('absent', '--name', 'Done', '--role', 'AXButton')
+        if self.phase == 'check' and name == 'Files':
+            self.files_dirty = True
         self.ax('select', '--name', name, '--role', 'control')
 
     def sidebar(self, wanted):
@@ -169,39 +218,84 @@ class Acceptance:
     def reset(self):
         # Establish each precondition, even after a previous item passed halfway.
         self.fixture.reset()
+        diag_prev = self.prev_select_failed
+        self.prev_select_failed = False
         window = self.window()
         if window[5]:
             self.ax('minimized', 'off')
         if window[4]:
             self.ax('fullscreen', 'off', '--timeout', '10')
+        if diag_prev:
+            self.trace_tab_states('before-front')
         self.ax('front')
+        if diag_prev:
+            self.trace_tab_states('after-front')
         self.ax('place', '1380', '860')
+        if diag_prev:
+            self.trace_tab_states('after-place')
         self.key('escape')
+        if diag_prev:
+            self.trace_tab_states('after-escape')
         if self.exists('Close', 'AXButton'):
             self.press('Close')  # Sidebar action menu has its own close control.
+        if self.exists('Done', 'AXButton'):
+            self.press('Done')
+            self.ax('absent', '--name', 'Done', '--role', 'AXButton')
+        if self.exists('Close find', 'AXButton'):
+            self.press('Close find')
         self.select_thread()
-        # Find can stay open across tabs, and each field retains its last query.
-        for tab in ('Files', 'Conversation'):
-            self.tab(tab)
+        # Only switch to Files to close Find when a prior check actually visited it.
+        if self.files_dirty:
+            self.tab('Files')
             if self.exists('Close find', 'AXButton'):
                 self.press('Close find')
+            self.tab('Conversation')
+            self.files_dirty = False
+        if self.exists('Close find', 'AXButton'):
+            self.press('Close find')
         self.field('Message to agent', '')
         self.key('cmd+r')
         self.ax('find', '--prefix', f'Plait message: {ANSWER}', '--role', 'AXGroup')
+
+    def app_returncode(self):
+        if self.app is None:
+            return None
+        code = self.app.poll()
+        return code if isinstance(code, int) else None
+
+    def note_app_exit(self, name):
+        if self.app_exited is not None:
+            return None
+        code = self.app_returncode()
+        if code is None:
+            return None
+        exit_desc = format_exit(code)
+        tail = tail_log(self.base / 'app.log')
+        self.app_exited = f'development app exited ({exit_desc}) during {name}'
+        report = f'APP EXITED: {self.app_exited}\n--- last lines of app.log ---\n{tail}\n--- end of app.log ---'
+        print(report, flush=True)
+        (self.output / 'app-exit.txt').write_text(report + '\n')
+        return exit_desc, tail
 
     def record(self, name, fn, native=True):
         self.current = name
         self.phase = 'reset' if native else 'setup'
         self.last_step = f'starting {self.phase} for {name}'
+        self.last_select_timeout = False
         started = time.monotonic()
         print(f'START {name}', flush=True)
+        exit_note = None
         try:
             if native and not self.ready:
                 raise Skipped('native setup unavailable; see setup/permissions result')
+            if native and self.app_returncode() is not None:
+                raise AssertionError(f'development app exited ({format_exit(self.app_returncode())}) before item started')
             if native:
                 self.reset()
             self.phase = 'check'
             detail = fn() or 'expected state observed'
+            if native and self.app_returncode() is not None:
+                raise AssertionError(f'development app exited ({format_exit(self.app_returncode())})')
             status = 'PASS'
         except Skipped as error:
             status, detail = 'SKIPPED', str(error)
@@ -210,12 +304,20 @@ class Acceptance:
             status, detail = 'FAIL', f'{self.phase}: {error}; last step: {self.last_step}'
         except Exception as error:
             status, detail = 'FAIL', f'{self.phase}: {error}'
+            if self.app_returncode() is not None:
+                exit_note = self.note_app_exit(name)
+                if exit_note:
+                    detail = f'{detail} (app exited with {exit_note[0]})'
         self.results.append({'item': name, 'status': status, 'observed': detail, 'seconds': round(time.monotonic() - started, 3)})
         # Exactly one result line per item; verbose evidence goes into files.
         print(f'{status} {name}: {" ".join(detail.split())}', flush=True)
         self.persist_results()
         if status == 'FAIL':
-            (self.output / f'{name}-failure.txt').write_text(detail + '\n')
+            failure_text = detail + '\n'
+            if exit_note:
+                failure_text += f'\n--- last lines of app.log ---\n{exit_note[1]}\n'
+            (self.output / f'{name}-failure.txt').write_text(failure_text)
+            self.last_select_timeout = "axdrive ['select'" in detail
             self.phase = 'capture'
             if self.app:
                 self.capture(name)
@@ -235,7 +337,7 @@ class Acceptance:
                     shutil.copy2(path, self.output / name)
 
     def capture(self, name):
-        if not self.app or self.app.poll() is not None:
+        if not self.app or self.app_returncode() is not None:
             (self.output / f'{name}-capture.txt').write_text('Development process has exited; no window to capture.\n')
             return
         errors = []
@@ -253,6 +355,20 @@ class Acceptance:
             command(['/usr/sbin/screencapture', '-x', '-l', window_id, self.output / f'{name}.png'], timeout=4)
         except Exception as error:
             errors.append(f'Window capture: {error}; grant Screen Recording to the invoking terminal')
+        if getattr(self, 'last_select_timeout', False):
+            # Post-failure probe only (item is already recorded FAIL): distinguish
+            # a slow transition (>3s) from a frame stalled until an AppKit event.
+            self.prev_select_failed = True
+            diag = []
+            try:
+                diag.append(f't+0.0s: {self.ax("tab-states", timeout=4)}')
+                time.sleep(1.5)
+                diag.append(f't+1.5s-passive: {self.ax("tab-states", timeout=4)}')
+                self.ax('front', timeout=4)
+                diag.append(f'after-front: {self.ax("tab-states", timeout=4)}')
+            except Exception as error:
+                diag.append(f'probe-error: {error}')
+            (self.output / f'{name}-select-diag.txt').write_text('\n'.join(diag) + '\n')
         if errors:
             (self.output / f'{name}-capture.txt').write_text('\n'.join(errors) + '\n')
 
@@ -309,26 +425,34 @@ class Acceptance:
         values = [float(v) for v in self.ax('lights').split()]
         return check_lights(values, self.frame('Toggle sidebar'))
 
-    def gap(self, sidebar=False):
-        x, y, width, _height = self.window()[:4]
-        # Tabs occupy the old header gaps; the rightmost 48 points stay draggable.
-        start, end = x + width - 46, x + width - 12
-        return [float(v) for v in self.ax('bar-gap', start, end).split()]
+    def tab_bar_end(self):
+        # Derived purely from the AX tree's tab-row control frames and window right edge.
+        try:
+            return [float(v) for v in self.ax('tab-bar-end').split()]
+        except CommandError as error:
+            if error.returncode == 4:
+                raise Skipped(error.detail) from error
+            raise
 
     def bar_drag(self, shown):
         self.pointer()
         self.sidebar(shown)
         before = self.window()
-        x, y = self.gap(sidebar=shown)
+        x, y = self.tab_bar_end()
         self.ax('hit', x, y)
-        self.ax('drag', x, y, x + 45, y + 30)
+        # Keep the drag destination inside the window horizontally even when a full tab row pushes x near the right edge.
+        dx = 45 if x + 45 <= before[0] + before[2] else -35
+        self.ax('drag', x, y, x + dx, y + 30)
         after = until(self.window, lambda rect: abs(rect[0] - before[0]) > 10 or abs(rect[1] - before[1]) > 10, description=f'window origin to move from {before[:2]}')
-        # Header controls must still activate after the native move.
+        # Header controls must still activate after the native move; wait for AX to reflect the toggle.
         self.press('Toggle sidebar')
-        require(self.exists('Resize sidebar') != shown, 'sidebar button stopped responding after dragging')
+        try:
+            self.ax('absent', '--name', 'Resize sidebar') if shown else self.find('Resize sidebar')
+        except AssertionError as error:
+            raise AssertionError(f'sidebar button stopped responding after dragging: {error}') from error
         self.sidebar(True)
         self.ax('place', '1380', '860')
-        return f'window moved from {before[:2]} to {after[:2]}; header control still responds'
+        return f'window moved from {before[:2]} to {after[:2]} via tab-row end ({x:.1f}, {y:.1f}); header control still responds'
 
     def double_click(self):
         self.pointer()
@@ -338,7 +462,7 @@ class Acceptance:
         self.sidebar(True)
         self.ax('place', '1000', '650')
         before = self.window()
-        self.ax('double-click', *self.gap(sidebar=True))
+        self.ax('double-click', *self.tab_bar_end())
         time.sleep(1)
         if action == 'Minimize':
             require(self.ax('minimized', 'get') == '1', f'setting {action}; observed {self.window()}')
@@ -643,8 +767,8 @@ class Acceptance:
         checks = [
             ('traffic-lights-sidebar-hidden', self.lights),
             ('thread-tab-row-and-keys', self.thread_tabs),
-            ('drag-sidebar-bar', lambda: self.bar_drag(True)),
-            ('drag-header-bar', lambda: self.bar_drag(False)),
+            ('drag-tab-bar', lambda: self.bar_drag(True)),
+            ('drag-tab-bar-sidebar-hidden', lambda: self.bar_drag(False)),
             ('double-click-system-setting', self.double_click),
             ('fullscreen-return', self.fullscreen),
             ('sidebar-toggle-and-shortcut', lambda: self.toggle('sidebar')),
@@ -685,12 +809,14 @@ class Acceptance:
             self.record('fixture-isolation', self.setup, native=False)
             self.record('native-setup-permissions', self.launch, native=False)
             for name, fn in self.checks():
+                if self.app_exited:
+                    break
                 self.record(name, fn)
         except RunInterrupted as error:
             self.interruption = str(error)
         finally:
             self.finish()
-        return 1 if self.interruption or any(r['status'] == 'FAIL' for r in self.results) else 0
+        return 1 if self.interruption or self.app_exited or any(r['status'] == 'FAIL' for r in self.results) else 0
 
     def finish(self):
         if self.finished:
@@ -698,11 +824,15 @@ class Acceptance:
         seen = {row['item'] for row in self.results}
         for name in ['fixture-isolation', 'native-setup-permissions', *[name for name, _ in self.checks()]]:
             if name not in seen:
-                detail = f'not attempted: {self.interruption or "run ended early"}'
+                if self.app_exited:
+                    detail = 'not run: app exited'
+                else:
+                    detail = f'not attempted: {self.interruption or "run ended early"}'
                 self.results.append({'item': name, 'status': 'SKIPPED', 'observed': detail})
                 print(f'SKIPPED {name}: {detail}', flush=True)
         self.persist_results()
-        print(summary(self.results) + (' incomplete=true' if self.interruption else ''), flush=True)
+        incomplete = bool(self.interruption or self.app_exited)
+        print(summary(self.results) + (' incomplete=true' if incomplete else ''), flush=True)
         self.finished = True
 
     def close(self):

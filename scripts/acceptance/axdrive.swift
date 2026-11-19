@@ -17,7 +17,8 @@ import Foundation
 
 // MARK: - Output and errors
 
-/// Exit codes: 0 done, 1 not seen or not done, 2 usage or permission, 3 refused.
+/// Exit codes: 0 done, 1 not seen or not done, 2 usage or permission, 3 refused,
+/// 4 skipped because no empty tab-bar end exists.
 func die(_ message: String, _ code: Int32 = 1) -> Never {
     FileHandle.standardError.write(Data((message + "\n").utf8))
     exit(code)
@@ -199,6 +200,129 @@ func widestGap(occupied: [(CGFloat, CGFloat)], from: CGFloat, to: CGFloat, minim
     return (best.0 + best.1) / 2
 }
 
+struct BarElement: Equatable {
+    let role: String
+    let frame: CGRect
+}
+
+enum TabBarEnd: Equatable {
+    case point(CGPoint, left: CGFloat, right: CGFloat)
+    case noEmptyEnd(rightmost: CGFloat, windowRight: CGFloat, available: CGFloat)
+    case noControls
+}
+
+/// Finds a point inside the 40-point top tab row's empty right end from the
+/// accessibility tree's own frames: strictly right of every control in the top
+/// band (traffic lights, sidebar toggle, tabs, overflow, New thread tab) and
+/// inside the window's right edge.
+func tabBarDragPoint(
+    window: CGRect,
+    elements: [BarElement],
+    barHeight: CGFloat = 40,
+    padding: CGFloat = 8,
+    minimum: CGFloat = 16
+) -> TabBarEnd {
+    let band = CGRect(x: window.minX, y: window.minY, width: window.width, height: barHeight)
+    let barRoles = Set(expandRoles("control,field,text,AXSplitter,AXTabGroup"))
+    var rightmost = window.minX
+    var sawControl = false
+    for element in elements {
+        let box = element.frame
+        guard box.width > 0, box.height > 0, box.height <= barHeight + 6,
+              box.intersects(band), barRoles.contains(element.role) else { continue }
+        sawControl = true
+        rightmost = max(rightmost, box.maxX)
+    }
+    guard sawControl else { return .noControls }
+    let left = rightmost + padding
+    let right = window.maxX - padding
+    let available = max(0, window.maxX - rightmost)
+    guard right - left >= minimum else {
+        return .noEmptyEnd(rightmost: rightmost, windowRight: window.maxX, available: available)
+    }
+    return .point(CGPoint(x: (left + right) / 2, y: window.minY + barHeight / 2), left: left, right: right)
+}
+
+/// Deduplicated wait trace so timed-out selection checks show what was observed
+/// at every distinct state transition without flooding logs.
+struct WaitTrace {
+    private(set) var polls = 0
+    private(set) var events: [(Double, String)] = []
+    private var lastState: String?
+
+    mutating func record(at elapsed: Double, state: String) {
+        polls += 1
+        if state != lastState {
+            lastState = state
+            if events.count < 12 {
+                events.append((elapsed, state))
+            }
+        }
+    }
+
+    var last: String {
+        lastState ?? "no observations"
+    }
+
+    var summary: String {
+        let entries = events.map { String(format: "%.2fs: %@", $0.0, $0.1) }.joined(separator: " -> ")
+        return "polls=\(polls); states=[\(entries)]"
+    }
+}
+
+/// Tracks streaming-label observations so early disappearance is distinguished
+/// from a genuine timeout.
+struct GrowthTrace {
+    private(set) var polls = 0
+    private(set) var lengths = Set<Int>()
+    private(set) var firstSeenAt: Double?
+    private(set) var lastSeenAt: Double?
+    private(set) var vanishedAt: Double?
+    private(set) var samples: [(elapsed: Double, length: Int, role: String, frame: String)] = []
+    private var lastLength: Int?
+
+    var seen: Bool { firstSeenAt != nil }
+    var grew: Bool { seen && lengths.count >= 2 }
+
+    mutating func observePresent(at elapsed: Double, length: Int, role: String, frame: String) {
+        polls += 1
+        if firstSeenAt == nil { firstSeenAt = elapsed }
+        lastSeenAt = elapsed
+        lengths.insert(length)
+        if length != lastLength {
+            lastLength = length
+            if samples.count < 16 {
+                samples.append((elapsed, length, role, frame))
+            }
+        }
+    }
+
+    mutating func observeAbsent(at elapsed: Double) -> Bool {
+        polls += 1
+        if seen && vanishedAt == nil {
+            vanishedAt = elapsed
+            return true
+        }
+        return false
+    }
+
+    var sampleDescription: String {
+        if samples.isEmpty { return "none" }
+        return samples.map {
+            String(format: "%.2fs:len=%d(%@ frame=[%@])", $0.elapsed, $0.length, $0.role, $0.frame)
+        }.joined(separator: ", ")
+    }
+
+    func failureMessage(timeout: Double, describe: String) -> String {
+        if let vanished = vanishedAt {
+            let first = firstSeenAt.map { String(format: "%.2fs", $0) } ?? "?"
+            let last = lastSeenAt.map { String(format: "%.2fs", $0) } ?? "?"
+            return "element \(describe) disappeared at \(String(format: "%.2fs", vanished)) before growing (not a timeout; first=\(first) last=\(last)); polls=\(polls); observed=[\(sampleDescription)]"
+        }
+        return "timed out after \(timeout)s waiting for growth of \(describe); polls=\(polls); last observed: \(seen ? "one length, \(lengths.max() ?? 0) characters" : "control absent"); observed=[\(sampleDescription)]"
+    }
+}
+
 /// AX and CGEvent use top-left screen points; AppKit hit testing uses bottom-left.
 /// Never apply the display's pixel scale to either coordinate system.
 func flipScreenPoint(_ point: CGPoint, primaryTop: CGFloat) -> CGPoint {
@@ -291,7 +415,17 @@ func selection(_ node: Node) -> Bool? {
 }
 
 func selectionDescription(_ node: Node) -> String {
-    "\(node.role)/\(node.subrole) \(node.name); AXSelected=\(rawAttribute(node.element, kAXSelectedAttribute)); AXValue=\(rawAttribute(node.element, kAXValueAttribute))"
+    let box = node.frame.map(fmt) ?? "-"
+    return "\(node.role)/\(node.subrole) \(node.name); AXSelected=\(rawAttribute(node.element, kAXSelectedAttribute)); AXValue=\(rawAttribute(node.element, kAXValueAttribute)); frame=[\(box)]"
+}
+
+func tabStatesSummary(_ pid: pid_t) -> String {
+    guard let window = mainWindow(pid) else { return "window=absent; \(frontDescription())" }
+    let tabs = walk(window)
+        .filter { $0.role == "AXRadioButton" }
+        .map { selectionDescription($0) }
+    let windowState = "AXMain=\(rawAttribute(window, kAXMainAttribute)); AXFocused=\(rawAttribute(window, kAXFocusedAttribute)); \(frontDescription())"
+    return "\(windowState); tabs=[\(tabs.joined(separator: " | "))]"
 }
 
 struct StableFlag {
@@ -414,30 +548,47 @@ func matches(_ pid: pid_t, _ selector: Selector) -> [Node] {
 
 func waitFor(_ pid: pid_t, _ selector: Selector) -> Node {
     var last = "no matching control"
-    if let node = poll(selector.timeout, { () -> Node? in
+    var result: Node?
+    var exited = false
+    _ = poll(selector.timeout) { () -> Bool? in
+        if !processAlive(pid) { exited = true; return true }
         let found = matches(pid, selector)
         last = "\(found.count) matching controls (need \(selector.nth))"
-        return found.count >= selector.nth ? found[selector.nth - 1] : nil
-    }) {
-        return node
+        if found.count >= selector.nth {
+            result = found[selector.nth - 1]
+            return true
+        }
+        return nil
     }
-    if !processAlive(pid) { die("the development copy (process \(pid)) exited") }
+    if exited || !processAlive(pid) { die("the development copy (process \(pid)) exited") }
+    if let node = result { return node }
     die("timed out after \(selector.timeout)s waiting for \(selector.describe); last observed: \(last)")
 }
 
 func waitSelected(_ pid: pid_t, _ selector: Selector, transition: String = "observing selection") {
-    var last = "control absent"
+    let started = Date()
+    var trace = WaitTrace()
+    var exited = false
     let found = poll(selector.timeout) { () -> Bool? in
+        if !processAlive(pid) { exited = true; return true }
+        let elapsed = Date().timeIntervalSince(started)
         let nodes = matches(pid, selector)
-        guard nodes.count >= selector.nth else { last = "control absent"; return nil }
+        guard nodes.count >= selector.nth else {
+            trace.record(at: elapsed, state: "control absent")
+            return nil
+        }
         let node = nodes[selector.nth - 1]
-        last = selectionDescription(node)
+        trace.record(at: elapsed, state: selectionDescription(node))
         return selection(node) == true ? true : nil
     }
-    guard found != nil else {
-        die("timed out after \(selector.timeout)s waiting for selected \(selector.describe); \(transition); last observed: \(last)")
+    if exited || !processAlive(pid) {
+        die("the development copy (process \(pid)) exited while waiting for selected \(selector.describe); \(transition); \(trace.summary)")
     }
-    say("selected \(selector.describe); \(transition); \(last)")
+    guard found != nil else {
+        let elapsed = String(format: "%.2fs", Date().timeIntervalSince(started))
+        die("timed out after \(selector.timeout)s (elapsed \(elapsed)) waiting for selected \(selector.describe); \(transition); last observed: \(trace.last); \(trace.summary); \(tabStatesSummary(pid))")
+    }
+    say("selected \(selector.describe); \(transition); \(trace.last)")
 }
 
 // MARK: - Window state
@@ -689,6 +840,69 @@ func selfTest() {
     if let (from, to) = messageSelectionSpan(box: CGRect(x: 300, y: 200, width: 500, height: 47)) {
         check(from == CGPoint(x: 303, y: 236) && to == CGPoint(x: 460, y: 236), "message drag clears author header line")
     } else { check(false, "selectable message frame accepted") }
+    // Recorded 1-tab CI tree (984x639 at 20,51): New thread tab ends at 408, window right at 1004.
+    let ciWindow = CGRect(x: 20, y: 51, width: 984, height: 639)
+    let secondRow = [
+        BarElement(role: "AXRadioButton", frame: CGRect(x: 668, y: 96, width: 93, height: 24)),
+        BarElement(role: "AXButton", frame: CGRect(x: 964, y: 94, width: 28, height: 28)),
+    ]
+    let oneTabBar = [
+        BarElement(role: "AXButton", frame: CGRect(x: 33, y: 62, width: 16, height: 16)),
+        BarElement(role: "AXButton", frame: CGRect(x: 79, y: 62, width: 16, height: 16)),
+        BarElement(role: "AXButton", frame: CGRect(x: 104, y: 56, width: 28, height: 28)),
+        BarElement(role: "AXTabGroup", frame: CGRect(x: 136, y: 51, width: 240, height: 39)),
+        BarElement(role: "AXRadioButton", frame: CGRect(x: 136, y: 56, width: 240, height: 34)),
+        BarElement(role: "AXButton", frame: CGRect(x: 380, y: 56, width: 28, height: 28)),
+    ] + secondRow
+    check(tabBarDragPoint(window: ciWindow, elements: oneTabBar) == .point(CGPoint(x: 706, y: 71), left: 416, right: 996), "1-tab CI tree uses empty right end centered on 40-point bar and ignores second row")
+    // Recorded 4-tab full-row CI tree (turn-redo-ax.txt): Open tabs 136..924, New thread tab 928..956.
+    let fullRowBar = [
+        BarElement(role: "AXButton", frame: CGRect(x: 104, y: 56, width: 28, height: 28)),
+        BarElement(role: "AXTabGroup", frame: CGRect(x: 136, y: 51, width: 788, height: 39)),
+        BarElement(role: "AXButton", frame: CGRect(x: 928, y: 56, width: 28, height: 28)),
+    ] + secondRow
+    check(tabBarDragPoint(window: ciWindow, elements: fullRowBar) == .point(CGPoint(x: 980, y: 71), left: 964, right: 996), "full-row CI tree uses remaining 48-point right end")
+    // Recorded wide window (editor-page-custom-state-ax.txt): 1790x1129 at 10,39; New thread tab 370..398.
+    let wideWindow = CGRect(x: 10, y: 39, width: 1790, height: 1129)
+    let wideBar = [
+        BarElement(role: "AXButton", frame: CGRect(x: 94, y: 44.5, width: 28, height: 28)),
+        BarElement(role: "AXTabGroup", frame: CGRect(x: 126, y: 39, width: 240, height: 39)),
+        BarElement(role: "AXButton", frame: CGRect(x: 370, y: 44.5, width: 28, height: 28)),
+    ]
+    check(tabBarDragPoint(window: wideWindow, elements: wideBar) == .point(CGPoint(x: 1099, y: 59), left: 406, right: 1792), "wide window centers drag point in empty right end")
+    // Full row with overflow button leaving no empty right end -> noEmptyEnd (skip, not fail).
+    let noRoomBar = [
+        BarElement(role: "AXTabGroup", frame: CGRect(x: 136, y: 51, width: 720, height: 39)),
+        BarElement(role: "AXButton", frame: CGRect(x: 860, y: 56, width: 104, height: 28)),
+        BarElement(role: "AXButton", frame: CGRect(x: 968, y: 56, width: 28, height: 28)),
+    ]
+    check(tabBarDragPoint(window: ciWindow, elements: noRoomBar) == .noEmptyEnd(rightmost: 996, windowRight: 1004, available: 8), "crowded tab bar reports no empty end instead of returning a point")
+    check(tabBarDragPoint(window: ciWindow, elements: secondRow) == .noControls, "missing top-bar controls reported separately from crowded bar")
+    // Verify selection decoding against recorded CI dump states (AXRadioButton tabs and AXRow threads).
+    let recordedStates: [(role: String, selected: Bool?, value: Bool?, expected: Bool?)] = [
+        ("AXRadioButton", nil, true, true),    // Conversation AXSelected=unavailable, AXValue=true(1)
+        ("AXRadioButton", nil, false, false),  // Files AXSelected=unavailable, AXValue=false(0)
+        ("AXRow", true, nil, true),            // Thread AXRow AXSelected=true(1), AXValue=unavailable
+        ("AXRow", false, nil, false),          // Project AXRow AXSelected=false(0), AXValue=unavailable
+    ]
+    for sample in recordedStates {
+        check(selectionFlag(role: sample.role, selected: sample.selected, value: sample.value) == sample.expected,
+              "recorded state selection for \(sample.role)")
+    }
+    var trace = WaitTrace()
+    trace.record(at: 0.0, state: "AXRadioButton Files AXValue=false(0)")
+    trace.record(at: 0.1, state: "AXRadioButton Files AXValue=false(0)")
+    trace.record(at: 0.2, state: "AXRadioButton Files AXValue=true(1)")
+    check(trace.polls == 3 && trace.events.count == 2 && trace.summary.contains("polls=3"), "wait trace deduplicates repeated states")
+    var growth = GrowthTrace()
+    growth.observePresent(at: 1.2, length: 30, role: "AXGroup", frame: "284 468 696 47")
+    growth.observePresent(at: 1.25, length: 30, role: "AXGroup", frame: "284 468 696 47")
+    check(growth.observeAbsent(at: 8.05) && !growth.grew, "early disappearance stops growth tracking")
+    check(growth.failureMessage(timeout: 15, describe: "writing").contains("disappeared at 8.05s before growing (not a timeout"), "disappearance is distinguished from timeout")
+    var growing = GrowthTrace()
+    growing.observePresent(at: 0.5, length: 30, role: "AXGroup", frame: "0 0 100 20")
+    growing.observePresent(at: 0.65, length: 42, role: "AXGroup", frame: "0 0 100 20")
+    check(growing.grew && growing.lengths == [30, 42], "two distinct lengths satisfy growth")
     if failures > 0 { exit(1) }
     print("axdrive self-test passed")
 }
@@ -700,7 +914,8 @@ usage: axdrive self-test | preflight
        axdrive COMMAND PID [selector] [arguments]
 commands with a PID:
   wait-window, window, window-id, windows, place W H, lights, front, dump,
-  find, frame, absent, count, press, select, wait-selected, focus, focused, selected, value, set-value --text T,
+  tab-states, tab-bar-end, find, frame, absent, count, press, select,
+  wait-selected, focus, focused, selected, value, set-value --text T,
   growth, key COMBO, type --text T [--delay S], fullscreen on|off,
   minimized on|off|get, hit X Y, bar-gap FROM TO,
   drag X1 Y1 X2 Y2, double-click X Y, select-text --text T
@@ -782,6 +997,29 @@ func run(_ arguments: [String]) throws {
             if ["AXRadioButton", "AXRow"].contains(node.role) { say("\(indent)  state: \(selectionDescription(node))") }
             if node.role == "AXWindow" { say("\(indent)  AXFullScreen=\(rawAttribute(node.element, "AXFullScreen")); AXMinimized=\(rawAttribute(node.element, kAXMinimizedAttribute))") }
         }
+    case "tab-states":
+        _ = requireWindow(pid)
+        say(tabStatesSummary(pid))
+    case "tab-bar-end":
+        let window = requireWindow(pid)
+        guard let rect = frame(of: window) else { die("window has no frame") }
+        var elements = walk(window).compactMap { node -> BarElement? in
+            node.frame.map { BarElement(role: node.role, frame: $0) }
+        }
+        for name in [kAXCloseButtonAttribute, kAXMinimizeButtonAttribute, kAXZoomButtonAttribute] {
+            if let button = attribute(window, name), CFGetTypeID(button) == AXUIElementGetTypeID(),
+               let box = frame(of: button as! AXUIElement) {
+                elements.append(BarElement(role: "AXButton", frame: box))
+            }
+        }
+        switch tabBarDragPoint(window: rect, elements: elements) {
+        case let .point(pt, _, _):
+            say("\(fmt(pt.x)) \(fmt(pt.y))")
+        case let .noEmptyEnd(rightmost, windowRight, available):
+            die("no empty right end in the 40-point tab row: rightmost control ends at \(fmt(rightmost)), window right edge is \(fmt(windowRight)) (\(fmt(available)) pt remaining)", 4)
+        case .noControls:
+            die("no tab-row controls found in the 40-point bar", 1)
+        }
     case "find":
         let node = waitFor(pid, selector)
         say("\(node.role)\t\(node.name.prefix(200))\t\(node.frame.map(fmt) ?? "-")")
@@ -793,11 +1031,14 @@ func run(_ arguments: [String]) throws {
         say(String(matches(pid, selector).count))
     case "absent":
         var last = "control still present"
+        var exited = false
         let gone = poll(selector.timeout) { () -> Bool? in
+            if !processAlive(pid) { exited = true; return true }
             let found = matches(pid, selector)
             last = "\(found.count) matching controls remain"
             return found.isEmpty ? true : nil
         }
+        if exited || !processAlive(pid) { die("the development copy (process \(pid)) exited") }
         if gone == nil { die("timed out after \(selector.timeout)s waiting for absence of \(selector.describe); last observed: \(last)") }
     case "press":
         let node = waitFor(pid, selector)
@@ -835,23 +1076,27 @@ func run(_ arguments: [String]) throws {
         guard result == .success else { die("set value failed (\(result.rawValue)) on \(selector.describe)") }
     case "growth":
         // Watches a live element's name while it grows, as streaming text does.
-        var lengths = Set<Int>()
-        var seen = false
-        let deadline = Date().addingTimeInterval(selector.timeout)
+        let started = Date()
+        var trace = GrowthTrace()
+        let deadline = started.addingTimeInterval(selector.timeout)
         while Date() < deadline {
+            if !processAlive(pid) {
+                die("the development copy (process \(pid)) exited while waiting for growth of \(selector.describe); observed=[\(trace.sampleDescription)]")
+            }
+            let elapsed = Date().timeIntervalSince(started)
             let found = matches(pid, selector)
             if let node = found.first {
-                seen = true
-                lengths.insert(node.name.count)
-            } else if seen {
+                trace.observePresent(at: elapsed, length: node.name.count, role: node.role, frame: node.frame.map(fmt) ?? "-")
+            } else if trace.observeAbsent(at: elapsed) {
                 break
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         }
-        guard seen && lengths.count >= 2 else {
-            die("timed out after \(selector.timeout)s waiting for growth of \(selector.describe); last observed: \(seen ? "one length, \(lengths.max() ?? 0) characters" : "control absent")")
+        guard trace.grew else {
+            die(trace.failureMessage(timeout: selector.timeout, describe: selector.describe))
         }
-        say("\(lengths.count) different lengths, longest \(lengths.max() ?? 0) characters")
+        let first = trace.firstSeenAt.map { String(format: "%.2fs", $0) } ?? "?"
+        say("\(trace.lengths.count) different lengths, longest \(trace.lengths.max() ?? 0) characters (first at \(first), polls=\(trace.polls))")
     case "key":
         guard let text = rest.first else { die(usage, 2) }
         let combo = try parseCombo(text)
@@ -873,7 +1118,9 @@ func run(_ arguments: [String]) throws {
         }
         var stable = StableFlag(wanted: wanted, seconds: 1.5)
         var last = before
-        guard poll(selector.timeout, interval: 0.1, { () -> Bool? in
+        var exited = false
+        let settled = poll(selector.timeout, interval: 0.1) { () -> Bool? in
+            if !processAlive(pid) { exited = true; return true }
             // The setter's original AX object may report the requested value
             // before the Space transition settles. Read a fresh window each time.
             guard let current = mainWindow(pid) else {
@@ -883,7 +1130,9 @@ func run(_ arguments: [String]) throws {
             }
             last = "AXFullScreen=\(rawAttribute(current, "AXFullScreen")); frame=\(frame(of: current).map(fmt) ?? "unknown")"
             return stable.observe(flagValue(attribute(current, "AXFullScreen")), at: ProcessInfo.processInfo.systemUptime) ? true : nil
-        }) != nil else { die("timed out waiting for stable full screen \(state) for 1.5s; before=\(before); last observed: \(last)") }
+        }
+        if exited || !processAlive(pid) { die("the development copy (process \(pid)) exited") }
+        guard settled != nil else { die("timed out waiting for stable full screen \(state) for 1.5s; before=\(before); last observed: \(last)") }
         say("stable full screen \(state); before=\(before); \(last)")
     case "minimized":
         guard let state = rest.first else { die(usage, 2) }
@@ -916,7 +1165,7 @@ func run(_ arguments: [String]) throws {
         let band = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: 40)
         var occupied = walk(window).compactMap { node -> (CGFloat, CGFloat)? in
             guard let box = node.frame, box.height <= 46, box.intersects(band),
-                  expandRoles("control,field,text,AXSplitter").contains(node.role) else { return nil }
+                  expandRoles("control,field,text,AXSplitter,AXTabGroup").contains(node.role) else { return nil }
             return (box.minX - 6, box.maxX + 6)
         }
         for name in [kAXCloseButtonAttribute, kAXMinimizeButtonAttribute, kAXZoomButtonAttribute] {
@@ -926,7 +1175,7 @@ func run(_ arguments: [String]) throws {
         guard let x = widestGap(occupied: occupied, from: number(rest[0]), to: number(rest[1]), minimum: 24) else {
             die("no free stretch of the bar between \(rest[0]) and \(rest[1])")
         }
-        say("\(fmt(x)) \(fmt(rect.minY + 22))")
+        say("\(fmt(x)) \(fmt(rect.minY + 20))")
     case "drag":
         guard rest.count == 4 else { die(usage, 2) }
         let from = CGPoint(x: number(rest[0]), y: number(rest[1]))

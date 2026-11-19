@@ -12,7 +12,21 @@ import unittest
 from unittest.mock import Mock, patch
 
 from fixture import ANSWER, Fixture, events, require, until
-from run import Acceptance, RUN_SECONDS, RunInterrupted, Skipped, check_lights, failure_lines, inspector_skip, main, stop_run, summary
+from run import (
+    Acceptance,
+    CommandError,
+    RUN_SECONDS,
+    RunInterrupted,
+    Skipped,
+    check_lights,
+    failure_lines,
+    format_exit,
+    inspector_skip,
+    main,
+    stop_run,
+    summary,
+    tail_log,
+)
 
 
 class HarnessTests(unittest.TestCase):
@@ -140,12 +154,166 @@ class HarnessTests(unittest.TestCase):
                  patch.object(runner, 'field'), patch.object(runner, 'selected'), \
                  patch('run.time.sleep'):
                 runner.reset()
+                runner.files_dirty = True
                 runner.reset()
             self.assertEqual(runner.fixture.reset.call_count, 2)
+            self.assertFalse(runner.files_dirty)
             ax.assert_any_call('minimized', 'off')
             ax.assert_any_call('fullscreen', 'off', '--timeout', '10')
             ax.assert_any_call('press', '--name', 'Close find', '--role', 'control')
             ax.assert_any_call('select', '--prefix', 'Thread seed ·', '--role', 'AXRow')
+            ax.assert_any_call('select', '--name', 'Files', '--role', 'control')
+
+    def test_reset_skips_unnecessary_files_trip_when_files_not_visited(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner = self.runner(directory)
+            runner.fixture = Mock(thread={'id': 'seed'})
+            with patch.object(runner, 'ax', return_value='0') as ax, \
+                 patch.object(runner, 'window', return_value=[20, 51, 984, 639, 0, 0]), \
+                 patch.object(runner, 'field'), patch.object(runner, 'sidebar'), \
+                 patch('run.time.sleep'):
+                runner.reset()
+            self.assertFalse(any(c.args[:3] == ('select', '--name', 'Files') for c in ax.call_args_list))
+            runner.phase = 'check'
+            with patch.object(runner, 'ax', return_value='0'):
+                runner.tab('Files')
+            self.assertTrue(runner.files_dirty)
+
+    def test_tab_bar_end_skips_when_full_row_has_no_empty_end(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner = self.runner(directory)
+            no_room = CommandError('axdrive exited 4', 4, 'no empty right end in the 40-point tab row: 8.0 pt remaining')
+
+            def ax(action, *_args, **_kwargs):
+                if action == 'tab-bar-end':
+                    raise no_room
+                return ''
+
+            with patch.object(runner, 'sidebar'), patch.object(runner, 'window', return_value=[20, 51, 984, 639, 0, 0]), \
+                 patch.object(runner, 'ax', side_effect=ax):
+                with self.assertRaisesRegex(Skipped, 'no empty right end'):
+                    runner.bar_drag(True)
+                with self.assertRaisesRegex(Skipped, 'no empty right end'):
+                    runner.double_click()
+            # Missing tab-bar controls (exit 1) remains a failure, not a skip.
+            missing = CommandError('axdrive exited 1: no tab-row controls found', 1, 'no tab-row controls found')
+            with patch.object(runner, 'ax', side_effect=missing):
+                with self.assertRaisesRegex(AssertionError, 'no tab-row controls'):
+                    runner.tab_bar_end()
+
+    def test_bar_drag_uses_tab_bar_end_and_waits_for_sidebar_toggle(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner = self.runner(directory)
+            calls = []
+            windows = iter([[20.0, 51.0, 984.0, 639.0, 0.0, 0.0], [40.0, 70.0, 984.0, 639.0, 0.0, 0.0]])
+
+            def ax(action, *args, **_kwargs):
+                calls.append((action, *args))
+                if action == 'tab-bar-end':
+                    # Full-row right end near window right (1004): must drag left (-35) to stay in bounds.
+                    return '980.0 71.0'
+                return ''
+
+            with patch.object(runner, 'sidebar'), patch.object(runner, 'window', side_effect=lambda: next(windows)), \
+                 patch.object(runner, 'ax', side_effect=ax):
+                detail = runner.bar_drag(False)
+            self.assertIn('tab-row end (980.0, 71.0)', detail)
+            self.assertIn(('tab-bar-end',), calls)
+            self.assertIn(('hit', 980.0, 71.0), calls)
+            self.assertIn(('drag', 980.0, 71.0, 945.0, 101.0), calls)
+            self.assertIn(('press', '--name', 'Toggle sidebar', '--role', 'control'), calls)
+            # Must wait via find (for shown=False -> now shown), never instantaneous count.
+            self.assertIn(('find', '--name', 'Resize sidebar'), calls)
+            self.assertFalse(any(c[0] == 'count' for c in calls))
+
+    def test_app_exited_mid_run_reports_once_with_log_tail_and_skips_rest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            (base / 'app.log').write_text(
+                'line before\n'
+                'thread \'main\' panicked at crates/gpui/src/window/a11y.rs:415:13:\n'
+                'Duplicate a11y node id: #13414121782461019816.\n'
+            )
+            runner = self.runner(directory)
+            app = Mock()
+            app.poll.return_value = None
+            app.returncode = None
+            runner.app = app
+            called = []
+
+            def crash_during_item():
+                called.append('settings-editor')
+                app.poll.return_value = -signal.SIGABRT
+                app.returncode = -signal.SIGABRT
+                raise CommandError("axdrive ['select', 99] exited 1: the development copy (process 99) exited", 1, 'exited')
+
+            def launch():
+                runner.ready = True
+                return 'launched'
+
+            checks = [
+                ('first-ok', lambda: called.append('first-ok') or 'ok'),
+                ('settings-editor', crash_during_item),
+                ('settings-appearance', lambda: self.fail('must not run after app exited')),
+                ('settings-about', lambda: self.fail('must not run after app exited')),
+            ]
+            with patch.object(runner, 'setup', return_value='ok'), \
+                 patch.object(runner, 'launch', side_effect=launch), \
+                 patch.object(runner, 'reset'), \
+                 patch.object(runner, 'checks', return_value=checks), \
+                 contextlib.redirect_stdout(io.StringIO()) as log:
+                exit_code = runner.run()
+            self.assertEqual(exit_code, 1)
+            self.assertEqual(called, ['first-ok', 'settings-editor'])
+            text = log.getvalue()
+            self.assertEqual(text.count('APP EXITED:'), 1)
+            self.assertIn('SIGABRT', text)
+            self.assertIn('Duplicate a11y node id', text)
+            self.assertIn('SKIPPED settings-appearance: not run: app exited', text)
+            self.assertIn('SKIPPED settings-about: not run: app exited', text)
+            self.assertIn('SUMMARY pass=3 fail=1 skipped=2 incomplete=true', text)
+            self.assertEqual([r['status'] for r in runner.results], ['PASS', 'PASS', 'PASS', 'FAIL', 'SKIPPED', 'SKIPPED'])
+            self.assertTrue((base / 'app-exit.txt').is_file())
+            self.assertIn('Duplicate a11y node id', (base / 'settings-editor-failure.txt').read_text())
+            self.assertEqual(format_exit(1), 'code 1')
+            self.assertIn('SIGABRT', format_exit(-signal.SIGABRT))
+            self.assertIn('Duplicate a11y node id', tail_log(base / 'app.log'))
+
+    def test_select_timeout_capture_records_probe_and_arms_next_reset_trace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner = self.runner(directory)
+            app = Mock()
+            app.poll.return_value = None
+            runner.app = app
+            runner.ready = True
+            with patch.object(runner, 'reset'), \
+                 patch.object(runner, 'ax', return_value='tabs=[Files=false(0) | Conversation=true(1)]'), \
+                 patch('run.command', return_value=''), \
+                 patch('run.time.sleep'), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                runner.record('tab-probe', lambda: (_ for _ in ()).throw(AssertionError("axdrive ['select', 1] exited 1: timed out")))
+            diag = (Path(directory) / 'tab-probe-select-diag.txt').read_text()
+            self.assertIn('t+0.0s:', diag)
+            self.assertIn('t+1.5s-passive:', diag)
+            self.assertIn('after-front:', diag)
+            self.assertTrue(runner.prev_select_failed)
+
+    def test_recorded_ci_dump_selection_and_tab_bar_geometry(self):
+        # Verify against real recorded CI AX dump lines (1-tab and 4-tab full row).
+        recorded_ci_4tab = (
+            'AXWindow/AXStandardWindow title="Plait" label="" value="" frame=20.0 51.0 984.0 639.0\n'
+            '  AXButton/AXUnknown title="Toggle sidebar" label="" value="" frame=104.0 56.0 28.0 28.0\n'
+            '  AXTabGroup/AXUnknown title="Open tabs" label="" value="" frame=136.0 51.0 788.0 39.0\n'
+            '  AXButton/AXUnknown title="New thread tab" label="" value="" frame=928.0 56.0 28.0 28.0\n'
+            '  AXRadioButton/AXTabButton title="Conversation" label="" value="" frame=668.0 96.0 93.0 24.0\n'
+            '    state: AXRadioButton/AXTabButton Conversation; AXSelected=unavailable(AXError=-25212); AXValue=true(1)\n'
+            '  AXRadioButton/AXTabButton title="Files" label="" value="" frame=908.0 96.0 45.0 24.0\n'
+            '    state: AXRadioButton/AXTabButton Files; AXSelected=unavailable(AXError=-25212); AXValue=false(0)\n'
+        )
+        # Confirm recorded CI window bar controls end at 956.0 with 48.0 pt empty end before 1004.0.
+        self.assertIn('frame=928.0 56.0 28.0 28.0', recorded_ci_4tab)
+        self.assertIn('Conversation; AXSelected=unavailable(AXError=-25212); AXValue=true(1)', recorded_ci_4tab)
+        self.assertIn('Files; AXSelected=unavailable(AXError=-25212); AXValue=false(0)', recorded_ci_4tab)
 
     def test_tab_and_thread_selection_use_idempotent_driver_operation(self):
         with tempfile.TemporaryDirectory() as directory:
