@@ -3,6 +3,8 @@ import contextlib
 import ast
 import io
 import json
+import os
+import subprocess
 from pathlib import Path
 import tempfile
 import signal
@@ -20,6 +22,7 @@ from run import (
     Skipped,
     check_lights,
     failure_lines,
+    forced_summary,
     format_exit,
     inspector_skip,
     main,
@@ -499,6 +502,218 @@ class HarnessTests(unittest.TestCase):
         frames = list(events({'tool': tool}, 3))
         self.assertEqual(json.loads(frames[2][1]['delta']['partial_json']), tool['input'])
         self.assertEqual(frames[-2][1]['delta']['stop_reason'], 'tool_use')
+
+
+class ForcedFrameTests(unittest.TestCase):
+    def runner(self, directory, enabled):
+        with patch.dict(os.environ, {'PLAIT_ACCEPTANCE_FORCE_FRAMES': enabled}):
+            return Acceptance(SimpleNamespace(host=Path('/unused'), no_pointer=False),
+                              Path(directory), Path('/never-call-driver'))
+
+    def replay(self, **spec):
+        driver = os.environ.get('PLAIT_ACCEPTANCE_TEST_DRIVER')
+        if not driver:
+            self.skipTest('Swift wait replay requires macOS --self-test')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'wait.json'
+            path.write_text(json.dumps(spec))
+            # This command returns before PID parsing or any native API access.
+            result = subprocess.run([driver, 'self-test-wait', str(path)],
+                                    check=True, capture_output=True, text=True, timeout=5)
+        return json.loads(result.stdout)
+
+    def test_helper_mode_off_replays_original_calls_and_order(self):
+        result = self.replay(values=[False, False, True], timeout=1, force=False)
+        self.assertTrue(result['success'])
+        self.assertEqual(result['calls'], ['read 0.000', 'sleep 0.100', 'read 0.100',
+                                           'sleep 0.100', 'read 0.200'])
+        timeout = self.replay(values=[False], timeout=.2, force=False)
+        self.assertFalse(timeout['success'])
+        self.assertEqual(timeout['calls'], result['calls'])
+        self.assertEqual(self.replay(values=[True], timeout=0, force=False)['calls'], ['read 0.000'])
+
+    def test_helper_forces_only_pending_states_at_two_hz_within_deadline(self):
+        for timeout in [.2, 1.2]:
+            result = self.replay(values=[False], timeout=timeout, force=True)
+            self.assertFalse(result['success'])
+            self.assertAlmostEqual(result['elapsed'], timeout)
+            times = [float(c.split()[1]) for c in result['calls'] if c.startswith('force ')]
+            self.assertEqual(times[0], 0)
+            self.assertTrue(all(b - a >= .4999 for a, b in zip(times, times[1:])))
+            self.assertTrue(all(t < timeout for t in times))
+            self.assertEqual(len(times), 1 if timeout == .2 else 3)
+        ready = self.replay(values=[True], timeout=1, force=True)
+        self.assertEqual(ready['calls'], ['read 0.000'])
+        zero = self.replay(values=[True], timeout=0, force=True)
+        self.assertTrue(zero['success'])
+        self.assertEqual(zero['calls'], ['read 0.000'])
+        recent = self.replay(values=[False], timeout=.2, force=True, last_frame=-.1)
+        self.assertFalse(any(c.startswith('force ') for c in recent['calls']))
+
+    def test_helper_rereads_after_capture_but_never_accepts_after_deadline(self):
+        result = self.replay(values=[False, True], timeout=1, force=True, capture_duration=.05)
+        self.assertTrue(result['success'])
+        self.assertEqual(result['calls'], ['read 0.000', 'force 0.000000 budget 1.000000', 'read 0.050'])
+        late = self.replay(values=[False, True], timeout=.2, force=True, capture_duration=1)
+        self.assertFalse(late['success'])
+        self.assertEqual(late['calls'], ['read 0.000', 'force 0.000000 budget 0.200000'])
+        self.assertEqual(late['elapsed'], .2)
+        for enabled in [False, True]:
+            slow_read = self.replay(values=[True], timeout=.2, force=enabled, read_duration=.3)
+            self.assertEqual(slow_read['success'], not enabled)
+
+    def test_streaming_replays_dumps_and_requires_two_lengths_before_done(self):
+        # Scripted dump sequence in the observed AccessKit format; the Done row
+        # is reduced from the CI failure dump (thread identity omitted).
+        short = 'AXGroup/AXApplicationGroup title="Plait is writing: Scripted str" label="" value="" frame=284 468 696 47'
+        longer = 'AXGroup/AXApplicationGroup title="Plait is writing: Scripted streaming acceptance." label="" value="" frame=284 468 696 47'
+        done = 'AXStaticText/AXUnknown title="" label="" value="Done" frame=204.0 267.0 28.0 18.0'
+        recorded = [{'at': 0, 'dump': short}, {'at': .25, 'dump': longer}, {'at': .8, 'dump': done}]
+        active = self.replay(kind='growth', force=True, timeout=2, dumps=recorded)
+        self.assertTrue(active['success'])
+        self.assertEqual(active['lengths'], [30, 48])
+        self.assertEqual(active['calls'][:2], ['force 0.000000 budget 2.000000', 'read 0.000'])
+        stalled = self.replay(kind='growth', force=False, timeout=2, dumps=recorded)
+        self.assertFalse(stalled['success'])
+        self.assertIn('control absent; observed=[none]', stalled['failure'])
+        self.assertFalse(any(c.startswith('force ') for c in stalled['calls']))
+        no_growth = self.replay(kind='growth', force=True, timeout=2,
+                                dumps=[recorded[0], recorded[2]])
+        self.assertFalse(no_growth['success'])
+        self.assertIn('disappeared', no_growth['failure'])
+        self.assertLess(no_growth['elapsed'], 2)
+        already_done = self.replay(kind='growth', force=True, timeout=1, dumps=[{'at': 0, 'dump': done}])
+        self.assertFalse(already_done['success'])
+        self.assertEqual(already_done['elapsed'], 1)
+        self.assertIn('timed out after 1.0s', already_done['failure'])
+        # Normal display: the original 50 ms sequence, with no capture calls.
+        natural = self.replay(kind='growth', force=False, timeout=1, spontaneous=True,
+                              dumps=[recorded[0], {'at': .1, 'dump': longer}, {'at': .25, 'dump': done}])
+        self.assertTrue(natural['success'])
+        expected = []
+        for at in [0, .05, .1, .15, .2]:
+            expected.extend([f'read {at:.3f}', 'sleep 0.050'])
+        self.assertEqual(natural['calls'], expected + ['read 0.250'])
+        slow_read = self.replay(kind='growth', force=True, timeout=.2, read_duration=.3, dumps=recorded)
+        self.assertFalse(slow_read['success'])
+        self.assertEqual(slow_read['lengths'], [])
+
+    def test_runner_mode_off_preserves_recorded_reads_sleeps_and_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for enabled in ['', '0', 'true']:
+                runner = self.runner(directory, enabled)
+                for values in [['old', 'old', 'new'], ['old']]:
+                    outcomes = []
+                    for wait in [until, runner.ax_until]:
+                        now, calls, index = [0.0], [], [0]
+
+                        def read():
+                            calls.append(('read', now[0]))
+                            value = values[min(index[0], len(values) - 1)]
+                            index[0] += 1
+                            return value
+
+                        def sleep(delay):
+                            calls.append(('sleep', delay))
+                            now[0] += delay
+
+                        with patch('fixture.time.monotonic', side_effect=lambda: now[0]), \
+                             patch('fixture.time.sleep', side_effect=sleep), \
+                             patch.object(runner, 'force_frame', side_effect=AssertionError('must not capture')):
+                            try:
+                                result = wait(read, lambda v: v == 'new', .3, description='recorded value')
+                            except AssertionError as error:
+                                result = str(error)
+                        outcomes.append((result, calls))
+                    self.assertEqual(*outcomes)
+                    expected = [('read', 0.0), ('sleep', .1), ('read', .1), ('sleep', .1), ('read', .2)]
+                    if len(values) == 1:
+                        expected.append(('sleep', .1))
+                        self.assertEqual(outcomes[0][0], 'timed out after 0.3s waiting for recorded value; last observed: old')
+                    else:
+                        self.assertEqual(outcomes[0][0], 'new')
+                    self.assertEqual(outcomes[0][1], expected)
+                runner.app = Mock(pid=123)
+                runner.app.poll.return_value = None
+                with patch('run.command', return_value='0') as command:
+                    self.assertEqual(runner.ax('count', '--name', 'Done'), '0')
+                command.assert_called_once_with([runner.driver, 'count', 123, '--name', 'Done'], timeout=15)
+                self.assertFalse(runner.frame_log.exists())
+
+    def test_runner_pending_capture_cannot_extend_wait_or_accept_late_state(self):
+        now, calls = [0.0], []
+
+        def capture(deadline):
+            calls.append(('force', now[0], deadline))
+            now[0] = deadline
+            return True
+
+        def read():
+            calls.append(('read', now[0]))
+            return 'ready' if now[0] >= .3 else 'pending'
+
+        with patch('fixture.time.monotonic', side_effect=lambda: now[0]), \
+             patch('fixture.time.sleep', side_effect=AssertionError('no extra sleep')):
+            with self.assertRaisesRegex(AssertionError, 'timed out after 0.3s waiting for sample; last observed: pending'):
+                until(read, lambda x: x == 'ready', .3, description='sample', on_pending=capture)
+        self.assertEqual(calls, [('read', 0), ('force', 0, .3)])
+
+    def test_forced_frames_are_counted_on_success_failure_and_reset_and_logged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner = self.runner(directory, '1')
+            runner.app = Mock(pid=123)
+            runner.app.poll.return_value = None
+            runner.ready = True
+
+            def command(*_args, **kwargs):
+                self.assertEqual(kwargs['env']['PLAIT_ACCEPTANCE_FORCE_FRAMES'], '1')
+                with runner.frame_log.open('a') as log:
+                    log.write(json.dumps({'forced': True, 'time': 0, 'detail': 'forcing frame with screencapture'}) + '\n')
+                    log.write(json.dumps({'forced': False, 'time': .1, 'detail': 'capture exited 0'}) + '\n')
+                if _args[0][1] == 'select-fails':
+                    raise AssertionError('same missing state')
+                return 'selected'
+
+            def fail():
+                runner.ax('select-fails')
+
+            with patch('run.command', side_effect=command), \
+                 patch.object(runner, 'reset', side_effect=lambda: runner.ax('select')), \
+                 patch.object(runner, 'capture'), patch.object(runner, 'checks', return_value=[]), \
+                 contextlib.redirect_stdout(io.StringIO()) as output:
+                runner.record('good', lambda: runner.ax('select'))
+                runner.record('bad', fail)
+                runner.finish()
+            self.assertIn('PASS good: selected (after 2 forced frames)', output.getvalue())
+            self.assertIn('FAIL bad: check: same missing state', output.getvalue())
+            self.assertEqual(runner.results[0]['forced_frames'], 2)
+            self.assertEqual(runner.results[1]['forced_frames'], 2)
+            self.assertEqual(runner.results[1]['observed'], 'check: same missing state')
+            self.assertIn('FORCED FRAMES items=2 pass=1 fail=1 skipped=0 captures=4', output.getvalue())
+            steps = (Path(directory) / 'good-steps.log').read_text()
+            self.assertIn('reset: axdrive select: forcing frame', steps)
+            self.assertIn('check: PASS good after 2 forced frames', steps)
+            self.assertEqual(forced_summary([]), 'FORCED FRAMES items=0 pass=0 fail=0 skipped=0 captures=0')
+
+    def test_ax_wait_inventory_excludes_non_ax_waits_and_keeps_shortcut_check(self):
+        # Wiring guard: new waits must choose the same pump, while Git/files and
+        # frontmost/clipboard waits must not start captures on their own.
+        root = Path(__file__).parent
+        source = (root / 'run.py').read_text()
+        tree = ast.parse(source)
+        routed = []
+        for fn in ast.walk(tree):
+            if isinstance(fn, ast.FunctionDef):
+                if any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                       and n.func.attr == 'ax_until' for n in ast.walk(fn)):
+                    routed.append(fn.name)
+        self.assertEqual(sorted(routed), ['bar_drag', 'double_click', 'field', 'resize'])
+        swift = (root / 'axdrive.swift').read_text()
+        self.assertEqual(swift.count('axPoll(pid, selector.timeout'), 5)  # waitFor, selected, window, absent, full screen
+        self.assertIn('observeGrowth(axTimeout(selector.timeout), pump: forceFrames ? activePump?.force : nil)', swift)
+        self.assertIn('let forward = poll(3)', swift)
+        self.assertIn('let copied = poll(2', swift)
+        self.assertIn("until(path.read_text, lambda text: text == 'allowed\\n', timeout=15, description='Redo to restore approval.txt to allowed')", source)
 
 
 if __name__ == '__main__':

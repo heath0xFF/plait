@@ -25,17 +25,24 @@ def require(condition, detail):
         raise AssertionError(detail)
 
 
-def until(read, accept, timeout=3, *, description):
+def until(read, accept, timeout=3, *, description, on_pending=None):
     deadline = time.monotonic() + timeout
     last = None
     while time.monotonic() < deadline:
         try:
             last = read()
-            if accept(last):
+            if accept(last) and (on_pending is None or time.monotonic() < deadline):
                 return last
         except (OSError, ValueError) as error:
             last = str(error)
-        time.sleep(.1)
+        if on_pending is not None:
+            if time.monotonic() >= deadline:
+                break
+            if on_pending(deadline):
+                continue  # Read again immediately after a capture, within the same deadline.
+            time.sleep(min(.1, max(0, deadline - time.monotonic())))
+        else:
+            time.sleep(.1)
     raise AssertionError(f'timed out after {timeout:g}s waiting for {description}; last observed: {str(last)[:1500]}')
 
 

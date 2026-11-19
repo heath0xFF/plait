@@ -128,6 +128,9 @@ jobs:
       # advisory on main only; tags neither execute nor wait for them.
       - name: Native acceptance (advisory)
         id: native-acceptance
+        env:
+          # The virtual display can stall presentation and AX updates until a capture forces a frame.
+          PLAIT_ACCEPTANCE_FORCE_FRAMES: '1'
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         timeout-minutes: 8
         continue-on-error: true

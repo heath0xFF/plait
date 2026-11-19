@@ -496,18 +496,73 @@ build, and one on CI against the same code.
   every remaining item `SKIPPED` (`not run: app exited`) and prints
   `incomplete=true`.
 
-**Unverified until the next CI run:** none of the changes above has run
-against a real window. That includes:
+**Subsequent CI observations (without forced frames).** On the
+v0.1.0-preview.19 tree, 37 passed, 5 failed and 4 skipped: five failures out
+of 42 attempted items. Four selections still reported false after 1.5 seconds
+of passive waiting and true at the first read after the failure screenshot.
+On the v0.1.0-preview.20 tree, 34 passed, 8 failed and 4 skipped: eight
+failures among 46 listed items (42 attempted). Six were selection timeouts:
+`tab-changes`, `settings-open`, `find-conversation`, `switch-branch`,
+`open-terminal-here` and `long-message-typing`. All six have the same
+false-before/true-after screenshot evidence. `streaming-reply` saw no
+`Plait is writing:` control during its 15-second wait, although the failure
+dump already showed the thread Done. Both runs also failed
+`turn-undo-redo-shortcut`, the known product defect; that item is unchanged.
 
-- the tab-row drag and double-click;
-- the post-drag wait;
-- how many reset timeouts remain, and where;
-- what wakes a stalled selection;
-- whether the streaming label also stalls;
-- reporting a real mid-run app exit.
+The screenshot path reads the AX tree, lists windows, resolves the development
+window's ID, then runs `/usr/sbin/screencapture -x -l <window-id> <file>`.
+The selection is still false in the dump and true before the later activation
+step. There is no AX sample between window lookup and capture, so the evidence
+strongly implicates that path but cannot isolate a single WindowServer call or
+prove how the app presents the frame. The check therefore uses the capture
+itself rather than assuming that activation or a window-list read is enough.
 
-On the narrow CI display the two inspector items, Finder and following a
-link should skip. The other 42 items are intended checks, not a pass claim.
+**Changed in the check and CI, not the app:** `PLAIT_ACCEPTANCE_FORCE_FRAMES=1`
+is now set only on the workflow's advisory native acceptance step. It is off
+by default. An unsatisfied accessibility wait can capture the development
+window and read again, with at least 0.5 seconds between capture attempts
+across helper processes and waits. Captures use the same window-specific
+command as failure evidence; temporary images are removed. Capture work uses
+the original wait budget, stops at its deadline, and never substitutes for the
+assertion. Capture failures are recorded; they do not turn missing state into
+a pass or a skip. The original timeout messages and assertion conditions
+remain in place.
+
+This applies to control lookup (`find`, `frame`, `press`, `select`, `focus`,
+`focused`, `selected`, `value`, `set-value`, `select-text`), selection completion
+(`select`, `wait-selected`), window appearance, absence, stable full screen,
+and Python's field-value, window-drag, double-click resize and panel-resize
+waits. Growth captures from the first sample and throughout streaming, rather
+than waiting until the transient label is gone. It still requires two distinct
+label lengths; Done alone fails. One-shot reads and waits for Git, files, host
+state, frontmost application or clipboard content do not initiate captures.
+
+Each assisted pass says `after N forced frames`. Every capture attempt and
+outcome is kept in the item's step log and `forced-frames.jsonl`, and
+`results.json` records the item's count, including reset work. A separate
+`FORCED FRAMES` summary counts affected items by outcome and capture attempts.
+The count is conservative: an attempted capture may have woken the window even
+if the capture failed or reached the deadline. An assisted pass establishes the
+requested state after capture assistance; it does not claim the app presented
+that state unaided or that streaming was smooth.
+
+**Real Mac checks run without this variable.** They retain the original
+read/sleep sequence, result format and failure behavior: a state that appears
+only after the failure screenshot still fails. Windowless tests replay those
+sequences through the actual Swift wait loops and Python runner, check the
+capture rate and deadlines, reporting, and streaming dumps that grow, remain
+unchanged or reach Done without growth.
+
+**Unverified until the next CI run:** the new mode has not driven a real
+window. Whether these captures unblock each of the six selections and expose
+two streaming lengths before Done, capture duration on the virtual display,
+and the number of assisted items remain unverified. If the diagnosis holds,
+those seven items should pass (with assistance explicitly counted when used),
+while the known shortcut Redo defect should still fail. On the narrow CI
+display the two inspector items, Finder and following a link should still
+skip. The mode adds no claim about real-display frame delivery, VoiceOver or
+the installed app.
+
 Failures remain failures, and a broken `AXPress` gets no pointer substitute.
 
 Build the normal development executables and runtime dependencies with

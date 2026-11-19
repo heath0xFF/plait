@@ -531,15 +531,165 @@ func requireWindow(_ pid: pid_t) -> AXUIElement {
     return window
 }
 
-/// Polls until `body` returns a value or the time runs out.
-func poll<T>(_ timeout: Double, interval: Double = 0.1, _ body: () -> T?) -> T? {
-    let deadline = Date().addingTimeInterval(timeout)
-    repeat {
-        if let value = body() { return value }
-        if Date() >= deadline { break }
-        RunLoop.current.run(until: Date().addingTimeInterval(interval))
-    } while true
+/// Clock and capture are injectable so replay tests exercise the actual wait loops.
+struct WaitClock {
+    var now: () -> Double = { Date().timeIntervalSince1970 }
+    var sleep: (Double) -> Void = { RunLoop.current.run(until: Date().addingTimeInterval($0)) }
+}
+
+typealias ForceFrame = (Double) -> Bool
+
+/// Without a pump this retains the original read/sleep order, including timeout zero.
+func poll<T>(_ timeout: Double, interval: Double = 0.1, clock: WaitClock = WaitClock(),
+             pump: ForceFrame? = nil, _ body: () -> T?) -> T? {
+    let deadline = clock.now() + timeout
+    if let pump {
+        // A zero-timeout read remains a read, but can never request a capture.
+        if timeout <= 0 { return body() }
+        repeat {
+            let value = body()
+            if let value, clock.now() < deadline { return value }
+            if clock.now() >= deadline { break }
+            if pump(deadline), clock.now() < deadline {
+                if let value = body(), clock.now() < deadline { return value }
+            }
+            if clock.now() >= deadline { break }
+            clock.sleep(min(interval, deadline - clock.now()))
+        } while clock.now() < deadline
+    } else {
+        repeat {
+            if let value = body() { return value }
+            if clock.now() >= deadline { break }
+            clock.sleep(interval)
+        } while true
+    }
     return nil
+}
+
+/// Shared across subprocesses and waits: even adjacent waits cannot exceed 2 Hz.
+struct FrameRate {
+    var last: Double = -.infinity
+
+    mutating func claim(at now: Double, deadline: Double) -> Bool {
+        guard now < deadline, now - last >= 0.5 else { return false }
+        last = now
+        return true
+    }
+}
+
+let forceFrames = ProcessInfo.processInfo.environment["PLAIT_ACCEPTANCE_FORCE_FRAMES"] == "1"
+
+final class FramePump {
+    let pid: pid_t
+    var rate = FrameRate()
+    let state: String?
+    let log: String?
+
+    init(_ pid: pid_t) {
+        self.pid = pid
+        let env = ProcessInfo.processInfo.environment
+        state = env["PLAIT_ACCEPTANCE_FRAME_STATE"]
+        log = env["PLAIT_ACCEPTANCE_FRAME_LOG"]
+    }
+
+    func event(_ detail: String, forced: Bool = false) {
+        guard let log else { return }
+        let data = try! JSONSerialization.data(withJSONObject: [
+            "time": Date().timeIntervalSince1970, "detail": detail, "forced": forced,
+        ]) + Data("\n".utf8)
+        do {
+            let file = try FileHandle(forWritingTo: URL(fileURLWithPath: log))
+            defer { try? file.close() }
+            try file.seekToEnd()
+            try file.write(contentsOf: data)
+        } catch { die("cannot record forced-frame evidence: \(error)") }
+    }
+
+    func force(until deadline: Double) -> Bool {
+        if let state, let text = try? String(contentsOfFile: state, encoding: .utf8), let last = Double(text) {
+            rate.last = last
+        }
+        guard rate.claim(at: Date().timeIntervalSince1970, deadline: deadline) else { return false }
+        if let state {
+            do { try String(rate.last).write(toFile: state, atomically: true, encoding: .utf8) }
+            catch { die("cannot pace forced frames: \(error)") }
+        }
+        guard processAlive(pid), let number = windowNumber(pid) else {
+            event("forced frame unavailable: no development window")
+            return false
+        }
+        guard Date().timeIntervalSince1970 < deadline else { return false }
+        // Same capture as failure evidence; the earlier CI traces do not isolate
+        // window lookup from capture, so do not substitute an unproven wakeup.
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("plait-frame-\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        process.arguments = ["-x", "-l", String(number), path.path]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        rate.last = Date().timeIntervalSince1970
+        guard rate.last < deadline else { return false }
+        if let state {
+            do { try String(rate.last).write(toFile: state, atomically: true, encoding: .utf8) }
+            catch { die("cannot pace forced frames: \(error)") }
+        }
+        // Count attempts conservatively: even a timed-out capture may wake a frame.
+        event("forcing frame with screencapture -x -l \(number)", forced: true)
+        do { try process.run() }
+        catch { event("forced frame capture could not start: \(error)"); return false }
+        while process.isRunning && Date().timeIntervalSince1970 < deadline {
+            Thread.sleep(forTimeInterval: min(0.005, max(0, deadline - Date().timeIntervalSince1970)))
+        }
+        if process.isRunning {
+            kill(process.processIdentifier, SIGKILL)
+            process.waitUntilExit()
+            event("forced frame capture reached wait deadline")
+            return false
+        }
+        event("forced frame capture exited \(process.terminationStatus)")
+        return process.terminationStatus == 0
+    }
+}
+
+var activePump: FramePump?
+
+func axTimeout(_ timeout: Double) -> Double {
+    guard forceFrames,
+          let text = ProcessInfo.processInfo.environment["PLAIT_ACCEPTANCE_WAIT_DEADLINE"],
+          let deadline = Double(text) else { return timeout }
+    return min(timeout, max(0, deadline - Date().timeIntervalSince1970))
+}
+
+func axPoll<T>(_ pid: pid_t, _ timeout: Double, interval: Double = 0.1, _ body: () -> T?) -> T? {
+    poll(axTimeout(timeout), interval: interval, pump: forceFrames ? activePump?.force : nil, body)
+}
+
+struct GrowthSample {
+    let length: Int
+    let role: String
+    let frame: String
+}
+
+func observeGrowth(_ timeout: Double, clock: WaitClock = WaitClock(), pump: ForceFrame? = nil,
+                   read: (GrowthTrace) -> GrowthSample?) -> GrowthTrace {
+    let started = clock.now()
+    let deadline = started + timeout
+    var trace = GrowthTrace()
+    while clock.now() < deadline {
+        // Transient text must be presented from the first sample, not rescued
+        // after the reply has already finished. Done never satisfies growth.
+        if let pump { _ = pump(deadline) }
+        if pump != nil && clock.now() >= deadline { break }
+        let elapsed = clock.now() - started
+        let sample = read(trace)
+        if pump != nil && clock.now() >= deadline { break }
+        if let sample {
+            trace.observePresent(at: elapsed, length: sample.length, role: sample.role, frame: sample.frame)
+        } else if trace.observeAbsent(at: elapsed) { break }
+        clock.sleep(pump == nil ? 0.05 : min(0.05, max(0, deadline - clock.now())))
+    }
+    return trace
 }
 
 func matches(_ pid: pid_t, _ selector: Selector) -> [Node] {
@@ -551,7 +701,7 @@ func waitFor(_ pid: pid_t, _ selector: Selector) -> Node {
     var last = "no matching control"
     var result: Node?
     var exited = false
-    _ = poll(selector.timeout) { () -> Bool? in
+    let completed = axPoll(pid, selector.timeout) { () -> Bool? in
         if !processAlive(pid) { exited = true; return true }
         let found = matches(pid, selector)
         last = "\(found.count) matching controls (need \(selector.nth))"
@@ -562,7 +712,7 @@ func waitFor(_ pid: pid_t, _ selector: Selector) -> Node {
         return nil
     }
     if exited || !processAlive(pid) { die("the development copy (process \(pid)) exited") }
-    if let node = result { return node }
+    if completed != nil, let node = result { return node }
     die("timed out after \(selector.timeout)s waiting for \(selector.describe); last observed: \(last)")
 }
 
@@ -570,7 +720,7 @@ func waitSelected(_ pid: pid_t, _ selector: Selector, transition: String = "obse
     let started = Date()
     var trace = WaitTrace()
     var exited = false
-    let found = poll(selector.timeout) { () -> Bool? in
+    let found = axPoll(pid, selector.timeout) { () -> Bool? in
         if !processAlive(pid) { exited = true; return true }
         let elapsed = Date().timeIntervalSince(started)
         let nodes = matches(pid, selector)
@@ -1007,9 +1157,81 @@ func number(_ text: String) -> CGFloat {
     return CGFloat(value)
 }
 
+/// Windowless replay entry point. Uses the production polling/growth/rate code;
+/// only the clock, AX reads, and capture side effect are replaced.
+func replayWait(_ path: String) throws {
+    let data = try Data(contentsOf: URL(fileURLWithPath: path))
+    guard let spec = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        throw UsageError("wait replay must be an object")
+    }
+    var now = 0.0
+    var calls: [String] = []
+    let clock = WaitClock(now: { now }, sleep: { delay in
+        calls.append(String(format: "sleep %.3f", delay))
+        now += delay
+    })
+    let timeout = spec["timeout"] as? Double ?? 1
+    let enabled = spec["force"] as? Bool ?? false
+    let duration = spec["capture_duration"] as? Double ?? 0
+    let readDuration = spec["read_duration"] as? Double ?? 0
+    var rate = FrameRate(last: spec["last_frame"] as? Double ?? -.infinity)
+    let records = spec["dumps"] as? [[String: Any]] ?? []
+    var displayed = spec["initial_dump"] as? String ?? ""
+    func currentDump() -> String {
+        records.last { ($0["at"] as? Double ?? 0) <= now }?["dump"] as? String ?? ""
+    }
+    let pump: ForceFrame? = enabled ? { deadline in
+        guard rate.claim(at: now, deadline: deadline) else { return false }
+        calls.append(String(format: "force %.6f budget %.6f", now, deadline - now))
+        now += min(duration, deadline - now)
+        displayed = currentDump()
+        return true
+    } : nil
+    var output: [String: Any] = [:]
+    if spec["kind"] as? String == "growth" {
+        let trace = observeGrowth(timeout, clock: clock, pump: pump) { _ in
+            if spec["spontaneous"] as? Bool == true { displayed = currentDump() }
+            calls.append(String(format: "read %.3f", now))
+            now += readDuration
+            // The recorded AccessKit dumps expose aria_label in title.
+            for line in displayed.components(separatedBy: "\n") {
+                for field in ["title", "label", "value"] {
+                    let prefix = "\(field)=\""
+                    guard let start = line.range(of: prefix + "Plait is writing:"),
+                          let end = line[start.upperBound...].firstIndex(of: "\"") else { continue }
+                    let labelStart = line.index(start.lowerBound, offsetBy: prefix.count)
+                    return GrowthSample(length: line[labelStart..<end].count, role: "AXGroup", frame: "-")
+                }
+            }
+            return nil
+        }
+        output["success"] = trace.grew
+        output["lengths"] = trace.lengths.sorted()
+        output["failure"] = trace.failureMessage(timeout: timeout, describe: "starting \"Plait is writing:\"")
+    } else {
+        let values = spec["values"] as? [Bool] ?? [false]
+        var index = 0
+        let found = poll(timeout, clock: clock, pump: pump) { () -> Bool? in
+            calls.append(String(format: "read %.3f", now))
+            now += readDuration
+            let value = values[min(index, values.count - 1)]
+            index += 1
+            return value ? true : nil
+        }
+        output["success"] = found != nil
+    }
+    output["calls"] = calls
+    output["elapsed"] = now
+    say(String(decoding: try JSONSerialization.data(withJSONObject: output, options: .sortedKeys), as: UTF8.self))
+}
+
 func run(_ arguments: [String]) throws {
     guard let command = arguments.first else { die(usage, 2) }
     switch command {
+    case "self-test-wait":
+        guard arguments.count == 2 else { throw UsageError("self-test-wait needs a replay file") }
+        try replayWait(arguments[1])
+        return
     case "self-test":
         selfTest()
         return
@@ -1024,9 +1246,12 @@ func run(_ arguments: [String]) throws {
     }
     guard arguments.count >= 2, let pid = pid_t(arguments[1]), pid > 0 else { die(usage, 2) }
     let (selector, extra, rest) = try parseSelector(Array(arguments.dropFirst(2)))
+    activePump = forceFrames ? FramePump(pid) : nil
     switch command {
+    case "force-frame":
+        if let pump = activePump { _ = pump.force(until: Date().timeIntervalSince1970 + axTimeout(selector.timeout)) }
     case "wait-window":
-        guard let window = poll(selector.timeout, { mainWindow(pid) }), let rect = frame(of: window) else {
+        guard let window = axPoll(pid, selector.timeout, { mainWindow(pid) }), let rect = frame(of: window) else {
             die("timed out after \(selector.timeout)s waiting for a development window with a frame; last observed: \(processAlive(pid) ? "process alive, no usable window" : "process exited")")
         }
         say(fmt(rect))
@@ -1114,7 +1339,7 @@ func run(_ arguments: [String]) throws {
     case "absent":
         var last = "control still present"
         var exited = false
-        let gone = poll(selector.timeout) { () -> Bool? in
+        let gone = axPoll(pid, selector.timeout) { () -> Bool? in
             if !processAlive(pid) { exited = true; return true }
             let found = matches(pid, selector)
             last = "\(found.count) matching controls remain"
@@ -1158,21 +1383,13 @@ func run(_ arguments: [String]) throws {
         guard result == .success else { die("set value failed (\(result.rawValue)) on \(selector.describe)") }
     case "growth":
         // Watches a live element's name while it grows, as streaming text does.
-        let started = Date()
-        var trace = GrowthTrace()
-        let deadline = started.addingTimeInterval(selector.timeout)
-        while Date() < deadline {
+        let trace = observeGrowth(axTimeout(selector.timeout), pump: forceFrames ? activePump?.force : nil) { trace in
             if !processAlive(pid) {
                 die("the development copy (process \(pid)) exited while waiting for growth of \(selector.describe); observed=[\(trace.sampleDescription)]")
             }
-            let elapsed = Date().timeIntervalSince(started)
-            let found = matches(pid, selector)
-            if let node = found.first {
-                trace.observePresent(at: elapsed, length: node.name.count, role: node.role, frame: node.frame.map(fmt) ?? "-")
-            } else if trace.observeAbsent(at: elapsed) {
-                break
+            return matches(pid, selector).first.map {
+                GrowthSample(length: $0.name.count, role: $0.role, frame: $0.frame.map(fmt) ?? "-")
             }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         }
         guard trace.grew else {
             die(trace.failureMessage(timeout: selector.timeout, describe: selector.describe))
@@ -1201,7 +1418,7 @@ func run(_ arguments: [String]) throws {
         var stable = StableFlag(wanted: wanted, seconds: 1.5)
         var last = before
         var exited = false
-        let settled = poll(selector.timeout, interval: 0.1) { () -> Bool? in
+        let settled = axPoll(pid, selector.timeout, interval: 0.1) { () -> Bool? in
             if !processAlive(pid) { exited = true; return true }
             // The setter's original AX object may report the requested value
             // before the Space transition settles. Read a fresh window each time.

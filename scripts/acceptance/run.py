@@ -98,6 +98,13 @@ def summary(results):
     return f'SUMMARY pass={counts["PASS"]} fail={counts["FAIL"]} skipped={counts["SKIPPED"]}'
 
 
+def forced_summary(results):
+    touched = [r for r in results if r.get('forced_frames', 0)]
+    counts = Counter(r['status'] for r in touched)
+    return (f'FORCED FRAMES items={len(touched)} pass={counts["PASS"]} fail={counts["FAIL"]} '
+            f'skipped={counts["SKIPPED"]} captures={sum(r["forced_frames"] for r in touched)}')
+
+
 def failure_lines(results):
     return [f'FAILED ITEM {r["item"]}: {" ".join(r["observed"].split())}'
             for r in results if r['status'] == 'FAIL']
@@ -127,6 +134,13 @@ class Acceptance:
         self.files_dirty = False
         self.prev_select_failed = False
         self.finished = False
+        self.force_frames = os.environ.get('PLAIT_ACCEPTANCE_FORCE_FRAMES') == '1'
+        self.forced_frames = 0
+        self.frame_log_offset = 0
+        self.ax_deadline = None
+        self.frame_log = base / 'forced-frames.jsonl'
+        if self.force_frames:
+            self.frame_log.touch()
 
     def trace(self, detail):
         self.last_step = detail
@@ -144,9 +158,44 @@ class Acceptance:
     def ax(self, action, *args, timeout=15):
         require(self.app is not None and self.app.poll() is None, 'development app is not running')
         self.trace(f'waiting for axdrive {action} {str(args)[:300]}')
-        result = command([self.driver, action, self.app.pid, *args], timeout=timeout)
+        if self.force_frames:
+            env = dict(os.environ, PLAIT_ACCEPTANCE_FORCE_FRAMES='1', PLAIT_ACCEPTANCE_FRAME_STATE=str(self.base / 'frame-rate.txt'),
+                       PLAIT_ACCEPTANCE_FRAME_LOG=str(self.frame_log))
+            if self.ax_deadline is not None:
+                remaining = max(0, self.ax_deadline - time.monotonic())
+                env['PLAIT_ACCEPTANCE_WAIT_DEADLINE'] = str(time.time() + remaining)
+            try:
+                result = command([self.driver, action, self.app.pid, *args], timeout=timeout, env=env)
+            finally:
+                self.read_frame_events(action)
+        else:
+            result = command([self.driver, action, self.app.pid, *args], timeout=timeout)
         self.trace(f'observed {result[:1500]!r}')
         return result
+
+    def read_frame_events(self, action):
+        with self.frame_log.open() as log:
+            log.seek(self.frame_log_offset)
+            for line in log:
+                event = json.loads(line)
+                self.forced_frames += int(event['forced'])
+                self.trace(f'axdrive {action}: {event["detail"]} at {event["time"]:.3f}; '
+                           f'after {self.forced_frames} forced frames')
+            self.frame_log_offset = log.tell()
+
+    def force_frame(self, deadline):
+        before = self.forced_frames
+        self.ax('force-frame', '--timeout', str(max(0, deadline - time.monotonic())))
+        return self.forced_frames > before
+
+    def ax_until(self, read, accept, timeout=3, *, description):
+        if not self.force_frames:
+            return until(read, accept, timeout, description=description)
+        self.ax_deadline = time.monotonic() + timeout
+        try:
+            return until(read, accept, timeout, description=description, on_pending=self.force_frame)
+        finally:
+            self.ax_deadline = None
 
     def find(self, name, role=None):
         return self.ax('find', '--name', name, *(['--role', role] if role else []))
@@ -168,7 +217,7 @@ class Acceptance:
             self.ax('type', '--text', text, '--delay', '0.002', timeout=30)
         else:
             self.ax('set-value', '--name', name, '--role', 'field', '--text', text)
-        until(lambda: self.ax('value', '--name', name, '--role', 'field', '--timeout', '0'), lambda value: value == text, description=f'field {name!r} to contain {text[:80]!r}')
+        self.ax_until(lambda: self.ax('value', '--name', name, '--role', 'field', '--timeout', '0'), lambda value: value == text, description=f'field {name!r} to contain {text[:80]!r}')
 
     def frame(self, name):
         return [float(v) for v in self.ax('frame', '--name', name).split()]
@@ -279,6 +328,7 @@ class Acceptance:
 
     def record(self, name, fn, native=True):
         self.current = name
+        self.forced_frames = 0
         self.phase = 'reset' if native else 'setup'
         self.last_step = f'starting {self.phase} for {name}'
         self.last_select_timeout = False
@@ -308,7 +358,14 @@ class Acceptance:
                 exit_note = self.note_app_exit(name)
                 if exit_note:
                     detail = f'{detail} (app exited with {exit_note[0]})'
-        self.results.append({'item': name, 'status': status, 'observed': detail, 'seconds': round(time.monotonic() - started, 3)})
+        if self.force_frames and self.forced_frames:
+            self.trace(f'{status} {name} after {self.forced_frames} forced frames')
+            if status == 'PASS':
+                detail += f' (after {self.forced_frames} forced frames)'
+        row = {'item': name, 'status': status, 'observed': detail, 'seconds': round(time.monotonic() - started, 3)}
+        if self.force_frames:
+            row['forced_frames'] = self.forced_frames
+        self.results.append(row)
         # Exactly one result line per item; verbose evidence goes into files.
         print(f'{status} {name}: {" ".join(detail.split())}', flush=True)
         self.persist_results()
@@ -331,7 +388,7 @@ class Acceptance:
 
     def publish_logs(self):
         if self.output != self.base:
-            for name in ('permissions.txt', 'app.log', 'host.log', 'preferences.json', 'replay.json'):
+            for name in ('permissions.txt', 'app.log', 'host.log', 'preferences.json', 'replay.json', 'forced-frames.jsonl'):
                 path = self.base / name
                 if path.is_file():
                     shutil.copy2(path, self.output / name)
@@ -448,7 +505,7 @@ class Acceptance:
         # Keep the drag destination inside the window horizontally even when a full tab row pushes x near the right edge.
         dx = 45 if x + 45 <= before[0] + before[2] else -35
         self.ax('drag', x, y, x + dx, y + 30)
-        after = until(self.window, lambda rect: abs(rect[0] - before[0]) > 10 or abs(rect[1] - before[1]) > 10, description=f'window origin to move from {before[:2]}')
+        after = self.ax_until(self.window, lambda rect: abs(rect[0] - before[0]) > 10 or abs(rect[1] - before[1]) > 10, description=f'window origin to move from {before[:2]}')
         # Header controls must still activate after the native move; wait for AX to reflect the toggle.
         self.press('Toggle sidebar')
         try:
@@ -475,7 +532,7 @@ class Acceptance:
             after = self.window()
             require(all(abs(a - b) < 3 for a, b in zip(before, after)), f'setting None; before={before}, after={after}')
         else:
-            until(self.window, lambda rect: abs(rect[2] - before[2]) > 10 or abs(rect[3] - before[3]) > 10, description=f'double-click {action} to resize window from {before[2:4]}')
+            self.ax_until(self.window, lambda rect: abs(rect[2] - before[2]) > 10 or abs(rect[3] - before[3]) > 10, description=f'double-click {action} to resize window from {before[2:4]}')
         return f'system setting {action}; matching minimize/no-op/resize observed (other settings not changed or tested)'
 
     def fullscreen(self):
@@ -513,7 +570,7 @@ class Acceptance:
         x, y = before[0] + before[2] / 2, before[1] + before[3] / 2
         delta = 50 if panel == 'sidebar' else -50
         self.ax('drag', x, y, x + delta, y)
-        after = until(lambda: self.frame(name), lambda rect: abs(rect[0] - before[0]) >= 20, description=f'{name} edge to move at least 20 points from {before}')
+        after = self.ax_until(lambda: self.frame(name), lambda rect: abs(rect[0] - before[0]) >= 20, description=f'{name} edge to move at least 20 points from {before}')
         saved = until(lambda: json.loads(self.fixture.preferences.read_text()), lambda prefs: prefs.get(f'{panel}_width') is not None and prefs[f'{panel}_width'] != old_width, description=f'{panel} width preference to change from {old_width}')
         return f'edge moved {after[0] - before[0]:.1f} pt; saved width {saved[f"{panel}_width"]}'
 
@@ -838,6 +895,8 @@ class Acceptance:
         self.persist_results()
         incomplete = bool(self.interruption or self.app_exited)
         print(summary(self.results) + (' incomplete=true' if incomplete else ''), flush=True)
+        if self.force_frames:
+            print(forced_summary(self.results), flush=True)
         self.finished = True
 
     def close(self):
@@ -854,7 +913,8 @@ class Acceptance:
 def pure_tests(driver):
     # No AX calls, application launch, clipboard access, or key/pointer events.
     command([driver, 'self-test'])
-    command([sys.executable, '-m', 'unittest', 'discover', '-s', ROOT / 'scripts/acceptance', '-p', 'test_*.py'])
+    command([sys.executable, '-m', 'unittest', 'discover', '-s', ROOT / 'scripts/acceptance', '-p', 'test_*.py'],
+            env=dict(os.environ, PLAIT_ACCEPTANCE_TEST_DRIVER=str(driver)))
     print('PASS self-test: Swift selectors/keys/Unicode/tab-row geometry and Python isolation/reporting/geometry/SSE tests; no UI accessed')
 
 
@@ -889,6 +949,8 @@ def main():
                 handlers[sig] = signal.signal(sig, stop_run)
             signal.setitimer(signal.ITIMER_REAL, RUN_SECONDS)
             print(f'Run deadline: {RUN_SECONDS}s including helper compilation and setup; ordinary waits: 3s.', flush=True)
+            if runner.force_frames:
+                print('Forced frames enabled for CI: window captures at most twice per second; assisted items are reported separately.', flush=True)
         command(['/usr/bin/xcrun', 'swiftc', '-O', ROOT / 'scripts/acceptance/axdrive.swift', '-o', driver], timeout=120)
         if args.self_test:
             pure_tests(driver)
