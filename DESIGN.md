@@ -208,7 +208,8 @@ conversation keeps a readable minimum width.
   Focus stays inside the modal; window shortcuts cannot change the covered
   workspace. Done, Escape, a click outside, or Cmd-comma dismiss application
   Settings and return focus to the previous control. Escape first closes an
-  open picker, cancels shortcut recording, or closes a provider form. Outside
+  open picker, cancels shortcut recording, closes a provider form, or keeps
+  the current command policy at the trust confirmation. Outside
   clicks do nothing during shortcut recording. A running thread keeps updating.
   Settings describes no one project, the open one included.
 - **Project settings.** The same modal and content column as Settings, headed

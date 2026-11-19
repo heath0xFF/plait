@@ -48,6 +48,13 @@ impl Plait {
                 } else if this.providers.form.is_some() {
                     this.close_provider_form(cx);
                     window.focus(&this.settings_focus, cx);
+                } else if this.settings_page == SettingsPage::Project
+                    && this.project_policy().confirm
+                {
+                    // As Keep current policy does.
+                    this.project_policy_mut().confirm = false;
+                    window.focus(&this.settings_focus, cx);
+                    cx.notify();
                 } else {
                     this.show_settings(false, window, cx);
                 }

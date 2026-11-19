@@ -1281,8 +1281,8 @@ projection, scroll handles, selection, find and draft. The same thread watch
 continues applying replies. A full-window dimming layer blocks pointer input;
 the root action shield suppresses workspace commands, including menu dispatch.
 Tab traversal wraps within the modal and dismissal restores the previously
-focused handle. Escape gives nested pickers, shortcut recording and provider
-forms precedence. Covered conversation scrolling cannot demand an older page.
+focused handle. Escape gives nested pickers, shortcut recording, provider
+forms and the trust confirmation precedence. Covered conversation scrolling cannot demand an older page.
 
 Project settings stores its own target and, for another checkout, separate
 policy and agent-resource state. It never selects that checkout on opening.

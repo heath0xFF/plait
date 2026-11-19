@@ -568,7 +568,8 @@ points on each side; height leaves at least 32 points above and below.
 **Done**, **Escape**, or a click outside closes either modal and returns focus
 to the previous control. Cmd-comma closes application Settings, or switches
 Project settings to application Settings. Escape first closes an open picker,
-cancels shortcut recording, or closes an open provider form. Outside clicks
+cancels shortcut recording, closes an open provider form, or keeps the current
+command policy at the trust confirmation. Outside clicks
 are ignored during shortcut recording. Tab and Shift-Tab cycle inside the
 modal, and workspace shortcuts are inactive until it closes. The covered view,
 scroll position, selection, find and draft remain in place; a running thread

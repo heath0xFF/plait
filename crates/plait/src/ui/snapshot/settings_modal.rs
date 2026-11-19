@@ -574,3 +574,29 @@ fn a_sent_draft_stays_in_place_and_opens_behind_the_modal() {
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+#[core::prelude::v1::test]
+fn escape_keeps_the_current_policy_before_the_modal() {
+    if !isolated("settings_modal::escape_keeps_the_current_policy_before_the_modal") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-modal-trust-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.update(|plait, window, cx| {
+        plait.show_project_settings(window, cx);
+        plait.project_policy_mut().confirm = true;
+    });
+    harness.draw();
+    harness.keystroke("escape");
+    harness.update(|plait, window, cx| {
+        assert!(plait.settings_open, "Escape closes the confirmation first");
+        assert!(!plait.project_policy().confirm);
+        assert!(plait.settings_focus.contains_focused(window, cx));
+    });
+    harness.keystroke("escape");
+    harness.update(|plait, _, _| assert!(!plait.settings_open));
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
