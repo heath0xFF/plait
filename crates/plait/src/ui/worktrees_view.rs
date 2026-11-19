@@ -645,17 +645,42 @@ impl Plait {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 this.worktree_busy = false;
-                if this
-                    .worktrees
-                    .removal
-                    .finish(&attempt, result.map_err(|e| e.to_string()))
-                {
-                    this.refresh_host_worktrees(cx);
-                    this.refresh_worktrees_view(false, cx);
-                    cx.notify();
-                }
+                this.settle_view_removal(&attempt, result, cx);
             });
         })
         .detach();
+    }
+    /// Removal here must leave the sidebar and composer where the sidebar's own
+    /// Remove leaves them: the folder is gone, not merely re-listed.
+    pub(super) fn settle_view_removal(
+        &mut self,
+        attempt: &plait_core::worktree_removal::Attempt,
+        result: Result<worktree::Operation, host::Error>,
+        cx: &mut Context<Self>,
+    ) {
+        let removed = result
+            .as_ref()
+            .ok()
+            .filter(|operation| {
+                operation.error.is_none() && operation.state == worktree::Stage::Removed
+            })
+            .cloned();
+        if !self
+            .worktrees
+            .removal
+            .finish(attempt, result.map_err(|e| e.to_string()))
+        {
+            return;
+        }
+        if let Some(operation) = removed {
+            self.remember_worktree_operation(&operation, cx);
+            self.navigation
+                .available
+                .insert(attempt.path.clone(), false);
+            self.sync_composer(cx);
+        }
+        self.refresh_host_worktrees(cx);
+        self.refresh_worktrees_view(false, cx);
+        cx.notify();
     }
 }

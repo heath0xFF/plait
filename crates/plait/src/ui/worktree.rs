@@ -211,7 +211,11 @@ impl Plait {
             });
         }).detach();
     }
-    fn remember_worktree_operation(&mut self, operation: &Operation, cx: &mut Context<Self>) {
+    pub(super) fn remember_worktree_operation(
+        &mut self,
+        operation: &Operation,
+        cx: &mut Context<Self>,
+    ) {
         let mut preferences = self.preferences.value.clone();
         preferences.navigation.remember_host_worktree(operation);
         self.persist_navigation(preferences, cx);

@@ -275,12 +275,66 @@ fn refreshes_during_a_read_run_once_after_it() {
         for force in [false, false, true, false] {
             p.refresh_worktrees_view(force, cx);
         }
-        assert_eq!(p.worktrees.generation, generation + 1, "inventories overlapped");
+        assert_eq!(
+            p.worktrees.generation,
+            generation + 1,
+            "inventories overlapped"
+        );
         assert_eq!(p.worktrees.again, Some(true));
     });
     h.update(|p, _, _| {
         assert!(!p.worktrees.reading);
         assert_eq!(p.worktrees.again, None);
+    });
+    drop(h);
+    let _ = std::fs::remove_dir_all(scratch);
+}
+/// A worktree removed here leaves its thread marked missing in the sidebar
+/// and composer, as the sidebar's own Remove does.
+#[core::prelude::v1::test]
+fn removal_here_marks_the_folder_missing_for_the_sidebar() {
+    if !isolated("worktrees_view::removal_here_marks_the_folder_missing_for_the_sidebar") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-worktree-gone-{}", std::process::id()));
+    let repo = fixture_repository(&scratch);
+    let mut h = Harness::new(&repo, None, 1380., 860.);
+    h.connect(&repo, false);
+    install(&mut h, 4);
+    h.update(|p, _, cx| {
+        let row = p.worktrees.rows[3].clone();
+        p.navigation.available.insert(row.path.clone(), true);
+        assert!(p.worktrees.removal.ask(&row, p.tabs.host.clone(), "removal".into()));
+        let attempt = p.worktrees.removal.answer(true).unwrap();
+        let removed = plait_core::host::worktree::Operation {
+            request_id: "creation-3".into(),
+            thread_id: "12345678-1234-4abc-8abc-123456789abc".into(),
+            state: plait_core::host::worktree::Stage::Removed,
+            worktree: None,
+            error: None,
+        };
+        p.settle_view_removal(&attempt, Ok(removed), cx);
+        assert_eq!(p.navigation.available.get(&row.path), Some(&false));
+        assert!(p.worktrees.removal.pending.is_none());
+        // A refusal changes nothing about the folder.
+        let other = p.worktrees.rows[1].path.clone();
+        p.navigation.available.insert(other.clone(), true);
+        p.worktrees.rows[1].preservation.refusal = None;
+        let row = p.worktrees.rows[1].clone();
+        assert!(p.worktrees.removal.ask(&row, p.tabs.host.clone(), "refused".into()));
+        let attempt = p.worktrees.removal.answer(true).unwrap();
+        let refused = plait_core::host::worktree::Operation {
+            request_id: "creation-1".into(),
+            thread_id: "12345678-1234-4abc-8abc-123456789abc".into(),
+            state: plait_core::host::worktree::Stage::Ready,
+            worktree: None,
+            error: Some(plait_core::host::HostError {
+                code: "busy".into(),
+                message: "New work appeared.".into(),
+            }),
+        };
+        p.settle_view_removal(&attempt, Ok(refused), cx);
+        assert_eq!(p.navigation.available.get(&other), Some(&true));
     });
     drop(h);
     let _ = std::fs::remove_dir_all(scratch);
