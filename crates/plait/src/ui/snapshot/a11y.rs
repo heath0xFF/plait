@@ -363,36 +363,242 @@ fn a11y_tree_has_no_duplicates_and_exposes_required_nodes() {
     let _ = std::fs::remove_dir_all(&scratch);
 }
 
+/// Every `.rs` file under `src/ui`, except this guard, with comments and the
+/// contents of string literals blanked to spaces. Offsets and line breaks are
+/// kept, so a hit maps back to its line.
+fn ui_sources() -> Vec<(std::path::PathBuf, String)> {
+    fn visit(dir: &Path, files: &mut Vec<(std::path::PathBuf, String)>) {
+        for entry in std::fs::read_dir(dir).expect("read ui dir") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                visit(&path, files);
+            } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs")
+                && !path.ends_with("ui/snapshot/a11y.rs")
+            {
+                let source = std::fs::read_to_string(&path).expect("read ui source");
+                files.push((path, code_only(&source)));
+            }
+        }
+    }
+    let mut files = Vec::new();
+    visit(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui"),
+        &mut files,
+    );
+    files.sort();
+    files
+}
+
+/// `source` with line comments and string contents replaced by spaces, so
+/// brackets and `//` inside text cannot mislead the checks below.
+fn code_only(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out = bytes.to_vec();
+    let (mut index, mut in_string) = (0, false);
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if in_string {
+            if byte == b'\\' {
+                out[index] = b' ';
+                if index + 1 < bytes.len() && bytes[index + 1] != b'\n' {
+                    out[index + 1] = b' ';
+                }
+                index += 2;
+                continue;
+            }
+            if byte == b'"' {
+                in_string = false;
+            } else if byte != b'\n' {
+                out[index] = b' ';
+            }
+        } else if byte == b'"' {
+            in_string = true;
+        } else if byte == b'\'' && bytes.get(index + 2) == Some(&b'\'') {
+            // A one-byte char literal such as '(' or '"'.
+            out[index + 1] = b' ';
+            index += 3;
+            continue;
+        } else if byte == b'/' && bytes.get(index + 1) == Some(&b'/') {
+            while index < bytes.len() && bytes[index] != b'\n' {
+                out[index] = b' ';
+                index += 1;
+            }
+            continue;
+        }
+        index += 1;
+    }
+    String::from_utf8(out).expect("blanking keeps UTF-8 boundaries")
+}
+
+/// `path:line` for a hit, relative to the crate so the message reads the same anywhere.
+fn place(path: &Path, code: &str, offset: usize) -> String {
+    let path = path
+        .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+        .unwrap_or(path);
+    let line = code[..offset].matches('\n').count() + 1;
+    format!("{}:{line}", path.display())
+}
+
 /// Every accessible text element in `ui/` must go through `a11y::text` (via
 /// `a11y_text`, `tag`, or `section_label`) with an explicit place-based ID.
 #[core::prelude::v1::test]
 fn no_raw_text_macro_in_ui() {
-    fn visit(dir: &Path, hits: &mut Vec<String>) {
-        for entry in std::fs::read_dir(dir).expect("read ui dir") {
-            let path = entry.expect("dir entry").path();
-            if path.is_dir() {
-                visit(&path, hits);
-            } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
-                if path.ends_with("ui/snapshot/a11y.rs") {
-                    continue;
-                }
-                let source = std::fs::read_to_string(&path).expect("read ui source");
-                for (index, line) in source.lines().enumerate() {
-                    let code = line.split("//").next().unwrap_or("");
-                    if code.contains("text!(") {
-                        hits.push(format!("{}:{}: {}", path.display(), index + 1, line.trim()));
-                    }
+    let mut hits = Vec::new();
+    for (path, code) in ui_sources() {
+        for (offset, _) in code.match_indices("text!(") {
+            hits.push(place(&path, &code, offset));
+        }
+    }
+    assert!(
+        hits.is_empty(),
+        "raw text!() bypasses place-based accessibility IDs and the collector:\n{}",
+        hits.join("\n")
+    );
+}
+
+/// Names of functions in `ui/` that return an element already wrapped in
+/// `Audited`, so a chain starting from one of them is seen by the collector.
+fn audited_constructors(files: &[(std::path::PathBuf, String)]) -> Vec<String> {
+    let mut names = Vec::new();
+    for (_, code) in files {
+        for (offset, _) in code.match_indices("fn ") {
+            let rest = &code[offset + 3..];
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            let signature = &rest[..rest.find(['{', ';']).unwrap_or(rest.len())];
+            let returns = signature.rsplit("->").next().unwrap_or("").trim();
+            if signature.contains("->")
+                && ["Control", "Option<Control>", "Audited<"]
+                    .iter()
+                    .any(|wrapped| returns.starts_with(wrapped))
+            {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
+/// The builder chain around `at`: from the expression's start to where the
+/// chain ends at the same bracket depth.
+fn chain_around(code: &[u8], at: usize) -> (usize, usize) {
+    let mut start = 0;
+    let mut depth = 0usize;
+    for index in (0..at).rev() {
+        match code[index] {
+            b')' | b']' | b'}' => depth += 1,
+            b'(' | b'[' | b'{' if depth == 0 => {
+                start = index + 1;
+                break;
+            }
+            b'(' | b'[' | b'{' => depth -= 1,
+            b',' | b';' | b'|' | b'=' if depth == 0 => {
+                start = index + 1;
+                break;
+            }
+            _ => {}
+        }
+    }
+    let mut end = code.len();
+    depth = 0;
+    for (index, byte) in code.iter().enumerate().skip(at) {
+        match byte {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' if depth == 0 => {
+                end = index;
+                break;
+            }
+            b')' | b']' | b'}' => depth -= 1,
+            b',' | b';' if depth == 0 => {
+                end = index;
+                break;
+            }
+            _ => {}
+        }
+    }
+    (start, end)
+}
+
+/// Whether the chain containing `at` reaches the collector: it calls
+/// `.audited()`, starts from an audited constructor, or continues a chain
+/// (a closure's parameter, or a `let` binding audited later) that does.
+fn chain_is_audited(code: &str, at: usize, constructors: &[String]) -> bool {
+    let bytes = code.as_bytes();
+    let (start, end) = chain_around(bytes, at);
+    let chain = &code[start..end];
+    if chain.contains(".audited()") {
+        return true;
+    }
+    let head = chain.trim_start_matches(|c: char| !(c.is_alphanumeric() || c == '_'));
+    let head = head.strip_prefix("self.").unwrap_or(head);
+    let name: String = head
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    let after = head[name.len()..].trim_start();
+    if (after.starts_with('(') || after.starts_with("::")) && constructors.contains(&name) {
+        return true;
+    }
+    if start > 0 && bytes[start - 1] == b'|' {
+        // `|el| el.role(..)`: the closure is an argument of the outer chain.
+        let mut depth = 0usize;
+        for index in (0..start).rev() {
+            match bytes[index] {
+                b')' | b']' | b'}' => depth += 1,
+                b'(' if depth == 0 => return chain_is_audited(code, index, constructors),
+                b'(' | b'[' | b'{' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+        return false;
+    }
+    if start > 0 && bytes[start - 1] == b'=' {
+        // `let name = ..`: audited where the binding is used.
+        let binding = code[..start - 1]
+            .trim_end()
+            .rsplit(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .next()
+            .unwrap_or("");
+        let later = &code[end..];
+        return !binding.is_empty()
+            && (later.contains(&format!("{binding}.audited()"))
+                || later.contains(&format!("{binding}\n.audited()")));
+    }
+    false
+}
+
+/// GPUI gives a node to every element with an id and a role, and to every
+/// `Text` with an id. The collector sees only what is wrapped in `Audited`, so
+/// an element built any other way could repeat an id unseen. This fails on a
+/// `.role(` chain that never reaches `Audited`, and on `Text::new` or
+/// `InteractiveText` outside `ui/a11y.rs`.
+#[core::prelude::v1::test]
+fn every_accessible_element_is_audited() {
+    let files = ui_sources();
+    let constructors = audited_constructors(&files);
+    let mut hits = Vec::new();
+    for (path, code) in &files {
+        let own = path.ends_with("ui/a11y.rs");
+        for (offset, _) in code.match_indices(".role(") {
+            if !own && !chain_is_audited(code, offset, &constructors) {
+                hits.push(format!("{} .role(", place(path, code, offset)));
+            }
+        }
+        for raw in ["Text::new(", "InteractiveText"] {
+            for (offset, _) in code.match_indices(raw) {
+                let styled = code[..offset].ends_with("Styled");
+                if !own && !styled {
+                    hits.push(format!("{} {raw}", place(path, code, offset)));
                 }
             }
         }
     }
-
-    let ui_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui");
-    let mut hits = Vec::new();
-    visit(&ui_dir, &mut hits);
     assert!(
         hits.is_empty(),
-        "raw text!() bypasses place-based accessibility IDs and the collector:\n{}",
+        "accessible elements the collector cannot see; wrap them with `.audited()` \
+         or build them with an audited helper:\n{}",
         hits.join("\n")
     );
 }
