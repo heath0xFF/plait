@@ -9,7 +9,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
     if args.len() != 3 {
         return Err(io::Error::other("command expects checkout policy script"));
     }
-    let command = sandbox_command(&args)?;
+    let command = sandbox_command(&args).inspect_err(|_| cleanup_receipt("clean\n"))?;
     let keep_env = std::env::var_os("PLAIT_COMMAND_ENV_FD").is_some();
     // Keep store, writer, and lifecycle leases in the guardian, never expose them to commands.
     for fd in 3..inherited_descriptor_limit() {
@@ -29,8 +29,8 @@ pub fn run_trusted(args: Vec<String>) -> io::Result<()> {
     if args.len() != 2 {
         return Err(io::Error::other("trusted-command expects checkout script"));
     }
-    let mut command = trusted_command(&args)?;
-    private_environment(&mut command)?;
+    let mut command = trusted_command(&args).inspect_err(|_| cleanup_receipt("clean\n"))?;
+    private_environment(&mut command).inspect_err(|_| cleanup_receipt("clean\n"))?;
     // The command has full user access, so no inherited descriptor may reach it:
     // not the leases, and not a host-private channel a parent failed to close.
     for fd in 3..inherited_descriptor_limit() {
@@ -52,8 +52,15 @@ pub(crate) fn guard(
     mut lifetime: impl Read + Send + 'static,
     stdin: Stdio,
 ) -> io::Result<()> {
-    let mut child = command.stdin(stdin).process_group(0).spawn()?;
+    let mut child = match command.stdin(stdin).process_group(0).spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            cleanup_receipt("clean\n");
+            return Err(error);
+        }
+    };
     let group = child.id() as i32;
+    cleanup_receipt(&format!("group:{group}\n"));
     // A pipe is a lifetime lease: even SIGKILL of Node closes it and stops tools.
     thread::spawn(move || {
         loop {
@@ -76,12 +83,38 @@ pub(crate) fn guard(
     unsafe {
         libc::kill(-group, libc::SIGKILL);
     }
+    if wait_group_gone(group, std::time::Duration::from_secs(2)) {
+        cleanup_receipt("clean\n");
+    }
     if status.success() {
         Ok(())
     } else {
         Err(io::Error::other(format!(
             "{label} command failed or stopped: {status}"
         )))
+    }
+}
+
+/// ESRCH alone proves the normal group is gone; a failed signal is not proof.
+pub(crate) fn wait_group_gone(group: i32, timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if unsafe { libc::kill(-group, 0) } != 0
+            && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+        {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// Optional private receipt channel. Never put a cleanup claim in tool output.
+pub(crate) fn cleanup_receipt(text: &str) {
+    unsafe {
+        libc::write(8, text.as_ptr().cast(), text.len());
     }
 }
 
@@ -154,4 +187,24 @@ fn private_environment(command: &mut Command) -> io::Result<()> {
         command.env_clear().envs(crate::mcp::environment()?);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use super::*;
+    #[test]
+    fn a_live_group_is_not_proof_and_a_reaped_group_is() {
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "sleep 30"])
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let group = child.id() as i32;
+        assert!(!wait_group_gone(group, std::time::Duration::ZERO));
+        unsafe {
+            libc::kill(-group, libc::SIGKILL);
+        }
+        child.wait().unwrap();
+        assert!(wait_group_gone(group, std::time::Duration::from_secs(3)));
+    }
 }

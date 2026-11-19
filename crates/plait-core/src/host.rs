@@ -1107,6 +1107,7 @@ pub use threads::ThreadWatch;
 pub use watch::{CancelWatch, Snapshots, ThreadLists, Updates};
 
 pub mod agent;
+pub mod cleanup;
 pub mod harness;
 pub mod identity;
 pub mod policy;

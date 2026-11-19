@@ -4,10 +4,11 @@ use plait_core::lease::{
     open_lease_dir, open_lock_file, open_verified_dir, prepare_checkout_lock, prepare_common_lock,
     try_flock_fd, verify_dir_still,
 };
+use plait_core::lease::{acquire_for_cleanup, cleanup};
 use serde_json::json;
 use std::{
     fs::File,
-    io::{self, Write},
+    io::{self, Read, Write},
     mem::MaybeUninit,
     os::fd::AsRawFd,
     path::Path,
@@ -27,10 +28,20 @@ pub fn prepare(args: Vec<String>) -> io::Result<()> {
         _ => return Err(io::Error::other("unknown lease-prepare kind")),
     }
     .map_err(|error| io::Error::other(error.to_string()))?;
+    let owner_path = if args[0] == "checkout" {
+        let (dir_path, directory) = open_lease_dir(&default_lease_dir().map_err(io::Error::other)?)
+            .map_err(io::Error::other)?;
+        let name = cleanup::owner_lock_name(prepared.identity);
+        open_lock_file(&directory, &name).map_err(io::Error::other)?;
+        Some(dir_path.join(name))
+    } else {
+        None
+    };
     let mut out = io::stdout().lock();
     serde_json::to_writer(
         &mut out,
         &json!({
+            "owner_path": owner_path,
             "root": prepared.root,
             "dev": prepared.identity.dev.to_string(),
             "ino": prepared.identity.ino.to_string(),
@@ -72,7 +83,9 @@ pub fn acquire(args: Vec<String>) -> io::Result<()> {
     let lease_dir = default_lease_dir().map_err(|error| io::Error::other(error.to_string()))?;
     let (_lease_dir_path, lease_dir_fd) =
         open_lease_dir(&lease_dir).map_err(|error| io::Error::other(error.to_string()))?;
-    let expected_name = if mode == "common" {
+    let expected_name = if mode == "owner" {
+        cleanup::owner_lock_name(id)
+    } else if mode == "common" {
         common_lock_name(id)
     } else {
         checkout_lock_name(id)
@@ -82,6 +95,11 @@ pub fn acquire(args: Vec<String>) -> io::Result<()> {
     verify_inherited_lock_fd(3, expected_lock_id)?;
 
     match mode {
+        "owner" => {
+            if !try_flock_fd(3, libc::LOCK_EX).map_err(io::Error::other)? {
+                return Err(io::Error::other("cleanup owner is busy"));
+            }
+        }
         "reader" => {
             if !try_flock_fd(3, libc::LOCK_SH).map_err(|e| io::Error::other(e.to_string()))? {
                 return Err(io::Error::other(format!("busy: {LIFECYCLE_BUSY}")));
@@ -133,6 +151,94 @@ pub fn acquire(args: Vec<String>) -> io::Result<()> {
         }
         return Err(io::Error::other(format!("identity: {error}")));
     }
+    let clear = match mode {
+        "common" | "owner" => Ok(()),
+        "reader" => cleanup::require_clear_for_reader(&lease_dir, id),
+        _ => cleanup::require_clear(id),
+    };
+    if let Err(error) = clear {
+        // These descriptors belong to Node. Close in this helper alone would
+        // leave its copies locked after a rejected admission.
+        if mode != "reader" {
+            unsafe {
+                libc::flock(4, libc::LOCK_UN);
+            }
+        }
+        unsafe {
+            libc::flock(3, libc::LOCK_UN);
+        }
+        return Err(io::Error::other(format!("cleanup_uncertain: {error}")));
+    }
+    Ok(())
+}
+
+/// Private sidecar helper; mutations either inherit the run's writer lease or
+/// acquire exclusive recovery ownership. No caller may bypass OS contention.
+pub fn cleanup_operation(args: Vec<String>) -> io::Result<()> {
+    if args.len() != 2 {
+        return Err(io::Error::other("cleanup expects operation checkout"));
+    }
+    let root = Path::new(&args[1]);
+    let (canonical, _, id) = open_verified_dir(root).map_err(io::Error::other)?;
+    let action = args[0].as_str();
+    let mut bytes = Vec::new();
+    io::stdin().take(8193).read_to_end(&mut bytes)?;
+    if bytes.len() > 8192 {
+        return Err(io::Error::other("cleanup input exceeds limit"));
+    }
+    let input: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let fields = input
+        .as_object()
+        .ok_or_else(|| io::Error::other("invalid cleanup input"))?;
+    if fields
+        .keys()
+        .any(|key| !matches!(key.as_str(), "token" | "reason"))
+    {
+        return Err(io::Error::other("unknown cleanup field"));
+    }
+    let token = input.get("token").and_then(serde_json::Value::as_str);
+    let reason = input.get("reason").and_then(serde_json::Value::as_str);
+    let recovery = if action == "resolve" {
+        Some(acquire_for_cleanup(&canonical).map_err(io::Error::other)?)
+    } else {
+        None
+    };
+    if matches!(action, "begin" | "mark" | "finish") {
+        verify_inherited_dir_fd(4, id)?;
+        let (_, dir) = open_lease_dir(&default_lease_dir().map_err(io::Error::other)?)
+            .map_err(io::Error::other)?;
+        let (_, lock_id) =
+            open_lock_file(&dir, &checkout_lock_name(id)).map_err(io::Error::other)?;
+        verify_inherited_lock_fd(7, lock_id)?;
+        if !try_flock_fd(4, libc::LOCK_EX).map_err(io::Error::other)? {
+            return Err(io::Error::other(WRITER_BUSY));
+        }
+    }
+    match action {
+        "read" => {}
+        "begin" | "mark" => {
+            let token = token.ok_or_else(|| io::Error::other("cleanup token missing"))?;
+            let next = cleanup::Cleanup {
+                token: token.into(),
+                reason: reason
+                    .ok_or_else(|| io::Error::other("cleanup reason missing"))?
+                    .into(),
+            };
+            cleanup::replace(id, (action == "mark").then_some(token), Some(&next))
+                .map_err(io::Error::other)?;
+        }
+        "finish" | "resolve" => {
+            let token = token.ok_or_else(|| io::Error::other("cleanup token missing"))?;
+            cleanup::replace(id, Some(token), None).map_err(io::Error::other)?;
+        }
+        _ => return Err(io::Error::other("unknown cleanup operation")),
+    }
+    let state = cleanup::state(id).map_err(io::Error::other)?;
+    serde_json::to_writer(
+        io::stdout(),
+        &json!({"checkout": canonical, "cleanup": state}),
+    )?;
+    drop(recovery);
     Ok(())
 }
 
@@ -227,6 +333,9 @@ pub fn acquire_or_verify_exclusive(
 
     verify_dir_still(&canonical, expected)
         .map_err(|_| io::Error::other("Checkout identity changed"))?;
+    if guard.owned_writer.is_some() {
+        cleanup::require_clear(expected).map_err(io::Error::other)?;
+    }
     Ok(guard)
 }
 

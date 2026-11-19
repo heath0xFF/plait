@@ -36,6 +36,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub mod cleanup;
+
 /// User-facing refusal when an active run, reader, or another Plait write holds a checkout.
 pub const CHECKOUT_BUSY: &str = "This checkout is in use by an active run or another Plait write. Wait until it finishes, then try again.";
 
@@ -75,6 +77,7 @@ pub enum LeaseClass {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeaseErrorKind {
     CheckoutBusy,
+    CleanupUncertain,
     CommonMetadataBusy,
     IdentityChanged,
     UnsafeLeaseStore,
@@ -557,6 +560,26 @@ pub fn acquire_checkout(
 }
 
 pub(crate) fn acquire_checkout_in(
+    lease_dir: &Path,
+    root: &Path,
+    expected: Option<DirIdentity>,
+    class: LeaseClass,
+) -> Result<CheckoutLease, LeaseError> {
+    let lease = acquire_for_cleanup_in(lease_dir, root, expected, class)?;
+    if class == LeaseClass::Reader {
+        cleanup::require_clear_for_reader(lease_dir, lease.identity)?;
+    } else {
+        cleanup::require_clear_in(lease_dir, lease.identity)?;
+    }
+    Ok(lease)
+}
+
+/// Recovery alone may acquire a quarantined checkout. It still obeys every OS lock.
+pub fn acquire_for_cleanup(root: &Path) -> Result<CheckoutLease, LeaseError> {
+    acquire_for_cleanup_in(&default_lease_dir()?, root, None, LeaseClass::Exclusive)
+}
+
+fn acquire_for_cleanup_in(
     lease_dir: &Path,
     root: &Path,
     expected: Option<DirIdentity>,

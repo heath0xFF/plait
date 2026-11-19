@@ -13,7 +13,7 @@ pub fn run(args: Vec<String>) -> io::Result<()> {
             "mcp-server expects checkout profile program [arguments]",
         ));
     }
-    let command = prepare(&args)?;
+    let command = prepare(&args).inspect_err(|_| crate::command::cleanup_receipt("clean\n"))?;
     // The guardian retains both writer leases. No private descriptor reaches a server.
     close_descriptors(args[1] != "trusted");
     if unsafe { libc::fcntl(5, libc::F_GETFD) } < 0 {

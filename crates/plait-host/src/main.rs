@@ -41,6 +41,9 @@ fn run() -> io::Result<()> {
     if operation == "lock-fd" {
         return lease::acquire(args.collect());
     }
+    if operation == "cleanup" {
+        return lease::cleanup_operation(args.collect());
+    }
     if operation == "command" {
         return command::run(args.collect());
     }

@@ -51,14 +51,22 @@ pub fn run() -> io::Result<()> {
 /// The outer helper keeps stdin open as the worker's lifetime lease. The
 /// worker and every descendant share a group, including discovery commands.
 pub(crate) fn supervise(operation: &str, budget: Duration) -> io::Result<()> {
-    let value = read_request()?;
+    let value = read_request().inspect_err(|_| crate::command::cleanup_receipt("clean\n"))?;
     let mut command = Command::new(std::env::current_exe()?);
     command.arg(operation);
     supervise_command(command, value, budget)
 }
 
 fn supervise_command(mut command: Command, value: Value, budget: Duration) -> io::Result<()> {
-    let mut child = command.process_group(0).stdin(Stdio::piped()).spawn()?;
+    unsafe {
+        libc::fcntl(8, libc::F_SETFD, libc::FD_CLOEXEC);
+    }
+    let mut child = command
+        .process_group(0)
+        .stdin(Stdio::piped())
+        .spawn()
+        .inspect_err(|_| crate::command::cleanup_receipt("clean\n"))?;
+    crate::command::cleanup_receipt(&format!("group:{}\n", child.id()));
     let mut lifetime = child
         .stdin
         .take()
@@ -96,6 +104,9 @@ fn wait_worker(mut child: Child, budget: Duration) -> io::Result<ExitStatus> {
     let result = receive.recv_timeout(budget);
     // Also reclaim descendants if their worker exited first.
     kill_group(group);
+    if crate::command::wait_group_gone(group as i32, Duration::from_secs(2)) {
+        crate::command::cleanup_receipt("clean\n");
+    }
     match result {
         Ok(status) => status,
         Err(_) => {
