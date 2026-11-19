@@ -43,10 +43,12 @@ pub(super) struct Tabs {
     pub lifecycle: super::tab_lifecycle::Lifecycle,
     pub identity: super::tab_identity::Identity,
     pub persistence: super::tab_persistence::Persistence,
-    strip: Option<Entity<TabStrip>>,
+    pub(super) strip: Option<Entity<TabStrip>>,
     strip_theme: u32,
     pub host: HostKey,
     pub rows: Vec<TabMetadata>,
+    pub(super) draft_titles: std::collections::HashMap<String, String>,
+    pub(super) draft_row: Option<(String, usize)>,
     layout: Option<TabLayout>,
     /// The most urgent state among hidden tabs, for the overflow summary's accent.
     overflow_state: Option<TabState>,
@@ -59,7 +61,7 @@ pub(super) struct Tabs {
     list_items: Vec<ListItem>,
     drag: Option<Drag>,
 }
-struct TabStrip {
+pub(super) struct TabStrip {
     owner: WeakEntity<Plait>,
 }
 impl Render for TabStrip {
@@ -97,6 +99,8 @@ impl Default for Tabs {
                 store: PathBuf::from("/"),
             },
             rows: Vec::new(),
+            draft_titles: Default::default(),
+            draft_row: None,
             layout: None,
             overflow_state: None,
             measured: None,
@@ -176,7 +180,7 @@ impl Plait {
     }
 
     pub(super) fn refresh_tab_rows(&mut self) {
-        let rows = model::metadata(
+        let mut rows = model::metadata(
             &self.tabs.model,
             &RowContext {
                 host: &self.tabs.host,
@@ -185,6 +189,7 @@ impl Plait {
                 machine: &self.active_project().machines[0].name,
             },
         );
+        self.name_draft_rows(&mut rows);
         if rows != self.tabs.rows {
             self.tabs.rows = rows;
             self.tabs.measured = None;
@@ -773,7 +778,7 @@ impl Plait {
                         .left(px(6.))
                         .right(px(6.))
                         .h(px(1.))
-                        .bg(rgb(tint(meta.state, meta.active))),
+                        .bg(rgb(tint(meta.state, meta.active || meta.word == "Ready"))),
                 )
             })
             .when(insertion, |el| {
@@ -798,7 +803,7 @@ impl Plait {
                             .text_color(rgb(colors().muted))
                             .into_any_element()
                     } else {
-                        dot(tint(meta.state, meta.active)).into_any_element()
+                        dot(tint(meta.state, meta.active || meta.word == "Ready")).into_any_element()
                     }),
             )
             .child(
@@ -810,9 +815,13 @@ impl Plait {
             )
             .when(!meta.word.is_empty(), |el| {
                 el.child(
-                    tag("tab-state", meta.word, tint(meta.state, meta.active))
-                        .text_size(px(11.))
-                        .flex_shrink_0(),
+                    tag(
+                        "tab-state",
+                        meta.word,
+                        tint(meta.state, meta.active || meta.word == "Ready"),
+                    )
+                    .text_size(px(11.))
+                    .flex_shrink_0(),
                 )
             })
             .child(self.tab_close_control(id, &meta.title, close_hover, close, group, cx))
@@ -966,7 +975,7 @@ impl Plait {
             .group(SharedString::from(group.clone()))
             .text_size(px(12.))
             .tooltip(move |_, cx| tooltip(hover.clone(), cx))
-            .child(dot(tint(meta.state, meta.active)))
+            .child(dot(tint(meta.state, meta.active || meta.word == "Ready")))
             .child(
                 div()
                     .min_w_0()
@@ -983,7 +992,7 @@ impl Plait {
                 tag(
                     "tab-list-state",
                     meta.state.word(true),
-                    tint(meta.state, meta.active),
+                    tint(meta.state, meta.active || meta.word == "Ready"),
                 )
                 .text_size(px(11.)),
             )

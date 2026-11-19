@@ -30,6 +30,7 @@ ui/                     GPUI layout, actions, focus, lists, theme
   model_picker.rs       model catalog as a palette; default, favorites, new thread
   new_thread.rs         the mounted new-thread draft and its controls
   draft_tabs.rs         independent draft configuration, creation owners and late replies
+  draft_titles.rs       bounded draft titles and updates to cached presentation rows
   new_thread_view.rs    the draft's project, model, harness, permissions row, and menus
   harnesses.rs          agent harnesses: the host's list, setup, Settings → Agents, mode lines
   permissions.rs        the Permissions chip and menu of a harness's own modes
@@ -557,6 +558,14 @@ slice without scanning hidden tabs. Overflow lists above 32 entries use a
 virtual list with cached row indices; hidden drafts mount no views and add no
 per-frame work. The frame suite includes 300 open tabs and their virtual
 overflow, measuring CPU draw phases rather than GPU presentation.
+
+Draft titles are a desktop presentation cache, derived from the first nonblank
+message line and bounded to 120 characters before display escaping. Composer
+notifications update just the mounted draft's cached row when that title changes;
+equal-width tab layout and overflow grouping remain intact. Parking refreshes
+that title from the composer, while restored cold tabs derive it once from
+already-loaded draft text. Rendering reads cached titles only. Titles do not add
+fields to the journal or tab preferences.
 
 ### Worktrees graph
 

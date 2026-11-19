@@ -843,7 +843,12 @@ New tab (+), Cmd-T, Cmd-N, the sidebar's New thread, and a project's New thread
 control always append a fresh, empty draft and bring it to the front, even when
 the current draft is empty. Each tab keeps its own text, images, project, model,
 harness, permissions, thinking level, and Project busy choice. Sending creates
-a thread in that tab; other drafts stay as they are. Cmd-1 through Cmd-8 select
+a thread in that tab; other drafts stay as they are. A draft takes its title
+from the first nonblank line of its message, trimmed and limited to 120
+characters. Empty and images-only drafts are called **New thread**. The same
+title appears in its tab, the overflow list, and the sidebar's current draft
+row. Connected drafts with a known model say **Ready**, including tabs behind
+the one in front; disconnected tabs say **Offline**. Cmd-1 through Cmd-8 select
 tabs by position; Cmd-9 selects the last. Cmd-Shift-[ and Cmd-Shift-] cycle
 through tabs; Control-Shift-Left and Control-Shift-Right move the active tab.
 Drag a tab to reorder it. The overflow control opens all tabs grouped by state;

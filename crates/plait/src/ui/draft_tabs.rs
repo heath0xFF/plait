@@ -120,6 +120,7 @@ impl Draft {
 
 impl Plait {
     pub(super) fn park_draft(&mut self, cx: &mut Context<Self>) {
+        self.refresh_draft_title(cx);
         let mut draft = std::mem::take(&mut self.draft);
         if let Some(composer) = draft.composer.take() {
             let composer = composer.read(cx);

@@ -340,6 +340,7 @@ impl Plait {
     }
 
     pub(super) fn capture_session(&mut self, cx: &mut Context<Self>) {
+        self.refresh_draft_title(cx);
         self.queue_tab_save(cx);
         let Some(data) = &self.session.data else {
             return;
@@ -367,7 +368,7 @@ impl Plait {
                 },
             );
         }
-        // Discard clears the content, but an open empty tab still survives restart.
+        // An open empty tab still survives restart before its composer is mounted.
         if self.draft.composer.is_none()
             && let Some(id) = &self.draft.id
             && self.tabs.model.tabs().iter().any(|tab| matches!(tab.session().target(), plait_core::tabs::TabTarget::Draft { id: open, .. } if open == id))

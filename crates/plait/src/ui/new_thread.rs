@@ -445,6 +445,7 @@ impl Plait {
         self.draft.error = None;
         self.carry_draft_thinking(shown);
         self.sync_composer(cx);
+        self.refresh_tab_rows();
         self.capture_session(cx);
         cx.notify();
     }
@@ -477,6 +478,7 @@ impl Plait {
         self.draft.error = None;
         self.carry_draft_thinking(shown);
         self.sync_composer(cx);
+        self.refresh_tab_rows();
         self.capture_session(cx);
         cx.notify();
     }

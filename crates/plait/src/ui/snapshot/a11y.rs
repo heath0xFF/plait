@@ -32,6 +32,71 @@ fn steady_frame(harness: &mut Harness, scene: &str) -> A11yFrame {
     second
 }
 
+#[core::prelude::v1::test]
+fn named_drafts_keep_accessibility_ids_through_title_edits() {
+    if !isolated("a11y::named_drafts_keep_accessibility_ids_through_title_edits") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-draft-a11y-{}", std::process::id()));
+    let repo = fixture_repository(&scratch);
+    let mut h = Harness::new(&repo, None, 1380., 860.);
+    h.connect(&repo, false);
+    h.update(|p, w, cx| {
+        p.tabs = Default::default();
+        p.park_workspace(cx);
+        p.open_draft(w, cx);
+    });
+    h.type_draft("Same first line");
+    h.update(|p, w, cx| p.open_draft(w, cx));
+    h.type_draft("Same first line");
+    h.update(|p, _, _| p.tabs.list_open = true);
+    let first = steady_frame(&mut h, "same draft titles");
+    for role in [Role::Tab, Role::MenuItem] {
+        let nodes: Vec<_> = first
+            .nodes
+            .iter()
+            .filter(|n| {
+                n.role == role
+                    && n.label
+                        .as_deref()
+                        .is_some_and(|label| label.starts_with("Same first line"))
+            })
+            .collect();
+        assert_eq!(nodes.len(), 2);
+        assert_ne!(nodes[0].node_id, nodes[1].node_id);
+    }
+    let identities = |frame: &A11yFrame| {
+        frame
+            .nodes
+            .iter()
+            .filter(|n| {
+                n.path.contains("thread-tab-")
+                    || n.path.contains("tab-list")
+                    || n.path.contains("draft-thread")
+            })
+            .map(|n| (n.path.clone(), n.node_id))
+            .collect::<Vec<_>>()
+    };
+    let expected = identities(&first);
+    for text in [" renamed", " again"] {
+        h.type_draft(text);
+        let frame = steady_frame(&mut h, "edited draft title");
+        assert_eq!(identities(&frame), expected);
+        assert!(frame.has_node(Role::Tab, |n| {
+            n.label
+                .as_deref()
+                .is_some_and(|s| s.starts_with("Same first line renamed"))
+        }));
+        assert!(frame.has_node(Role::TreeItem, |n| {
+            n.label
+                .as_deref()
+                .is_some_and(|s| s.starts_with("Same first line renamed"))
+        }));
+    }
+    drop(h);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
 fn assert_views_reachable(frame: &A11yFrame, scene: &str) {
     for view in ["Conversation", "Changes", "History", "Files"] {
         assert!(

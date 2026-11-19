@@ -968,7 +968,10 @@ impl Plait {
             .child(
                 nav_row(
                     "draft-thread",
-                    "New thread, not started. Sending its first message creates it here.",
+                    format!(
+                        "{}, not started. Sending its first message creates it here.",
+                        self.current_draft_title()
+                    ),
                     selected,
                 )
                 .w_auto()
@@ -979,9 +982,12 @@ impl Plait {
                 .aria_selected(selected)
                 .pl(px(RAIL_X + 5.))
                 .child(icon("plus").size(px(12.)).text_color(rgb(colors().mint)))
-                .child(title(super::session::UNTITLED).text_color(rgb(colors().text)))
+                .child(title(self.current_draft_title().to_owned()).text_color(rgb(colors().text)))
                 .child(tag("draft-badge", "Draft", colors().subtle).flex_shrink_0())
-                .on_activate(cx, |this, window, cx| this.open_draft(window, cx)),
+                .on_activate(cx, |this, window, cx| {
+                    this.show_tab(super::Workspace::Conversation, window, cx);
+                    this.focus_composer(window, cx);
+                }),
             )
             .child(
                 icon_button("draft-discard-row", "close", "Discard new thread")

@@ -223,14 +223,31 @@ pub(super) fn scenes(h: &mut Harness, suffix: &str) {
         for n in 0..3 {
             p.open_draft(w, cx);
             p.draft.composer.clone().unwrap().update(cx, |c, cx| {
-                c.restore_draft(format!("Draft {} for this project", n + 1), 1, None, cx)
+                c.restore_draft(
+                    [
+                        "Review the retry logic",
+                        "Add tests for cancellation",
+                        "Explain the cache limits",
+                    ][n]
+                        .into(),
+                    1,
+                    None,
+                    cx,
+                )
             });
         }
     });
     h.capture(&format!("tabs-many-drafts-{suffix}"));
+    h.update(|p, _, _| p.tabs.list_open = true);
+    h.capture(&format!("tabs-named-drafts-list-{suffix}"));
+    h.update(|p, _, _| p.tabs.list_open = false);
     h.update(|p, w, cx| {
         while p.tabs.model.tabs().len() < 300 {
             p.open_draft(w, cx);
+            let number = p.tabs.model.tabs().len();
+            p.draft.composer.clone().unwrap().update(cx, |c, cx| {
+                c.restore_draft(format!("Review project task {number}"), 1, None, cx)
+            });
         }
     });
     h.capture(&format!("tabs-three-hundred-{suffix}"));
@@ -393,6 +410,14 @@ fn drafts_restart_in_order_with_images_settings_and_evicted_history() {
                 .collect::<Vec<_>>(),
             order
         );
+        assert_eq!(
+            p.tabs
+                .rows
+                .iter()
+                .map(|r| r.title.as_str())
+                .collect::<Vec<_>>(),
+            ["Draft 2", "Draft 0", "Draft 1", "New thread"]
+        );
     });
     for (position, n) in [2, 0, 1, 3].into_iter().enumerate() {
         h.update(|p, w, cx| {
@@ -406,6 +431,9 @@ fn drafts_restart_in_order_with_images_settings_and_evicted_history() {
                 return;
             }
             assert_eq!(draft_text(p, cx), format!("Draft {n}"));
+            assert_eq!(p.current_draft_title(), format!("Draft {n}"));
+            let row = p.tabs.rows.iter().find(|r| r.active).unwrap();
+            assert_eq!(row.title, format!("Draft {n}"));
             assert_eq!(p.draft_isolation_choice(), n == 0);
             if n == 0 || n == 2 {
                 assert_eq!(
@@ -576,4 +604,89 @@ fn wait_tabs(h: &mut Harness) {
         assert!(Instant::now() < deadline, "tab save did not settle");
         std::thread::sleep(Duration::from_millis(2));
     }
+}
+
+#[core::prelude::v1::test]
+fn titles_follow_edits_without_rebuilding_sibling_rows() {
+    if !isolated("many_drafts::titles_follow_edits_without_rebuilding_sibling_rows") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-draft-titles-{}", std::process::id()));
+    let repo = fixture_repository(&scratch);
+    let mut h = Harness::new(&repo, None, 900., 600.);
+    h.connect(&repo, false);
+    h.update(|p, w, cx| {
+        p.tabs = Default::default();
+        p.park_workspace(cx);
+        p.open_draft(w, cx);
+    });
+    h.type_draft("Sibling title");
+    h.update(|p, w, cx| p.open_draft(w, cx));
+    let (rows, sibling) = h
+        .window
+        .update(&mut h.cx, |p, _, _| {
+            (p.tabs.rows.as_ptr(), p.tabs.rows[0].title.as_ptr())
+        })
+        .unwrap();
+    h.type_draft("\n  First line  \nSecond");
+    let front = h
+        .window
+        .update(&mut h.cx, |p, _, _| {
+            assert_eq!(p.current_draft_title(), "First line");
+            assert_eq!(p.tabs.rows[1].title, "First line");
+            assert!(p.tabs.rows[1].hover.starts_with("First line ·"));
+            assert_eq!(p.tabs.rows.as_ptr(), rows);
+            assert_eq!(p.tabs.rows[0].title.as_ptr(), sibling);
+            p.tabs.rows[1].title.as_ptr()
+        })
+        .unwrap();
+    h.type_draft(" line edited");
+    h.window
+        .update(&mut h.cx, |p, _, _| {
+            assert_eq!(p.tabs.rows[1].title.as_ptr(), front);
+            assert_eq!(p.tabs.rows[0].title.as_ptr(), sibling);
+        })
+        .unwrap();
+    h.keystroke("cmd-1");
+    h.update(|p, _, cx| {
+        assert_eq!(draft_text(p, cx), "Sibling title");
+        assert_eq!(p.tabs.rows[1].title, "First line");
+        assert_eq!(p.tabs.rows[1].word, "Ready");
+    });
+    h.keystroke("cmd-2");
+    h.update(|p, _, cx| {
+        assert_eq!(p.current_draft_title(), "First line");
+        assert!(draft_text(p, cx).ends_with("Second line edited"));
+    });
+    h.keystroke("cmd-a");
+    h.type_draft("");
+    h.window
+        .update(&mut h.cx, |p, _, _| {
+            assert_eq!(p.current_draft_title(), "New thread");
+            assert_eq!(p.tabs.rows[1].title, "New thread");
+        })
+        .unwrap();
+    let image = plait_core::images::persist(include_bytes!(
+        "../../../../../runtime/test/support/images/0.png"
+    ))
+    .unwrap();
+    h.window
+        .update(&mut h.cx, |p, _, cx| {
+            p.draft
+                .composer
+                .clone()
+                .unwrap()
+                .update(cx, |c, cx| c.restore_images(vec![image], cx));
+        })
+        .unwrap();
+    h.settle();
+    h.update(|p, _, cx| {
+        assert!(!p.draft.composer.as_ref().unwrap().read(cx).is_empty());
+        assert_eq!(p.current_draft_title(), "New thread");
+        p.tabs.model.disconnected(&p.tabs.host);
+        p.refresh_tab_rows();
+        assert!(p.tabs.rows.iter().all(|r| r.word == "Offline"));
+    });
+    drop(h);
+    std::fs::remove_dir_all(scratch).unwrap();
 }
