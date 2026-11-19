@@ -4,7 +4,7 @@
 //! Plait creates them beside the repository, in `<name>.worktrees/`, and removes
 //! them only through `git worktree remove`, which refuses uncommitted work.
 
-use super::{Result, head_exists, write::git};
+use super::{Result, head_exists, write::git_holding};
 use std::{
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -42,10 +42,10 @@ pub(crate) fn add_worktree_with_common_wait(
         Some(common_wait),
     )
     .map_err(String::from)?;
-    add_worktree_unlocked(lease.root())
+    add_worktree_unlocked(lease.root(), &lease)
 }
 
-fn add_worktree_unlocked(root: &Path) -> Result<Worktree> {
+fn add_worktree_unlocked(root: &Path, lease: &crate::lease::CheckoutLease) -> Result<Worktree> {
     if !head_exists(root)? {
         return Err("Make a first commit before starting a thread in its own worktree.".into());
     }
@@ -66,11 +66,12 @@ fn add_worktree_unlocked(root: &Path) -> Result<Worktree> {
         let target = path
             .to_str()
             .ok_or("The worktree folder path is not UTF-8.")?;
-        git(
+        // Git checks the new tree out after this process may have died; it holds the lease too.
+        git_holding(
             root,
             &["worktree", "add", "-q", "-b", &branch, target, "HEAD"],
-            None,
             CHECKOUT_TIMEOUT,
+            lease,
         )?;
         // The host names checkouts by their resolved path; match it.
         let path = path.canonicalize().map_err(|error| error.to_string())?;
@@ -100,25 +101,30 @@ pub(crate) fn remove_worktree_with_common_wait(
     }
     // Hold exclusive lifecycle + writer leases on the target worktree before
     // taking the shared common-directory metadata lock.
-    let _lease = crate::lease::acquire_git_checkout(
+    let lease = crate::lease::acquire_git_checkout(
         &target_paths.root,
         None,
         crate::lease::LeaseClass::Exclusive,
         Some(common_wait),
     )
     .map_err(String::from)?;
-    remove_worktree_unlocked(&main_paths.root, &target_paths.root)
+    remove_worktree_unlocked(&main_paths.root, &target_paths.root, &lease)
 }
 
-fn remove_worktree_unlocked(main: &Path, path: &Path) -> Result<()> {
+fn remove_worktree_unlocked(
+    main: &Path,
+    path: &Path,
+    lease: &crate::lease::CheckoutLease,
+) -> Result<()> {
     let target = path
         .to_str()
         .ok_or("The worktree folder path is not UTF-8.")?;
-    git(
+    // Git deletes the tree after this process may have died; it holds the lease too.
+    git_holding(
         main,
         &["worktree", "remove", target],
-        None,
         CHECKOUT_TIMEOUT,
+        lease,
     )
     .map_err(|error| {
         if error.contains("modified or untracked files") {

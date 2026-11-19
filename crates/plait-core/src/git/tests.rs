@@ -2093,3 +2093,95 @@ fn shared_metadata_lock_serializes_linked_worktree_ops_and_times_out_truthfully(
 
     remove_worktree(&repo.0, &tree.path).unwrap();
 }
+
+/// The process `a_killed_worktree_removal_keeps_the_lease_until_git_exits` kills
+/// while its `git worktree remove` is still running. Does nothing otherwise.
+#[test]
+fn worktree_removal_whose_process_is_killed() {
+    let Some(spec) = std::env::var_os("PLAIT_TEST_KILLED_REMOVAL") else {
+        return;
+    };
+    let spec = spec.into_string().unwrap();
+    let (main, target) = spec.split_once('\n').unwrap();
+    let _ = remove_worktree(Path::new(main), Path::new(target));
+}
+
+#[test]
+fn a_killed_worktree_removal_keeps_the_lease_until_git_exits() {
+    use crate::lease::{LeaseClass, LeaseErrorKind, acquire_checkout, acquire_common_metadata};
+    let repo = Repo::new();
+    repo.write("a.txt", "base\n");
+    repo.commit();
+    let tree = add_worktree(&repo.0).unwrap();
+    let scratch = repo.0.parent().unwrap().join(format!(
+        "plait-killed-removal-{}",
+        repo.0.file_name().unwrap().to_string_lossy()
+    ));
+    let _ = fs::remove_dir_all(&scratch);
+    fs::create_dir(&scratch).unwrap();
+    let real = Command::new("/bin/sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    let real = String::from_utf8(real.stdout).unwrap().trim().to_owned();
+    let marker = scratch.join("git-started");
+    // Git for the removal waits a moment first, so the process can die while it runs.
+    let wrapper = format!(
+        "#!/bin/sh\ncase \"$*\" in *'worktree remove'*) echo $$ > '{}'; sleep 2;; esac\nexec '{real}' \"$@\"\n",
+        marker.display()
+    );
+    fs::write(scratch.join("git"), wrapper).unwrap();
+    let mut perms = fs::metadata(scratch.join("git")).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o700);
+    fs::set_permissions(scratch.join("git"), perms).unwrap();
+    let path = format!(
+        "{}:{}",
+        scratch.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut parent = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "git::tests::worktree_removal_whose_process_is_killed",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("PATH", path)
+        .env(
+            "PLAIT_TEST_KILLED_REMOVAL",
+            format!("{}\n{}", repo.0.display(), tree.path.display()),
+        )
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !marker.exists() {
+        assert!(Instant::now() < deadline, "the removal never started Git");
+        thread::sleep(Duration::from_millis(10));
+    }
+    parent.kill().unwrap();
+    parent.wait().unwrap();
+
+    // Git is still running: the worktree and the repository's shared metadata stay held.
+    assert_eq!(
+        acquire_checkout(&tree.path, None, LeaseClass::Exclusive)
+            .unwrap_err()
+            .kind,
+        LeaseErrorKind::CheckoutBusy
+    );
+    assert_eq!(
+        acquire_common_metadata(&repo.0, Duration::ZERO)
+            .unwrap_err()
+            .kind,
+        LeaseErrorKind::CommonMetadataBusy
+    );
+    // Once Git has finished, it has removed the worktree and the lease is free.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while acquire_common_metadata(&repo.0, Duration::ZERO).is_err() {
+        assert!(Instant::now() < deadline, "Git never released the lease");
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!tree.path.exists());
+    fs::remove_dir_all(scratch).unwrap();
+}

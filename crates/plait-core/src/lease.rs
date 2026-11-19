@@ -27,9 +27,11 @@ use std::{
         unix::{
             ffi::OsStrExt,
             fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
+            process::CommandExt,
         },
     },
     path::{Path, PathBuf},
+    process::Command,
     ptr, thread,
     time::{Duration, Instant},
 };
@@ -160,6 +162,36 @@ impl CheckoutLease {
 
     pub fn identity(&self) -> DirIdentity {
         self.identity
+    }
+
+    /// Make the process `command` starts a holder of this lease too, so the
+    /// lease lasts until that process exits even if this one dies first.
+    ///
+    /// Only the dying case changes: dropping the lease unlocks it for every
+    /// holder. Everything the lent process starts inherits the lease as well,
+    /// so after this process dies a helper that outlives it (Git's credential
+    /// cache, detached maintenance, a daemon a hook starts) keeps the checkout
+    /// busy. Lend only to a command that starts no such helper. Setting this
+    /// also makes the standard library fork rather than `posix_spawn`.
+    pub fn lend_to(&self, command: &mut Command) {
+        let held = [
+            Some(self.lifecycle.as_raw_fd()),
+            self.writer.as_ref().map(AsRawFd::as_raw_fd),
+            self.common.as_ref().map(AsRawFd::as_raw_fd),
+        ];
+        // SAFETY: the closure runs in the child between fork and exec and only
+        // calls `fcntl`, which is async-signal-safe; the child's descriptor
+        // table is its own, so the parent's descriptors stay close-on-exec.
+        unsafe {
+            command.pre_exec(move || {
+                for fd in held.into_iter().flatten() {
+                    if libc::fcntl(fd, libc::F_SETFD, 0) < 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
+        }
     }
 
     /// Acquire the Level 3 shared Git common-directory metadata lock after
@@ -1004,6 +1036,39 @@ mod tests {
         let account =
             PathBuf::from(std::env::var_os("HOME").unwrap()).join(".local/share/plait-leases");
         assert!(!account.join(checkout_lock_name(id)).exists());
+    }
+
+    #[test]
+    fn a_lent_lease_is_held_by_the_child_and_freed_when_its_holder_drops_it() {
+        let scratch = Scratch::new("lend");
+        let leases = scratch.0.join("leases");
+        let repo = scratch.0.join("repo");
+        init_repo(&repo);
+        let lease = acquire_git_checkout_in(
+            &leases,
+            &repo,
+            None,
+            LeaseClass::Exclusive,
+            Some(Duration::ZERO),
+        )
+        .unwrap();
+        // A child that outlives the call, as a helper Git leaves running would.
+        let mut command = Command::new("/bin/sleep");
+        command.arg("30");
+        lease.lend_to(&mut command);
+        let mut child = command.spawn().unwrap();
+        drop(lease);
+        // Dropping the lease unlocks it for every holder: the running child keeps nothing.
+        let again = acquire_git_checkout_in(
+            &leases,
+            &repo,
+            None,
+            LeaseClass::Exclusive,
+            Some(Duration::ZERO),
+        );
+        child.kill().unwrap();
+        child.wait().unwrap();
+        again.unwrap();
     }
 
     #[test]

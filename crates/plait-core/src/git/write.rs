@@ -780,7 +780,29 @@ pub(super) fn git(
     input: Option<Vec<u8>>,
     timeout: Duration,
 ) -> Result<()> {
+    finish(write_command(root), args, input, timeout)
+}
+
+/// As `git`, with `lease` lent to the Git process so a crash of this one does
+/// not free the checkout while Git still writes it. Only for a command that
+/// starts no long-lived helper (see `CheckoutLease::lend_to`).
+pub(super) fn git_holding(
+    root: &Path,
+    args: &[&str],
+    timeout: Duration,
+    lease: &crate::lease::CheckoutLease,
+) -> Result<()> {
     let mut command = write_command(root);
+    lease.lend_to(&mut command);
+    finish(command, args, None, timeout)
+}
+
+fn finish(
+    mut command: std::process::Command,
+    args: &[&str],
+    input: Option<Vec<u8>>,
+    timeout: Duration,
+) -> Result<()> {
     // A stopped write can leave Git's lock behind; say how to recover.
     let raw = run(command.args(args), input, STATUS_LIMIT, timeout).map_err(|error| {
         if error.contains("was stopped") {
