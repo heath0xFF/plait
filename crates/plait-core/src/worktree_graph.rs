@@ -24,6 +24,9 @@ pub struct Graph {
     pub rows: Vec<Row>,
     pub more: bool,
     pub columns: usize,
+    /// Each drawn edge as (child row, parent row, column of its vertical).
+    #[cfg(test)]
+    pub(crate) edges: Vec<(usize, usize, usize)>,
 }
 fn ancestors(
     tip: Option<&str>,
@@ -101,15 +104,26 @@ pub fn layout(checkouts: &[Checkout], commits: Vec<GraphCommit>, more: bool) -> 
         }
         next = commits[i].parents.first().map(String::as_str);
     }
+    // A lane holds only its head's first-parent chain down to its base. Commits
+    // it merged in keep lanes of their own; otherwise its line would run
+    // through them as if they were its parents.
     let segments: Vec<_> = checkouts
         .iter()
         .enumerate()
         .map(|(n, c)| {
             let before = ancestors(c.base.as_deref(), &index, &commits);
-            reach[n]
-                .difference(&before)
-                .copied()
-                .collect::<HashSet<_>>()
+            let mut chain = HashSet::new();
+            let mut next = lanes[n].head;
+            while let Some(i) = next.filter(|i| !before.contains(i)) {
+                if !chain.insert(i) {
+                    break;
+                }
+                next = commits[i]
+                    .parents
+                    .first()
+                    .and_then(|p| index.get(p.as_str()).copied());
+            }
+            chain
         })
         .collect();
     let mut columns = checkouts.len().max(1);
@@ -141,6 +155,11 @@ pub fn layout(checkouts: &[Checkout], commits: Vec<GraphCommit>, more: bool) -> 
     }
     let mut lines = vec![HashSet::new(); end];
     let mut joins = vec![Vec::new(); end];
+    #[cfg(test)]
+    let mut edges = Vec::new();
+    // Columns beyond every node's lane, each free again after its last row.
+    let spare = columns;
+    let mut spare_until: Vec<usize> = Vec::new();
     for (i, commit) in commits.iter().take(end).enumerate() {
         let from = node_lanes[i];
         for (p, parent) in commit.parents.iter().enumerate() {
@@ -151,13 +170,30 @@ pub fn layout(checkouts: &[Checkout], commits: Vec<GraphCommit>, more: bool) -> 
             if from != to && lanes.get(from).is_some_and(|l| l.detached) {
                 continue;
             }
-            let line = if p == 0 { from } else { to };
+            let mut line = if p == 0 { from } else { to };
+            // A line over another commit's node would read as that commit
+            // being the parent. Route it through a column with no nodes.
+            if (i + 1..to_row).any(|k| node_lanes[k] == line) {
+                let slot = spare_until
+                    .iter()
+                    .position(|&last| last < i)
+                    .unwrap_or_else(|| {
+                        spare_until.push(0);
+                        spare_until.len() - 1
+                    });
+                spare_until[slot] = to_row;
+                line = spare + slot;
+                columns = columns.max(line + 1);
+                joins[i].push((from, line));
+                joins[to_row].push((line, to));
+            } else if from != to {
+                joins[if p == 0 { to_row } else { i }].push((from, to));
+            }
             for row in &mut lines[i..=to_row] {
                 row.insert(line);
             }
-            if from != to {
-                joins[if p == 0 { to_row } else { i }].push((from, to));
-            }
+            #[cfg(test)]
+            edges.push((i, to_row, line));
         }
     }
     // Two checkouts can point at the same commit. Each label keeps its own lane.
@@ -196,6 +232,8 @@ pub fn layout(checkouts: &[Checkout], commits: Vec<GraphCommit>, more: bool) -> 
         rows,
         more,
         columns,
+        #[cfg(test)]
+        edges,
     }
 }
 
@@ -229,6 +267,114 @@ mod tests {
             preservation: Preservation::default(),
             creation_id: None,
             last_used: None,
+        }
+    }
+    /// Every parent link within the drawn rows is an edge, and no edge's line
+    /// passes over another commit's node in its column.
+    fn assert_edges_are_parents(graph: &Graph, case: &str) {
+        let index: HashMap<_, _> = graph
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(i, r)| (r.commit.commit.id.as_str(), i))
+            .collect();
+        for &(i, j, line) in &graph.edges {
+            let parent = graph.rows[j].commit.commit.id.as_str();
+            assert!(
+                graph.rows[i].commit.parents.iter().any(|p| p == parent),
+                "{case}: {i}->{j}"
+            );
+            for k in i + 1..j {
+                assert_ne!(
+                    graph.rows[k].lane, line,
+                    "{case}: edge {i}->{j} passes over {k}"
+                );
+            }
+            assert!(
+                (i..=j).all(|r| graph.rows[r].lines.contains(&line)),
+                "{case}"
+            );
+        }
+        for (i, row) in graph.rows.iter().enumerate() {
+            for parent in &row.commit.parents {
+                let Some(&j) = index.get(parent.as_str()) else {
+                    continue;
+                };
+                let crosses = graph.rows[j].lane != row.lane;
+                let detached = graph.lanes.get(row.lane).is_some_and(|l| l.detached);
+                if !(crosses && detached) {
+                    assert!(
+                        graph.edges.iter().any(|e| (e.0, e.1) == (i, j)),
+                        "{case}: {i}->{j} missing"
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn merged_side_branches_and_crossing_merges_never_run_through_other_commits() {
+        // A worktree that merged its own side branch, and an octopus merge.
+        for side in [vec![5], vec![5, 4]] {
+            let mut parents = vec![6];
+            parents.extend(&side);
+            let mut commits = vec![commit(9, &[1]), commit(7, &parents), commit(6, &[1])];
+            commits.extend(side.iter().map(|&n| commit(n, &[1])));
+            commits.push(commit(1, &[]));
+            let graph = layout(&[checkout(9, None), checkout(7, Some(1))], commits, false);
+            assert_edges_are_parents(&graph, "side merge");
+            assert_eq!(graph.rows[1].lane, 1);
+            assert_eq!(graph.rows[2].lane, 1);
+            assert_ne!(graph.rows[3].lane, 1);
+        }
+        // The trunk merged an older commit of a worktree that has moved on.
+        let graph = layout(
+            &[checkout(9, None), checkout(8, Some(1))],
+            vec![
+                commit(9, &[2, 7]),
+                commit(8, &[7]),
+                commit(7, &[1]),
+                commit(2, &[1]),
+                commit(1, &[]),
+            ],
+            false,
+        );
+        assert_edges_are_parents(&graph, "crossing merge");
+        assert!(graph.columns > 2);
+    }
+    #[test]
+    fn random_histories_never_panic_or_draw_an_edge_to_a_non_parent() {
+        let mut seed = 0x2545_F491_4F6C_DD1D_u64;
+        let mut next = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n.max(1) as u64) as usize
+        };
+        for round in 0..2000 {
+            let n = 2 + next(40);
+            // Newest first: every parent is an older, later row.
+            let commits = (0..n)
+                .rev()
+                .map(|k| {
+                    let mut parents = Vec::new();
+                    if k > 0 {
+                        parents.push(next(k));
+                        let other = next(k);
+                        if next(4) == 0 && !parents.contains(&other) {
+                            parents.push(other);
+                        }
+                    }
+                    commit(k, &parents)
+                })
+                .collect();
+            let mut rows = vec![checkout(n - 1, None)];
+            for _ in 0..next(7) {
+                let mut row = checkout(next(n), Some(next(n)));
+                row.path = format!("/repo/{round}-{}", rows.len()).into();
+                rows.push(row);
+            }
+            let graph = layout(&rows, commits, next(4) == 0);
+            assert_edges_are_parents(&graph, &format!("round {round}"));
         }
     }
     #[test]
