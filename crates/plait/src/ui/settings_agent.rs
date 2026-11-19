@@ -24,7 +24,7 @@ const DETAIL: usize = 140;
 pub(super) struct AgentState {
     pub(super) key: Option<(u64, PathBuf)>,
     pub(super) view: Option<Arc<AgentView>>,
-    busy: bool,
+    pub(super) busy: bool,
     pub(super) revision: u64,
     note: Option<String>,
     expanded: bool,
@@ -306,40 +306,68 @@ impl Plait {
 
     /// Read the setup again: Pi's files can change while the app is open.
     pub(super) fn refresh_agent(&mut self, cx: &mut Context<Self>) {
-        self.request_agent(None, cx);
+        self.request_agent(self.host.creation.checkout.clone(), None, cx);
     }
 
-    fn request_agent(
+    pub(super) fn refresh_project_agent(&mut self, cx: &mut Context<Self>) {
+        let key = (
+            self.host.connection.epoch,
+            self.settings_checkout().to_owned(),
+        );
+        let state = self.project_agent_mut();
+        if state.key.as_ref() != Some(&key) {
+            *state = AgentState {
+                key: Some(key.clone()),
+                revision: state.revision.wrapping_add(1),
+                ..Default::default()
+            };
+        }
+        self.request_agent(key.1, None, cx);
+    }
+
+    fn request_project_agent(
         &mut self,
         change: Option<(String, bool, Option<String>)>,
         cx: &mut Context<Self>,
     ) {
-        if self.agent.busy || !self.host.connection.connected || cfg!(test) {
+        self.request_agent(self.settings_checkout().to_owned(), change, cx);
+    }
+
+    fn request_agent(
+        &mut self,
+        checkout: PathBuf,
+        change: Option<(String, bool, Option<String>)>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.host.connection.connected || cfg!(test) {
             return;
         }
-        self.agent.busy = true;
-        self.agent.revision = self.agent.revision.wrapping_add(1);
-        let revision = self.agent.revision;
-        self.agent.note = None;
-        let key = (
-            self.host.connection.epoch,
-            self.host.creation.checkout.clone(),
-        );
-        let checkout = self
-            .state
-            .repository
-            .snapshot()
-            .ready()
-            .map_or_else(|| key.1.clone(), |snapshot| snapshot.root.clone());
-        let checkout_generation = self.host.creation.generation;
-        let expected = self.state.checkout_key().cloned();
+        let key = (self.host.connection.epoch, checkout.clone());
+        let Some(state) = self.agent_for_mut(&checkout) else {
+            return;
+        };
+        if state.busy {
+            return;
+        }
+        state.busy = true;
+        state.revision = state.revision.wrapping_add(1);
+        let revision = state.revision;
+        state.note = None;
+        let checkout = if checkout == self.host.creation.checkout {
+            self.state
+                .repository
+                .snapshot()
+                .ready()
+                .map_or(checkout, |snapshot| snapshot.root.clone())
+        } else {
+            checkout
+        };
+        let checkout_generation =
+            (key.1 == self.host.creation.checkout).then_some(self.host.creation.generation);
+        let expected = self.settings_checkout_key(&key.1).cloned();
         let task = cx.background_executor().spawn(async move {
-            if let Some(expected) = &expected {
-                expected
-                    .verify()
-                    .map_err(plait_core::host::Error::Protocol)?;
-            }
-            let canonical = std::fs::canonicalize(&checkout)?;
+            let identity = Self::identify_settings_checkout(&checkout, expected)?;
+            let canonical = identity.root.clone();
             let request = match change {
                 Some((name, enabled, definition)) => {
                     Request::set_mcp_server(canonical.clone(), name, enabled, definition)
@@ -353,14 +381,23 @@ impl Plait {
                     "Host returned another checkout's agent setup.".into(),
                 ));
             }
-            Ok(AgentView::new(reply))
+            identity
+                .verify()
+                .map_err(plait_core::host::Error::Protocol)?;
+            Ok((AgentView::new(reply), identity))
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                if this.host.creation.generation != checkout_generation {
+                if checkout_generation
+                    .is_some_and(|generation| this.host.creation.generation != generation)
+                {
                     return;
                 }
+                let result = result.and_then(|(reply, identity)| {
+                    this.remember_settings_checkout_key(&key, identity)?;
+                    Ok(reply)
+                });
                 if !this.accept_agent(&key, revision, result) {
                     return;
                 }
@@ -378,18 +415,20 @@ impl Plait {
         revision: u64,
         result: Result<AgentView, plait_core::host::Error>,
     ) -> bool {
-        if self.agent.revision != revision
-            || self.agent.key.as_ref() != Some(key)
-            || self.host.connection.epoch != key.0
-            || self.host.creation.checkout != key.1
-        {
+        if self.host.connection.epoch != key.0 {
             return false;
         }
-        self.agent.busy = false;
+        let Some(state) = self.agent_for_mut(&key.1) else {
+            return false;
+        };
+        if state.revision != revision || state.key.as_ref() != Some(key) {
+            return false;
+        }
+        state.busy = false;
         match result {
-            Ok(view) => self.agent.view = Some(Arc::new(view)),
+            Ok(view) => state.view = Some(Arc::new(view)),
             Err(error) => {
-                self.agent.note = Some(if providers::needs_host_update(&error) {
+                state.note = Some(if providers::needs_host_update(&error) {
                     "Update the host to manage your Pi setup.".into()
                 } else {
                     providers::refusal(&error)
@@ -408,27 +447,28 @@ impl Plait {
     pub(super) fn agent_settings(&self, cx: &mut Context<Self>) -> Div {
         let refresh = toned_button(
             "agent-refresh",
-            if self.agent.busy {
+            if self.project_agent().busy {
                 "Reading…"
             } else {
                 "Refresh"
             },
             Tone::Filled,
         )
-        .disabled(self.agent.busy || !self.host.connection.connected)
-        .when(!self.agent.busy && self.host.connection.connected, |el| {
-            el.on_activate(cx, |this, _, cx| this.refresh_agent(cx))
-        });
+        .disabled(self.project_agent().busy || !self.host.connection.connected)
+        .when(
+            !self.project_agent().busy && self.host.connection.connected,
+            |el| el.on_activate(cx, |this, _, cx| this.refresh_project_agent(cx)),
+        );
         let mut page = settings::section("Your Pi agent").child(settings::setting(
             "What threads here are offered",
             "Skills, prompt templates, instructions, and MCP servers from your Pi setup. Skills and templates follow Pi's settings.",
             refresh,
         ));
-        if let Some(note) = &self.agent.note {
+        if let Some(note) = &self.project_agent().note {
             page = page.child(tag(note.clone(), colors().amber).line_height(px(16.)));
         }
-        let Some(view) = self.agent.view.as_ref() else {
-            let page = page.when(self.agent.note.is_none(), |el| {
+        let Some(view) = self.project_agent().view.as_ref() else {
+            let page = page.when(self.project_agent().note.is_none(), |el| {
                 el.child(tag(
                     if self.host.connection.connected {
                         "Reading your agent setup…"
@@ -484,7 +524,7 @@ impl Plait {
             "Pi finds tools on demand. Each server stops when the run ends.",
             colors().subtle,
         ));
-        let all = self.agent.expanded || servers.len() <= FOLDED;
+        let all = self.project_agent().expanded || servers.len() <= FOLDED;
         for (index, server) in servers
             .iter()
             .take(if all { servers.len() } else { FOLDED })
@@ -496,11 +536,11 @@ impl Plait {
             let enabled = !server.enabled;
             let available = server.can_enable
                 && self.host.connection.connected
-                && !self.agent.busy
-                && self.agent.key.as_ref()
+                && !self.project_agent().busy
+                && self.project_agent().key.as_ref()
                     == Some(&(
                         self.host.connection.epoch,
-                        self.host.creation.checkout.clone(),
+                        self.settings_checkout().to_owned(),
                     ));
             section = section.child(
                 row()
@@ -521,7 +561,12 @@ impl Plait {
                     .when_some(server.file.clone(), |el, path| {
                         el.child(button(("mcp-open-file", index), "Open file").on_activate(
                             cx,
-                            move |this, _, cx| {
+                            move |this, window, cx| {
+                                let checkout = this.settings_checkout().to_owned();
+                                this.show_settings(false, window, cx);
+                                if checkout != this.host.creation.checkout {
+                                    this.change_checkout(checkout, window, cx);
+                                }
                                 this.open_file(path.clone(), None, cx);
                             },
                         ))
@@ -537,7 +582,7 @@ impl Plait {
                         .disabled(!available)
                         .when(available, |el| {
                             el.on_activate(cx, move |this, _, cx| {
-                                this.request_agent(
+                                this.request_project_agent(
                                     Some((name.to_string(), enabled, definition.clone())),
                                     cx,
                                 );
@@ -551,7 +596,7 @@ impl Plait {
                 button("mcp-show-all", format!("Show all {}", servers.len())).on_activate(
                     cx,
                     |this, _, cx| {
-                        this.agent.expanded = true;
+                        this.project_agent_mut().expanded = true;
                         cx.notify();
                     },
                 ),
@@ -567,7 +612,7 @@ impl Plait {
         empty: &'static str,
         cx: &mut Context<Self>,
     ) -> Div {
-        let all = self.agent.expanded || rows.len() <= FOLDED;
+        let all = self.project_agent().expanded || rows.len() <= FOLDED;
         let shown = if all { rows } else { &rows[..FOLDED] };
         settings::section(title)
             .when(rows.is_empty(), |el| el.child(tag(empty, colors().subtle)))
@@ -577,7 +622,7 @@ impl Plait {
                     button((id, usize::MAX), format!("Show all {}", rows.len())).on_activate(
                         cx,
                         |this, _, cx| {
-                            this.agent.expanded = true;
+                            this.project_agent_mut().expanded = true;
                             cx.notify();
                         },
                     ),

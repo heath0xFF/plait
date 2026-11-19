@@ -55,7 +55,7 @@ impl Plait {
     ) {
         self.cancel_recording(cx);
         self.keyboard.recording = Some(index);
-        window.focus(&self.focus, cx);
+        window.focus(&self.settings_focus, cx);
         let entity = cx.weak_entity();
         let window_id = window.window_handle().window_id();
         self.keyboard.interceptor = Some(cx.intercept_keystrokes(move |event, window, cx| {

@@ -482,7 +482,7 @@ Turn). The latest run always shows its control; earlier controls appear on
 hover or keyboard focus. There is no confirmation: the line changes to
 **Undone**, lists the files restored, and offers **Redo**. Steering messages
 share a run's control; a queued follow-up is its own run. The shortcut acts
-only in the visible conversation, with no settings page or palette over it.
+only in the visible conversation, with no settings modal or palette over it.
 It follows the latest line's Undo or Redo state; Cmd-Z remains text undo.
 
 If a path differs from the run's after record, the default operation changes
@@ -553,6 +553,27 @@ messages are searched; when earlier messages, or the rest of a long one, are
 not loaded, the bar says **Loaded messages only**, with the reason on hover.
 Find does not load pages to search them.
 
+
+### Settings and Project settings
+
+Settings opens as a centered modal over the window from Cmd-comma,
+**Plait → Settings…**, the sidebar's Settings control, or the command palette.
+**Project Settings…** opens from a project's sidebar menu, the File menu, or
+its command-palette action. A sidebar project menu targets that project without
+switching the thread underneath. Host status and section navigation stay above
+the scrolling Settings content; the project name and checkout identify Project
+settings. Both use an 820-point width where it fits, shrinking to leave 24
+points on each side; height leaves at least 32 points above and below.
+
+**Done**, **Escape**, or a click outside closes either modal and returns focus
+to the previous control. Cmd-comma closes application Settings, or switches
+Project settings to application Settings. Escape first closes an open picker,
+cancels shortcut recording, or closes an open provider form. Outside clicks
+are ignored during shortcut recording. Tab and Shift-Tab cycle inside the
+modal, and workspace shortcuts are inactive until it closes. The covered view,
+scroll position, selection, find and draft remain in place; a running thread
+continues receiving replies. Settings changes keep their existing immediate
+save and confirmation behavior.
 
 ### Application shortcuts
 

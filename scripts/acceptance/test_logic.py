@@ -98,6 +98,15 @@ class HarnessTests(unittest.TestCase):
                 ax.assert_any_call('press', '--name', 'Done', '--role', 'control')
                 ax.assert_any_call('absent', '--name', 'Done', '--role', 'AXButton')
 
+    def test_settings_checks_the_named_modal_surface(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner = self.runner(directory)
+            with patch.object(runner, 'ax', return_value='1') as ax:
+                runner.settings()
+                ax.assert_any_call('find', '--name', 'Settings', '--role', 'AXWindow')
+                runner.project_settings()
+                ax.assert_any_call('find', '--name', 'Project settings', '--role', 'AXWindow')
+
     def test_every_item_resets_even_after_failed_reset_or_failed_action(self):
         with tempfile.TemporaryDirectory() as directory:
             runner = self.runner(directory)

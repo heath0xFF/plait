@@ -1,0 +1,443 @@
+//! Modal routes, focus containment and workspace preservation, without native input.
+use super::*;
+use crate::ui::{Workspace, selection::Owner};
+
+fn click(harness: &mut Harness, x: f32, y: f32) {
+    harness.draw();
+    let position = point(px(x), px(y));
+    harness.pointer(PlatformInput::MouseDown(MouseDownEvent {
+        button: MouseButton::Left,
+        position,
+        click_count: 1,
+        ..Default::default()
+    }));
+    harness.pointer(PlatformInput::MouseUp(MouseUpEvent {
+        button: MouseButton::Left,
+        position,
+        click_count: 1,
+        ..Default::default()
+    }));
+}
+
+pub(super) fn walk(harness: &mut Harness, repository: &Path, suffix: &str) {
+    harness.connect(repository, false);
+    harness.change_snapshot(|snapshot| {
+        snapshot.live_text = "Sample streaming text continues arriving.".into();
+        snapshot.messages[1].text =
+            "Sample reply streaming behind Settings; the thread keeps running.".into();
+        snapshot.status = ThreadStatus::Running;
+    });
+    harness.update(|plait, window, cx| plait.show_settings(true, window, cx));
+    harness.capture(&format!("tabs-settings-modal-{suffix}"));
+    if suffix == "narrow" {
+        harness.capture("settings-minimum-900");
+    }
+    harness.update(|plait, window, cx| plait.show_project_settings(window, cx));
+    harness.capture(&format!("tabs-project-modal-{suffix}"));
+    harness.connect(repository, true);
+    harness.update(|plait, window, cx| plait.show_settings(true, window, cx));
+    harness.capture(&format!("tabs-modal-approval-shield-{suffix}"));
+    harness.update(|plait, window, cx| plait.show_settings(false, window, cx));
+}
+
+#[core::prelude::v1::test]
+fn routes_close_and_restore_focus_from_every_view() {
+    if !isolated("settings_modal::routes_close_and_restore_focus_from_every_view") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-modal-routes-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    for view in [
+        Workspace::Conversation,
+        Workspace::Changes,
+        Workspace::History,
+        Workspace::Files,
+    ] {
+        harness.update(|plait, window, cx| {
+            plait.workspace.tab = view;
+            window.focus(&plait.focus, cx);
+        });
+        harness.draw();
+        for route in 0..4 {
+            harness.keystroke("cmd-,");
+            harness.update(|plait, window, cx| {
+                assert!(plait.settings_open);
+                assert_eq!(plait.workspace.tab, view);
+                assert!(plait.settings_focus.contains_focused(window, cx));
+            });
+            match route {
+                0 => harness.keystroke("escape"),
+                1 => harness.keystroke("cmd-,"),
+                2 => click(&mut harness, 805., 54.),
+                _ => click(&mut harness, 12., 140.),
+            }
+            harness.update(|plait, window, _| {
+                assert!(!plait.settings_open, "close route {route}");
+                assert_eq!(plait.workspace.tab, view);
+                assert!(
+                    plait.focus.is_focused(window),
+                    "focus returns for route {route}"
+                );
+            });
+        }
+    }
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn focus_cycles_inside_and_workspace_shortcuts_are_inert() {
+    if !isolated("settings_modal::focus_cycles_inside_and_workspace_shortcuts_are_inert") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-modal-focus-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, true);
+    harness.update(|plait, window, cx| {
+        plait.focus_composer(window, cx);
+        plait.show_settings(true, window, cx);
+    });
+    harness.draw();
+    for key in ["tab", "shift-tab"] {
+        for _ in 0..60 {
+            harness.keystroke(key);
+            harness.update(|plait, window, cx| {
+                assert!(plait.settings_focus.contains_focused(window, cx))
+            });
+        }
+    }
+    for key in [
+        "cmd-shift-2",
+        "cmd-shift-3",
+        "cmd-n",
+        "cmd-p",
+        "cmd-b",
+        "cmd-l",
+        "cmd-2",
+        "cmd-f",
+        "cmd-alt-y",
+        "cmd-alt-.",
+        "cmd-k",
+        "cmd-w",
+    ] {
+        harness.keystroke(key);
+        harness.update(|plait, _, _| {
+            assert!(plait.settings_open, "{key}");
+            assert_eq!(plait.workspace.tab, Workspace::Conversation, "{key}");
+            assert_eq!(plait.host.thread.selected.as_deref(), Some(THREAD), "{key}");
+            assert!(!plait.workspace.conversation_find.open, "{key}");
+            assert!(!plait.draft.open, "{key}");
+            assert!(plait.host.thread.decided_approvals.is_empty(), "{key}");
+        });
+    }
+    harness.keystroke("escape");
+    harness.update(|plait, window, cx| {
+        assert!(
+            plait.workspace.composers[THREAD]
+                .focus_handle(cx)
+                .is_focused(window)
+        )
+    });
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn preserves_reading_find_draft_and_accepts_a_reply() {
+    if !isolated("settings_modal::preserves_reading_find_draft_and_accepts_a_reply") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-modal-reading-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.change_snapshot(reading);
+    harness.composer(|composer, window, cx| composer.type_text("Unsent draft", window, cx));
+    harness.update(|plait, window, cx| {
+        plait.open_conversation_find(window, cx);
+        plait
+            .workspace
+            .conversation_find
+            .field
+            .clone()
+            .unwrap()
+            .update(cx, |field, cx| field.set_text("sample", cx));
+        plait.workspace.live_scroll.scroll_to(ListOffset::default());
+    });
+    harness.draw();
+    let position = harness
+        .window
+        .update(&mut harness.cx, |plait, _, _| {
+            plait
+                .text_point(&Owner::Message("r2".into()), 0, 4)
+                .unwrap()
+        })
+        .unwrap();
+    harness.pointer(PlatformInput::MouseDown(MouseDownEvent {
+        button: MouseButton::Left,
+        position,
+        click_count: 2,
+        ..Default::default()
+    }));
+    harness.pointer(PlatformInput::MouseUp(MouseUpEvent {
+        button: MouseButton::Left,
+        position,
+        click_count: 2,
+        ..Default::default()
+    }));
+    harness.draw();
+    let before = harness
+        .window
+        .update(&mut harness.cx, |plait, _, cx| {
+            (
+                plait.workspace.formatted.clone(),
+                plait.workspace.live_scroll.logical_scroll_top(),
+                plait.selected_text(),
+                plait.workspace.composers[THREAD]
+                    .read(cx)
+                    .saved_draft()
+                    .0
+                    .to_owned(),
+                plait.host.thread.watch_epoch,
+            )
+        })
+        .unwrap();
+    assert!(before.2.is_some(), "fixture has a selection");
+    harness.keystroke("cmd-,");
+    harness.draw();
+    harness.keystroke("escape");
+    harness.update(|plait, window, cx| {
+        assert!(
+            Arc::ptr_eq(&before.0, &plait.workspace.formatted),
+            "opening does not rebuild conversation"
+        );
+        assert_eq!(before.1, plait.workspace.live_scroll.logical_scroll_top());
+        assert_eq!(before.2, plait.selected_text());
+        assert_eq!(
+            before.3,
+            plait.workspace.composers[THREAD].read(cx).saved_draft().0
+        );
+        assert_eq!(before.4, plait.host.thread.watch_epoch);
+        assert!(plait.workspace.conversation_find.open);
+        assert_eq!(
+            plait
+                .workspace
+                .conversation_find
+                .field
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .text(),
+            "sample"
+        );
+        plait.show_settings(true, window, cx);
+    });
+    harness.update(|plait, window, cx| {
+        let mut reply = (**plait.host.thread.snapshot.as_ref().unwrap()).clone();
+        reply.messages.push(Message {
+            id: "modal-reply".into(),
+            role: MessageRole::Assistant,
+            text: "Arrived while settings was open".into(),
+            ..Default::default()
+        });
+        assert!(plait.host.apply_snapshot(
+            plait.host.connection.epoch,
+            plait.host.thread.watch_epoch,
+            reply
+        ));
+        plait.conversation_changed(window, cx);
+    });
+    harness.update(|plait, _, _| {
+        assert!(plait.settings_open);
+        assert_eq!(
+            plait
+                .host
+                .thread
+                .snapshot
+                .as_ref()
+                .unwrap()
+                .messages
+                .last()
+                .unwrap()
+                .id,
+            "modal-reply"
+        );
+    });
+    harness.keystroke("escape");
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn escape_cancels_recording_and_secret_form_before_the_modal() {
+    if !isolated("settings_modal::escape_cancels_recording_and_secret_form_before_the_modal") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-modal-escape-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.update(|plait, window, cx| {
+        plait.show_settings(true, window, cx);
+        plait.settings_tab = SettingsTab::Keyboard;
+        plait.record_shortcut(0, window, cx);
+    });
+    harness.draw();
+    harness.keystroke("escape");
+    harness.update(|plait, _, cx| {
+        assert!(plait.settings_open);
+        assert!(plait.keyboard.recording.is_none());
+        plait.settings_tab = SettingsTab::Providers;
+        let field = cx.new(|cx| crate::ui::text_field::TextField::new("API key", "", cx).secret());
+        plait.providers.form = Some(crate::ui::settings_providers::Form::Key {
+            provider: "fixture".into(),
+            field,
+        });
+    });
+    harness.draw();
+    harness.keystroke("escape");
+    harness.update(|plait, _, _| {
+        assert!(plait.settings_open);
+        assert!(plait.providers.form.is_none());
+    });
+    harness.keystroke("escape");
+    harness.update(|plait, _, _| assert!(!plait.settings_open));
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn project_replies_keep_their_target_after_dismissal() {
+    if !isolated("settings_modal::project_replies_keep_their_target_after_dismissal") {
+        return;
+    }
+    use crate::ui::settings_agent::AgentView;
+    use plait_core::host::{
+        agent::AgentResources,
+        policy::{CommandPolicy, PolicyReply},
+    };
+    let scratch = std::env::temp_dir().join(format!("plait-modal-target-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.update(|plait, window, cx| {
+        let original = plait.host.creation.checkout.clone();
+        let target = original.join("other");
+        plait.show_settings_for_project(target.clone(), window, cx);
+        let key = (plait.host.connection.epoch, target.clone());
+        let revision = plait.project_agent().revision;
+        plait.project_policy_mut().busy = true;
+        plait.project_agent_mut().busy = true;
+        plait.show_settings_for_project(original.clone(), window, cx);
+        assert_eq!(
+            plait.settings_checkout(),
+            target,
+            "pending request fixes the target"
+        );
+        plait.show_settings(false, window, cx);
+        let reply = || {
+            Ok(AgentView::new(AgentResources {
+                checkout: target.clone(),
+                trusted: true,
+                instructions: None,
+                skills: vec![],
+                templates: vec![],
+                problems: vec![],
+                mcp_servers: vec![],
+            }))
+        };
+        assert!(!plait.accept_agent(&(key.0 + 1, key.1.clone()), revision, reply()));
+        assert!(!plait.accept_agent(&key, revision + 1, reply()));
+        assert!(plait.accept_agent(&key, revision, reply()));
+        assert!(plait.project_agent().view.is_some());
+        assert!(
+            plait.agent.view.is_none(),
+            "active checkout data is untouched"
+        );
+        assert!(plait.accept_policy(
+            &key,
+            Some(CommandPolicy::Trusted),
+            Ok(PolicyReply {
+                checkout: target.clone(),
+                policy: CommandPolicy::Trusted
+            }),
+            cx
+        ));
+        assert_eq!(plait.project_policy().value, Some(CommandPolicy::Trusted));
+        assert_eq!(plait.policy.value, None);
+        assert!(!plait.settings_open, "a reply never reopens the modal");
+        assert_eq!(plait.host.creation.checkout, original);
+        assert_eq!(plait.host.thread.selected.as_deref(), Some(THREAD));
+        assert!(!plait.accept_policy(
+            &(key.0 + 1, key.1),
+            None,
+            Err(plait_core::host::Error::Protocol("stale".into())),
+            cx
+        ));
+    });
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn a_settings_picker_closes_before_the_modal() {
+    if !isolated("settings_modal::a_settings_picker_closes_before_the_modal") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-modal-picker-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.update(|plait, window, cx| {
+        plait.show_settings(true, window, cx);
+        plait.open_model_picker(ModelPurpose::DefaultModel, window, cx);
+    });
+    harness.draw();
+    harness.keystroke("escape");
+    harness.update(|plait, window, cx| {
+        assert!(plait.settings_open);
+        assert!(plait.overlay.is_none());
+        assert!(plait.settings_focus.contains_focused(window, cx));
+    });
+    harness.keystroke("escape");
+    harness.update(|plait, _, _| assert!(!plait.settings_open));
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn menu_palette_and_sidebar_open_settings() {
+    if !isolated("settings_modal::menu_palette_and_sidebar_open_settings") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-modal-open-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.draw();
+    click(&mut harness, 218., 580.);
+    harness.update(|plait, _, _| assert!(plait.settings_open, "sidebar footer"));
+    harness.keystroke("escape");
+    harness.update(|_, window, cx| window.dispatch_action(Box::new(crate::ui::Settings), cx));
+    harness.update(|plait, _, _| assert!(plait.settings_open, "menu action"));
+    harness.keystroke("escape");
+    for (query, page) in [
+        ("Settings…", SettingsPage::Application),
+        ("Project Settings…", SettingsPage::Project),
+    ] {
+        harness.keystroke("cmd-k");
+        set_query(&mut harness, query);
+        harness.draw();
+        harness.keystroke("enter");
+        harness.update(|plait, _, _| {
+            assert!(plait.settings_open, "palette {query}");
+            assert_eq!(plait.settings_page, page);
+        });
+        harness.keystroke("escape");
+    }
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}

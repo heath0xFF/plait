@@ -45,6 +45,7 @@ mod branches;
 mod find;
 mod mcp;
 mod messages;
+mod settings_modal;
 mod showcase;
 mod tabs;
 mod turn_review;
@@ -2244,6 +2245,7 @@ fn walk(output: Option<&Path>) {
         composer_walk(&mut harness, &repository, suffix);
         images::walk(&mut harness, &repository, suffix);
         composer_v3_walk(&mut harness, &repository, suffix);
+        settings_modal::walk(&mut harness, &repository, suffix);
         settings_walk(&mut harness, &repository, suffix);
         settings_controls_walk(&mut harness, &repository, suffix);
         mcp::mcp_walk(&mut harness, &repository, suffix);
@@ -4004,7 +4006,19 @@ fn settings_controls_walk(harness: &mut Harness, repository: &Path, suffix: &str
     harness.keystroke("cmd-b");
     harness.update(|plait, _, _| assert!(plait.sidebar, "old shortcut no longer runs"));
     harness.keystroke("ctrl-shift-b");
-    harness.update(|plait, _, _| assert!(!plait.sidebar, "new shortcut runs"));
+    harness.update(|plait, window, cx| {
+        assert!(
+            plait.sidebar,
+            "the modal shields the workspace from the new shortcut"
+        );
+        plait.show_settings(false, window, cx);
+    });
+    harness.draw();
+    harness.keystroke("ctrl-shift-b");
+    harness.update(|plait, window, cx| {
+        assert!(!plait.sidebar, "new shortcut runs after dismissal");
+        plait.show_settings(true, window, cx);
+    });
     harness.capture(&format!("keyboard-customized-{suffix}"));
     harness.update(|plait, _, cx| {
         plait.sidebar = true;
@@ -5122,9 +5136,7 @@ fn project_switching_keeps_each_draft_and_rejects_the_old_watch() {
     std::fs::remove_dir_all(scratch).unwrap();
 }
 
-/// Project Settings… in another project's sidebar menu makes that project the
-/// active one, then opens its page. The action opens the active project's
-/// page, and Done and Cmd-comma leave it.
+/// Project Settings… targets a project without switching the thread behind it.
 #[core::prelude::v1::test]
 fn project_settings_open_for_the_chosen_project() {
     if !isolated("project_settings_open_for_the_chosen_project") {
@@ -5145,17 +5157,20 @@ fn project_settings_open_for_the_chosen_project() {
             .as_mut()
             .unwrap()
             .protocol_version = 3;
-        // Refused while a thread is being created: no page for the wrong project.
+        // Even pending creation keeps its checkout while another project is configured.
         plait.host.creation.creating = true;
         plait.show_settings_for_project(chosen.clone(), window, cx);
-        assert!(!plait.settings_open);
+        assert!(plait.settings_open);
+        assert_eq!(plait.settings_checkout(), chosen);
         assert_ne!(plait.host.creation.checkout, chosen);
         plait.host.creation.creating = false;
         plait.notice = None;
         plait.show_settings_for_project(chosen.clone(), window, cx);
+        assert_ne!(plait.host.creation.checkout, chosen);
         assert_eq!(
-            plait.host.creation.checkout, chosen,
-            "the chosen project is active"
+            plait.settings_checkout(),
+            chosen,
+            "the modal targets the chosen project"
         );
         assert!(plait.settings_open);
         assert_eq!(plait.settings_page, SettingsPage::Project);

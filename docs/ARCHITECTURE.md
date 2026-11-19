@@ -59,8 +59,9 @@ ui/                     GPUI layout, actions, focus, lists, theme
   window_bar.rs         the traffic lights' place, header inset, and window dragging
   jump.rs               Cmd-1 to Cmd-9 and the desktop preferences file
   session.rs            draft and submission recovery, and save scheduling
-  settings.rs           the Settings page (the app and host) and its tabs
-  settings_project.rs   a project's own settings page, from its sidebar menu
+  settings.rs           the Settings modal contents (the app and host) and sections
+  settings_project.rs   a project's modal target, independent of the active checkout
+  settings_modal.rs     centered modal, dismissal, shortcut shield and focus containment
   settings_keyboard.rs  the shortcut editor
   settings_editor.rs    Settings → Editor: what opens files and terminals
   ways_out.rs           Open in Editor, Show in Finder, Open Terminal Here; starts them
@@ -297,7 +298,7 @@ desktop default with a version 2 host, they run without a prompt. File helpers o
 [command policy](HOST.md#command-policy), in which commands run as the user and
 may write the checkout. A project can instead be sandboxed, in which commands
 read the checkout and use private scratch space for build output. The
-project's settings page (its sidebar menu → Project settings…) offers the
+project's settings modal (its sidebar menu → Project settings…) offers the
 policy, with a deliberate confirmation of Trusted access. Stop revokes pending approvals and
 cancels work. Interrupted work must not replay automatically after host failure.
 These boundaries need the tests listed in HOST.md before valuable-repository use.
@@ -450,7 +451,7 @@ Plain core state separates ownership while preserving one selected thread slot:
   file viewer, Changes/History scroll handles, commit message state, and the
   existing per-thread composer map). The
   root `Plait` view retains window-owned state (focus, approval key debounce,
-  sidebar navigation, overlays, settings pages, panels, new-thread drafts,
+  sidebar navigation, overlays, settings modals, panels, new-thread drafts,
   and shared desktop services) and delegates selection, reconnect, and checkout
   resets through `ThreadWorkspace`.
 
@@ -1271,6 +1272,26 @@ words, and cannot be chosen. The default model is marked wherever models are
 listed. Choosing a default sends the host's `set_default_model` request at
 once; the picker footer and Settings report Saving, the host's confirmation, or
 the failure. Nothing is shown as saved before the host answers.
+
+### Settings modals
+
+Application and Project settings are window-owned overlays. Opening one leaves
+`ThreadWorkspace` mounted at its existing geometry and preserves its conversation
+projection, scroll handles, selection, find and draft. The same thread watch
+continues applying replies. A full-window dimming layer blocks pointer input;
+the root action shield suppresses workspace commands, including menu dispatch.
+Tab traversal wraps within the modal and dismissal restores the previously
+focused handle. Escape gives nested pickers, shortcut recording and provider
+forms precedence. Covered conversation scrolling cannot demand an older page.
+
+Project settings stores its own target and, for another checkout, separate
+policy and agent-resource state. It never selects that checkout on opening.
+Requests capture checkout and host epoch; agent reads also carry a revision.
+Replies route to that target even after closing, without updating another
+project's controls. A pending request prevents retargeting that modal. Choosing
+an MCP configuration file explicitly closes settings and opens its checkout's
+Files view. Filesystem canonicalization and host requests remain in background
+jobs; section rendering only draws prepared state.
 
 ### Provider settings and command policy
 

@@ -426,7 +426,8 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if event.is_scrolled
+        if !self.settings_open
+            && event.is_scrolled
             && event.visible_range.start <= 3
             && self.workspace.history.error.is_none()
         {

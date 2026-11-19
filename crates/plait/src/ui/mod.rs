@@ -30,6 +30,7 @@ mod settings;
 mod settings_agent;
 mod settings_editor;
 mod settings_keyboard;
+mod settings_modal;
 mod settings_policy;
 mod settings_project;
 mod settings_providers;
@@ -132,9 +133,12 @@ pub struct Plait {
     workspace: thread_workspace::ThreadWorkspace,
     commit_sends:
         std::collections::HashMap<plait_core::state::CheckoutId, commit_panel::CommitAttempt>,
-    /// A settings page covers the workspace; `settings_page` says which.
+    /// Window modal, independent of the thread workspace.
     settings_open: bool,
     settings_page: settings::SettingsPage,
+    settings_focus: FocusHandle,
+    settings_restore: Option<FocusHandle>,
+    settings_project: Option<settings_project::ProjectSettings>,
     settings_tab: settings::SettingsTab,
     /// Shared by both pages: opening either starts it at the top.
     settings_scroll: ScrollHandle,
@@ -204,6 +208,9 @@ impl Plait {
             commit_sends: Default::default(),
             settings_open: false,
             settings_page: Default::default(),
+            settings_focus: cx.focus_handle(),
+            settings_restore: None,
+            settings_project: None,
             settings_tab: Default::default(),
             settings_scroll: ScrollHandle::new(),
             keyboard: Default::default(),
@@ -253,6 +260,7 @@ impl Plait {
             this.sync_picker(cx);
             this.sync_policy(cx);
             this.sync_agent(cx);
+            this.sync_project_settings(cx);
             this.sync_harnesses(cx);
             this.sync_provider_settings(cx);
         })
@@ -260,8 +268,17 @@ impl Plait {
         // Keys dispatch from the focused element. One that is no longer drawn,
         // such as a field on a tab that was left, sends them from outside the
         // app's key context, where no shortcut or menu action is handled.
-        cx.on_focus_lost(window, |this, window, cx| window.focus(&this.focus, cx))
-            .detach();
+        cx.on_focus_lost(window, |this, window, cx| {
+            window.focus(
+                if this.settings_open {
+                    &this.settings_focus
+                } else {
+                    &this.focus
+                },
+                cx,
+            )
+        })
+        .detach();
         this.watch_approval_keys(window, cx);
         this.reconnect_host(window, cx);
         // Test scenes stay offline.
@@ -532,7 +549,7 @@ impl Plait {
 
     /// Open the active project's settings page.
     pub(super) fn show_project_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_page(Some(settings::SettingsPage::Project), window, cx);
+        self.show_settings_for_project(self.host.creation.checkout.clone(), window, cx);
     }
 
     /// Cmd-comma: the application page closes when it is the one open;
@@ -549,9 +566,20 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.close_overlay(false, window, cx);
-        window.focus(&self.focus, cx);
+        self.close_overlay(true, window, cx);
+        if page.is_some() && !self.settings_open {
+            self.settings_restore = window.focused(cx);
+        }
         self.settings_open = page.is_some();
+        if self.settings_open {
+            window.focus(&self.settings_focus, cx);
+        } else {
+            let restore = self
+                .settings_restore
+                .take()
+                .filter(|focus| focus.is_rendered(window));
+            window.focus(restore.as_ref().unwrap_or(&self.focus), cx);
+        }
         self.settings_page = page.unwrap_or_default();
         self.settings_scroll.set_offset(point(px(0.), px(0.)));
         self.cancel_recording(cx);
@@ -565,9 +593,9 @@ impl Plait {
             Some(settings::SettingsPage::Project) => {
                 self.close_provider_form(cx);
                 // Opened fresh, the page asks before trusting again.
-                self.policy.confirm = false;
+                self.project_policy_mut().confirm = false;
                 // Pi's files can change while the app is open.
-                self.refresh_agent(cx);
+                self.refresh_project_agent(cx);
             }
             None => self.close_provider_form(cx),
         }
@@ -577,7 +605,6 @@ impl Plait {
         {
             self.mark_thread_read(&id, cx);
         }
-        self.new_thread_open = false;
         cx.notify();
     }
 
@@ -759,14 +786,14 @@ impl Plait {
     /// The active content supplies the second row; an empty workspace has none.
     fn header(
         &self,
-        title: String,
+        _title: String,
         _location: Option<String>,
         _status: (String, u32),
         wide: bool,
         _fullscreen: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if !self.settings_open && self.tabs.model.active().is_none() {
+        if self.tabs.model.active().is_none() {
             return div().into_any_element();
         }
         let header = row()
@@ -776,15 +803,6 @@ impl Plait {
             .gap_2()
             .border_b_1()
             .border_color(rgb(colors().border));
-        if self.settings_open {
-            return header
-                .child(div().flex_1().child(title))
-                .child(
-                    toned_button("close-settings", "Done", Tone::Filled)
-                        .on_activate(cx, |this, window, cx| this.show_settings(false, window, cx)),
-                )
-                .into_any_element();
-        }
         let project = self.active_project();
         let branch = self
             .state
@@ -826,9 +844,17 @@ impl Plait {
             )
             .child(self.workspace_switch(cx))
             .child(
-                icon_button("toggle-inspector", "panel-right", "Toggle Git inspector")
-                    .aria_keyshortcuts(self.shortcut_aria("view.toggle_inspector"))
-                    .on_activate(cx, |this, window, cx| this.toggle_inspector(window, cx)),
+                icon_button(
+                    "toggle-inspector",
+                    "panel-right",
+                    if wide {
+                        "Toggle Git inspector"
+                    } else {
+                        "Git inspector (needs a wider window)"
+                    },
+                )
+                .aria_keyshortcuts(self.shortcut_aria("view.toggle_inspector"))
+                .on_activate(cx, |this, window, cx| this.toggle_inspector(window, cx)),
             )
             .into_any_element()
     }
@@ -994,21 +1020,14 @@ impl Render for Plait {
             ("Host disconnected".to_owned(), colors().amber)
         };
         let drafting = !real && self.draft.open;
-        let page = self.settings_open.then_some(self.settings_page);
-        let title = if let Some(page) = page {
-            match page {
-                settings::SettingsPage::Application => "Settings",
-                settings::SettingsPage::Project => "Project settings",
-            }
-            .to_owned()
-        } else if real {
+        let title = if real {
             self.thread_title(self.host.thread.selected.as_deref().unwrap_or_default())
         } else if drafting {
             session::UNTITLED.to_owned()
         } else {
             project.name.clone()
         };
-        let status = if real && !self.settings_open {
+        let status = if real {
             self.host.thread.snapshot.as_ref().map_or_else(
                 || ("Loading".to_owned(), colors().muted),
                 |snapshot| {
@@ -1021,14 +1040,11 @@ impl Render for Plait {
         } else {
             connection
         };
-        // With no thread open the title is already the project; don't repeat it.
-        // Settings is the app's, so it names no project; a project's page names it.
-        let location = match page {
-            // A settings page names itself; the project's page shows its
-            // name and path as its heading, so the bar does not repeat them.
-            Some(_) => None,
-            None if real || drafting => Some(format!("{} / {}", project.name, machine.name)),
-            None => Some(machine.name.clone()),
+        // With no thread open the title already names the project.
+        let location = if real || drafting {
+            Some(format!("{} / {}", project.name, machine.name))
+        } else {
+            Some(machine.name.clone())
         };
         let root = column()
             .id("plait")
@@ -1036,6 +1052,7 @@ impl Render for Plait {
             .aria_label("Plait")
             .key_context("Plait")
             .track_focus(&self.focus)
+            .map(|root| self.settings_shortcuts(root, cx))
             .on_action(cx.listener(Self::open_repository))
             .on_action(cx.listener(Self::refresh))
             .on_action(
@@ -1257,20 +1274,10 @@ impl Render for Plait {
                                 )
                             })
                             .when_some(self.creation_bar(cx), |el, bar| el.child(bar))
-                            .when(
-                                self.workspace.inspector_note && !wide && page.is_none(),
-                                |el| el.child(self.inspector_note(cx)),
-                            )
-                            .child(if let Some(page) = page {
-                                match page {
-                                    settings::SettingsPage::Application => {
-                                        self.settings(cx).into_any_element()
-                                    }
-                                    settings::SettingsPage::Project => {
-                                        self.project_settings(cx).into_any_element()
-                                    }
-                                }
-                            } else if self.workspace.tab == Workspace::History {
+                            .when(self.workspace.inspector_note && !wide, |el| {
+                                el.child(self.inspector_note(cx))
+                            })
+                            .child(if self.workspace.tab == Workspace::History {
                                 self.history_view(wide, cx).into_any_element()
                             } else if self.workspace.tab == Workspace::Files {
                                 self.file_view(cx)
@@ -1287,14 +1294,18 @@ impl Render for Plait {
             )
             // Timings stay available without spending a permanent chrome row on them.
             .when(self.diagnostics, |el| el.child(self.diagnostics_bar()))
-            // Last, so the overlay paints above and blocks the workspace.
+            .when_some(self.tab_list(cx), |el, list| el.child(list))
+            .when_some(self.image_overlay(window, cx), |el, overlay| {
+                el.child(overlay)
+            })
+            .when(self.settings_open, |el| {
+                el.child(self.settings_modal(window, cx))
+            })
+            // Pickers remain above Settings.
             .when_some(self.overlay.as_ref(), |el, overlay| {
                 el.child(overlay.palette.clone())
             });
-        let root = root.when_some(self.tab_list(cx), |el, list| el.child(list));
-        let root = root.when_some(self.image_overlay(window, cx), |el, overlay| {
-            el.child(overlay)
-        });
+
         self.last_render_us = start.elapsed().as_micros();
         self.max_render_us = self.max_render_us.max(self.last_render_us);
         root

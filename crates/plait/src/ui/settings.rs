@@ -1,6 +1,6 @@
-//! The application's Settings page: host status first, then New threads,
+//! The application's Settings modal: host status first, then New threads,
 //! Providers, Agents, Keyboard, Editor, Appearance, and About. Only what applies to the
-//! whole app or host is here; a project's own settings have their own page
+//! whole app or host is here; a project's own settings have their own modal
 //! (settings_project.rs), and a thread's are under its message box.
 
 use super::{
@@ -14,7 +14,7 @@ use super::{
 use gpui::{prelude::*, *};
 use std::collections::HashSet;
 
-/// Which settings page fills the workspace while one is open.
+/// Which settings surface is open over the workspace.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum SettingsPage {
     /// Settings (Cmd-comma): the whole app and host.
@@ -84,7 +84,13 @@ pub(super) fn heading(text: impl Into<SharedString>) -> Div {
 
 /// The workspace area around a settings page's column.
 pub(super) fn framed(column: Div) -> Div {
-    div().flex().flex_1().min_h_0().px_6().py_5().child(column)
+    div()
+        .flex()
+        .flex_1()
+        .min_h_0()
+        .px(px(30.))
+        .pb_5()
+        .child(column)
 }
 
 fn note(text: impl Into<SharedString>) -> Div {
@@ -382,10 +388,7 @@ impl Plait {
         self.present(palette, None, window, cx);
     }
 
-    /// A settings page's column. Both pages share it, so they keep one
-    /// width. The window bar names the page and holds Done, so the column
-    /// starts with its content; `title` is for a page that has something
-    /// more to say there, as the project's page names its project.
+    /// Both modal bodies share one content width; the modal owns their header.
     pub(super) fn settings_column(&self, title: Option<AnyElement>) -> Div {
         column()
             .flex_1()

@@ -660,6 +660,13 @@ pub fn run() -> Vec<Row> {
             install(h, round);
         },
     ));
+    // The heavy workspace stays mounted while Settings is open.
+    scroll_conversation(&mut harness, 0.5);
+    rows.push(harness.steady("modal baseline, heavy conversation"));
+    harness.update(|plait, window, cx| plait.show_settings(true, window, cx));
+    rows.push(harness.steady("modal open, heavy conversation behind Settings"));
+    harness.update(|plait, window, cx| plait.show_settings(false, window, cx));
+    rows.push(harness.steady("modal closed, same heavy conversation"));
 
     drop(harness);
     let _ = std::fs::remove_dir_all(&scratch);

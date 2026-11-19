@@ -404,6 +404,7 @@ class Acceptance:
         if not self.exists('Done', 'AXButton'):
             self.key('cmd+comma')
         self.find('Done', 'control')
+        self.find('Settings', 'AXWindow')
         if tab:
             self.ax('select', '--name', tab, '--role', 'control')
             markers = {'New threads': 'Models', 'Providers': 'Find provider', 'Agents': 'Agent harnesses', 'Keyboard': 'Find shortcut', 'Editor': 'Open files with', 'Appearance': 'Code font', 'About': 'About and updates'}
@@ -415,6 +416,7 @@ class Acceptance:
         self.sidebar(True)
         self.press('Actions for acceptance project project')
         self.press('Project settings…')
+        self.find('Project settings', 'AXWindow')
         self.find('Commands')
         self.find('Done', 'control')
         self.ax('absent', '--name', 'New threads', '--role', 'control')
