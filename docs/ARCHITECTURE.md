@@ -90,6 +90,10 @@ thread_view.rs          presentation-independent thread view enum and Git view s
 ownership.rs            host/thread/checkout identities and read lifetimes
 operations.rs           thread-owned undo acknowledgements and uncertain retries
 state/registry.rs       checkout routing, root verification, and inactive write outcomes
+tabs.rs                 headless tab order, lifetimes, transitions, and cold residency
+tabs/bookmark.rs        bounded semantic workspace bookmarks; no loaded content
+tabs/row.rs             catalog-derived tab labels and measured-width overflow grouping
+tabs/persistence.rs     pure versioned tab-preferences codecs; no journal access
 transcript.rs           stable row identity and incremental list-change plans
 history.rs              stored/live merging, text parts, memory limits, run wording
 history/records.rs      complete record pages, run membership and closing-line projection
@@ -449,6 +453,92 @@ status because it needs the root that status reports. The list is kept until
 the epoch changes; a failed read is not cached, so the next request retries.
 Git reads do not start SSH or network connections. Remote transport is not
 implemented.
+
+### Headless tab model
+
+`plait_core::tabs` now provides a tab model in the core; the desktop does not
+use it to show tabs yet. `WindowTabs` owns at most 100 ordered `TabRecord`s,
+one active ID, and a session-only stack of up to 20 closed bookmarks.
+`TabContent::Thread` is its only content variant. A thread identity includes
+its host and store; its expected checkout separately includes the canonical
+root and, when verified, directory device/inode. Opening a thread activates
+its existing tab. New-thread drafts deduplicate by exact checkout; a creation
+acknowledgement replaces the draft in place without changing its tab position.
+
+The pure transitions cover activation, parking, close/reopen, reorder, cycling,
+numbered selection, confirmed deletion, project removal, and reconnect.
+Positions 1–8 address those tabs; position 9 addresses the last tab. Closing
+an active tab selects its right neighbor, then its left; closing the last
+leaves an empty model. Close never sends Stop, archives a thread, or removes a
+worktree. Its caller must finish saving drafts and bookmarks before closing.
+Rename and archive remain catalog facts and leave open tabs intact. Confirmed
+thread deletion and explicit project removal purge matching open and closed
+records; hiding a sidebar group is separate. Disconnect parks the host's tabs;
+a validated reconnect reloads only the active one.
+
+A tab retains a bookmark, not a loaded view, while hidden. Bookmarks describe
+the selected view, stable conversation row/offset or follow-latest, bounded
+history window, file position, diff path/layer/record and content fingerprint,
+selected commit, find queries/current matches, draft cursor/revision, semantic
+focus, panel/image/turn descriptors, logical selection/folds, and commit draft.
+Sidebar and inspector visibility remain window preferences. Draft text, image
+originals, and pending submissions remain in their existing owner stores.
+The cold record is checked against 16 KiB of owned storage, including string
+and path capacities. Inline bookmark JSON is at most 8 KiB, stored without
+spare capacity and decoded only when requested for activation or validation.
+A larger bookmark returns an explicit storage requirement; an opaque blob
+reference and bounded 1 MiB extended-bookmark codecs provide the handoff for
+future UI storage. No state is silently truncated on parking.
+
+`Residency::Cold` explicitly means reload is required. Only the active tab
+can own `Loading` or `Ready` read state, using Stage 1's `SelectedThreadState`
+and `ThreadRepositoryView`. Parking drops those payloads. The UI integration
+must also release history/projections, loaded diffs/files, images, shaped text,
+watch subscriptions, tasks, timers, and pointer geometry. Actual cancellation,
+editor undo retention, active payload budgets, and allocation/frame measurements
+remain UI-stage work; this headless model does not establish their performance.
+
+`TabLifetime` changes on close/reopen and draft replacement. `ReadStamp` adds
+visibility and connection generations, rejecting old activation replies even
+after A → B → A. Each new window lifetime, including restore, receives a fresh
+`WindowId` from its caller. Per-request generations, checkout revisions, and
+file/record fingerprints still need their existing checks. Mutation and submit
+acknowledgements must reach their owning ledgers regardless of these read guards.
+
+`tabs::row` derives title, state word, hover text, and shortcut hints from real
+thread summaries and navigation unread flags. It does not load a conversation
+or infer a current tool, exact approval call, or error body from a summary.
+Activating Files does not mark a conversation read. Its layout function takes
+measured widths and returns a contiguous visible range, hidden counts, and all
+tabs grouped as Needs me, Failed, Working, Finished, and Idle. The UI supplies
+measurements and draws the returned data.
+
+### Tab preferences codec
+
+`tabs::persistence` supplies pure encode/decode functions for a separate
+`tabs.json` beside desktop preferences. Schema 1 holds ordered tab IDs, the
+active ID, content identities, and bookmark records. Keeping it separate avoids
+rewriting unrelated preferences or risking draft/submission recovery when only
+a tab order or scroll position changes. The file is bounded to 2 MiB; restore
+examines at most 100 entries. Corrupt input, unsupported versions, missing
+threads, mismatched host/store/checkout identities, invalid bookmarks, and
+duplicates produce a valid window with unrestorable tabs omitted. A missing
+active entry selects the first surviving tab. Every restored tab starts cold.
+
+Restoration requires a validated complete catalog and known checkout identities,
+not a newest-200 watch subset. Archived threads may restore. Known disconnected
+identities can remain offline; missing identities drop silently. Nonempty draft
+tabs restore only when their caller already knows the draft is recoverable;
+these codecs neither read nor require the recovery journal. Closed history,
+resident payloads, and submission data are never serialized. The UI stage must
+supply background bounded no-follow reads, private (0600) debounced atomic writes,
+save-failure handling, extended-blob storage, and activation hydration. It must leave an unsupported
+future tab-preferences version untouched instead of overwriting it.
+
+**The v1 draft and submission recovery journal is unchanged.** Its proposed v2
+index/blob redesign remains planned work with a separate compatibility review.
+The new tab codecs are tested without touching saved preferences or a journal;
+they do not yet restore tabs in the desktop window.
 
 ## Git boundary
 
