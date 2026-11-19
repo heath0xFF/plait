@@ -1005,6 +1005,7 @@ fn undo_with_inherited(request: &Value, lifecycle: &fs::File, writer: &fs::File)
 fn undo_never_converts_an_inherited_shared_lifecycle_lock() {
     use plait_core::lease::{LeaseClass, acquire_checkout, prepare_checkout_lock};
     use std::os::fd::AsRawFd;
+    use std::time::{Duration, Instant};
     let base = Scratch::new();
     let root = repository(&base.0);
     let store = base.0.join("store");
@@ -1054,7 +1055,15 @@ fn undo_never_converts_an_inherited_shared_lifecycle_lock() {
 
     // An exclusive pair, as turn undo passes it: the helper reuses it and restores the file.
     let (lifecycle, writer) = open();
-    assert!(flock(&lifecycle, libc::LOCK_EX) && flock(&writer, libc::LOCK_EX));
+    // Parallel tests can briefly inherit CLOEXEC files between fork and exec.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !(flock(&lifecycle, libc::LOCK_EX) && flock(&writer, libc::LOCK_EX)) {
+        assert!(
+            Instant::now() < deadline,
+            "the shared pair remained held after undo exited"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
     let (ok, stderr) = undo_with_inherited(&request("exclusive"), &lifecycle, &writer);
     assert!(ok, "{stderr}");
     assert_eq!(
