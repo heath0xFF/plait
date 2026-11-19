@@ -2366,10 +2366,15 @@ the new root's exclusive lifecycle/writer leases and reacquires common metadata
 before Git starts, retaining the parent lifecycle lease throughout. This keeps
 lock ordering intact and prevents another host from running in a partial checkout.
 Removal holds exclusive lifecycle and writer leases on the recorded
-checkout, followed by common metadata exclusion. Parent/common identities,
-worktree membership and branch are rechecked under those leases. Removal also
-refuses queued work, record recovery, uncommitted/untracked/ignored content and
-unfinished merge/rebase/sequencer state. Desktop busy summaries grant no
+checkout, followed by common metadata exclusion. The record must name the
+UUID-derived folder and branch; the main checkout and common-directory
+identities, worktree membership and branch are rechecked under those leases
+(the checkout a worktree was started from need not still exist). Removal also
+refuses queued work, record recovery, uncommitted/untracked/ignored content,
+unfinished merge/rebase/sequencer state, tracked files whose edits are hidden
+by an assume-unchanged or present skip-worktree flag, and commits reachable
+only from the worktree's own HEAD reflog or per-worktree refs, whichever
+confirmation was given. Desktop busy summaries grant no
 permission. Both helper and Git supervisors use lifetime pipes and bounded
 process groups; checkout hooks and filters have a 120-second limit and are
 reclaimed before the outer worker releases its leases. The worker lends its
@@ -2383,7 +2388,9 @@ UUID and base. Host restart resumes admitted creation. A verified complete,
 clean checkout at its recorded base can be bound to its saved thread after a
 crash; hooks are never replayed against an existing checkout. A partial or
 ambiguous creation is reported as failed, retaining its files and branch for
-inspection rather than guessing ownership or deleting unknown work. A crash
+inspection rather than guessing ownership or deleting unknown work. When a
+checkout hook or filter fails after Git made the worktree, Git keeps it; the
+error names its folder and branch and says no thread was started. A crash
 between directory reservation and identity persistence likewise refuses reuse.
 A removal interrupted after Git completed is reconciled only when its recorded
 parent is available and Git no longer registers the missing checkout; a missing

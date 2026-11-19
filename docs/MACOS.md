@@ -671,7 +671,8 @@ a linked worktree. An unavailable chosen harness is refused, never replaced.
 
 You can change tabs while creation finishes; completion appears in the sidebar
 without taking focus. An unconfirmed request is retried with Cmd-Option-N using
-its original identity. Closing the window leaves accepted creation on the host;
+its original identity, from the same project; in another project Cmd-Option-N
+starts a new request. Closing the window leaves accepted creation on the host;
 reopening recovers its thread and grouping. A failed checkout reports what
 happened and preserves existing files and branches for inspection.
 
@@ -679,7 +680,9 @@ happened and preserves existing files and branches for inspection.
 upstream containing the current commit, as of the last fetch. **Keep local
 commits only** explicitly permits unpushed or unknown publication status while
 keeping the branch. Both refuse active work, changed directory identity,
-uncommitted files, ignored files and unfinished Git operations. Old worktrees
+uncommitted files, ignored files, edits hidden by assume-unchanged or
+skip-worktree flags, commits on no branch (made on a detached HEAD in the
+worktree) and unfinished Git operations. Old worktrees
 created by the desktop remain grouped as imported records and must be removed
 with your Git tools. There is no automatic cleanup or force removal.
 
