@@ -500,11 +500,38 @@ impl WindowTabs {
     /// The create acknowledgement changes content in place and invalidates reads.
     /// Mutation acknowledgements themselves must go to the operation ledger first.
     pub fn bind_created(&mut self, id: TabId, target: ThreadTarget) -> Result<(), TabError> {
+        self.bind_creation(id, target, None)
+    }
+
+    /// Only an unbound draft may adopt a host-verified worktree. Existing threads never move.
+    pub fn bind_worktree_created(
+        &mut self,
+        id: TabId,
+        source: &CheckoutKey,
+        target: ThreadTarget,
+    ) -> Result<(), TabError> {
+        self.bind_creation(id, target, Some(source))
+    }
+
+    fn bind_creation(
+        &mut self,
+        id: TabId,
+        target: ThreadTarget,
+        source: Option<&CheckoutKey>,
+    ) -> Result<(), TabError> {
         let i = self.index(id)?;
         if !target.valid() || target.is_draft() || !self.tabs[i].thread().target.is_draft() {
             return Err(TabError::InvalidIdentity);
         }
-        if self.tabs[i].thread().target.checkout() != target.checkout() {
+        let original = self.tabs[i].thread().target.checkout();
+        if let Some(source) = source {
+            if source != original
+                || target.checkout().host != original.host
+                || target.checkout().directory.is_none()
+            {
+                return Err(TabError::IdentityMismatch);
+            }
+        } else if original != target.checkout() {
             return Err(TabError::IdentityMismatch);
         }
         if self
@@ -514,7 +541,17 @@ impl WindowTabs {
         {
             return Err(TabError::AlreadyOpen);
         }
-        validate_record(&target, &self.tabs[i].thread().bookmark)?;
+        let bookmark = if source.is_some() {
+            // Repository selections belong to the original root, even when paths happen to match.
+            BookmarkRecord::capture(&bookmark::ThreadBookmark {
+                view: self.tabs[i].thread().bookmark.view(),
+                ..Default::default()
+            })
+            .map_err(|_| TabError::InvalidIdentity)?
+        } else {
+            self.tabs[i].thread().bookmark.clone()
+        };
+        validate_record(&target, &bookmark)?;
         if self.serial >= u64::MAX - 1 {
             return Err(TabError::IdentityExhausted);
         }
@@ -522,6 +559,7 @@ impl WindowTabs {
         self.tabs[i].lifetime.generation = generation;
         let thread = self.tabs[i].content.thread_mut();
         thread.target = target;
+        thread.bookmark = bookmark;
         thread.residency = Residency::Cold {
             reason: ColdReason::Replaced,
         };

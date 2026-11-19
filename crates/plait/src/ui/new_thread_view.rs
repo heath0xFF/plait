@@ -54,7 +54,10 @@ impl Plait {
                     // Under the box, where an open thread's controls are, so
                     // the box stays where it is when the first message is sent.
                     .child(self.draft_controls(cx))
-                    .children(self.draft_status(cx)),
+                    .children(self.isolation_choice(cx))
+                    .when(!self.admission.choice, |el| {
+                        el.children(self.draft_status(cx))
+                    }),
             );
         row()
             .gap_0()

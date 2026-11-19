@@ -345,7 +345,7 @@ here: the card names those files, but nothing stops the harness writing them.
 
 **Default harness for new threads** in Settings → New threads chooses where Cmd-N
 starts. A harness that is not ready is shown dimmed and cannot be chosen; a
-draft whose default is not ready starts in Pi. What has been checked against
+draft whose default is not ready keeps that harness and asks you to choose an available one. What has been checked against
 real installs is in [Verification](VERIFICATION.md#claude-code).
 
 ## Images in messages
@@ -1141,3 +1141,31 @@ nothing. The job's only secret is the update signing key, which signs
 `update.json` for in-app updates (see [Releasing](RELEASING.md)); the app and
 packages are not Developer ID signed. [Issue #6](https://github.com/heath0xFF/plait/issues/6)
 tracks Developer ID signing and notarization.
+
+
+### Starting a thread while a project is busy
+
+Sending a new draft asks the host where it can start. If the project already has
+a writer, **Project busy** offers **Own worktree** and **Wait**. Own worktree
+creates a new branch and checkout from HEAD, then sends the draft there using
+its chosen harness, model and permissions. Uncommitted files and build outputs
+are not copied. Wait is disabled and marked not yet available; nothing is queued.
+Cancel keeps the draft. A failed or unanswered creation keeps the request for
+safe retry. Completing it never selects a tab the person has moved away from.
+
+Project settings → New threads → **When this project is busy** defaults to
+**Ask** (each time). **Own worktree** authorizes automatic worktrees for new
+threads in that project only. The completed checkout path and branch are shown;
+cleanup remains manual. Cmd-Option-N still explicitly creates a cold worktree
+thread without waiting for a busy project.
+
+A thread already bound to a busy checkout offers **Continue separately**.
+Confirming **Own worktree** creates a linked thread from HEAD with a fresh harness
+session. The original history and draft stay in place; **Original thread** opens
+that source. No conversation is silently replayed or moved. A disconnected or
+older host does not offer unsupported isolation choices.
+
+Independent checkouts have no default run-count ceiling. Before-record scans on
+one filesystem prepare one at a time; the selected thread explains this wait
+and Stop cancels it before its harness starts. Exhausted resources produce an
+explicit error requiring a deliberate retry, rather than a hidden queue.

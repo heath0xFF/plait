@@ -1,5 +1,6 @@
 pub(crate) mod a11y;
 mod actions;
+mod admission;
 mod appearance;
 mod branches;
 mod changes;
@@ -31,6 +32,7 @@ mod session;
 mod settings;
 mod settings_agent;
 mod settings_editor;
+mod settings_isolation;
 mod settings_keyboard;
 mod settings_modal;
 mod settings_policy;
@@ -160,6 +162,7 @@ pub struct Plait {
     /// The new thread being written, before anything exists on the host.
     draft: new_thread::Draft,
     /// A worktree is being created or removed.
+    admission: admission::State,
     worktree_busy: bool,
     worktree_pending: Option<worktree::Pending>,
     approval_keys: live_conversation::ApprovalKeys,
@@ -227,6 +230,7 @@ impl Plait {
             providers: Default::default(),
             new_thread_open: false,
             draft: Default::default(),
+            admission: Default::default(),
             worktree_busy: false,
             worktree_pending: None,
             approval_keys: Default::default(),
@@ -266,6 +270,8 @@ impl Plait {
             this.sync_picker(cx);
             this.sync_policy(cx);
             this.sync_cleanup(cx);
+            this.sync_admission_capability(cx);
+            this.sync_admission_context(cx);
             this.sync_agent(cx);
             this.sync_project_settings(cx);
             this.sync_harnesses(cx);

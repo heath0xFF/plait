@@ -439,6 +439,38 @@ pub fn run() -> Vec<Row> {
     rows.push(harness.steady(&format!("c1 conversation, {count} rows, at bottom")));
     super::tabs::install(&mut harness, 20);
     rows.push(harness.steady("tabs20 conversation, twenty tabs, five running summaries"));
+    rows.push(harness.switching(
+        "tabs20 five running, burst of twenty summaries",
+        frames(),
+        |h, round| {
+            h.update(|plait, _, cx| {
+                let summaries = plait
+                    .host
+                    .connection
+                    .threads
+                    .iter()
+                    .enumerate()
+                    .map(|(index, thread)| {
+                        let mut thread = thread.clone();
+                        thread.updated_at = Some(round as u64 + 1);
+                        thread.status = if index < 5 {
+                            ThreadStatus::Running
+                        } else {
+                            ThreadStatus::Idle
+                        };
+                        thread
+                    })
+                    .collect();
+                plait_core::navigation::merge_threads(
+                    &mut plait.host.connection.threads,
+                    summaries,
+                )
+                .unwrap();
+                plait.refresh_tab_rows();
+                plait.rebuild_projects(cx);
+            });
+        },
+    ));
     super::tabs::install(&mut harness, 1);
     scroll_conversation(&mut harness, 0.5);
     rows.push(harness.steady("c2 conversation, middle (steady)"));

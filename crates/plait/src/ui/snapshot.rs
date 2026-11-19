@@ -43,6 +43,7 @@ use std::{
 
 #[cfg(debug_assertions)]
 mod a11y;
+mod admission;
 mod branches;
 mod find;
 mod isolation;
@@ -3674,10 +3675,10 @@ fn a_codex_draft_starts_a_codex_thread_in_its_mode() {
 }
 
 /// A draft starts in the default harness from Settings → New threads while it is
-/// ready, else Pi; a harness chosen in one draft leaves the default alone.
+/// unavailable; a harness chosen in one draft leaves the default alone.
 #[core::prelude::v1::test]
-fn a_draft_starts_in_the_default_harness_while_it_is_ready() {
-    if !isolated("a_draft_starts_in_the_default_harness_while_it_is_ready") {
+fn a_draft_keeps_its_default_harness_when_unavailable() {
+    if !isolated("a_draft_keeps_its_default_harness_when_unavailable") {
         return;
     }
     let scratch =
@@ -3733,15 +3734,15 @@ fn a_draft_starts_in_the_default_harness_while_it_is_ready() {
         plait.set_default_harness(HarnessId::Codex, cx);
         plait.discard_draft(window, cx);
         plait.open_draft(window, cx);
-        // Not ready: the draft starts in Pi, and the saved default stays.
+        // Not ready: keep the requested harness and block sending.
         plait.inject_harnesses(Some(sample_harnesses("signed_out", None)));
-        assert_eq!(plait.draft_harness(), HarnessId::Pi);
-        assert_eq!(plait.draft_model(), Some(choice()));
+        assert_eq!(plait.draft_harness(), HarnessId::Codex);
+        assert!(plait.draft_blocked().is_some());
         assert_eq!(plait.preferences.value.default_harness, HarnessId::Codex);
         // Ready again before anything was chosen: the draft follows the default.
         plait.inject_harnesses(Some(sample_harnesses("ready", None)));
         assert_eq!(plait.draft_harness(), HarnessId::Codex);
-        // An older host lists no harnesses, so Pi.
+        // An older host cannot silently replace the configured harness.
         plait
             .host
             .connection
@@ -3749,7 +3750,7 @@ fn a_draft_starts_in_the_default_harness_while_it_is_ready() {
             .as_mut()
             .unwrap()
             .protocol_version = 3;
-        assert_eq!(plait.draft_harness(), HarnessId::Pi);
+        assert_eq!(plait.draft_harness(), HarnessId::Codex);
     });
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();

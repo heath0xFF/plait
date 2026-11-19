@@ -74,6 +74,7 @@ impl Plait {
             return;
         }
         self.prepare_project_policy(cx);
+        self.prepare_isolation_settings(cx);
         let key = (
             self.host.connection.epoch,
             self.settings_checkout().to_owned(),
@@ -89,7 +90,8 @@ impl Plait {
                 settings::page("project-settings-page")
                     .track_scroll(&self.settings_scroll)
                     .child(self.policy_settings(cx))
-                    .child(self.agent_settings(cx)),
+                    .child(self.agent_settings(cx))
+                    .child(self.isolation_settings(cx)),
             ),
         )
     }
@@ -156,7 +158,9 @@ impl Plait {
         if self.settings_open
             && self.settings_page == settings::SettingsPage::Project
             && self.settings_checkout() != checkout
-            && (self.project_policy().busy || self.project_agent().busy)
+            && (self.project_policy().busy
+                || self.project_agent().busy
+                || self.admission.settings_busy)
         {
             return;
         }

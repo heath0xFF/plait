@@ -121,6 +121,32 @@ impl Info {
     }
 }
 impl Admission {
+    pub fn verify_request(&self, request: &Request) -> Result<(), Error> {
+        let Request::CreateAdmittedThread {
+            request_id,
+            checkout,
+            placement,
+            source_thread_id,
+            ..
+        } = request
+        else {
+            return Err(invalid());
+        };
+        if self.request_id != *request_id
+            || self.source_thread_id != *source_thread_id
+            || self
+                .worktree
+                .as_ref()
+                .is_some_and(|tree| tree.parent.root != *checkout)
+            || self.worktree.is_none() && self.checkout != *checkout
+            || self.state == Stage::Ready
+                && *placement == Placement::Worktree
+                && self.worktree.is_none()
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
     pub fn verified(self) -> Result<Self, Error> {
         if !worktree::bounded_id(&self.request_id)
             || !worktree::path(&self.checkout)
@@ -216,6 +242,43 @@ mod tests {
                     .is_err()
             );
         }
+    }
+    #[test]
+    fn admission_reply_must_keep_its_request_and_source_checkout() {
+        let request = Request::CreateAdmittedThread {
+            request_id: "one".into(),
+            checkout: "/repo".into(),
+            placement: Placement::Worktree,
+            harness: HarnessId::Pi,
+            provider: "faux".into(),
+            model_id: "faux-1".into(),
+            approval: ApprovalMode::Ask,
+            mode: None,
+            thinking: None,
+            source_thread_id: Some("original".into()),
+        };
+        let mut receipt = Admission {
+            request_id: "one".into(),
+            state: Stage::Preparing,
+            thread_id: None,
+            checkout: "/repo".into(),
+            worktree: None,
+            source_thread_id: Some("original".into()),
+            error: None,
+        };
+        assert!(receipt.verify_request(&request).is_ok());
+        receipt.request_id = "other".into();
+        assert!(receipt.verify_request(&request).is_err());
+        receipt.request_id = "one".into();
+        receipt.source_thread_id = None;
+        assert!(receipt.verify_request(&request).is_err());
+        receipt.source_thread_id = Some("original".into());
+        receipt.checkout = "/elsewhere".into();
+        assert!(receipt.verify_request(&request).is_err());
+        receipt.checkout = "/repo".into();
+        receipt.state = Stage::Ready;
+        receipt.thread_id = Some("new".into());
+        assert!(receipt.verify_request(&request).is_err());
     }
     #[test]
     fn admission_request_has_no_protocol_version_or_queue_choice() {

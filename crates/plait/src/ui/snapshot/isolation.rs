@@ -115,6 +115,44 @@ pub(super) fn walk(
             Some("Worktree thread created in the background. Open it from the sidebar.".into());
     });
     creation.capture(&format!("isolation-created-in-background-{suffix}"));
+    let mut busy = Harness::new(repository, output, width, height);
+    busy.connect(repository, false);
+    busy.update(|plait, window, cx| {
+        plait.open_draft(window, cx);
+        plait.admission.choice = true;
+        plait.host.creation.pending_create = Some(("choice".into(), super::choice()));
+    });
+    busy.capture(&format!("isolation-busy-choice-{suffix}"));
+    let mut many = Harness::new(repository, output, width, height);
+    many.connect(repository, false);
+    super::tabs::install(&mut many, 20);
+    many.update(|plait, _, cx| {
+        for (i, thread) in plait.host.connection.threads.iter_mut().enumerate() {
+            thread.checkout = repository
+                .with_extension("worktrees")
+                .join(format!("run-{i}"));
+            thread.status = ThreadStatus::Running;
+            thread.pending_approval = Some(false);
+            plait.preferences.value.navigation.remember_worktree(
+                thread.checkout.clone(),
+                repository.into(),
+                format!("plait/run-{i}"),
+            );
+        }
+        plait.refresh_tab_rows();
+        plait.rebuild_projects(cx);
+    });
+    many.capture(&format!("isolation-twenty-running-{suffix}"));
+    many.update(|plait, _, _| {
+        if let Some(snapshot) = plait.host.thread.snapshot.as_mut() {
+            std::sync::Arc::make_mut(snapshot).status = ThreadStatus::Running;
+        }
+        plait.admission.preparing = Some((
+            super::THREAD.into(),
+            Some(plait_core::host::admission::Phase::ResourceWait),
+        ));
+    });
+    many.capture(&format!("isolation-resource-wait-{suffix}"));
 }
 
 /// Holding a host writer lease on the open checkout must never block desktop

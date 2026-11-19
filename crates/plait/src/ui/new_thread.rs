@@ -164,6 +164,7 @@ impl Plait {
     /// Clear the draft and its choices. A creation already sent still
     /// finishes on the host, but its reply opens nothing and sends nothing.
     pub(super) fn discard_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_isolation(cx);
         window.focus(&self.focus, cx);
         self.clear_new_draft(cx);
         self.draft = super::new_thread::Draft {
@@ -178,13 +179,9 @@ impl Plait {
         self.draft.harness.unwrap_or_else(|| self.default_harness())
     }
 
-    /// The harness from Settings → New threads when it can start a thread now, else Pi.
+    /// An unavailable configured harness stays selected until the person changes it.
     pub(super) fn default_harness(&self) -> HarnessId {
-        let id = self.preferences.value.default_harness;
-        let startable = self
-            .harness_row(id)
-            .is_some_and(super::harnesses::HarnessRow::startable);
-        if startable { id } else { HarnessId::Pi }
+        self.preferences.value.default_harness
     }
 
     /// The model the draft starts with: the one chosen, else the harness's default.
@@ -531,14 +528,27 @@ impl Plait {
         if let Some(composer) = composer {
             self.attach_composer(id.clone(), composer, window, cx);
         }
-        if let Some((tab, checkout)) = draft_tab {
-            let result = self.tabs.model.bind_created(
-                tab,
-                plait_core::tabs::ThreadTarget::Existing {
-                    id: id.clone(),
-                    checkout,
-                },
-            );
+        if let Some((tab, source)) = draft_tab {
+            let mut checkout = source.clone();
+            if let Some(summary) = self.host.connection.threads.iter().find(|t| t.id == id) {
+                checkout.root = summary.checkout.clone();
+                checkout.directory = self
+                    .tabs
+                    .identity
+                    .checkouts
+                    .get(&checkout.root)
+                    .copied()
+                    .or(checkout.directory.filter(|_| checkout.root == source.root));
+            }
+            let target = plait_core::tabs::ThreadTarget::Existing {
+                id: id.clone(),
+                checkout: checkout.clone(),
+            };
+            let result = if checkout != source {
+                self.tabs.model.bind_worktree_created(tab, &source, target)
+            } else {
+                self.tabs.model.bind_created(tab, target)
+            };
             self.tab_error(result);
             self.refresh_tab_rows();
         }

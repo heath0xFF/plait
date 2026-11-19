@@ -383,7 +383,9 @@ impl Plait {
             .max_w(px(CONTENT_WIDTH))
             .mx_auto()
             .gap_1()
-            .child(controls);
+            .child(controls)
+            .children(self.continuation_control(cx))
+            .children(self.admission_context(cx));
         // The controls are the whole line. What a mode allows and why a
         // control is locked are hover text. One thing is said in the open,
         // in amber: the run is not under the mode the control names.

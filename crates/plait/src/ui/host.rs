@@ -621,20 +621,17 @@ impl Plait {
             protocol,
         )
         .with_mode(self.pending_mode());
-        self.host_request::<host::ThreadReply>(
+        self.create_with_admission(
+            Created {
+                request_id: id,
+                choice,
+                harness,
+                selection_epoch,
+                checkout,
+            },
             request,
             window,
             cx,
-            move |this, result, window, cx| {
-                let created = Created {
-                    request_id: id,
-                    choice,
-                    harness,
-                    selection_epoch,
-                    checkout,
-                };
-                this.finish_create(created, result, window, cx)
-            },
         );
         self.sync_composer(cx);
         cx.notify();

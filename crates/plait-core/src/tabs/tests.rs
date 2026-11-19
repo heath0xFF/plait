@@ -746,3 +746,47 @@ fn verifying_a_session_host_preserves_order_bookmarks_and_closed_history() {
         .unwrap();
     assert_ne!(reopened, b);
 }
+
+#[test]
+fn worktree_creation_only_binds_the_expected_draft_and_never_steals_focus() {
+    let mut w = window();
+    let a = w.open(draft("draft"), Some(1)).unwrap();
+    let other = open(&mut w, "other");
+    let original = checkout("/repo");
+    let target = ThreadTarget::Existing {
+        id: "isolated".into(),
+        checkout: checkout("/repo.worktrees/thread"),
+    };
+    assert_eq!(
+        w.bind_worktree_created(a, &checkout("/wrong"), target.clone()),
+        Err(TabError::IdentityMismatch)
+    );
+    let mut foreign = target.clone();
+    if let ThreadTarget::Existing { checkout, .. } = &mut foreign {
+        checkout.host.id = "different-host".into();
+    }
+    assert_eq!(
+        w.bind_worktree_created(a, &original, foreign),
+        Err(TabError::IdentityMismatch)
+    );
+    let mut unknown = target.clone();
+    if let ThreadTarget::Existing { checkout, .. } = &mut unknown {
+        checkout.directory = None;
+    }
+    assert_eq!(
+        w.bind_worktree_created(a, &original, unknown),
+        Err(TabError::IdentityMismatch)
+    );
+    assert_eq!(
+        w.bind_worktree_created(other, &original, target.clone()),
+        Err(TabError::InvalidIdentity)
+    );
+    w.bind_worktree_created(a, &original, target.clone())
+        .unwrap();
+    assert_eq!(w.active(), Some(other));
+    assert_eq!(w.get(a).unwrap().thread().target(), &target);
+    assert_eq!(
+        w.bind_worktree_created(a, &original, target),
+        Err(TabError::InvalidIdentity)
+    );
+}

@@ -1555,3 +1555,24 @@ Recorded review prepares visible paths, run descriptions and patch text with
 the shared display-text escaping used for MCP data. Format and control
 characters remain visible without changing the path or record identity sent
 to the host. This preparation runs off the UI thread.
+
+
+### Busy-project admission and finite resources
+
+`runtime/src/admission.ts` owns additive placement negotiation, identity-bound
+project authorization, durable creation receipts and linked-thread provenance.
+It composes the host-owned worktree operations; no Git process moves into the
+window. `run-capacity.ts` has no default execution ceiling, offers an explicit
+host limit and serializes before-record preparation per filesystem device.
+Cancellation removes waiting preparation and cleanup releases the existing
+writer lease. The immutable run still has the chosen harness and policy.
+
+`host/admission.rs` validates additive capabilities and receipts. The desktop's
+`ui/admission.rs` captures request ownership, handles the draft choice and guards
+late results by connection/request identity; `settings_isolation.rs` presents the
+main project's stored authorization in its modal. Unsupported hosts retain the
+old in-place flow without promising a queue. The selected thread alone observes
+preparation and linked provenance; tab/sidebar drawing consumes cached summaries
+and never calls the filesystem, Git or host. Headless scenes exercise twenty
+running summaries and the busy/resource choices; the frame suite includes a
+burst of twenty summaries with five runs and one transcript watch.
