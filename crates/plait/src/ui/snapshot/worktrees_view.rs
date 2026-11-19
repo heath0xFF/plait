@@ -472,3 +472,57 @@ fn reopen_returns_worktrees_only_for_a_present_project() {
     drop(h);
     let _ = std::fs::remove_dir_all(scratch);
 }
+/// Assistive technology keeps its place by node id: every control in the view
+/// is named, and each keeps its id when a size reply re-sorts the lanes.
+#[core::prelude::v1::test]
+fn graph_controls_are_named_and_keep_their_ids_when_lanes_resort() {
+    if !isolated("worktrees_view::graph_controls_are_named_and_keep_their_ids_when_lanes_resort") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-worktree-ids-{}", std::process::id()));
+    let repo = fixture_repository(&scratch);
+    let mut h = Harness::new(&repo, None, 1380., 860.);
+    h.connect(&repo, false);
+    install(&mut h, 4);
+    let buttons = |frame: &crate::ui::a11y::A11yFrame| {
+        let mut found: Vec<_> = frame
+            .nodes
+            .iter()
+            .filter(|n| n.path.contains("worktrees-view") && n.role == Role::Button)
+            .map(|n| (n.path.clone(), n.node_id, n.label.clone()))
+            .collect();
+        found.sort();
+        found
+    };
+    let before = buttons(&h.draw_a11y());
+    assert!(before.len() > 10, "{before:?}");
+    for (path, _, label) in &before {
+        assert!(
+            label.as_deref().is_some_and(|l| !l.trim().is_empty()),
+            "unnamed {path}"
+        );
+    }
+    h.update(|p, _, cx| {
+        p.worktrees.sizes[3] = Some(Ok(Size {
+            source: 9_000_000_000,
+            build: 0,
+            incomplete: false,
+            entries: 1,
+        }));
+        p.sort_worktree_lanes(true, cx);
+    });
+    let frame = h.draw_a11y();
+    frame.assert_no_duplicates("worktrees re-sorted");
+    let after: Vec<_> = buttons(&frame)
+        .into_iter()
+        .map(|(path, id, _)| (path, id))
+        .collect();
+    for (path, id, _) in &before {
+        assert!(
+            after.contains(&(path.clone(), *id)),
+            "{path} changed its id"
+        );
+    }
+    drop(h);
+    let _ = std::fs::remove_dir_all(scratch);
+}
