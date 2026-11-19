@@ -459,6 +459,76 @@ fn drafts_restart_in_order_with_images_settings_and_evicted_history() {
     std::fs::remove_dir_all(scratch).unwrap();
 }
 
+#[core::prelude::v1::test]
+fn restore_forgets_empty_drafts_no_tab_returned() {
+    use plait_core::{
+        session::{Draft, DraftSettings, DraftTab, Session},
+        tabs::{CheckoutKey, HostKey},
+    };
+    let scratch = std::env::temp_dir().join(format!("plait-orphan-drafts-{}", std::process::id()));
+    let repo = fixture_repository(&scratch);
+    let host = HostKey {
+        id: "test-host".into(),
+        store: "/host".into(),
+    };
+    let checkout = CheckoutKey {
+        host: host.clone(),
+        root: repo.clone(),
+        directory: crate::ui::tab_identity::directory(&repo),
+    };
+    let entry = |text: &str| DraftTab {
+        legacy: false,
+        creation: None,
+        checkout: repo.clone(),
+        draft: Draft {
+            text: text.into(),
+            ..Default::default()
+        },
+        settings: DraftSettings::default(),
+    };
+    // A crash after the journal save, before the tab file, leaves an empty entry
+    // that no tab record names. It is the checkout's legacy owner.
+    let mut data = Session::empty("/host".into());
+    data.set_draft_tab("orphan".into(), entry(""));
+    data.set_draft_tab("open-empty".into(), entry(""));
+    data.set_draft_tab("closed-text".into(), entry("Kept text"));
+    let mut h = Harness::new(&repo, None, 900., 600.);
+    h.connect(&repo, false);
+    h.update(|p, w, cx| {
+        p.host.connection.connected = false;
+        p.tabs = Default::default();
+        p.park_workspace(cx);
+        p.install_tab_identity(host, vec![checkout.clone()], cx);
+        p.session.data = Some(data);
+        p.tabs
+            .model
+            .open(
+                ThreadTarget::Draft {
+                    id: "open-empty".into(),
+                    checkout,
+                },
+                None,
+            )
+            .unwrap();
+        p.tabs.persistence.edited = true;
+        p.tabs.identity.catalog_ready = true;
+        p.tabs.persistence.requested = true;
+        p.tabs.persistence.loaded = true;
+        p.try_restore_tabs(w, cx);
+        let data = p.session.data.as_ref().unwrap();
+        let mut ids: Vec<_> = data.draft_tabs.keys().map(String::as_str).collect();
+        ids.sort();
+        assert_eq!(ids, ["closed-text", "open-empty"]);
+        assert_eq!(
+            data.new_draft_for(&repo).unwrap().text,
+            "Kept text",
+            "an older build is shown the draft with text"
+        );
+    });
+    drop(h);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
 fn wait_tabs(h: &mut Harness) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {

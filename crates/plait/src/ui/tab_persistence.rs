@@ -317,8 +317,51 @@ impl Plait {
             self.tabs.lifecycle.presenting = false;
             self.keep_beneath_settings(covered, window, cx);
         }
+        self.forget_unopened_empty_drafts(cx);
         self.queue_tab_save(cx);
         cx.notify();
+    }
+
+    /// Empty drafts are saved only so their open tabs return. Restore is the one
+    /// point that knows which returned; drop the rest so they do not accumulate.
+    fn forget_unopened_empty_drafts(&mut self, cx: &mut Context<Self>) {
+        let mut kept: std::collections::HashSet<String> = self
+            .tabs
+            .model
+            .tabs()
+            .iter()
+            .filter_map(|tab| match tab.thread().target() {
+                ThreadTarget::Draft { id, .. } => Some(id.clone()),
+                ThreadTarget::Existing { .. } => None,
+            })
+            .collect();
+        kept.extend(self.draft.id.clone());
+        kept.extend(self.tabs.lifecycle.drafts.keys().cloned());
+        let Some(data) = &mut self.session.data else {
+            return;
+        };
+        let unopened: Vec<String> = data
+            .draft_tabs
+            .iter()
+            .filter(|(id, tab)| {
+                !kept.contains(*id)
+                    && tab.creation.is_none()
+                    && tab.draft.creation.is_none()
+                    && tab.draft.text.is_empty()
+                    && tab.draft.images.is_empty()
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        if unopened.is_empty() {
+            return;
+        }
+        for id in &unopened {
+            data.clear_draft_tab(id);
+        }
+        if let Some(journal) = &self.session.journal {
+            journal.queue(data.clone());
+        }
+        self.schedule_session_save(false, cx);
     }
 
     pub(super) fn tab_save_request(
