@@ -683,6 +683,7 @@ pub fn remove_managed_supervised(
         return Err("This worktree has uncommitted or ignored files. Preserve or remove them before removing the worktree.".into());
     }
     refuse_hidden_edits(&record.path)?;
+    refuse_worktree_only_commits(&record)?;
     let git_dir = text_read(&record.path, &["rev-parse", "--absolute-git-dir"])?;
     if [
         "MERGE_HEAD",
@@ -747,6 +748,50 @@ fn refuse_hidden_edits(path: &Path) -> Result<()> {
         if tag.is_ascii_lowercase() || (*tag == b'S' && present()) {
             return Err("This worktree has tracked files Git is told not to check (assume-unchanged or skip-worktree), so their edits cannot be seen. Clear those flags and commit or discard the edits before removing the worktree.".into());
         }
+    }
+    Ok(())
+}
+
+/// Commits kept only by this worktree's HEAD reflog or its own refs lose their
+/// last reference when Git deletes the worktree's administrative folder.
+fn refuse_worktree_only_commits(record: &ManagedWorktree) -> Result<()> {
+    let mut tips = read_worktree(&record.path, &["rev-list", "--walk-reflogs", "HEAD"])?;
+    tips.extend(read_worktree(
+        &record.path,
+        &[
+            "for-each-ref",
+            "--format=%(objectname)",
+            "refs/worktree/",
+            "refs/bisect/",
+            "refs/rewritten/",
+        ],
+    )?);
+    if tips.iter().all(u8::is_ascii_whitespace) {
+        return Ok(());
+    }
+    // From the main checkout, `--single-worktree` leaves out this worktree's
+    // HEAD, reflog and own refs: what remains survives the removal. `--stdin`
+    // comes before `--not` so every Git version reads the tips as positive.
+    let mut command = super::read_command(&record.parent.main)?;
+    let raw = super::run(
+        command.args([
+            "rev-list",
+            "--count",
+            "--single-worktree",
+            "--stdin",
+            "--not",
+            "--all",
+            "--reflog",
+        ]),
+        Some(tips),
+        super::STATUS_LIMIT,
+        super::TIMEOUT,
+    )?;
+    if !raw.status.success() {
+        return Err(raw.failure());
+    }
+    if String::from_utf8_lossy(&raw.out.bytes).trim() != "0" {
+        return Err("This worktree has commits that are on no branch (made on a detached HEAD or kept only by its own refs). Removing it would lose them. Put them on a branch, then remove the worktree.".into());
     }
     Ok(())
 }
@@ -1166,6 +1211,49 @@ mod managed_tests {
         // A sparse-style skipped file that is absent holds no edit.
         git_in(&tree.path, &["update-index", "--skip-worktree", "file"]);
         fs::remove_file(tree.path.join("file")).unwrap();
+        let removed = remove_managed_worktree(tree.clone(), identity, true, |_| Ok(())).unwrap();
+        assert_eq!(removed.stage, ManagedStage::Removed);
+        clean(&tree);
+    }
+    #[test]
+    fn removal_refuses_commits_only_the_worktree_keeps() {
+        let repo = repository();
+        let tree = create(&repo);
+        let identity = tree.identity.as_ref().unwrap();
+        let commit = |name: &str| {
+            fs::write(tree.path.join(name), "work\n").unwrap();
+            git_in(&tree.path, &["add", name]);
+            git_in(
+                &tree.path,
+                &[
+                    "-c",
+                    "user.name=T",
+                    "-c",
+                    "user.email=t@t",
+                    "commit",
+                    "-qm",
+                    name,
+                ],
+            );
+        };
+        // A commit made on a detached HEAD lives only in this worktree's HEAD reflog.
+        git_in(&tree.path, &["checkout", "-q", "--detach"]);
+        commit("detached");
+        git_in(&tree.path, &["checkout", "-q", &tree.branch]);
+        for allow in [false, true] {
+            let error =
+                remove_managed_worktree(tree.clone(), identity, allow, |_| Ok(())).unwrap_err();
+            assert!(error.contains("on no branch"), "{error}");
+        }
+        git_in(&tree.path, &["branch", "kept-detached", "HEAD@{1}"]);
+        // A per-worktree ref is deleted with the worktree too.
+        commit("worktree-ref");
+        git_in(&tree.path, &["update-ref", "refs/worktree/keep", "HEAD"]);
+        git_in(&tree.path, &["reset", "-q", "--hard", "HEAD~1"]);
+        git_in(&tree.path, &["reflog", "expire", "--expire=now", "--all"]);
+        let error = remove_managed_worktree(tree.clone(), identity, true, |_| Ok(())).unwrap_err();
+        assert!(error.contains("on no branch"), "{error}");
+        git_in(&tree.path, &["branch", "kept-ref", "refs/worktree/keep"]);
         let removed = remove_managed_worktree(tree.clone(), identity, true, |_| Ok(())).unwrap();
         assert_eq!(removed.stage, ManagedStage::Removed);
         clean(&tree);
