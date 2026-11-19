@@ -348,8 +348,12 @@ pub fn stop(id: DirIdentity, expected: &str) -> Result<(), LeaseError> {
             "The desktop still owns this Git operation. Wait for it to finish.",
         ));
     }
+    let mut verified = false;
     for signal in [libc::SIGTERM, libc::SIGKILL] {
-        if !leader(child) {
+        // After a verified SIGTERM the group was watched without a gap, and a
+        // live group's ID is never reallocated: a leader that exited since
+        // still names the same group. Any process now at its PID does not.
+        if !leader(child) && !(verified && process::pid_free(child.pid)) {
             return Err(LeaseError::io(
                 "The recorded Git leader no longer has the same identity. No further signal was sent; inspect the remaining processes before confirming.",
             ));
@@ -357,6 +361,7 @@ pub fn stop(id: DirIdentity, expected: &str) -> Result<(), LeaseError> {
         if unsafe { libc::kill(-child.pid, signal) } != 0 && !process::group_gone(child.pid) {
             return Err(io_error(io::Error::last_os_error()));
         }
+        verified = true;
         if wait_gone(child.pid) {
             return file.set_len(0).map_err(io_error);
         }
@@ -696,6 +701,30 @@ mod tests {
             LeaseErrorKind::CleanupUncertain
         );
         drop(acquire_checkout(&root, None, LeaseClass::Writer).unwrap());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn stop_escalates_when_sigterm_ends_git_but_its_group_survives() {
+        let root = root();
+        // The leader dies on SIGTERM; its child ignores TERM and stays in the group.
+        let (mut child, id) = pending(&root, "(trap '' TERM; echo ready; exec sleep 30) & wait");
+        let mut ready = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready.trim(), "ready");
+        let state = unconfirmed(id).unwrap().unwrap();
+        let group = state.process.as_ref().unwrap().group;
+        let wait = thread::spawn(move || child.wait().unwrap());
+        let stopped = stop(id, &state.token);
+        let alive = !process::group_gone(group);
+        unsafe {
+            libc::kill(-group, libc::SIGKILL);
+        }
+        wait.join().unwrap();
+        assert!(stopped.is_ok(), "{stopped:?}");
+        assert!(!alive, "Stop left the recorded group running");
+        assert!(unconfirmed(id).unwrap().is_none());
         fs::remove_dir_all(root).unwrap();
     }
     fn crash_case(lent: bool) {

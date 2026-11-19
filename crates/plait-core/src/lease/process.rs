@@ -93,6 +93,13 @@ fn parse_stat(pid: i32, bytes: &[u8]) -> Option<Process> {
     })
 }
 
+/// No process, not even a zombie, holds this PID.
+pub(super) fn pid_free(pid: i32) -> bool {
+    pid > 0
+        && unsafe { libc::kill(pid, 0) } != 0
+        && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
 pub(super) fn group_gone(group: i32) -> bool {
     group > 0
         && unsafe { libc::kill(-group, 0) } != 0

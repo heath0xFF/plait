@@ -1652,8 +1652,12 @@ identity never authorizes a signal. The optional `process` field gives the
 recorded `group`, `command`, and `can_stop` value. When `can_stop` is true, the
 same control offers **Stop processes**. Its action rechecks the token, boot,
 owner and leader identity, sends SIGTERM to that group, and waits up to two
-seconds for absence. If the same leader still exists, it sends SIGKILL and
-checks for another two seconds. Losing identity stops further signals; a
+seconds for absence. If the group remains, it sends SIGKILL to the same group
+and checks for another two seconds: either the same leader still exists, or
+the leader has exited and no process holds its PID. A live group's ID is never
+reallocated, and Stop watched it without a gap since its verified SIGTERM, so
+the survivors are still the recorded group. Any other process at that PID ends
+the stop. Losing identity stops further signals; a
 remaining group stays blocked, with no timeout-based clearance. If identity
 cannot be proved, the control offers **Confirm stopped** instead and sends
 nothing. The checkout's existing identity check also refuses a removed or
