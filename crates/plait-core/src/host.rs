@@ -128,6 +128,8 @@ impl ThreadStatus {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ThreadSummary {
+    #[serde(default)]
+    pub checkout_queue: Option<checkout_queue::Summary>,
     pub id: String,
     pub checkout: PathBuf,
     pub model: ModelChoice,
@@ -152,6 +154,7 @@ pub struct ThreadSummary {
 impl From<&Snapshot> for ThreadSummary {
     fn from(snapshot: &Snapshot) -> Self {
         Self {
+            checkout_queue: None,
             id: snapshot.id.clone(),
             checkout: snapshot.checkout.clone(),
             model: snapshot.model.clone(),
@@ -454,6 +457,30 @@ pub enum Request {
         mode: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         protocol_version: Option<u32>,
+    },
+    SubmitCheckout {
+        thread_id: String,
+        request_id: String,
+        text: String,
+        approval: ApprovalMode,
+        images: Vec<String>,
+    },
+    CheckoutQueueInfo {},
+    WatchThreadsQueue {
+        archived: bool,
+    },
+    ListThreadsQueue {
+        archived: bool,
+        limit: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cursor: Option<String>,
+    },
+    CancelCheckoutWait {
+        thread_id: String,
+        request_id: String,
+    },
+    ResumeCheckoutQueue {
+        thread_id: String,
     },
     Submit {
         #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -1108,6 +1135,7 @@ pub use watch::{CancelWatch, Snapshots, ThreadLists, Updates};
 
 pub mod admission;
 pub mod agent;
+pub mod checkout_queue;
 pub mod cleanup;
 pub mod harness;
 pub mod identity;
@@ -1279,6 +1307,27 @@ mod tests {
     }
 
     #[test]
+    fn checkout_queue_capability_falls_back_only_for_older_hosts() {
+        let (client, server, directory) = scripted(
+            "queue-capability",
+            vec![
+                r#"{"ok":false,"error":{"code":"invalid_request","message":"Unknown operation."}}"#,
+                r#"{"ok":true,"result":{"schema":1,"checkout_queue_v1":true,"limit":32,"payload_bytes":33554432}}"#,
+                r#"{"ok":true,"result":{"schema":1,"checkout_queue_v1":true,"limit":1000,"payload_bytes":33554432}}"#,
+                r#"{"ok":false,"error":{"code":"busy","message":"Try again."}}"#,
+            ],
+        );
+        assert!(!checkout_queue::available(&client).unwrap());
+        assert!(checkout_queue::available(&client).unwrap());
+        assert!(checkout_queue::available(&client).is_err());
+        assert!(checkout_queue::available(&client).is_err());
+        for request in server.join().unwrap() {
+            assert_eq!(request, serde_json::json!({"op":"checkout_queue_info"}));
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn image_downloads_accept_large_parts_and_refuse_oversized_parts() {
         use crate::images::{IMAGE_BYTES, READ_CHUNK};
         use base64::{Engine, engine::general_purpose::STANDARD};
@@ -1365,6 +1414,7 @@ mod tests {
             height: 1,
         };
         let pending = crate::host_state::PendingSubmit {
+            checkout_wait: false,
             request_id: "r".into(),
             text: String::new(),
             images: vec![image.clone()],

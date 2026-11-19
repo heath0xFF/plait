@@ -11,6 +11,8 @@ pub enum TabState {
     Interrupted,
     Failed,
     Working,
+    Waiting,
+    Held,
     Finished,
     Idle,
     Stopped,
@@ -24,6 +26,8 @@ impl TabState {
             Self::Interrupted => "Interrupted",
             Self::Failed => "Failed",
             Self::Working => "Working",
+            Self::Waiting => "Waiting",
+            Self::Held => "Held",
             Self::Finished => "Done",
             Self::Idle if active => "Ready",
             Self::Idle => "",
@@ -34,9 +38,9 @@ impl TabState {
     }
     pub fn group(self) -> TabGroup {
         match self {
-            Self::Approve | Self::Interrupted => TabGroup::NeedsMe,
+            Self::Approve | Self::Interrupted | Self::Held => TabGroup::NeedsMe,
             Self::Failed => TabGroup::Failed,
-            Self::Working => TabGroup::Working,
+            Self::Working | Self::Waiting => TabGroup::Working,
             Self::Finished => TabGroup::Finished,
             Self::Idle | Self::Stopped | Self::Offline | Self::Unavailable => TabGroup::Idle,
         }
@@ -47,6 +51,8 @@ impl TabState {
             Self::Interrupted => "Interrupted before completion",
             Self::Failed => "Failed — inspect conversation",
             Self::Working => "Working — open the conversation for current activity",
+            Self::Waiting => "Waiting for the checkout",
+            Self::Held => "Checkout queue held — Resume to continue",
             Self::Finished => "Finished — unread result",
             Self::Idle => "Ready for input",
             Self::Stopped => "Stopped",
@@ -141,7 +147,7 @@ pub fn metadata(window: &WindowTabs, context: &RowContext<'_>) -> Vec<TabMetadat
             let project_path = context.navigation.project_of(&checkout.root);
             let project = crate::display_text::escape(&crate::state::project_name(project_path));
             let archived = summary.is_some_and(|t| t.archived == Some(true));
-            let hover = format!(
+            let mut hover = format!(
                 "{title} · {project} / {}\n{}{}",
                 crate::display_text::escape(context.machine),
                 if target.is_worktrees() && state != TabState::Offline {
@@ -151,6 +157,9 @@ pub fn metadata(window: &WindowTabs, context: &RowContext<'_>) -> Vec<TabMetadat
                 },
                 if archived { "\nArchived" } else { "" }
             );
+            if let Some(queue) = summary.and_then(|t| t.checkout_queue.as_ref()) {
+                hover.push_str(&format!("\n{}", queue.detail()));
+            }
             TabMetadata {
                 id: tab.id,
                 worktrees: target.is_worktrees(),
@@ -218,6 +227,15 @@ fn tab_summaries<'a>(
 }
 
 pub fn summary_state(thread: &ThreadSummary, unread: bool) -> TabState {
+    if !thread.status.busy()
+        && let Some(queue) = &thread.checkout_queue
+    {
+        return if queue.state == crate::host::checkout_queue::State::Held {
+            TabState::Held
+        } else {
+            TabState::Waiting
+        };
+    }
     if thread.pending_approval == Some(true) {
         return TabState::Approve;
     }

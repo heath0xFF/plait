@@ -99,7 +99,14 @@ impl Client {
 
     /// Live summaries of every thread. Needs a host that negotiated version 3.
     pub fn subscribe_threads(&self, archived: bool) -> Result<ThreadLists, Error> {
-        let mut watch = self.watch_threads(archived)?;
+        self.subscribe_threads_queue(archived, false)
+    }
+    pub fn subscribe_threads_queue(
+        &self,
+        archived: bool,
+        queue: bool,
+    ) -> Result<ThreadLists, Error> {
+        let mut watch = self.watch_threads_queue(archived, queue)?;
         let socket = watch.socket()?;
         Updates::spawn(socket, move || watch.next_list())
     }

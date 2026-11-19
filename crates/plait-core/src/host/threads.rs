@@ -31,10 +31,17 @@ struct Event {
 
 impl Client {
     pub fn watch_threads(&self, archived: bool) -> Result<ThreadWatch, Error> {
+        self.watch_threads_queue(archived, false)
+    }
+    pub fn watch_threads_queue(&self, archived: bool, queue: bool) -> Result<ThreadWatch, Error> {
         Ok(ThreadWatch {
-            frames: self.connect(&Request::WatchThreads {
-                archived,
-                protocol_version: 3,
+            frames: self.connect(&if queue {
+                Request::WatchThreadsQueue { archived }
+            } else {
+                Request::WatchThreads {
+                    archived,
+                    protocol_version: 3,
+                }
             })?,
             first: true,
             initial_deadline: Instant::now() + Duration::from_secs(15),
@@ -75,6 +82,14 @@ impl ThreadWatch {
                 return Err(Error::Protocol("Unsupported host event.".into()));
             }
             merge(&mut self.threads, event.threads, &event.removed);
+        }
+        if self.threads.iter().any(|thread| {
+            thread
+                .checkout_queue
+                .as_ref()
+                .is_some_and(|queue| !queue.valid())
+        }) {
+            return Err(Error::Protocol("Invalid checkout queue summary.".into()));
         }
         Ok(self.threads.clone())
     }

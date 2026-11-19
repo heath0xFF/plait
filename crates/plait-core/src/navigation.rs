@@ -205,6 +205,13 @@ pub fn merge_threads(
 ) -> Result<(), String> {
     let mut seen = HashSet::new();
     for next in &incoming {
+        if next
+            .checkout_queue
+            .as_ref()
+            .is_some_and(|queue| !queue.valid())
+        {
+            return Err("Invalid checkout queue summary.".into());
+        }
         if next.id.is_empty() || !next.checkout.is_absolute() || !seen.insert(&next.id) {
             return Err(
                 "Host returned invalid or duplicate thread identities. Reconnect to reload.".into(),
@@ -233,6 +240,11 @@ pub fn merge_threads(
 }
 
 pub fn state_label(thread: &ThreadSummary) -> &'static str {
+    if !thread.status.busy()
+        && let Some(queue) = &thread.checkout_queue
+    {
+        return queue.label();
+    }
     if thread.pending_approval == Some(true) {
         return "Needs approval";
     }

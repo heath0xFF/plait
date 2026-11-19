@@ -45,6 +45,7 @@ pub enum Request {
 pub enum Placement {
     Project,
     Worktree,
+    Wait,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

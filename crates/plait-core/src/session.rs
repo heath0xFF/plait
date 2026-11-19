@@ -487,6 +487,7 @@ mod tests {
                 creation: None,
             },
             pending: Some(PendingSubmit {
+                checkout_wait: false,
                 images: Vec::new(),
                 request_id: "request-1".into(),
                 text: "Do the task".into(),

@@ -262,6 +262,8 @@ impl HostState {
 /// The exact request to retry after an uncertain response. It is journaled before I/O.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PendingSubmit {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub checkout_wait: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<crate::images::ImageRef>,
     pub request_id: String,
@@ -276,6 +278,15 @@ pub struct PendingSubmit {
 
 impl PendingSubmit {
     pub fn request(&self, thread_id: &str) -> Request {
+        if self.checkout_wait {
+            return Request::SubmitCheckout {
+                thread_id: thread_id.into(),
+                request_id: self.request_id.clone(),
+                text: self.text.clone(),
+                approval: self.approval.unwrap_or(ApprovalMode::Ask),
+                images: self.images.iter().map(|image| image.id.clone()).collect(),
+            };
+        }
         let mut request = match self.when_busy {
             Some(mode) => Request::submit_when_busy(
                 thread_id.into(),
@@ -366,6 +377,7 @@ impl Submissions {
             return Err("This draft is already awaiting acceptance. Use Retry safely.".into());
         }
         let submission = PendingSubmit {
+            checkout_wait: false,
             images,
             request_id: request_id(),
             text,
@@ -407,6 +419,16 @@ impl Submissions {
         self.all(thread_id)
             .iter()
             .find(|p| p.request_id == request_id)
+    }
+
+    pub fn wait_for_checkout(&mut self, thread_id: &str, request_id: &str) {
+        if let Some(pending) = self
+            .pending
+            .get_mut(thread_id)
+            .and_then(|items| items.iter_mut().find(|p| p.request_id == request_id))
+        {
+            pending.checkout_wait = true;
+        }
     }
 
     pub fn start_send(&mut self, thread_id: &str, request_id: &str) -> bool {
