@@ -34,6 +34,9 @@ pub(super) struct AgentState {
 
 /// One line of a list: what it is, what it says, where it came from, and its file.
 pub(super) struct Row {
+    /// The row's element id: its list, title and path, so it stays the same
+    /// when rows are added or removed around it. Set by [`with_keys`].
+    key: SharedString,
     title: SharedString,
     detail: SharedString,
     tag: SharedString,
@@ -167,6 +170,24 @@ fn line(text: &str) -> String {
     }
 }
 
+/// Give each row a key from its list, title and path, numbering repeats so
+/// two identical rows still differ. Built once, not on every frame.
+fn with_keys(list: &str, rows: impl Iterator<Item = Row>) -> Vec<Row> {
+    let mut seen = std::collections::HashMap::<String, usize>::new();
+    rows.map(|mut row| {
+        let base = format!("{list}\n{}\n{}", row.title, row.path);
+        let repeat = seen.entry(base.clone()).or_default();
+        row.key = if *repeat == 0 {
+            base.into()
+        } else {
+            format!("{base}\n{repeat}").into()
+        };
+        *repeat += 1;
+        row
+    })
+    .collect()
+}
+
 fn size(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{bytes} bytes")
@@ -180,6 +201,7 @@ impl AgentView {
         let path = |path: &std::path::Path| SharedString::from(home_relative(path));
         let folder = |path: &std::path::Path| path.parent().map(std::path::Path::to_path_buf);
         let skills = reply.skills.iter().map(|skill| Row {
+            key: SharedString::default(),
             title: format!("/skill:{}", skill.name).into(),
             detail: line(&skill.description).into(),
             tag: if skill.model_invocation {
@@ -191,6 +213,7 @@ impl AgentView {
             folder: folder(&skill.path),
         });
         let templates = reply.templates.iter().map(|template| Row {
+            key: SharedString::default(),
             title: match &template.argument_hint {
                 Some(hint) => format!("/{} {hint}", template.name).into(),
                 None => format!("/{}", template.name).into(),
@@ -201,6 +224,7 @@ impl AgentView {
             folder: folder(&template.path),
         });
         let problems = reply.problems.iter().map(|problem| Row {
+            key: SharedString::default(),
             title: problem.message.clone().into(),
             detail: SharedString::default(),
             tag: SharedString::default(),
@@ -247,15 +271,16 @@ impl AgentView {
                 })
                 .collect(),
             instructions: reply.instructions.as_ref().map(|file| Row {
+                key: "agent-instructions".into(),
                 title: "User instructions".into(),
                 detail: size(file.bytes).into(),
                 tag: SharedString::default(),
                 path: path(&file.path),
                 folder: folder(&file.path),
             }),
-            skills: skills.collect(),
-            templates: templates.collect(),
-            problems: problems.collect(),
+            skills: with_keys("agent-skills", skills),
+            templates: with_keys("agent-templates", templates),
+            problems: with_keys("agent-problems", problems),
             commands,
         }
     }
@@ -490,7 +515,7 @@ impl Plait {
             ).line_height(px(16.)));
         }
         let instructions = match &view.instructions {
-            Some(row) => self.rows("agent-instructions", std::slice::from_ref(row), true, cx),
+            Some(row) => self.rows(std::slice::from_ref(row), true, cx),
             None => column().child(tag(
                 "agent-instructions-empty",
                 "No AGENTS.md or CLAUDE.md in the Pi agent folder.",
@@ -627,7 +652,7 @@ impl Plait {
                     colors().subtle,
                 ))
             })
-            .child(self.rows(id, shown, false, cx))
+            .child(self.rows(shown, false, cx))
             .when(!all, |el| {
                 el.child(div().child(
                     button((id, usize::MAX), format!("Show all {}", rows.len())).on_activate(
@@ -641,68 +666,90 @@ impl Plait {
             })
     }
 
-    fn rows(&self, id: &'static str, rows: &[Row], quiet: bool, cx: &mut Context<Self>) -> Div {
+    fn rows(&self, rows: &[Row], quiet: bool, cx: &mut Context<Self>) -> Div {
         let mut list = column().gap_3();
-        for (index, item) in rows.iter().enumerate() {
+        for item in rows {
             let open = item.folder.clone();
             let mut text = column().flex_1().min_w_0().gap(px(2.)).child(
                 div()
                     .text_size(px(12.))
                     .text_color(rgb(if quiet { colors().muted } else { colors().text }))
-                    .child(a11y_text(
-                        SharedString::from(format!("{id}-title-{index}")),
-                        item.title.clone(),
-                    )),
+                    .child(a11y_text("agent-row-title", item.title.clone())),
             );
             if !item.detail.is_empty() {
-                text = text.child(
-                    tag(
-                        SharedString::from(format!("{id}-detail-{index}")),
-                        item.detail.clone(),
-                        colors().muted,
-                    )
-                    .truncate(),
-                );
+                text = text
+                    .child(tag("agent-row-detail", item.detail.clone(), colors().muted).truncate());
             }
             let mut place = row().gap_2().min_w_0();
             if !item.tag.is_empty() {
-                place = place.child(
-                    tag(
-                        SharedString::from(format!("{id}-tag-{index}")),
-                        item.tag.clone(),
-                        colors().subtle,
-                    )
-                    .flex_shrink_0(),
-                );
+                place = place
+                    .child(tag("agent-row-tag", item.tag.clone(), colors().subtle).flex_shrink_0());
             }
             if !item.path.is_empty() {
-                place = place.child(
-                    tag(
-                        SharedString::from(format!("{id}-path-{index}")),
-                        item.path.clone(),
-                        colors().subtle,
-                    )
-                    .truncate(),
-                );
+                place = place
+                    .child(tag("agent-row-path", item.path.clone(), colors().subtle).truncate());
             }
+            // Keyed by the row, not its index, so ids hold as rows come and go.
             list = list.child(
                 row()
+                    .id(ElementId::Name(item.key.clone()))
                     .items_start()
                     .gap_3()
                     .child(text.child(place))
                     .when_some(open, |el, folder| {
                         el.child(
-                            toned_button(
-                                SharedString::from(format!("{id}-open-{index}")),
-                                "Open folder",
-                                Tone::Ghost,
-                            )
-                            .flex_shrink_0()
-                            .on_activate(cx, move |_, _, cx| cx.open_with_system(&folder)),
+                            toned_button("agent-row-open", "Open folder", Tone::Ghost)
+                                .flex_shrink_0()
+                                .on_activate(cx, move |_, _, cx| cx.open_with_system(&folder)),
                         )
                     }),
             );
         }
         list
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn problem(message: &str, path: &str) -> Row {
+        Row {
+            key: SharedString::default(),
+            title: message.to_owned().into(),
+            detail: SharedString::default(),
+            tag: SharedString::default(),
+            path: path.to_owned().into(),
+            folder: None,
+        }
+    }
+
+    #[core::prelude::v1::test]
+    fn row_keys_are_unique_and_do_not_depend_on_position() {
+        let first = with_keys(
+            "agent-problems",
+            [
+                problem("bad", "a.md"),
+                problem("bad", "a.md"),
+                problem("bad", "b.md"),
+            ]
+            .into_iter(),
+        );
+        let keys: Vec<_> = first.iter().map(|row| row.key.clone()).collect();
+        assert_eq!(keys.len(), 3);
+        assert!(keys[0] != keys[1] && keys[1] != keys[2] && keys[0] != keys[2]);
+
+        // A row added in front leaves the others' keys alone.
+        let second = with_keys(
+            "agent-problems",
+            [
+                problem("new", "c.md"),
+                problem("bad", "a.md"),
+                problem("bad", "b.md"),
+            ]
+            .into_iter(),
+        );
+        assert_eq!(second[1].key, keys[0]);
+        assert_eq!(second[2].key, keys[2]);
     }
 }

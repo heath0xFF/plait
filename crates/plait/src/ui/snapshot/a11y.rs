@@ -284,6 +284,48 @@ fn assert_settings_modals(harness: &mut Harness) {
         open_folder_buttons >= 5,
         "expected Open folder buttons for agent rows, got {open_folder_buttons}"
     );
+
+    // A skill added in front must not move the ids of the rows after it.
+    let skill_ids = |frame: &A11yFrame| -> Vec<(String, u64)> {
+        frame
+            .nodes
+            .iter()
+            .filter(|node| node.role == Role::Label)
+            .filter_map(|node| {
+                let value = node.value.as_deref()?;
+                value
+                    .starts_with("/skill:")
+                    .then(|| (value.to_owned(), node.node_id))
+            })
+            .collect()
+    };
+    let before = skill_ids(&project_frame);
+    harness.update(|plait, _, _| {
+        let mut resources = project_agent_resources(&plait.host.creation.checkout);
+        let mut added = resources.skills[0].clone();
+        added.name = "added-skill".into();
+        added.path = "/opt/sample-agent/skills/added-skill/SKILL.md".into();
+        resources.skills.insert(0, added);
+        plait.agent.view = Some(Arc::new(AgentView::new(resources)));
+    });
+    let after = skill_ids(&steady_frame(harness, "project-settings-skill-added"));
+    let kept: Vec<_> = before
+        .iter()
+        .filter_map(|(title, id)| {
+            let (_, now) = after.iter().find(|(shown, _)| shown == title)?;
+            Some((title, id, now))
+        })
+        .collect();
+    assert!(
+        kept.len() >= 2,
+        "expected skill rows on both frames: {before:?} {after:?}"
+    );
+    for (title, id, now) in kept {
+        assert_eq!(
+            id, now,
+            "skill row {title:?} changed its node id when a skill was added"
+        );
+    }
     harness.update(|plait, window, cx| plait.show_settings(false, window, cx));
 }
 
