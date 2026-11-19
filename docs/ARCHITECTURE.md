@@ -524,6 +524,9 @@ examines at most 100 entries. Corrupt input, unsupported versions, missing
 threads, mismatched host/store/checkout identities, invalid bookmarks, and
 duplicates produce a valid window with unrestorable tabs omitted. A missing
 active entry selects the first surviving tab. Every restored tab starts cold.
+Encoding saves every open thread tab whatever the current listing holds, so a
+save during loading or reconnection cannot erase tabs; only drafts not known to
+be recoverable are left out.
 
 Restoration requires a validated complete catalog and known checkout identities,
 not a newest-200 watch subset. Archived threads may restore. Known disconnected

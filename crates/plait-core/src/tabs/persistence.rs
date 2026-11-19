@@ -63,12 +63,17 @@ impl RestoreContext<'_> {
 }
 
 /// Encoding failure preserves the last good file; the UI must not replace it.
-/// Empty drafts are omitted using the same validated context as restoration.
+/// Every open thread is saved: a catalog that is loading, partial or stale must
+/// not erase tabs, and `decode` validates on restore. Only drafts the caller
+/// knows are recoverable are kept, so empty drafts are omitted.
 pub fn encode(window: &WindowTabs, context: &RestoreContext<'_>) -> Result<Vec<u8>, TabError> {
     let tabs = window
         .tabs
         .iter()
-        .filter(|t| context.contains(&t.thread().target))
+        .filter(|t| {
+            let target = &t.thread().target;
+            !target.is_draft() || context.drafts.contains(target)
+        })
         .map(|tab| SavedTab {
             id: tab.id,
             target: tab.thread().target.clone(),
@@ -457,6 +462,24 @@ mod tests {
                         .is_none_or(|id| r.window.get(id).is_some())
                 );
             }
+        }
+    }
+
+    #[test]
+    fn encode_keeps_tabs_the_current_catalog_does_not_list() {
+        // A save made while the listing is empty, partial or reconnecting must
+        // not erase tabs; decode alone decides what can be restored.
+        let (w, full) = source(2);
+        let mut partial = Catalog::new(1);
+        let lagging = value(&w, &partial);
+        partial.threads.clear();
+        partial.checkouts.clear();
+        let empty = value(&w, &partial);
+        for saved in [lagging, empty] {
+            assert_eq!(saved["tabs"].as_array().unwrap().len(), 2);
+            let r = read(&saved, &full);
+            assert_eq!(r.window.tabs().len(), 2);
+            assert_eq!(r.window.tabs()[1].thread().target(), &target("t1"));
         }
     }
 
