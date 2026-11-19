@@ -156,3 +156,37 @@ fn host_defaults_and_grouping() {
     server.join().unwrap();
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+#[core::prelude::v1::test]
+fn stale_worktree_request_is_retried_only_from_its_checkout() {
+    if !isolated("worktrees::stale_worktree_request_is_retried_only_from_its_checkout") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-worktree-stale-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    harness.update(|plait, window, cx| {
+        // An unconfirmed request from another project is not resent here.
+        let host = plait.tabs.host.clone();
+        plait.worktree_pending = Some(super::super::worktree::Pending::for_test(
+            scratch.join("other"),
+            host.clone(),
+        ));
+        plait.host.connection.connected = false;
+        plait.new_worktree_thread(window, cx);
+        assert!(plait.worktree_pending.is_none());
+        assert!(!plait.worktree_busy);
+        assert_eq!(
+            plait.notice.as_deref(),
+            Some("Connect to the host to start a thread in a worktree.")
+        );
+        // From its own checkout, the same request is retried.
+        let checkout = plait.host.creation.checkout.clone();
+        plait.worktree_pending = Some(super::super::worktree::Pending::for_test(checkout, host));
+        plait.new_worktree_thread(window, cx);
+        assert!(plait.worktree_busy);
+    });
+    harness.settle();
+    std::fs::remove_dir_all(scratch).unwrap();
+}

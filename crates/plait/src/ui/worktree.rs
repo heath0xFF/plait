@@ -16,10 +16,25 @@ use std::{
 #[derive(Clone)]
 pub(super) struct Pending {
     request: Request,
+    /// The checkout the person asked from; a retry elsewhere is a new request.
+    checkout: PathBuf,
     selection: u64,
     tab: Option<plait_core::tabs::TabId>,
     connection: u64,
     host: plait_core::tabs::HostKey,
+}
+#[cfg(test)]
+impl Pending {
+    pub(super) fn for_test(checkout: PathBuf, host: plait_core::tabs::HostKey) -> Self {
+        Self {
+            request: Request::ListWorktrees,
+            checkout,
+            selection: 0,
+            tab: None,
+            connection: 0,
+            host,
+        }
+    }
 }
 impl Plait {
     pub(super) fn new_worktree_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -34,8 +49,13 @@ impl Plait {
                 );
                 return cx.notify();
             }
-            pending.connection = self.host.connection.epoch;
-            return self.send_worktree(pending, window, cx);
+            if pending.checkout == self.host.creation.checkout {
+                pending.connection = self.host.connection.epoch;
+                return self.send_worktree(pending, window, cx);
+            }
+            // Another project gets its own request. The host keeps the earlier
+            // receipt, and reconnecting lists it.
+            self.worktree_pending = None;
         }
         if !self.host.connection.connected {
             self.notice = Some("Connect to the host to start a thread in a worktree.".into());
@@ -82,6 +102,7 @@ impl Plait {
             self.default_approval()
         };
         let root = self.host.creation.checkout.clone();
+        let checkout = root.clone();
         let selection = self.host.thread.watch_epoch;
         let tab = self.tabs.model.active();
         let connection = self.host.connection.epoch;
@@ -102,6 +123,7 @@ impl Plait {
                 match result {
                     Ok(info) => {
                         let pending = Pending {
+                            checkout,
                             request: Request::CreateWorktreeThread {
                                 request_id: request_id(),
                                 parent: Box::new(info.parent),
@@ -162,7 +184,9 @@ impl Plait {
             let result = task.await;
             let _ = this.update_in(cx, |this, window, cx| {
                 this.worktree_busy = false;
-                if this.host.connection.epoch != pending.connection { return; }
+                if this.host.connection.epoch != pending.connection {
+                    return;
+                }
                 match result {
                     Ok((operation, summary)) => {
                         this.worktree_pending = None;
