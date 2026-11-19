@@ -261,8 +261,8 @@ thread and project-draft fields retain their 512-record bound for older builds. 
 previous good file stays intact and current work stays in memory. Sending and
 required close or tab-switch saves report the failure and keep the work open.
 A draft that would take the journal over 4 MiB stays in memory with **Workspace
-not saved** and the reason. Required saves refuse sending, switching tabs, or
-closing until it fits; the previous file is unchanged. Shorten or explicitly
+not saved** and the reason. Required saves refuse sending, opening or
+switching tabs, or closing until it fits; the previous file is unchanged. Shorten or explicitly
 discard drafts to free space. Force quit can lose the unsaved changes. Twenty
 drafts of the maximum size are not a supported capacity.
 
