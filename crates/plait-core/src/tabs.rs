@@ -477,6 +477,9 @@ impl WindowTabs {
         let tab = self.tabs.remove(i);
         let TabContent::Thread(thread) = tab.content;
         if !thread.target.is_draft() || draft_nonempty {
+            // One entry per content: the newest close carries the current bookmark.
+            self.closed
+                .retain(|c| !c.target.same_content(&thread.target));
             self.closed.push(ClosedTab {
                 index: i,
                 target: thread.target,

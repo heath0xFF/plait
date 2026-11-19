@@ -681,3 +681,23 @@ fn reopen_at_capacity_activates_an_already_open_thread() {
     assert_eq!(w.reopen(|_| Some(Some(1))), Err(TabError::Capacity));
     assert_eq!(w.closed_len(), 1);
 }
+#[test]
+fn closing_a_thread_again_replaces_its_older_history_entry() {
+    let mut w = window();
+    let a = open(&mut w, "a");
+    let b = open(&mut w, "b");
+    w.close(b, false).unwrap();
+    let b = open(&mut w, "b");
+    w.save_bookmark(b, bookmark(ThreadView::History)).unwrap();
+    w.close(b, false).unwrap();
+    assert_eq!(w.closed_len(), 1);
+    let b = w.reopen(|_| Some(Some(1))).unwrap().unwrap();
+    assert_eq!(
+        w.get(b).unwrap().thread().bookmark().view(),
+        ThreadView::History
+    );
+    // Nothing else was closed, so a second reopen must not just refocus b.
+    w.activate(a).unwrap();
+    assert_eq!(w.reopen(|_| Some(Some(1))), Ok(None));
+    assert_eq!(w.active(), Some(a));
+}
