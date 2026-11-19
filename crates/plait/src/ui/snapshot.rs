@@ -3088,6 +3088,8 @@ fn draft_scenes_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
         // Set aside, so the sidebar shows threads without a draft.
         plait.discard_draft(window, cx);
     });
+    // Discard selects its neighbour. Supply that thread's reply without a host.
+    harness.connect(repository, false);
     // Resting on a project row shows its New thread button.
     harness.capture(&format!("sidebar-{suffix}"));
     harness.pointer(PlatformInput::MouseMove(MouseMoveEvent {
@@ -3098,6 +3100,14 @@ fn draft_scenes_walk(harness: &mut Harness, repository: &Path, suffix: &str) {
     harness.capture(&format!("sidebar-project-hover-{suffix}"));
     // With Codex as the default in Settings → New threads, a new draft opens on it.
     harness.update(|plait, window, cx| {
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 4;
+        plait.inject_harnesses(Some(sample_harnesses("ready", Some(NEWER))));
         // In memory only: the scene does not write a preferences file.
         plait.preferences.value.default_harness = HarnessId::Codex;
         plait.open_draft(window, cx);
