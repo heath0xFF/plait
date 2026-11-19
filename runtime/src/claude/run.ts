@@ -1,3 +1,4 @@
+import type { CleanupProof } from '../cleanup.ts';
 import type { ImageData } from '../images.ts';
 // One Plait run of a Claude Code thread: one Claude Code process, which takes
 // the run's message and any steering, and ends when no message is left.
@@ -36,6 +37,7 @@ const TURN_FAILED = 'Claude Code ended the turn with an error. Its own logs have
 
 export type ClaudeRunContext = {
   snapshot: Snapshot;
+  cleanup?: CleanupProof;
   /** The thread's Plait mode ID when the run starts; a change during the run goes through `setMode`. */
   mode: string;
   launch: ClaudeLaunch;
@@ -64,6 +66,7 @@ export class ClaudeRun {
   private session?: ClaudeSession;
   private head: number;
   private timer?: NodeJS.Timeout;
+  private interruptTimer?: NodeJS.Timeout;
   /** Set once the run's own message is sent, until the run ends; steering needs it. */
   private open = false;
   /** Set once Claude Code has answered `initialize`, until the run ends; a mode change needs it. */
@@ -90,6 +93,7 @@ export class ClaudeRun {
       if (error instanceof HostError) throw error;
       fail('runtime_error', STOPPED);
     } finally {
+      clearTimeout(this.interruptTimer);
       this.open = false; this.ready = false;
       this.session?.close();
       this.flush();
@@ -113,7 +117,7 @@ export class ClaudeRun {
     await session.setPermissionMode(claudeMode(mode)).catch(() => this.report(session.permissionMode()));
   }
 
-  close() { clearTimeout(this.timer); this.session?.close(); }
+  close() { clearTimeout(this.interruptTimer); clearTimeout(this.timer); this.session?.close(); }
 
   private async turns(requestId: string, input: string, images: ImageData[]) {
     const { snapshot, launch, signal, entries } = this.context;
@@ -121,13 +125,14 @@ export class ClaudeRun {
     const known = launch.models?.find(model => model.id === this.context.model);
     const ask: Ask = (approval, request, aborted) => this.ask(approval, request.toolUseID, aborted);
     const session = new ClaudeSession({
-      query: launch.sdk.query, path: launch.install.path, env: launch.env, cwd: snapshot.checkout,
+      cleanup: this.context.cleanup, query: launch.sdk.query, path: launch.install.path, env: launch.env, cwd: snapshot.checkout,
       model: this.context.model, modelInfo: known, level: this.context.level, mode: claudeMode(this.context.mode),
       resume, canUseTool: canUseToolFrom(ask),
     });
     this.session = session;
     const stop = () => void this.interrupt();
     signal.addEventListener('abort', stop, { once: true });
+    if (signal.aborted) stop();
     try {
       // Messages are read while initialize is answered; the SDK sees control replies only then.
       const consumed = this.consume(session.messages()[Symbol.asyncIterator](), resume !== undefined);
@@ -233,8 +238,8 @@ export class ClaudeRun {
     const session = this.session;
     if (!session) return;
     this.open = false;
-    const timer = setTimeout(() => session.close(), INTERRUPT_WAIT_MS);
-    timer.unref?.();
+    this.interruptTimer ??= setTimeout(() => session.close(), INTERRUPT_WAIT_MS);
+    this.interruptTimer.unref?.();
     try {
       const receipt = await session.interrupt();
       // Those requests never ran; Stop has already taken them off the queue.

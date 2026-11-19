@@ -1,3 +1,4 @@
+import { cleanupHelper } from '../src/cleanup.ts';
 // The host's records of a checkout, through the real runtime and the real
 // `plait-host record` helper: one before and one after every run, in every
 // harness. Codex and Claude Code are the scripted fakes; Pi runs in the real
@@ -118,7 +119,7 @@ test('a Pi run in the real host is recorded before and after its edit', { timeou
   assert.match(String(pair.before.head_ref), /^refs\/heads\//);
 });
 
-test('a host restart between the two records takes the later one when the host starts again', { timeout: 40000 }, async t => {
+test('host restart quarantines an in-flight run and records only after cleanup confirmation', { timeout: 40000 }, async t => {
   const f = await realHost(t, 'effect');
   const thread = await f.create();
   await f.submit(thread.id);
@@ -133,6 +134,9 @@ test('a host restart between the two records takes the later one when the host s
   assert.equal(cut.before.state, 'ready');
   assert.equal(cut.after, undefined);
   await f.start('answer');
+  const cleanup = await cleanupHelper('read', f.repo);
+  assert.ok(cleanup.cleanup);
+  assert.equal((await request(f.store, { op: 'resolve_checkout_cleanup', checkout: f.repo, token: cleanup.cleanup.token, confirm_stopped: true })).ok, true);
   const [pair] = await eventually(async () => stored(f.store), value => value[0]?.after?.state === 'ready');
   recorded(pair, 'submit-1', ['attempts.txt', 'notes.txt']);
   assert.equal(pair.after!.after_restart, 1);
@@ -282,6 +286,8 @@ test('restart recovery waits for a leased next run when another writer held the 
   const [node] = await childPids(f.host.pid!);
   process.kill(node, 'SIGKILL');
   await eventually(async () => f.host.exitCode !== null, value => value);
+  const pendingCleanup = await cleanupHelper('read', f.repo);
+  await cleanupHelper('resolve', f.repo, pendingCleanup.cleanup!.token);
   const lease = await acquireCheckout(f.repo);
   try {
     await f.start('answer');

@@ -1,3 +1,4 @@
+import { confirmStopped } from './support/host.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFile } from 'node:fs/promises';
@@ -45,6 +46,7 @@ test('a host killed during compaction waits for a new submission before making a
   await f.start('self-host-compaction');
   await request(f.store, { op: 'history', thread_id: thread.id, protocol_version: 3 });
   await delay(150); assert.equal((await observed(f)).length, before);
+  await confirmStopped(f);
   assert.equal((await submit(f, thread.id, 3)).status, 'idle');
   assert((await observed(f)).at(-1)!.goal);
 });

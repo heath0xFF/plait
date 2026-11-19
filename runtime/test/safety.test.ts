@@ -277,3 +277,46 @@ test('tests keep lock files out of the account lease directory', async t => {
   assert.equal((await stat(join(process.env.PLAIT_LEASE_DIR!, name))).isFile(), true);
   await assert.rejects(stat(join(homedir(), '.local/share/plait-leases', name)), { code: 'ENOENT' });
 });
+
+test('cleanup markers survive lease loss, cover aliases, and reject stale resolution', async t => {
+  const { cleanupHelper } = await import('../src/cleanup.ts');
+  const { root, base } = await setup(t);
+  const alias = join(base, 'alias'); await symlink(root, alias);
+  const lease = await acquireCheckout(root);
+  await cleanupHelper('begin', root, 'run-one', 'The command group did not stop.', lease);
+  await lease.close();
+  try {
+    for (const mode of ['writer', 'exclusive', 'reader'] as const) {
+      await assert.rejects(acquireCheckout(alias, mode), { code: 'cleanup_uncertain' });
+    }
+    await assert.rejects(cleanupHelper('resolve', root, 'old-run'), /changed/);
+    assert.equal((await cleanupHelper('read', root)).cleanup?.token, 'run-one');
+  } finally { await cleanupHelper('resolve', root, 'run-one'); }
+  const next = await acquireCheckout(root); await next.close();
+});
+
+test('cleanup requests require exact fields and explicit confirmation', async () => {
+  const { validateCleanup } = await import('../src/cleanup.ts');
+  assert.deepEqual(validateCleanup({ op: 'checkout_cleanup', checkout: '/repo' }), { op: 'checkout_cleanup', checkout: '/repo' });
+  for (const bad of [
+    { op: 'checkout_cleanup', checkout: 'relative' },
+    { op: 'checkout_cleanup', checkout: '/repo', extra: true },
+    { op: 'resolve_checkout_cleanup', checkout: '/repo', token: 'run' },
+    { op: 'resolve_checkout_cleanup', checkout: '/repo', token: 'run', confirm_stopped: false },
+    { op: 'resolve_checkout_cleanup', checkout: '/repo', token: '../bad', confirm_stopped: true },
+  ]) assert.throws(() => validateCleanup(bad), { code: 'invalid_request' });
+});
+
+test('a live run permits parent lifecycle readers but abandoned and uncertain markers refuse them', async t => {
+  const { cleanupHelper, RESTART_REASON } = await import('../src/cleanup.ts');
+  const { root } = await setup(t);
+  const writer = await acquireCheckout(root);
+  await cleanupHelper('begin', root, 'live-run', RESTART_REASON, writer);
+  const reader = await acquireCheckout(root, 'reader'); await reader.close();
+  await cleanupHelper('mark', root, 'live-run', 'The command group did not stop.', writer);
+  await assert.rejects(acquireCheckout(root, 'reader'), { code: 'cleanup_uncertain' });
+  await cleanupHelper('mark', root, 'live-run', RESTART_REASON, writer);
+  await writer.close();
+  try { await assert.rejects(acquireCheckout(root, 'reader'), { code: 'cleanup_uncertain' }); }
+  finally { await cleanupHelper('resolve', root, 'live-run'); }
+});

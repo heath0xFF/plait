@@ -132,7 +132,7 @@ export async function trustedCommand(run: TrustedRun, text: string, signal: Abor
   await dropDrifted(run);
   let result = ''; let failure: unknown;
   try {
-    result = await runGuardian({ root, text, env: environment.env, checkoutFd: run.lease?.fd, lifecycleFd: run.lease?.lifecycleFd, trusted: true },
+    result = await runGuardian({ root, text, cleanup: run.lease?.cleanup, env: environment.env, checkoutFd: run.lease?.fd, lifecycleFd: run.lease?.lifecycleFd, trusted: true },
       signal, output, options.timeoutMs ?? COMMAND_TIMEOUT_MS, options.capture);
   } catch (error) { failure = error ?? new Error('Command failed.'); }
   // Reconcile after success, failure, and Stop alike: a killed command still ran.

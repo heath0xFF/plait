@@ -1,3 +1,4 @@
+import { confirmStopped } from './support/host.ts';
 import assert from 'node:assert/strict';
 import { readFile, writeFile, stat, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -78,6 +79,7 @@ for (const target of ['host', 'node']) test(`${target} SIGKILL after effect neve
   assert.equal((await f.submit(thread.id)).ok, true);
   await until(async () => { try { process.kill(-pid, 0); return false; } catch { return true; } }, value => value);
   assert.equal((await f.watch(thread.id)).status, 'interrupted');
+  await confirmStopped(f);
   assert.equal((await f.submit(thread.id, 'submit-new', 'Inspect recovery safely.')).ok, true);
   const done = await until(() => f.watch(thread.id), value => value.status === 'idle');
   assert.equal(done.messages.filter(message => message.role === 'user').length, 2);

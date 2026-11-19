@@ -1,3 +1,4 @@
+import { groupExited } from '../cleanup.ts';
 import { spawn } from 'node:child_process';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type { InitializeParams, InitializeResponse, RequestId } from './protocol.ts';
@@ -33,6 +34,7 @@ type RequestHandler = (method: string, params: any) => Promise<unknown>;
 /** One `codex app-server` process, spoken to over stdio JSON lines. */
 export class AppServer {
   readonly exited: Promise<Exit>;
+  readonly cleanup: Promise<void>;
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly pending = new Map<RequestId, Pending>();
   private readonly notificationHandlers = new Set<NotificationHandler>();
@@ -46,8 +48,9 @@ export class AppServer {
 
   private constructor(child: ChildProcessWithoutNullStreams, timeoutMs?: number) {
     this.child = child;
+    this.cleanup = groupExited(child);
     this.timeoutMs = timeoutMs;
-    this.exited = new Promise(resolve => child.once('close', (code, signal) => {
+    this.exited = new Promise(resolve => child.once('exit', (code, signal) => {
       this.fail(new CodexConnectionError(`Codex app-server exited (${signal ?? `code ${code}`}).`));
       resolve({ code, signal });
     }));
@@ -61,7 +64,7 @@ export class AppServer {
 
   /** Spawns `<binary> app-server` and completes the `initialize` handshake. */
   static async start(binary: string, options: StartOptions): Promise<AppServer> {
-    const child = spawn(binary, ['app-server'], { env: options.env, cwd: options.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(binary, ['app-server'], { env: options.env, cwd: options.cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
     await new Promise<void>((resolve, reject) => {
       child.once('spawn', resolve);
       child.once('error', error => reject(new CodexConnectionError(`Could not start Codex: ${(error as NodeJS.ErrnoException).code ?? error.message}.`)));
@@ -124,6 +127,7 @@ export class AppServer {
     const timer = setTimeout(() => this.child.kill('SIGKILL'), CLOSE_GRACE_MS);
     await this.exited;
     clearTimeout(timer);
+    this.child.stdout.destroy(); this.child.stderr.destroy();
   }
 
   private send(frame: object) {

@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { constants } from 'node:fs';
 import { promisify } from 'node:util';
 import { fail, HostError } from './protocol.ts';
+import type { CleanupProof } from './cleanup.ts';
 
 const execute = promisify(execFile);
 const gitEnv = { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: '/nonexistent', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C' };
@@ -101,6 +102,7 @@ export function safePath(path: string, dirty: string[] = []) {
 }
 export type LeaseClass = 'reader' | 'writer' | 'exclusive';
 export type LeaseHandle = {
+  cleanup?: CleanupProof;
   fd?: number;
   lifecycleFd?: number;
   close(): Promise<void>;
@@ -141,6 +143,7 @@ async function prepareLease(kind: 'checkout' | 'common', path: string): Promise<
 
 function lockFailure(stderr: string, fallback: string): HostError {
   const line = stderr.trim().replace(/^plait-host:\s*/, '');
+  if (line.startsWith('cleanup_uncertain:')) return new HostError('cleanup_uncertain', line.slice('cleanup_uncertain:'.length).trim());
   const busyIndex = line.indexOf('busy:');
   if (busyIndex >= 0) return new HostError('busy', line.slice(busyIndex + 5).trim() || fallback);
   if (line.includes('identity:')) return new HostError('permission_denied', 'Checkout changed while taking its lease.');
@@ -183,13 +186,18 @@ export async function acquireCheckout(root: string, mode: LeaseClass = 'writer')
   // writers/exclusive mutations, the checkout directory inode itself.
   const { root: canonical, identity: expected, lifecycle } = await openLifecycle(root);
   let writer: FileHandle | undefined;
+  let owner: FileHandle | undefined;
   try {
+    if (mode === 'writer') {
+      const ownerName = `cleanup-owner-${lockHex(expected.dev)}-${lockHex(expected.ino)}.lock`;
+      owner = await open(join(leaseDirectory(), ownerName), constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+    }
     if (mode !== 'reader') {
       writer = await open(canonical, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     }
     await new Promise<void>((resolve, reject) => {
       const stdio: ('ignore' | 'pipe' | number)[] = writer
-        ? ['ignore', 'ignore', 'pipe', lifecycle.fd, writer.fd]
+        ? ['ignore', 'ignore', 'pipe', lifecycle.fd, writer.fd, owner?.fd ?? 'ignore']
         : ['ignore', 'ignore', 'pipe', lifecycle.fd];
       const child = spawn(process.env.PLAIT_HOST_EXE!, ['lock-fd', mode, canonical], { stdio });
       let err = '';
@@ -213,11 +221,11 @@ export async function acquireCheckout(root: string, mode: LeaseClass = 'writer')
         if (closed) return;
         closed = true;
         // Release in reverse acquisition order: writer first, then lifecycle.
-        try { await writer?.close(); } finally { await lifecycle.close(); }
+        try { await writer?.close(); } finally { try { await owner?.close(); } finally { await lifecycle.close(); } }
       },
     };
   } catch (error) {
-    try { await writer?.close(); } finally { await lifecycle.close(); }
+    try { await writer?.close(); } finally { try { await owner?.close(); } finally { await lifecycle.close(); } }
     throw error;
   }
 }

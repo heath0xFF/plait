@@ -28,20 +28,10 @@ pub fn prepare(args: Vec<String>) -> io::Result<()> {
         _ => return Err(io::Error::other("unknown lease-prepare kind")),
     }
     .map_err(|error| io::Error::other(error.to_string()))?;
-    let owner_path = if args[0] == "checkout" {
-        let (dir_path, directory) = open_lease_dir(&default_lease_dir().map_err(io::Error::other)?)
-            .map_err(io::Error::other)?;
-        let name = cleanup::owner_lock_name(prepared.identity);
-        open_lock_file(&directory, &name).map_err(io::Error::other)?;
-        Some(dir_path.join(name))
-    } else {
-        None
-    };
     let mut out = io::stdout().lock();
     serde_json::to_writer(
         &mut out,
         &json!({
-            "owner_path": owner_path,
             "root": prepared.root,
             "dev": prepared.identity.dev.to_string(),
             "ino": prepared.identity.ino.to_string(),
@@ -83,9 +73,7 @@ pub fn acquire(args: Vec<String>) -> io::Result<()> {
     let lease_dir = default_lease_dir().map_err(|error| io::Error::other(error.to_string()))?;
     let (_lease_dir_path, lease_dir_fd) =
         open_lease_dir(&lease_dir).map_err(|error| io::Error::other(error.to_string()))?;
-    let expected_name = if mode == "owner" {
-        cleanup::owner_lock_name(id)
-    } else if mode == "common" {
+    let expected_name = if mode == "common" {
         common_lock_name(id)
     } else {
         checkout_lock_name(id)
@@ -95,11 +83,6 @@ pub fn acquire(args: Vec<String>) -> io::Result<()> {
     verify_inherited_lock_fd(3, expected_lock_id)?;
 
     match mode {
-        "owner" => {
-            if !try_flock_fd(3, libc::LOCK_EX).map_err(io::Error::other)? {
-                return Err(io::Error::other("cleanup owner is busy"));
-            }
-        }
         "reader" => {
             if !try_flock_fd(3, libc::LOCK_SH).map_err(|e| io::Error::other(e.to_string()))? {
                 return Err(io::Error::other(format!("busy: {LIFECYCLE_BUSY}")));
@@ -152,7 +135,7 @@ pub fn acquire(args: Vec<String>) -> io::Result<()> {
         return Err(io::Error::other(format!("identity: {error}")));
     }
     let clear = match mode {
-        "common" | "owner" => Ok(()),
+        "common" => Ok(()),
         "reader" => cleanup::require_clear_for_reader(&lease_dir, id),
         _ => cleanup::require_clear(id),
     };
@@ -168,6 +151,14 @@ pub fn acquire(args: Vec<String>) -> io::Result<()> {
             libc::flock(3, libc::LOCK_UN);
         }
         return Err(io::Error::other(format!("cleanup_uncertain: {error}")));
+    }
+    if mode == "writer" && fstat_fd(5).is_ok() {
+        let (_, owner_id) = open_lock_file(&lease_dir_fd, &cleanup::owner_lock_name(id))
+            .map_err(io::Error::other)?;
+        verify_inherited_lock_fd(5, owner_id)?;
+        if !try_flock_fd(5, libc::LOCK_EX).map_err(io::Error::other)? {
+            return Err(io::Error::other("busy: Cleanup ownership is still held."));
+        }
     }
     Ok(())
 }

@@ -1,4 +1,5 @@
 import { Worktrees, type Create as WorktreeCreate } from './worktrees.ts';
+import { CleanupProof, NEVER, RESTART_REASON, cleanupHelper, handlesCleanup, validateCleanup } from './cleanup.ts';
 import type { ImageData } from './images.ts';
 import { TurnReview } from './turn-review.ts';
 import { LinearService } from './linear/service.ts';
@@ -48,6 +49,7 @@ type Session = ToolState & {
   inputs: InputRecord[]; requestId: string; approvals: InteractiveApproval; save(): void;
   /** Set once the run's own input is in the conversation store; steering needs a run to join. */
   started?: boolean;
+  cleanupToken?: string;
   steered: Map<string, Submission>;
   /** The person's prompt templates, found when the run started. */
   templates?: TemplateEntry[];
@@ -136,6 +138,69 @@ export class Runtime {
     if (thinking !== undefined) snapshot.thinking_level = levels ? nearest(levels, thinking) : clampThinkingLevel(this.models.getModel(choice.provider, choice.model_id)!, thinking);
     return snapshot;
   }
+  private async checkoutCleanup(input: unknown) {
+    const request = validateCleanup(input);
+    const root = await checkout(request.checkout);
+    if (request.op === 'resolve_checkout_cleanup') {
+      if (this.active.has(root)) fail('busy', 'This checkout still has a run finishing. Wait for it to stop.');
+      const reply = await cleanupHelper('resolve', root, request.token);
+      this.cleanupResolved(root);
+      return reply;
+    }
+    const reply = await cleanupHelper('read', root);
+    // A live run's crash marker is not a cleanup failure.
+    return this.active.has(root) ? { ...reply, cleanup: null } : reply;
+  }
+  private cleanupResolved(root: string) {
+    this.records.recoverCheckout(root);
+    for (const row of this.store.db.prepare('SELECT id FROM threads WHERE checkout=?').all(root)) {
+      const snapshot = this.store.get(String(row.id));
+      if (snapshot.error?.code === 'cleanup_uncertain') {
+        snapshot.error = { code: 'cleanup_resolved', message: 'Cleanup confirmed. The interrupted run was not resumed.' };
+        this.save(snapshot);
+      }
+    }
+    this.changed('#');
+  }
+  private async beginCleanup(session: Session) {
+    if (!session.lease || session.cleanupToken) return;
+    const token = randomUUID();
+    await cleanupHelper('begin', session.snapshot.checkout, token, RESTART_REASON, session.lease);
+    session.cleanupToken = token;
+    session.lease.cleanup = new CleanupProof();
+  }
+  private async finishCleanup(session: Session, record?: string) {
+    const { snapshot, lease, cleanupToken } = session;
+    if (!lease || !cleanupToken) return;
+    const proof = lease.cleanup!;
+    await proof.wait();
+    if (!proof.reason() && record !== undefined) {
+      await this.records.after(record, lease);
+      await proof.wait();
+    }
+    const reason = proof.reason();
+    if (!reason) {
+      await cleanupHelper('finish', snapshot.checkout, cleanupToken, undefined, lease);
+      return;
+    }
+    await cleanupHelper('mark', snapshot.checkout, cleanupToken, reason, lease);
+    snapshot.error = { code: 'cleanup_uncertain', message: `Stop unconfirmed. ${reason} New runs and Git changes are blocked until cleanup is confirmed.` };
+    // The durable marker retains exclusion after the OS descriptors close, even
+    // across host stores or a crash. Late proof can clear only this run's token.
+    void proof.proved().then(async () => {
+      if (this.closing) return;
+      for (;;) {
+        if (this.closing) return;
+        try { await cleanupHelper('resolve', snapshot.checkout, cleanupToken); break; }
+        catch {
+          const current = await cleanupHelper('read', snapshot.checkout);
+          if (current.cleanup?.token !== cleanupToken) return;
+          await new Promise<void>(resolve => setTimeout(resolve, 100).unref());
+        }
+      }
+      if (!this.closing) this.cleanupResolved(snapshot.checkout);
+    }).catch(() => {});
+  }
   /** Every harness, Pi first. */
   private async harnesses(fresh?: HarnessId, protocol: Protocol = 4) {
     const [codex, claude] = await Promise.all([this.codex.entry(fresh === 'codex'), this.claude.entry(fresh === 'claude')]);
@@ -184,6 +249,7 @@ export class Runtime {
   }
   async handle(input: unknown): Promise<unknown> {
     if (this.providers?.handles(input)) return this.providers.handle(input);
+    if (handlesCleanup(input)) return this.checkoutCleanup(input);
     if (this.turnReview.handles(input)) return this.turnReview.handle(input);
     if (this.linear.handles(input)) return this.linear.handle(input);
     if (this.worktrees.handles(input)) return this.worktrees.handle(input);
@@ -556,6 +622,7 @@ export class Runtime {
         snapshot, baseline: [], protected: [], rootIdentity: this.store.rootIdentity(id), buildCache: { store: this.directory, thread: id }, owned: new Map(), inputs: [], requestId,
         authorization, approvals, mcpApproval: approvals, lease, save, outputs: this.store.outputs, record: image => this.store.record(id, image), steered: new Map(),
       };
+      await this.beginCleanup(session);
       // Read once here: the run keeps this policy, and a later change waits for the next run.
       session.commandPolicy = commandPolicy(this.store, snapshot.checkout, session.rootIdentity);
       session.forget = path => this.store.forget(id, path);
@@ -570,6 +637,8 @@ export class Runtime {
     } finally {
       if (!accepted) {
         authorization?.revoke();
+        const session = this.sessions.get(id);
+        if (session?.cleanupToken && lease) await cleanupHelper('finish', snapshot.checkout, session.cleanupToken, undefined, lease);
         if (authorization) this.sessions.delete(id);
         await lease?.close(); this.active.delete(snapshot.checkout);
       }
@@ -669,6 +738,7 @@ export class Runtime {
         await checkRoot(snapshot.checkout, session.rootIdentity);
         session.lease = await acquireCheckout(snapshot.checkout, 'writer');
       }
+      await this.beginCleanup(session);
       // Before any harness starts: a run the host cannot record does not run.
       record = await this.records.before(snapshot.id, requestId, snapshot.checkout, session.lease);
       if (session.authorization.signal.aborted) return;
@@ -729,20 +799,20 @@ export class Runtime {
       }
     } finally {
       session.authorization.revoke();
-      await session.mcp?.close();
+      await session.mcp?.close().catch(() => session.lease?.cleanup?.track(NEVER, 'The MCP connection did not confirm cleanup.'));
       snapshot.pending_approval = null; snapshot.live_text = ''; snapshot.live_reasoning = ''; snapshot.retry = null;
-      await this.gate(snapshot.id, () => this.release(session));
+      await this.gate(snapshot.id, () => this.release(session)).catch(() => session.lease?.cleanup?.track(NEVER, 'The harness did not confirm cleanup.'));
       if (snapshot.status === 'interrupted') {
         for (const tool of snapshot.tools) if (tool.status === 'running') tool.status = 'interrupted';
       }
       // After every outcome, with the harness gone and the checkout still this run's.
-      if (record !== undefined) await this.records.after(record, session.lease);
+      await this.finishCleanup(session, record).catch(() => { snapshot.error = { code: 'cleanup_uncertain', message: 'Stop unconfirmed. The host could not save cleanup confirmation. New runs and Git changes remain blocked.' }; });
       await session.lease?.close(); session.lease = undefined;
       this.active.delete(snapshot.checkout);
       // Idle means a following submit can acquire the checkout immediately.
       if (snapshot.status !== 'stopped' && snapshot.status !== 'interrupted') snapshot.status = snapshot.error ? 'error' : 'idle';
       session.save(); this.sessions.delete(snapshot.id);
-      this.drain(snapshot.id);
+      if (snapshot.error?.code !== 'cleanup_uncertain') this.drain(snapshot.id);
     }
   }
   /** A Codex thread's run: one Codex turn, under Codex's own sandbox and Plait's approvals. */
@@ -765,7 +835,7 @@ export class Runtime {
       snapshot.queued = this.store.queue(id).map(queuedView);
     };
     const run = new CodexRun({
-      snapshot, mode, lease, entries,
+      snapshot, mode, lease, entries, cleanup: session.lease?.cleanup,
       approvals: session.approvals, signal: session.authorization.signal, dirty,
       inputs: () => session.inputs, place: placed, persist: head => this.save(snapshot, head), publish: () => this.changed(id),
       changed: path => this.store.recordWrite(id, path),
@@ -791,7 +861,7 @@ export class Runtime {
     const entries = await this.gate(id, async () => new CodexEntries(join(this.directory, `${id}.claude.sqlite`)));
     session.claude = { entries };
     const run = new ClaudeRun({
-      snapshot, mode, launch, model: snapshot.model.model_id, level: snapshot.thinking_level, entries,
+      snapshot, mode, launch, cleanup: session.lease?.cleanup, model: snapshot.model.model_id, level: snapshot.thinking_level, entries,
       approvals: session.approvals, signal: session.authorization.signal, dirty,
       inputs: () => session.inputs,
       place: (request, entry) => {

@@ -105,7 +105,7 @@ export function registry(state: ToolState) {
               ? await trustedCommand(state, args.command, signal, output, { capture: log.append })
               : await command(state.snapshot.checkout, args.command, state.baseline,
                 signal, output, state.lease?.fd, state.rootIdentity, state.buildCache, log.append,
-                readableFolders(state.skills ?? []), state.lease?.lifecycleFd);
+                readableFolders(state.skills ?? []), state.lease?.lifecycleFd, state.lease?.cleanup);
           } catch (error) { failure = error; text = ''; }
           const reference = log.finish();
           if (failure instanceof HostError) throw new HostError(failure.code, outputTail(failure.message) + reference);

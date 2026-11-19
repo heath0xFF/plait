@@ -110,7 +110,8 @@ async function playTurn(turnId: string) {
     const answer = await ask('item/tool/requestUserInput', { threadId, turnId, itemId: 'ask-1', questions: [], isBlocking: true, autoResolutionMs: null });
     if (log) appendFileSync(log, `${JSON.stringify({ observed: 'user-input', answer })}\n`);
   }
-  if (scenario === 'slow') await wait(5000);
+  if (scenario === 'interrupt-ignored') return;
+  if (scenario === 'slow' || scenario === 'start-delayed') await wait(5000);
   if (active?.interrupted) return;
   item('item/started', turnId, { type: 'agentMessage', id: 'msg-1', text: '', phase: null, moderation: null, memoryCitation: null, delivery: null, questions: null });
   for (const part of ['Two ', 'files.']) delta('item/agentMessage/delta', 'msg-1', part);
@@ -120,7 +121,7 @@ async function playTurn(turnId: string) {
   active = undefined;
 }
 
-function handle(frame: Frame) {
+async function handle(frame: Frame) {
   const { id, method, params } = frame;
   if (method === undefined) {
     if (id !== undefined) { replies.get(id)?.(frame); replies.delete(id); }
@@ -164,6 +165,7 @@ function handle(frame: Frame) {
       if (scenario === 'exit-on-turn') process.exit(3);
       policy = params.approvalPolicy ?? policy;
       active = { id: turnId, interrupted: false };
+      if (scenario === 'start-delayed') await wait(200);
       reply(id, { turn: turnOf(turnId) });
       const text = params.input?.map((input: { text?: string }) => input.text ?? '').join('') ?? '';
       // Codex reports the user message as items of the turn it starts.
@@ -177,7 +179,13 @@ function handle(frame: Frame) {
       reply(id, { turnId: active.id });
       return user(active.id, params.input.map((input: { text?: string }) => input.text ?? '').join(''), params.clientUserMessageId ?? null, `steer-${turns}`);
     }
+    case 'fake/finish': {
+      reply(id, {});
+      if (active) notify('turn/completed', { threadId, turn: turnOf(active.id, 'interrupted') });
+      active = undefined; return;
+    }
     case 'turn/interrupt': {
+      if (scenario === 'interrupt-ignored') return reply(id, {});
       if (!active || active.id !== params.turnId) return failRequest(id, 'no active turn');
       active.interrupted = true;
       reply(id, {});

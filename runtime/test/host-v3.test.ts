@@ -1,3 +1,4 @@
+import { confirmStopped } from './support/host.ts';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -66,6 +67,7 @@ test('history returns the whole conversation with the snapshot IDs and never sta
   assert.equal(await readFile(join(f.repo, 'attempts.txt'), 'utf8'), 'effect\n');
   assert.equal(await readFile(join(f.repo, 'notes.txt'), 'utf8'), 'after\n');
 
+  await confirmStopped(f);
   // A later run still recovers and answers normally, and history then matches the snapshot.
   await f.submit(thread.id, 'resume', 'Inspect the interrupted result.');
   const done = await until(() => watch3(f, thread.id), value => value.status === 'idle');

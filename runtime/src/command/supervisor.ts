@@ -1,3 +1,4 @@
+import { guardianProof, type CleanupProof } from '../cleanup.ts';
 import { spawn } from 'node:child_process';
 import { fail, HostError } from '../protocol.ts';
 import { GUARDIAN_ENV, writeEnvironment } from './environment.ts';
@@ -6,6 +7,7 @@ import { clipTail } from '../text.ts';
 export const COMMAND_TIMEOUT_MS = 15 * 60 * 1000;
 // A request is either a Seatbelt profile or the explicit trusted entry, never both.
 type GuardianCommand = {
+  cleanup?: CleanupProof;
   root: string;
   text: string;
   env: NodeJS.ProcessEnv;
@@ -31,10 +33,14 @@ export async function runGuardian(command: GuardianCommand, signal: AbortSignal,
       stdio.push('ignore', command.isolateEnvironment ? 'pipe' : 'ignore');
       if (command.lifecycleFd !== undefined) stdio.push(command.lifecycleFd);
     }
+    while (stdio.length < 8) stdio.push('ignore');
+    stdio.push('pipe');
     const child = spawn(executable, args, {
       cwd: command.root, env: command.isolateEnvironment ? { ...GUARDIAN_ENV, PLAIT_COMMAND_ENV_FD: '6' } : command.env,
       stdio,
     });
+    command.cleanup?.track(guardianProof(child), 'The command guardian did not confirm its process group stopped.');
+    if (signal.aborted) child.stdin!.end();
     if (command.isolateEnvironment) writeEnvironment(child, command.env);
     let result = ''; let settled = false;
     let drainTimeout: ReturnType<typeof setTimeout> | undefined;

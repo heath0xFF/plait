@@ -1,3 +1,4 @@
+import { confirmStopped } from './support/host.ts';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { connect } from 'node:net';
@@ -176,6 +177,7 @@ test('crash after acceptance before Durable submit retains input and never repla
   assert(interrupted.messages.some(message => message.id === 'request-admitted' && message.text === text));
   assert.equal((await f.submit(thread.id, 'admitted', text)).ok, true);
   assert.equal((await f.watch(thread.id)).status, 'interrupted');
+  await confirmStopped(f);
   await f.submit(thread.id, 'explicit-new', 'Start this new request only.');
   const done = await until(() => f.watch(thread.id), value => value.status === 'idle');
   assert.equal(done.messages.filter(message => message.role === 'user').length, 2);
@@ -208,6 +210,7 @@ test('crash after effect before provenance record leaves the dirty file protecte
   await until(async () => f.host.exitCode !== null, value => value);
   await f.start('followup');
   assert.equal((await f.watch(thread.id)).status, 'interrupted');
+  await confirmStopped(f);
   await f.submit(thread.id, 'followup');
   const done = await until(() => f.watch(thread.id), value => value.status === 'idle');
   assert(done.tools.some(tool => tool.id === 'followup-1' && tool.status === 'error'));
@@ -225,6 +228,7 @@ test('crash after atomic file effect before tool completion never repeats the ef
   await f.start('answer');
   assert.equal((await f.watch(thread.id)).status, 'interrupted');
   assert.equal((await f.submit(thread.id)).ok, true);
+  await confirmStopped(f);
   await f.submit(thread.id, 'resume-2', 'Inspect the interrupted result.');
   await until(() => f.watch(thread.id), value => value.status === 'idle');
   assert.equal(await readFile(join(f.repo, 'notes.txt'), 'utf8'), 'after\n');

@@ -1,3 +1,4 @@
+import { type CleanupProof } from '../cleanup.ts';
 import type { ImageData } from '../images.ts';
 // One Plait run of a Codex thread: a single Codex turn on the shared app-server.
 //
@@ -32,6 +33,7 @@ const INTERRUPT_WAIT_MS = 10_000;
 
 export type CodexRunContext = {
   snapshot: Snapshot;
+  cleanup?: CleanupProof;
   /** The thread's Codex mode for this turn. */
   mode: string;
   lease: Lease;
@@ -59,6 +61,11 @@ export class CodexRun {
   private readonly transcript: CodexTranscript;
   private thread?: string;
   private turn?: string;
+  private interruptTimer?: NodeJS.Timeout;
+  private confirm?: () => void;
+  private readonly confirmed = new Promise<void>(resolve => { this.confirm = resolve; });
+  private startedRequest = false;
+  private closed = false;
   /** Turns that ended before `turn/start` replied, so a fast turn is not missed. */
   private readonly ended = new Map<string, NonNullable<ReturnType<typeof isTerminalTurn>>>();
   private finish?: (end: NonNullable<ReturnType<typeof isTerminalTurn>>) => void;
@@ -117,14 +124,17 @@ export class CodexRun {
       threadId: this.thread, input: content(input, images), clientUserMessageId: requestId, cwd, approvalPolicy, sandboxPolicy, approvalsReviewer, model,
       effort: effort ?? null, summary: 'auto',
     };
+    this.startedRequest = true;
+    this.context.cleanup?.track(Promise.race([this.confirmed, lease.server.cleanup]), 'Codex did not confirm its turn ended and its app-server has not exited.');
     const { turn } = await lease.server.request<TurnStartResponse>('turn/start', params);
     this.turn = turn.id;
     // The reply can come before Codex announces the turn; the transcript needs to know it either way.
     this.notify(NOTIFICATIONS.turnStarted, { threadId: this.thread, turn });
     const early = this.ended.get(turn.id);
-    if (early) this.finish!(early);
+    if (early) { this.confirm?.(); this.finish!(early); }
     const stop = () => void this.interrupt();
     signal.addEventListener('abort', stop, { once: true });
+    if (signal.aborted) stop();
     try {
       const end = await Promise.race([
         ended,
@@ -150,18 +160,25 @@ export class CodexRun {
     if (!this.thread || !this.turn) return;
     const turn = this.turn;
     const params: TurnInterruptParams = { threadId: this.thread, turnId: turn };
-    const timer = setTimeout(() => this.finish?.({ turnId: turn, status: 'interrupted' }), INTERRUPT_WAIT_MS);
-    timer.unref?.();
+    this.interruptTimer ??= setTimeout(() => this.finish?.({ turnId: turn, status: 'interrupted' }), INTERRUPT_WAIT_MS);
+    this.interruptTimer.unref?.();
     await this.context.lease.server.request('turn/interrupt', params).catch(() => {});
   }
 
   close() {
+    this.closed = true;
     clearTimeout(this.timer);
-    this.unroute?.();
+    clearTimeout(this.interruptTimer);
+    if (!this.startedRequest) this.unroute?.();
+    else void Promise.race([this.confirmed, this.context.lease.server.cleanup]).then(() => this.unroute?.());
   }
 
   private notify(method: string, params: any) {
     const end = isTerminalTurn(method, params);
+    if (end && end.turnId === this.turn) {
+      this.confirm?.(); clearTimeout(this.interruptTimer);
+    }
+    if (this.closed) return;
     const applied = this.transcript.apply(method, params);
     if (applied.append.length) {
       this.context.entries.append(applied.append);

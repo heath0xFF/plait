@@ -1,3 +1,4 @@
+import { guardianProof } from '../cleanup.ts';
 import { spawn } from 'node:child_process';
 import type { Writable } from 'node:stream';
 import type { McpPipeHandlers } from '@earendil-works/pi-mcp';
@@ -32,8 +33,9 @@ export function guardianPipe(root: string, policy: string, program: string, args
   const child = spawn(executable, ['mcp-server', root, policy, program, ...args], {
     cwd: root, env: GUARDIAN_ENV,
     stdio: ['pipe', 'pipe', 'pipe', process.env.PLAIT_LOCK_FD ? Number(process.env.PLAIT_LOCK_FD) : 'ignore', state.lease?.fd ?? 'ignore', 'pipe', 'pipe',
-      ...(state.lease?.lifecycleFd !== undefined ? [state.lease.lifecycleFd] as const : [])],
+      state.lease?.lifecycleFd ?? 'ignore', 'pipe'],
   });
+  state.lease?.cleanup?.track(guardianProof(child), 'The MCP guardian did not confirm its process group stopped.');
   writeEnvironment(child, env);
   const lifetime = (child.stdio as (Writable | null | undefined)[])[5]!;
   const close = () => { lifetime.end(); child.stdin!.end(); };

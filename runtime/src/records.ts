@@ -3,6 +3,7 @@
 // (`STORE/records`) and never into the person's repository; this file decides
 // when, keeps the list in `host.sqlite`, exposes version 5 views and undo,
 // and prunes what has expired.
+import { CleanupProof, RESTART_REASON, cleanupHelper, guardianProof } from './cleanup.ts';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -49,9 +50,10 @@ export function helper<T>(operation: 'record' | 'prune' | 'undo' | 'review', inp
     // timeout stop the sandboxed copy it starts as well.
     const child = spawn(executable, [operation], {
       stdio: ['pipe', 'pipe', 'pipe', process.env.PLAIT_LOCK_FD ? Number(process.env.PLAIT_LOCK_FD) : 'ignore', writerFd ?? 'ignore',
-        ...(lifecycleFd !== undefined ? ['ignore', 'ignore', lifecycleFd] as const : [])],
+        'ignore', 'ignore', lifecycleFd ?? 'ignore', 'pipe'],
       detached: true,
     });
+    if (typeof lease === 'object') lease.cleanup?.track(guardianProof(child), 'The checkout record helper did not confirm its process group stopped.');
     const chunks: Buffer[] = []; let size = 0; let diagnostic = '';
     const stop = () => { try { process.kill(-child.pid!, 'SIGKILL'); } catch { child.kill('SIGKILL'); } };
     const timer = setTimeout(stop, timeout);
@@ -154,13 +156,17 @@ export class Records {
    * now, before anything else in that checkout, and marked as taken after a
    * restart: it may include changes made while the host was down.
    */
-  private recover() {
+  recoverCheckout(checkout: string) { this.recover(checkout); }
+  private recover(checkout?: string) {
     const db = this.store.db;
     const open = db.prepare(`SELECT b.id FROM records b WHERE b.kind='before' AND b.state='ready'
       AND NOT EXISTS (SELECT 1 FROM records a WHERE a.kind IN ('after','undo') AND a.before=b.id AND (a.state IN ('ready','undone','no_effect') OR (a.state='failed' AND a.after_restart=0))) ORDER BY b.created_at, b.rowid`).all().map(row => String(row.id));
     // A record cut short by the stop left nothing usable; the before record of a run that never started its harness stays failed.
     db.prepare("UPDATE records SET state='failed' WHERE kind='before' AND state='recording'").run();
-    for (const before of open) this.track(this.after(before, undefined, true));
+    for (const before of open) {
+      if (checkout && this.store.db.prepare('SELECT checkout FROM records WHERE id=?').get(before)?.checkout !== checkout) continue;
+      this.track(this.after(before, undefined, true));
+    }
   }
   /** A busy checkout may have deferred startup recovery until its next leased run. */
   private async recoverBefore(checkout: string, lease?: LeaseHandle) {
@@ -243,6 +249,8 @@ export class Records {
       await checkRoot(snapshot.checkout, this.store.rootIdentity(thread));
       const lease = await acquireCheckout(snapshot.checkout, 'exclusive');
       const before = randomUUID(), id = randomUUID();
+      lease.cleanup = new CleanupProof();
+      await cleanupHelper('begin', snapshot.checkout, id, RESTART_REASON, lease);
       try {
         this.transaction(() => {
           this.insert(before, thread, requestId, 'before', snapshot.checkout);
@@ -274,7 +282,18 @@ export class Records {
         if (outcome.state !== 'undone') fail('undo_incomplete', 'Undo stopped after it may have changed files. Refresh the records and inspect the checkout; this request will not be repeated.');
         await rm(this.undoPath(id), { force: true });
         return undoReply('undone', outcome.changed_since, outcome.not_covered, id, row.after_restart === 1);
-      } finally { await lease.close(); await rm(this.undoPath(id).replace(/\.json$/, '.paths'), { force: true }); }
+      } finally {
+        try {
+          await lease.cleanup.wait();
+          const reason = lease.cleanup.reason();
+          await cleanupHelper(reason ? 'mark' : 'finish', snapshot.checkout, id, reason, lease);
+          if (reason) void lease.cleanup.proved().then(async () => {
+            // The helper's exit may trail its receipt by a few milliseconds.
+            await new Promise(resolve => setTimeout(resolve, 100));
+            if (!this.closing) await cleanupHelper('resolve', snapshot.checkout, id);
+          }).catch(() => {});
+        } finally { await lease.close(); await rm(this.undoPath(id).replace(/\.json$/, '.paths'), { force: true }); }
+      }
     });
   }
   private undoPath(id: string) { return join(this.directory, 'records', `undo-${id}.json`); }

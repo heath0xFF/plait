@@ -117,7 +117,7 @@ test('two host stores contend on one inode and its alias while an unrelated chec
   await until(async () => (await request(secondStore, { op: 'watch', thread_id: t2.id })).result.thread, value => value.status === 'idle');
 });
 
-test('a host crash releases checkout leases so another store can immediately acquire the checkout', { timeout: 30000 }, async t => {
+test('a host crash releases OS leases but quarantines the checkout across stores until confirmed', { timeout: 30000 }, async t => {
   process.env.PLAIT_HOST_EXE ??= binary;
   const f = await setup(t, 'edit');
   const secondStore = await secondHost(t, f.own);
@@ -133,7 +133,13 @@ test('a host crash releases checkout leases so another store can immediately acq
   await until(async () => f.host.exitCode !== null || f.host.signalCode !== null, done => done);
   await delay(50);
 
-  // Lease must be free immediately for both exclusive mutations and the second host store.
+  // A lost sidecar cannot vouch for descendants. The durable marker survives
+  // its kernel locks and excludes desktop writes and every other host store.
+  await assert.rejects(acquireCheckout(f.repo, 'exclusive'), { code: 'cleanup_uncertain' });
+  const cleanup = ((await request(secondStore, { op: 'checkout_cleanup', checkout: f.repo })).result as unknown as { cleanup: { token: string; reason: string } }).cleanup;
+  assert.match(cleanup.reason, /host ended/);
+  assert.equal((await request(secondStore, { op: 'resolve_checkout_cleanup', checkout: f.repo, token: 'stale', confirm_stopped: true })).ok, false);
+  assert.equal((await request(secondStore, { op: 'resolve_checkout_cleanup', checkout: f.repo, token: cleanup.token, confirm_stopped: true })).ok, true);
   const exclusive = await acquireCheckout(f.repo, 'exclusive');
   await exclusive.close();
   const t2 = (await request(secondStore, { op: 'create_thread', checkout: f.repo, provider: 'faux', model_id: 'faux-1', request_id: 'create-crash-2' })).result.thread;

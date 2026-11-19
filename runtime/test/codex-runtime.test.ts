@@ -195,3 +195,74 @@ test('a Codex that does not echo the request ID still shows the message once', a
   const done = await h.idle(thread.id);
   assert.deepEqual(done.messages.filter(message => message.role === 'user').map(message => [message.id, message.text]), [['request-r1', 'Once']]);
 });
+
+test('Codex interrupt timeout quarantines only its checkout until a late terminal acknowledgement', { timeout: 25000 }, async t => {
+  const { cleanupHelper } = await import('../src/cleanup.ts');
+  const { acquireCheckout } = await import('../src/safety.ts');
+  const h = await host(t, 'interrupt-ignored');
+  const thread = await h.create();
+  await h.call({ op: 'submit', thread_id: thread.id, request_id: 'timeout', text: 'Wait', approval: 'auto' });
+  await h.until(thread.id, snapshot => snapshot.tools.length > 0);
+  // Another checkout may still use the shared app-server: Stop may not kill it.
+  const shared = await h.runtime.codex.acquire();
+  try {
+    await h.call({ op: 'stop', thread_id: thread.id });
+    const stopped = await h.until(thread.id, snapshot => !h.runtime.sessions.has(thread.id), 16000);
+    assert.equal(stopped.error?.code, 'cleanup_uncertain');
+    await assert.rejects(acquireCheckout(h.root, 'exclusive'), { code: 'cleanup_uncertain' });
+    const rejected = await h.call({ op: 'submit', thread_id: thread.id, request_id: 'blocked', text: 'Blocked' });
+    assert.equal(rejected.error?.code, 'cleanup_uncertain');
+    assert.ok((await cleanupHelper('read', h.root)).cleanup);
+    await shared.server.request('fake/finish', {});
+    const deadline = Date.now() + 3000;
+    while ((await cleanupHelper('read', h.root)).cleanup) {
+      assert.ok(Date.now() < deadline, 'late terminal proof did not clear quarantine');
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    await h.runtime.records.settled(h.root);
+    const lease = await acquireCheckout(h.root, 'exclusive'); await lease.close();
+  } finally { shared.release(); }
+});
+
+test('Stop during the Codex turn-start reply gap still interrupts the accepted turn', async t => {
+  const h = await host(t, 'start-delayed');
+  const thread = await h.create();
+  await h.call({ op: 'submit', thread_id: thread.id, request_id: 'race', text: 'Wait', approval: 'auto' });
+  const deadline = Date.now() + 5000;
+  while (!(await h.frames()).some(frame => frame.method === 'turn/start')) {
+    assert.ok(Date.now() < deadline);
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  await h.call({ op: 'stop', thread_id: thread.id });
+  const stopped = await h.idle(thread.id);
+  assert.equal(stopped.status, 'stopped');
+  assert.notEqual(stopped.error?.code, 'cleanup_uncertain');
+  assert.ok((await h.frames()).some(frame => frame.method === 'turn/interrupt'));
+});
+
+for (const phase of ['before', 'after'] as const) test(`Stop during the ${phase} record retains exclusion until recording settles`, async t => {
+  const { acquireCheckout } = await import('../src/safety.ts');
+  const h = await host(t);
+  const thread = await h.create();
+  let entered!: () => void, resume!: () => void;
+  const reached = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { resume = resolve; });
+  const records = h.runtime.records;
+  if (phase === 'before') {
+    const original = records.before.bind(records);
+    records.before = async (...args) => { entered(); await gate; return original(...args); };
+  } else {
+    const original = records.after.bind(records);
+    records.after = async (...args) => { entered(); await gate; return original(...args); };
+  }
+  await h.call({ op: 'submit', thread_id: thread.id, request_id: 'phase', text: 'Wait', approval: 'auto' });
+  await reached;
+  await h.call({ op: 'stop', thread_id: thread.id });
+  await assert.rejects(acquireCheckout(h.root, 'exclusive'), { code: 'busy' });
+  resume();
+  const stopped = await h.idle(thread.id);
+  assert.equal(stopped.status, 'stopped');
+  assert.notEqual(stopped.error?.code, 'cleanup_uncertain');
+  if (phase === 'before') assert.ok(!(await h.frames()).some(frame => frame.method === 'turn/start'));
+  const lease = await acquireCheckout(h.root, 'exclusive'); await lease.close();
+});

@@ -1,3 +1,5 @@
+import { spawn } from 'node:child_process';
+import { groupExited, type CleanupProof } from '../cleanup.ts';
 import type { ImageData } from '../images.ts';
 // One Claude Code session for one Plait run, through the pinned Agent SDK in
 // streaming-input mode. Claude Code owns the work: its tools, its permission
@@ -39,6 +41,7 @@ export function claudeThinking(level: ThinkingLevel | undefined, model: Pick<Cla
 }
 
 export type ClaudeSessionOptions = {
+  cleanup?: CleanupProof;
   /** The SDK's `query`, from the copy `loadSdk` checked. */
   query: QueryFunction;
   path: string;
@@ -104,6 +107,19 @@ export class ClaudeSession {
     delete env.CLAUDE_CODE_RESUME_INTERRUPTED_TURN;
     const sdkOptions: Options = {
       pathToClaudeCodeExecutable: options.path,
+      // Pinned SDK 0.3.326 passes the actual launch command through this hook.
+      // Own the process so query.close() cannot masquerade as an exit receipt.
+      spawnClaudeCodeProcess: launch => {
+        if (this.closed) throw new Error('Claude Code session already closed.');
+        const child = spawn(launch.command, launch.args, { cwd: launch.cwd, env: launch.env, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+        options.cleanup?.track(groupExited(child), 'Claude Code did not confirm its process group stopped.');
+        child.stderr.setEncoding('utf8').on('data', options.stderr ?? (() => {}));
+        const stop = () => { try { process.kill(-child.pid!, 'SIGKILL'); } catch { /* Exit proof decides. */ } };
+        launch.signal.addEventListener('abort', stop, { once: true });
+        if (launch.signal.aborted) stop();
+        child.once('exit', () => launch.signal.removeEventListener('abort', stop));
+        return child;
+      },
       env,
       cwd: options.cwd,
       ...(model ? { model } : {}),

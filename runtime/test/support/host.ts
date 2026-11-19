@@ -93,3 +93,14 @@ export async function setup(t: { after: (fn: () => Promise<void>) => void }, sce
   const approve = (id: string, approval_id: string, allow = true) => request(store, { op: 'approve', thread_id: id, approval_id, allow });
   return { base, repo, store, host, start, create, watch, submit, approve, own: (child: ChildProcess) => children.push(child) };
 }
+
+/** Explicit test-person acknowledgement after the fixture's process cleanup. */
+export async function confirmStopped(f: { store: string; repo: string }) {
+  const reply = await request(f.store, { op: 'checkout_cleanup', checkout: f.repo });
+  if (!reply.ok) throw new Error(JSON.stringify(reply));
+  const cleanup = (reply.result as unknown as { cleanup: { token: string } | null }).cleanup;
+  if (cleanup) {
+    const resolved = await request(f.store, { op: 'resolve_checkout_cleanup', checkout: f.repo, token: cleanup.token, confirm_stopped: true });
+    if (!resolved.ok) throw new Error(JSON.stringify(resolved));
+  }
+}
