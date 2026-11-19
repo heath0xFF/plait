@@ -16,8 +16,8 @@ New thread action appends a fresh draft, even when the current one is empty.
 Drafts keep independent text, images, choices, and pending creation. Closing a
 nonempty draft preserves it for reopening; older closed drafts remain recoverable
 when the twenty-entry view history expires. A draft's title is its first nonblank
-message line, trimmed, with whitespace runs as one space, and capped at 120 characters, or New thread for empty and
-images-only drafts. Its tab, overflow entry, and current sidebar row share that
+message line, trimmed, with whitespace runs as one space, and capped at 120
+characters, or New thread for empty and images-only drafts. Its tab, overflow entry, and current sidebar row share that
 title. Discard removes the draft and closes its tab without reopen history.
 Connected drafts with a known model say Ready in inactive tabs too.
 Hidden drafts draw no content, and

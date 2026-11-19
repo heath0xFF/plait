@@ -8,18 +8,20 @@ use plait_core::tabs::{
 
 /// Characters a title keeps.
 const KEPT: usize = 120;
+/// Characters a title looks at, so pasted blank space is not walked on every edit.
+const SCANNED: usize = 4096;
 
 /// The first nonblank line, with each run of whitespace shown as one space,
 /// as a sent thread's title shows it.
 fn first_line(text: &str) -> String {
     let mut line = String::new();
     let (mut kept, mut gap) = (0, false);
-    for ch in text.trim_start().chars() {
-        if ch == '\n' {
+    for ch in text.chars().take(SCANNED) {
+        if ch == '\n' && kept > 0 {
             break;
         }
         if ch.is_whitespace() {
-            gap = true;
+            gap = kept > 0;
             continue;
         }
         if kept + usize::from(gap) >= KEPT {
@@ -156,6 +158,14 @@ mod tests {
         assert_eq!(title(&pasted), "🦀".repeat(120));
         assert_eq!(title(&format!("{} end", "a".repeat(119))), "a".repeat(119));
         assert_eq!(title("Spoof\u{202e}"), "Spoof\\u202e");
+    }
+
+    #[core::prelude::v1::test]
+    fn titles_look_only_at_the_first_characters() {
+        let blank = " \n".repeat(SCANNED / 2);
+        assert_eq!(title(&format!("{blank}Too late")), UNTITLED);
+        assert_eq!(title(&format!("{}Found", &blank[2..])), "Fo");
+        assert_eq!(title(&format!("a{}b", " ".repeat(SCANNED))), "a");
     }
 
     #[core::prelude::v1::test]

@@ -560,8 +560,9 @@ per-frame work. The frame suite includes 300 open tabs and their virtual
 overflow, measuring CPU draw phases rather than GPU presentation.
 
 Draft titles are a desktop presentation cache, derived from the first nonblank
-message line, with whitespace runs folded to one space, and bounded to 120 characters before display escaping. Composer
-notifications update just the mounted draft's cached row when that title changes;
+message line with whitespace runs folded to one space. They keep at most 120
+characters before display escaping and look at only the first 4,096, so pasted
+blank space is not walked on every edit. Composer notifications update just the mounted draft's cached row when that title changes;
 equal-width tab layout and overflow grouping remain intact. Parking refreshes
 that title from the composer, while restored cold tabs derive it once from
 already-loaded draft text. Rendering reads cached titles only. Titles do not add
