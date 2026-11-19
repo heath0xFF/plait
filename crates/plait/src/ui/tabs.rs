@@ -48,6 +48,8 @@ pub(super) struct Tabs {
     pub host: HostKey,
     pub rows: Vec<TabMetadata>,
     layout: Option<TabLayout>,
+    /// The most urgent state among hidden tabs, for the overflow summary's accent.
+    overflow_state: Option<TabState>,
     measured: Option<(f32, bool)>,
     first_visible: usize,
     pub list_open: bool,
@@ -88,6 +90,7 @@ impl Default for Tabs {
             },
             rows: Vec::new(),
             layout: None,
+            overflow_state: None,
             measured: None,
             first_visible: 0,
             list_open: false,
@@ -108,9 +111,23 @@ fn tint(state: TabState, active: bool) -> u32 {
         _ => colors().subtle,
     }
 }
+/// Accents follow the urgent-count order: needs me, then failed, then working.
+fn urgent_hidden(hidden: impl Iterator<Item = TabState>) -> Option<TabState> {
+    let rank = |state: TabState| match state {
+        TabState::Approve | TabState::Interrupted => Some(0),
+        TabState::Failed => Some(1),
+        TabState::Working => Some(2),
+        _ => None,
+    };
+    hidden
+        .filter_map(|state| rank(state).map(|r| (r, state)))
+        .min_by_key(|(r, _)| *r)
+        .map(|(_, state)| state)
+}
 fn tooltip(value: String, cx: &mut App) -> AnyView {
     cx.new(|_| TextTooltip(value)).into()
 }
+/// Measures at the overflow button's drawn size.
 fn measure(text: &str, window: &Window) -> f32 {
     let run = TextRun {
         len: text.len(),
@@ -120,7 +137,7 @@ fn measure(text: &str, window: &Window) -> f32 {
     };
     window
         .text_system()
-        .shape_line(text.to_owned().into(), px(11.), &[run], None)
+        .shape_line(text.to_owned().into(), px(12.), &[run], None)
         .width
         .into()
 }
@@ -444,6 +461,13 @@ impl Plait {
             limit,
         );
         self.tabs.first_visible = layout.first_visible;
+        self.tabs.overflow_state = urgent_hidden(
+            self.tabs
+                .rows
+                .iter()
+                .filter(|row| layout.hidden.contains(&row.id))
+                .map(|row| row.state),
+        );
         self.tabs.layout = Some(layout);
         self.tabs.measured = Some((width, fullscreen));
     }
@@ -496,8 +520,14 @@ impl Plait {
             .child(strip)
             .when(!layout.hidden.is_empty(), |bar| {
                 let hover = layout.overflow_hover.clone();
+                let accent = self.tabs.overflow_state.map(|state| tint(state, false));
                 bar.child(
                     button("tab-overflow", layout.overflow_label.clone())
+                        // Share the tab titles' line: tabs sit 3 points below the bar's centre.
+                        .relative()
+                        .top(px(3.))
+                        .ml_1()
+                        .when_some(accent, |el, accent| el.text_color(rgb(accent)))
                         .max_w(px(if self.panels.viewport > super::WIDE_WINDOW {
                             164.
                         } else {
@@ -861,4 +891,19 @@ pub(super) enum TabNavigation {
     Previous,
     Jump(usize),
     Reopen,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[core::prelude::v1::test]
+    fn overflow_accent_takes_the_most_urgent_hidden_state() {
+        use TabState::*;
+        let urgent = |states: &[TabState]| urgent_hidden(states.iter().copied());
+        assert_eq!(urgent(&[Working, Failed, Idle]), Some(Failed));
+        assert_eq!(urgent(&[Working, Failed, Interrupted]), Some(Interrupted));
+        assert_eq!(urgent(&[Idle, Working, Finished]), Some(Working));
+        assert_eq!(urgent(&[Idle, Stopped, Finished]), None);
+    }
 }
