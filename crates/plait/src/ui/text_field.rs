@@ -894,6 +894,7 @@ impl Render for TextField {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focused = self.focus.is_focused(window);
         let field = cx.entity().downgrade();
+        let own_focus = self.focus.clone();
         div()
             .id(("text-field", cx.entity_id()))
             .role(self.role)
@@ -904,7 +905,10 @@ impl Render for TextField {
                 self.line.text().to_owned()
             })
             .aria_placeholder(self.placeholder.clone())
-            .on_a11y_action(AccessibleAction::SetValue, move |data, _, cx| {
+            .on_a11y_action(AccessibleAction::SetValue, move |data, window, cx| {
+                if super::theme::beneath_modal(Some(&own_focus), window, cx) {
+                    return;
+                }
                 if let Some(gpui::accesskit::ActionData::Value(text)) = data {
                     let _ = field.update(cx, |this, cx| this.set_text(text, cx));
                 }

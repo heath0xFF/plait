@@ -571,7 +571,8 @@ Project settings to application Settings. Escape first closes an open picker,
 cancels shortcut recording, closes an open provider form, or keeps the current
 command policy at the trust confirmation. Outside clicks
 are ignored during shortcut recording. Tab and Shift-Tab cycle inside the
-modal, and workspace shortcuts are inactive until it closes. The covered view,
+modal, and workspace shortcuts are inactive until it closes. Assistive
+technology reaches only the modal and a picker opened over it. The covered view,
 scroll position, selection, find and draft remain in place; a running thread
 continues receiving replies. Settings changes keep their existing immediate
 save and confirmation behavior.

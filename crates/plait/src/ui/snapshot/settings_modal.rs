@@ -600,3 +600,66 @@ fn escape_keeps_the_current_policy_before_the_modal() {
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+/// GPUI runs an assistive action on its element directly, past the scrim and
+/// the action shield; the test platform cannot deliver one, so this checks
+/// the gate those actions consult and the focus an assistive Focus moves.
+#[core::prelude::v1::test]
+fn assistive_actions_reach_only_the_modal_and_what_opens_above_it() {
+    if !isolated("settings_modal::assistive_actions_reach_only_the_modal_and_what_opens_above_it") {
+        return;
+    }
+    use crate::ui::theme::beneath_modal;
+    let scratch = std::env::temp_dir().join(format!("plait-modal-assist-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    // GPUI reports focus moving out only in an active window.
+    harness.update(|_, window, _| window.activate_window());
+    harness.draw();
+    let composer = harness
+        .window
+        .update(&mut harness.cx, |plait, window, cx| {
+            let composer = plait.workspace.composers[THREAD].focus_handle(cx);
+            assert!(
+                !beneath_modal(None, window, cx),
+                "nothing covers the window"
+            );
+            plait.show_settings(true, window, cx);
+            plait.settings_tab = SettingsTab::Keyboard;
+            composer
+        })
+        .unwrap();
+    harness.draw();
+    harness.update(|plait, window, cx| {
+        let search = plait.keyboard.search.as_ref().unwrap().focus_handle(cx);
+        assert!(beneath_modal(None, window, cx), "a workspace button");
+        assert!(beneath_modal(Some(&composer), window, cx), "the composer");
+        assert!(!beneath_modal(Some(&search), window, cx), "a modal field");
+        // As an assistive Focus action on the composer does.
+        window.focus(&composer, cx);
+    });
+    harness.draw();
+    harness.update(|plait, window, cx| {
+        assert!(
+            plait.settings_focus.contains_focused(window, cx),
+            "focus returns to the modal"
+        );
+        plait.open_model_picker(ModelPurpose::DefaultModel, window, cx);
+    });
+    harness.draw();
+    harness.update(|plait, window, cx| {
+        let picker = plait.overlay.as_ref().unwrap().palette.focus_handle(cx);
+        assert!(
+            !beneath_modal(Some(&picker), window, cx),
+            "a picker above it"
+        );
+        assert!(picker.is_focused(window), "a picker keeps the keyboard");
+        plait.close_overlay(true, window, cx);
+        plait.show_settings(false, window, cx);
+    });
+    harness.draw();
+    harness.update(|_, window, cx| assert!(!beneath_modal(None, window, cx)));
+    drop(harness);
+    std::fs::remove_dir_all(scratch).unwrap();
+}

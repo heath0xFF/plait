@@ -279,6 +279,7 @@ impl Plait {
             )
         })
         .detach();
+        this.keep_focus_in_settings(window, cx);
         this.watch_approval_keys(window, cx);
         this.reconnect_host(window, cx);
         // Test scenes stay offline.
@@ -1004,6 +1005,7 @@ impl Render for Plait {
             self.switch_us = interaction.elapsed().as_micros();
         }
         let wide = Self::wide(window);
+        self.cover_workspace(window, cx);
         // Full screen hides the traffic lights the header otherwise clears.
         let fullscreen = window.is_fullscreen();
         self.panels.viewport = f32::from(window.viewport_size().width);

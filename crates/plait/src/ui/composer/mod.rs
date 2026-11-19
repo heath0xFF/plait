@@ -1303,6 +1303,10 @@ impl Render for Composer {
                     .aria_value(self.draft.value.text.clone())
                     .aria_placeholder(PLACEHOLDER)
                     .on_a11y_action(AccessibleAction::SetValue, move |data, window, cx| {
+                        // A composer is never in a window modal.
+                        if crate::ui::theme::beneath_modal(None, window, cx) {
+                            return;
+                        }
                         if let Some(gpui::accesskit::ActionData::Value(text)) = data {
                             let _ = input.update(cx, |this, cx| {
                                 if this.draft.set_external_value(text, this.enabled) {

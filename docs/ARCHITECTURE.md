@@ -1282,7 +1282,11 @@ continues applying replies. A full-window dimming layer blocks pointer input;
 the root action shield suppresses workspace commands, including menu dispatch.
 Tab traversal wraps within the modal and dismissal restores the previously
 focused handle. Escape gives nested pickers, shortcut recording, provider
-forms and the trust confirmation precedence. Covered conversation scrolling cannot demand an older page.
+forms and the trust confirmation precedence. GPUI runs an accessibility
+action on its element without a hit test, so each frame records what covers
+the window (`theme::Covered`): buttons built outside the modal or a picker
+over it ignore an assistive Click, the composer and text fields outside them
+ignore SetValue, and focus moved beneath the modal returns to it. Covered conversation scrolling cannot demand an older page.
 
 Project settings stores its own target and, for another checkout, separate
 policy and agent-resource state. It never selects that checkout on opening.

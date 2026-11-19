@@ -11,6 +11,64 @@ thread_local! {
         const { std::cell::Cell::new(&plait_core::theme::DEFAULT_DARK) };
 }
 
+/// Under a window modal, assistive actions reach only the modal and what
+/// opens above it, as the pointer does through its scrim. GPUI runs an
+/// element's accessibility action directly, without a hit test, so the
+/// window's action shield and the scrim do not stop it.
+#[derive(Default)]
+pub(super) struct Covered(std::collections::HashMap<WindowId, Vec<FocusHandle>>);
+
+impl Global for Covered {}
+
+thread_local! {
+    /// Set while controls in or above a window modal are built.
+    static ABOVE_MODAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// While held, built controls belong to a window modal or to something
+/// opened over it, and stay reachable by assistive actions.
+pub(super) struct AboveModal(bool);
+
+impl AboveModal {
+    pub(super) fn enter() -> Self {
+        Self(ABOVE_MODAL.with(|above| above.replace(true)))
+    }
+}
+
+impl Drop for AboveModal {
+    fn drop(&mut self) {
+        ABOVE_MODAL.with(|above| above.set(self.0));
+    }
+}
+
+/// Record the focus handles of what covers the window's content, or `None`.
+pub(super) fn cover(window: &Window, above: Option<Vec<FocusHandle>>, cx: &mut App) {
+    let id = window.window_handle().window_id();
+    if cx
+        .try_global::<Covered>()
+        .and_then(|covered| covered.0.get(&id))
+        == above.as_ref()
+    {
+        return;
+    }
+    let covered = cx.default_global::<Covered>();
+    match above {
+        Some(above) => covered.0.insert(id, above),
+        None => covered.0.remove(&id),
+    };
+}
+
+/// An assistive action on an element beneath a window modal is refused.
+/// `focus` is the element's own focus handle, when it has one.
+pub(super) fn beneath_modal(focus: Option<&FocusHandle>, window: &Window, cx: &App) -> bool {
+    let id = window.window_handle().window_id();
+    cx.try_global::<Covered>()
+        .and_then(|covered| covered.0.get(&id))
+        .is_some_and(|above| {
+            !focus.is_some_and(|focus| above.iter().any(|handle| handle.contains(focus, window)))
+        })
+}
+
 /// The current theme's colors. Read during render; cheap.
 pub fn colors() -> &'static Palette {
     CURRENT.with(std::cell::Cell::get)
@@ -220,9 +278,13 @@ impl ButtonAction for Stateful<Div> {
         let action = std::rc::Rc::new(action);
         let click = action.clone();
         let entity = cx.weak_entity();
+        let above = ABOVE_MODAL.with(std::cell::Cell::get);
         self.on_click(cx.listener(move |this, _, window, cx| click(this, window, cx)))
             // Bind identity directly; GPUI's fallback simulates a click at cached bounds.
             .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
+                if !above && beneath_modal(None, window, cx) {
+                    return;
+                }
                 let _ = entity.update(cx, |this, cx| action(this, window, cx));
             })
     }

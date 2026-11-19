@@ -63,6 +63,35 @@ impl Plait {
         }))
     }
 
+    /// Tell assistive actions what covers the workspace this frame: the
+    /// modal, and a picker opened over it.
+    pub(super) fn cover_workspace(&self, window: &Window, cx: &mut Context<Self>) {
+        let above = self.settings_open.then(|| {
+            let mut above = vec![self.settings_focus.clone()];
+            if let Some(overlay) = &self.overlay {
+                above.push(overlay.palette.focus_handle(cx));
+            }
+            above
+        });
+        super::theme::cover(window, above, cx);
+    }
+
+    /// Focus moved beneath the modal, as an assistive Focus action can do
+    /// without a click, goes back into it.
+    pub(super) fn keep_focus_in_settings(&self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.on_focus_out(&self.settings_focus, window, |this, _, window, cx| {
+            // Leaving the app also reports focus out; a field keeps it then.
+            if this.settings_open
+                && this.overlay.is_none()
+                && window.is_window_active()
+                && !this.settings_focus.contains_focused(window, cx)
+            {
+                window.focus(&this.settings_focus, cx);
+            }
+        })
+        .detach();
+    }
+
     fn settings_focus_step(&self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
         // A second key may arrive before the modal's first painted frame.
         if !self.settings_focus.is_rendered(window) {
@@ -87,6 +116,7 @@ impl Plait {
     }
 
     pub(super) fn settings_modal(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let _above = super::theme::AboveModal::enter();
         let project = (self.settings_page == SettingsPage::Project)
             .then_some(self.settings_project.as_ref())
             .flatten();

@@ -814,6 +814,8 @@ impl Palette {
                     "palette-rows",
                     count,
                     cx.processor(|this, range: Range<usize>, _, cx| {
+                        // A palette opens above everything, a settings modal included.
+                        let _above = super::theme::AboveModal::enter();
                         range
                             // The list sizes a bare row to its content; this
                             // gives every row the panel's width and a margin.
@@ -912,6 +914,7 @@ impl EventEmitter<PaletteEvent> for Palette {}
 
 impl Render for Palette {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _above = super::theme::AboveModal::enter();
         let searching = !self.field.read(cx).text().trim().is_empty();
         let panel = column()
             .id("palette")
