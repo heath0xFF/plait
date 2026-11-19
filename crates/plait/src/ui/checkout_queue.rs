@@ -49,7 +49,7 @@ impl Plait {
         let resume = Request::ResumeCheckoutQueue {
             thread_id: id.clone(),
         };
-        let detail = queue.detail().to_owned();
+        let detail = SharedString::from(queue.detail().to_owned());
         let enabled = self.admission.queue && self.host.connection.connected;
         let mut controls = row()
             .w_full()
@@ -57,23 +57,32 @@ impl Plait {
             .mx_auto()
             .gap_2()
             .child(
-                button("checkout-wait-state", queue.label())
-                    .aria_description(queue.detail().to_owned())
+                // A state, not a control: drawn as a status with its place in line on hover.
+                div()
+                    .id("checkout-wait-state")
+                    .role(Role::Status)
+                    .aria_label(queue.label())
+                    .aria_description(detail.clone())
+                    .audited()
+                    .flex()
+                    .items_center()
+                    .text_size(px(12.))
                     .text_color(rgb(if queue.state == checkout_queue::State::Held {
                         colors().amber
                     } else {
                         colors().blue
                     }))
-                    .tooltip(move |_, cx| cx.new(|_| TextTooltip(detail.clone())).into()),
+                    .child(queue.label())
+                    .tooltip(move |_, cx| cx.new(|_| TextTooltip(detail.to_string())).into()),
             );
         if queue.state == checkout_queue::State::Held {
             controls = controls.child(
                 button("checkout-wait-resume", "Resume")
                     .disabled(!enabled)
                     .aria_description(
-                        "Resume all held messages for this checkout in their original order.",
+                        "Resume this checkout's held Wait messages in their original order.",
                     )
-                    .tooltip(|_, cx| cx.new(|_| TextTooltip("Resume all held messages for this checkout in their original order.".into())).into())
+                    .tooltip(|_, cx| cx.new(|_| TextTooltip("Resume this checkout's held Wait messages in their original order.".into())).into())
                     .on_activate(cx, move |this, window, cx| {
                         this.change_checkout_wait(resume.clone(), window, cx)
                     }),

@@ -966,7 +966,15 @@ fn checkout_queue_states_remain_accessible_wide_and_narrow() {
             super::isolation::install_queue(&mut h, state);
             let frame = steady_frame(&mut h, label);
             if state.is_some() {
-                assert!(frame.has_node(Role::Button, |node| node.label.as_deref() == Some(label)));
+                // The state is a status the person reads, not a control that does nothing.
+                assert!(!frame.has_node(Role::Button, |node| node.label.as_deref() == Some(label)));
+                assert!(frame.has_node(Role::Status, |node| {
+                    node.label.as_deref() == Some(label)
+                        && node
+                            .description
+                            .as_deref()
+                            .is_some_and(|d| d.contains("in line for this checkout"))
+                }));
                 assert!(
                     frame.has_node(Role::Button, |node| node.label.as_deref() == Some("Cancel"))
                 );

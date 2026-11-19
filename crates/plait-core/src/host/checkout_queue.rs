@@ -37,7 +37,7 @@ impl Summary {
         let detail = format!(
             "{position} in line for this checkout. {}",
             if state == State::Held {
-                "Resume releases this checkout's held line in order; interrupted runs are not replayed."
+                "Resume releases this checkout's held Wait messages in order; interrupted runs are not replayed."
             } else {
                 "Starts after earlier messages and the checkout's current writer finish."
             }
