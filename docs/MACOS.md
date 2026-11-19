@@ -375,16 +375,18 @@ disconnected or older host does not offer choices it cannot carry out.
 
 A queued thread says **Waiting** in its tab, sidebar row and above its message
 box. Hover shows its place in line and that it waits for the checkout. **Cancel**
-removes its first waiting message; if that message just started, it requests
-Stop for that run. Following messages keep their order. A host restart changes
+removes its first waiting message and leaves the rest in order. If that message
+just started, Cancel requests Stop, which also clears that thread's remaining
+queued input as usual. A host restart changes
 not-started messages to **Held**. **Resume** releases the whole checkout's held
 line in order; interrupted runs are never replayed. Closing a tab or the desktop
 leaves a running host's queue alone. Messages and images remain with their own
 thread or pending draft through a lost reply and an explicit retry.
 
-Changing a queued thread's model, thinking, permissions or command policy makes
+Changing a queued thread's model, thinking, harness permission mode or command policy makes
 that waiter fail with a reason when its turn comes. Send again with the choices
-you intend. A removed or replaced checkout, unavailable harness/model or
+you intend. The next message's approval choice does not change an already
+accepted message's approval. A removed or replaced checkout, unavailable harness/model or
 unconfirmed cleanup also cannot start it; a failed waiter does not strand the
 rest of the line. A checkout holds at most 32 pending messages and 32 MiB of
 queued text and images, including held messages and follow-ups. A full queue
