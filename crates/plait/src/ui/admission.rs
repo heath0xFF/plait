@@ -223,14 +223,14 @@ impl Plait {
         }
         if self.admission.continuation.as_ref() == Some(&snapshot.id) {
             return Some(column().gap_2().child(tag("admission-continuation-detail", "Starts a linked thread from HEAD. Uncommitted files are not copied; this thread's history and draft stay here.",colors().muted))
-                .child(row().gap_2().child(button("continue-worktree-confirm","Own worktree").on_activate(cx,|this,window,cx| this.start_continuation(window,cx)))
-                    .child(button("continue-worktree-cancel","Cancel").on_activate(cx,|this,_,cx| {this.admission.continuation=None;cx.notify();})))
+                .child(row().gap_2().child(button("continue-worktree-confirm","Own worktree").tooltip(|_,cx| hover(cx,CONTINUE_WORKTREE)).aria_description(CONTINUE_WORKTREE).on_activate(cx,|this,window,cx| this.start_continuation(window,cx)))
+                    .child(button("continue-worktree-cancel","Cancel").tooltip(|_,cx| hover(cx,CONTINUE_CANCEL)).aria_description(CONTINUE_CANCEL).on_activate(cx,|this,_,cx| {this.admission.continuation=None;cx.notify();})))
                 .into_any_element());
         }
         Some(row().gap_2().child(button("continue-worktree","Continue separately")
             .tooltip(|_,cx| cx.new(|_| super::thread_controls::TextTooltip("Create a linked thread in a new worktree from HEAD. This thread and its draft stay here.".into())).into())
             .on_activate(cx,|this,_,cx| {this.admission.continuation=this.host.thread.selected.clone();cx.notify();}))
-            .child(button("continue-wait","Wait").disabled(true).aria_description("Not yet available. Nothing is queued."))
+            .child(button("continue-wait","Wait").disabled(true).tooltip(|_,cx| hover(cx,WAIT_UNAVAILABLE)).aria_description(WAIT_UNAVAILABLE))
             .into_any_element())
     }
     fn start_continuation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -500,11 +500,20 @@ impl Plait {
             .child(div().text_size(px(12.)).text_color(rgb(colors().muted)).child(a11y_text("isolation-choice-detail", "Start from HEAD in a new worktree. Uncommitted files and build output are not copied. The busy thread stays in its checkout. Your message starts the new thread.")))
             .child(row().gap_2()
                 .child(button("isolation-worktree", "Own worktree").tooltip(|_,cx| cx.new(|_| super::thread_controls::TextTooltip("Create a separate branch and checkout from HEAD, then send this draft there.".into())).into()).aria_description("Create a separate branch and checkout from HEAD, then send this draft there.").on_activate(cx, |this, window, cx| this.accept_isolation(window,cx)))
-                .child(button("isolation-wait", "Wait").disabled(true).tooltip(|_,cx| cx.new(|_| super::thread_controls::TextTooltip("Not yet available. No run is queued.".into())).into()).aria_description("Not yet available. No run is queued."))
+                .child(button("isolation-wait", "Wait").disabled(true).tooltip(|_,cx| hover(cx,WAIT_UNAVAILABLE)).aria_description(WAIT_UNAVAILABLE))
                 .child(button("isolation-cancel", "Cancel").tooltip(|_,cx| cx.new(|_| super::thread_controls::TextTooltip("Keep this draft without starting a thread.".into())).into()).on_activate(cx, |this,_,cx| this.cancel_isolation(cx))))
             .child(div().text_size(px(11.)).text_color(rgb(colors().muted)).child(a11y_text("isolation-choice-wait-detail", "Wait is not yet available. Nothing is queued.")))
             .into_any_element())
     }
+}
+/// Both Wait controls say the same thing: nothing is accepted as queued.
+const WAIT_UNAVAILABLE: &str = "Not yet available. No run is queued.";
+const CONTINUE_WORKTREE: &str =
+    "Create a linked thread in a new branch and checkout from HEAD. This thread stays here.";
+const CONTINUE_CANCEL: &str = "Keep this thread as it is without creating anything.";
+fn hover(cx: &mut App, text: &'static str) -> AnyView {
+    cx.new(|_| super::thread_controls::TextTooltip(text.into()))
+        .into()
 }
 fn await_admission(
     client: &Client,
