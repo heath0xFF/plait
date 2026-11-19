@@ -1,6 +1,6 @@
 //! Prepared text ranges and one-point strokes; no ancestry work in a frame.
 use super::{Graph, Item};
-use std::ops::Range;
+use std::{collections::HashMap, ops::Range};
 
 pub(super) struct LabelStyle {
     pub title: Range<usize>,
@@ -36,6 +36,26 @@ fn part(text: &mut String, value: &str, separator: &str) -> Range<usize> {
     start..text.len()
 }
 
+pub(super) fn preservation_label(
+    facts: &plait_core::git::worktree::inventory::Preservation,
+) -> String {
+    [
+        facts.changed.map_or_else(
+            || "Changed files unknown".into(),
+            |n| format!("{n} changed"),
+        ),
+        facts.unpushed.map_or_else(
+            || "Publication unknown".into(),
+            |n| format!("{n} not pushed"),
+        ),
+        facts.exclusive.map_or_else(
+            || "Commits kept only here: Unknown".into(),
+            |n| format!("{n} kept only here"),
+        ),
+    ]
+    .join(" · ")
+}
+
 pub(super) struct Stroke {
     pub lane: usize,
     pub x: f32,
@@ -57,7 +77,26 @@ fn x(lane: usize) -> f32 {
     12. + lane as f32 * 14.
 }
 
-pub(super) fn strokes(item: &Item, graph: &Graph) -> Vec<Stroke> {
+pub(super) fn prepare(items: &[Item], graph: &Graph) -> Vec<Vec<Stroke>> {
+    let mut heads = HashMap::new();
+    for (i, item) in items.iter().enumerate() {
+        if let Item::Changed(row, lane) | Item::Head(row, lane) = item {
+            heads.entry((*row, *lane)).or_insert(i);
+        }
+    }
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| strokes(i, item, graph, &heads))
+        .collect()
+}
+
+fn strokes(
+    item_index: usize,
+    item: &Item,
+    graph: &Graph,
+    heads: &HashMap<(usize, usize), usize>,
+) -> Vec<Stroke> {
     let index = match item {
         Item::Head(i, _) | Item::Changed(i, _) | Item::Commit(i) => *i,
         Item::Detached(_) => return Vec::new(),
@@ -69,13 +108,30 @@ pub(super) fn strokes(item: &Item, graph: &Graph) -> Vec<Stroke> {
         &[]
     };
     let mut strokes = Vec::new();
-    for &lane in &row.lines {
-        let mut top: f32 = 0.;
-        let mut bottom: f32 = 28.;
+    let mut lanes = row.lines.clone();
+    for &lane in &row.heads {
+        if !lanes.contains(&lane) {
+            lanes.push(lane);
+        }
+    }
+    let commit = matches!(item, Item::Commit(_));
+    for lane in lanes {
+        let incoming = row.incoming.binary_search(&lane).is_ok();
+        let outgoing = row.outgoing.binary_search(&lane).is_ok();
+        let head = heads.get(&(index, lane)).copied();
+        if !commit && !incoming && head.is_none_or(|h| item_index < h) {
+            continue;
+        }
+        let mut top: f32 = if incoming || head.is_some_and(|h| h < item_index) {
+            0.
+        } else {
+            14.
+        };
+        let mut bottom: f32 = if !commit || outgoing { 28. } else { 14. };
         for &(from, to) in joins {
-            if row.lane == from && lane == to {
+            if row.lane == from && lane == to && !incoming && head.is_none() {
                 top = 20.;
-            } else if row.lane != from && lane == from {
+            } else if row.lane != from && lane == from && !outgoing {
                 bottom = 8.;
             }
         }
@@ -126,6 +182,111 @@ pub(super) fn strokes(item: &Item, graph: &Graph) -> Vec<Stroke> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn graph_row(
+        lane: usize,
+        heads: &[usize],
+        lines: &[usize],
+        incoming: &[usize],
+        outgoing: &[usize],
+        joins: &[(usize, usize)],
+    ) -> plait_core::worktree_graph::Row {
+        plait_core::worktree_graph::Row {
+            commit: plait_core::git::log::GraphCommit {
+                commit: plait_core::git::log::Commit {
+                    id: "a".into(),
+                    short: "a".into(),
+                    author: String::new(),
+                    subject: String::new(),
+                    time: 0,
+                },
+                parents: vec![],
+            },
+            lane,
+            heads: heads.to_vec(),
+            lines: lines.to_vec(),
+            incoming: incoming.to_vec(),
+            outgoing: outgoing.to_vec(),
+            joins: joins.to_vec(),
+        }
+    }
+    fn vertical(strokes: &[Stroke], lane: usize) -> Option<(f32, f32)> {
+        strokes
+            .iter()
+            .find(|s| s.lane == lane && s.corner.is_none() && s.width == 1.)
+            .map(|s| (s.y, s.height))
+    }
+    #[test]
+    fn lines_begin_at_the_first_head_and_end_at_the_last_node() {
+        let graph = Graph {
+            rows: vec![
+                graph_row(0, &[0], &[0], &[], &[0], &[]),
+                graph_row(0, &[], &[0], &[0], &[], &[]),
+            ],
+            ..Default::default()
+        };
+        let items = [
+            Item::Changed(0, 0),
+            Item::Head(0, 0),
+            Item::Commit(0),
+            Item::Commit(1),
+        ];
+        let drawn = prepare(&items, &graph);
+        assert_eq!(vertical(&drawn[0], 0), Some((14., 14.)));
+        assert_eq!(vertical(&drawn[1], 0), Some((0., 28.)));
+        assert_eq!(vertical(&drawn[2], 0), Some((0., 28.)));
+        assert_eq!(vertical(&drawn[3], 0), Some((0., 14.)));
+    }
+    #[test]
+    fn shared_head_stubs_start_at_their_labels_and_stop_at_the_fork() {
+        let graph = Graph {
+            rows: vec![graph_row(0, &[1, 0], &[1], &[], &[], &[(1, 0)])],
+            ..Default::default()
+        };
+        let drawn = prepare(
+            &[Item::Head(0, 1), Item::Head(0, 0), Item::Commit(0)],
+            &graph,
+        );
+        assert_eq!(vertical(&drawn[0], 1), Some((14., 14.)));
+        assert_eq!(vertical(&drawn[0], 0), None);
+        assert_eq!(vertical(&drawn[1], 0), Some((14., 14.)));
+        assert_eq!(vertical(&drawn[2], 0), Some((0., 14.)));
+        assert_eq!(vertical(&drawn[2], 1), Some((0., 8.)));
+    }
+    #[test]
+    fn routed_edges_start_at_the_merge_and_end_at_the_join() {
+        let graph = Graph {
+            rows: vec![
+                graph_row(0, &[0], &[2], &[], &[2], &[(0, 2)]),
+                graph_row(1, &[], &[2], &[2], &[], &[(2, 1)]),
+            ],
+            ..Default::default()
+        };
+        let drawn = prepare(
+            &[Item::Head(0, 0), Item::Commit(0), Item::Commit(1)],
+            &graph,
+        );
+        assert_eq!(vertical(&drawn[0], 2), None);
+        assert_eq!(vertical(&drawn[1], 2), Some((20., 8.)));
+        assert_eq!(vertical(&drawn[2], 2), Some((0., 8.)));
+    }
+    #[test]
+    fn unknown_publication_is_never_presented_as_a_commit_count() {
+        let mut facts = plait_core::git::worktree::inventory::Preservation {
+            changed: Some(0),
+            exclusive: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(
+            preservation_label(&facts),
+            "0 changed · Publication unknown · 0 kept only here"
+        );
+        facts.unpushed = Some(2);
+        assert_eq!(
+            preservation_label(&facts),
+            "0 changed · 2 not pushed · 0 kept only here"
+        );
+    }
 
     #[test]
     fn head_labels_omit_missing_parts_without_empty_slots() {

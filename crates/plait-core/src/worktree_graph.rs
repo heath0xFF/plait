@@ -16,6 +16,9 @@ pub struct Row {
     pub heads: Vec<usize>,
     /// Each visible line is precomputed; render performs no ancestry search.
     pub lines: Vec<usize>,
+    /// Sorted columns whose edges cross the row's upper or lower boundary.
+    pub incoming: Vec<usize>,
+    pub outgoing: Vec<usize>,
     pub joins: Vec<(usize, usize)>,
 }
 #[derive(Clone, Debug, Default)]
@@ -69,7 +72,9 @@ pub fn layout(checkouts: &[Checkout], commits: Vec<GraphCommit>, more: bool) -> 
             head,
             base,
             parent,
-            merged: n > 0 && head.is_some_and(|h| reach[0].contains(&h)),
+            merged: n > 0
+                && checkout.head != checkout.base
+                && head.is_some_and(|h| reach[0].contains(&h)),
             detached: n > 0
                 && (base.is_none()
                     || parent.is_none()
@@ -154,6 +159,8 @@ pub fn layout(checkouts: &[Checkout], commits: Vec<GraphCommit>, more: bool) -> 
         }
     }
     let mut lines = vec![HashSet::new(); end];
+    let mut incoming = vec![HashSet::new(); end];
+    let mut outgoing = vec![HashSet::new(); end];
     let mut joins = vec![Vec::new(); end];
     #[cfg(test)]
     let mut edges = Vec::new();
@@ -189,8 +196,14 @@ pub fn layout(checkouts: &[Checkout], commits: Vec<GraphCommit>, more: bool) -> 
             } else if from != to {
                 joins[if p == 0 { to_row } else { i }].push((from, to));
             }
-            for row in &mut lines[i..=to_row] {
-                row.insert(line);
+            for r in i..=to_row {
+                lines[r].insert(line);
+                if r > i {
+                    incoming[r].insert(line);
+                }
+                if r < to_row {
+                    outgoing[r].insert(line);
+                }
             }
             #[cfg(test)]
             edges.push((i, to_row, line));
@@ -211,20 +224,18 @@ pub fn layout(checkouts: &[Checkout], commits: Vec<GraphCommit>, more: bool) -> 
         .into_iter()
         .take(end)
         .enumerate()
-        .map(|(i, commit)| {
-            let mut row_lines = lines[i].iter().copied().collect::<Vec<_>>();
-            row_lines.sort_unstable();
-            Row {
-                commit,
-                lane: node_lanes[i],
-                heads: lanes
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(n, l)| (l.head == Some(i)).then_some(n))
-                    .collect(),
-                lines: row_lines,
-                joins: std::mem::take(&mut joins[i]),
-            }
+        .map(|(i, commit)| Row {
+            commit,
+            lane: node_lanes[i],
+            heads: lanes
+                .iter()
+                .enumerate()
+                .filter_map(|(n, l)| (l.head == Some(i)).then_some(n))
+                .collect(),
+            lines: ordered(&lines[i]),
+            incoming: ordered(&incoming[i]),
+            outgoing: ordered(&outgoing[i]),
+            joins: std::mem::take(&mut joins[i]),
         })
         .collect();
     Graph {
@@ -235,6 +246,12 @@ pub fn layout(checkouts: &[Checkout], commits: Vec<GraphCommit>, more: bool) -> 
         #[cfg(test)]
         edges,
     }
+}
+
+fn ordered(values: &HashSet<usize>) -> Vec<usize> {
+    let mut values: Vec<_> = values.iter().copied().collect();
+    values.sort_unstable();
+    values
 }
 
 #[cfg(test)]
@@ -296,6 +313,24 @@ mod tests {
             );
         }
         for (i, row) in graph.rows.iter().enumerate() {
+            for &lane in &row.lines {
+                assert_eq!(
+                    row.incoming.contains(&lane),
+                    graph
+                        .edges
+                        .iter()
+                        .any(|&(a, b, l)| l == lane && a < i && b >= i),
+                    "{case}: upper endpoint at {i}"
+                );
+                assert_eq!(
+                    row.outgoing.contains(&lane),
+                    graph
+                        .edges
+                        .iter()
+                        .any(|&(a, b, l)| l == lane && a <= i && b > i),
+                    "{case}: lower endpoint at {i}"
+                );
+            }
             for parent in &row.commit.parents {
                 let Some(&j) = index.get(parent.as_str()) else {
                     continue;
@@ -473,7 +508,7 @@ mod tests {
         );
         assert_eq!(graph.lanes[2].parent, Some(1));
         assert!(!graph.lanes[2].detached);
-        assert!(graph.lanes[3].merged);
+        assert!(!graph.lanes[3].merged);
         assert_eq!(graph.lanes[3].head, graph.lanes[3].base);
         assert!(graph.lanes[4].detached);
         assert_eq!(graph.lanes[4].base, None);

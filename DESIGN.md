@@ -52,9 +52,11 @@ conversation keeps a readable minimum width.
   like counts and ages; commit subjects use secondary text. Thread titles use
   primary text and their state words use the same color as thread tabs.
   Virtualized 28-point rows carry those labels and right-aligned sizes.
-  Merged heads rejoin; unavailable or rewritten bases say Detached. Connectors
-  turn through six-point rounded corners. Selection adds a neutral fill and
-  strengthens the whole lane to foreground; hover strengthens it more quietly.
+  Merged heads rejoin; unavailable or rewritten bases say Fork unknown, distinct
+  from a Git Detached head. A fresh worktree is not labelled Merged. Connectors
+  turn through six-point rounded corners. Lines begin and end at node centres,
+  including shared-head stubs. Selection adds a neutral fill and strengthens
+  the whole lane to foreground; hover strengthens it more quietly.
   The detail sits beside the
   graph in wide windows and below it in narrow windows, with actions near its
   top. Its six-point storage bar shows the selected checkout's share of the

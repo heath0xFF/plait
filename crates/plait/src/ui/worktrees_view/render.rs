@@ -263,7 +263,6 @@ impl Plait {
             format!("{} · {}", self.worktrees.titles[n], self.worktrees.words[n])
         };
         let facts = &tree.preservation;
-        let count = |n: Option<u64>| n.map_or("Unknown".into(), |n| n.to_string());
         let reason=facts.refusal.clone().unwrap_or_else(||"Clean, published, and no commits kept only by this worktree. The host checks again before removal.".into());
         let base = tree.base.as_deref().map(|s| &s[..12]).unwrap_or("Unknown");
         let size = self
@@ -315,7 +314,12 @@ impl Plait {
         } else {
             reason.clone()
         };
-        let visible_reason = removal_advice(&reason).to_owned();
+        let visible_reason = if facts.refusal.is_none() {
+            "Removable"
+        } else {
+            removal_advice(&reason)
+        }
+        .to_owned();
         let path_text = safe_text(&path.display().to_string());
         panel.min_w_0().child(column().min_w_0().flex_shrink_0().gap_2().child(a11y_text("worktrees-detail-title",title))
             .child(row().flex_wrap().gap_2()
@@ -325,7 +329,7 @@ impl Plait {
                 .when(tree.creation_id.is_some()&&!tree.main&&!tree.removed,|el|el.child(button("worktrees-remove","Remove").when(cfg!(test), |el| el.tooltip_show_delay(std::time::Duration::ZERO)).disabled(facts.refusal.is_some() || busy || self.worktrees.removal.pending.is_some() || self.worktree_busy || !self.host.connection.connected || self.worktrees.loading || self.worktrees.error.is_some()).text_color(rgb(if facts.refusal.is_some(){colors().subtle}else{colors().text})).tooltip(move |_,cx|hover(remove_reason.clone(),cx)).on_activate(cx,move |this,window,cx|this.ask_remove_view_worktree(&drawn.0,drawn.1.as_ref(),window,cx)))))
             .child(div().text_size(px(12.)).text_color(rgb(colors().muted)).child(a11y_text("worktrees-detail-branch",format!("{} · from {base}",safe_text(tree.branch.as_deref().unwrap_or("Detached"))))))
             .child(hover_text("worktrees-detail-path",path_text.clone(),path_text).min_w_0().w_full().truncate().text_ellipsis_middle().text_size(px(11.)).text_color(rgb(colors().subtle)))
-            .child(a11y_text("worktrees-detail-facts",format!("{} changed · {} not pushed · {} kept only here",count(facts.changed),count(facts.unpushed),count(facts.exclusive))))
+            .child(a11y_text("worktrees-detail-facts",presentation::preservation_label(facts)))
             .child(hover_text("worktrees-detail-reason",safe_text(&visible_reason),reason).text_size(px(12.)).text_color(rgb(colors().muted)))
             .child(bar)
             .child(hover_text("worktrees-detail-size",size.map_or_else(||size_label(self.worktrees.sizes[n].as_ref()),|s|format!("{} source · {} build output{}",bytes(s.source),bytes(s.build),if s.incomplete {" · lower bound"}else{""})),"Logical bytes, including private build cache. Shared Git storage excluded; this is not space reclaimable.".into()))

@@ -630,8 +630,9 @@ installed-window acceptance and performance timings remain separate verification
   reader class, shipping none).
 - **Worktree build artifacts, cleanup, and returning work (Stages 11 and 12):**
   a new worktree's build output is cloned copy-on-write only from a per-project
-  approved list; worktree cleanup is manual only, with no automatic removal
-  in the current scope; work returns by commit, push, and pull request, with no
+  approved list; worktree cleanup is manual first (Stage 12a), then an opt-in
+  rule (Stage 12b). This view supplies the manual part; work returns by commit,
+  push, and pull request, with no
   merge, rebase, or cherry-pick added.
 
 The agreed v2 recovery index/blob layout remains planned, with its own

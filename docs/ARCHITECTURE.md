@@ -599,7 +599,9 @@ suite's fifty-worktree case measures cached graph rendering, layout, prepaint
 and paint with no host, Git or storage work; it does not measure GPU presentation.
 
 The desktop prepares rounded connector strokes and label style ranges when
-the graph changes. Selection and hover only tint those strokes; the virtualized
+the graph changes. The core retains which edges cross each row boundary;
+head stubs and the first and last edge rows stop at their node centres.
+Selection and hover only tint those strokes; the virtualized
 list builds text and geometry for visible rows. Accessible row names retain the
 title, state and branch order independently of their visual styles.
 

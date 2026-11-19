@@ -191,11 +191,7 @@ impl View {
             }
         }
         self.selected = self.selected.min(self.rows.len().saturating_sub(1));
-        self.strokes = self
-            .items
-            .iter()
-            .map(|item| presentation::strokes(item, &self.graph))
-            .collect();
+        self.strokes = presentation::prepare(&self.items, &self.graph);
         self.hovered = None;
     }
 }
@@ -652,7 +648,7 @@ impl Plait {
                 if self.worktrees.graph.lanes[i].merged {
                     facts.push("Merged".into());
                 } else if self.worktrees.graph.lanes[i].detached {
-                    facts.push("Detached".into());
+                    facts.push("Fork unknown".into());
                 }
                 presentation::head_label(
                     &self.worktrees.titles[i],

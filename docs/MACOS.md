@@ -387,8 +387,10 @@ Tab order, selected lane and lane sorting return after restart.
 The graph shows the main checkout's current branch as a trunk and each worktree
 as a lane. Commit rows show hash, subject and age. Head labels show the owning
 thread and its tab state, branch, preservation facts and size. **Merged** means
-the head is reachable from the trunk; **Detached** means the recorded fork
-cannot be connected in the available history. Hollow nodes count uncommitted
+the head is reachable from the trunk and differs from its starting commit;
+a fresh worktree is not labelled Merged. **Fork unknown** means the recorded fork
+cannot be connected in the available history; **Detached** instead describes
+a checkout without a Git branch. Hollow nodes count uncommitted
 changes. History is capped at 300 commits; a clipped graph says **Older commits
 not shown**. External worktrees are labelled plainly and cannot be removed here.
 
