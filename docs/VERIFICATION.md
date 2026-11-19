@@ -2012,12 +2012,16 @@ debug build the check stopped at Settings → Editor: the framework's debug
 assertion reported a duplicate accessibility node id and the app exited, so the
 items after it did not run. The two colliding elements were the custom-command
 notes under **Open files with** and **Open terminals with** (`Runs <program>
-directly, not through a shell.`): the acceptance fixture configures both
-settings to run the same recorder script, and `tag()` derived each text
-element's accessibility id from its own text under the shared `settings-page`
-ancestor. A release build drops the duplicate node and carries on, which is how
-both the local release run above and the packaged release build tested on CI
-passed that page.
+directly, not through a shell.`). The check's fixture starts with both settings
+set to Custom commands that run the same recorder script, so both notes show on
+the first visit, and `tag()` derived each text element's accessibility id from
+its own text under the shared `settings-page` ancestor. The recorder lives in a
+fresh folder for each run, which is why the reported id differed from run to
+run. The reported id was matched afterward: it is the hash GPUI makes of the
+second note's element path, recomputed headlessly with that run's folder. A
+release build drops the duplicate node and carries on, which is how both the
+local release run above and the packaged release build that CI drives passed
+that page.
 
 Not exercised: a live model in more than one tab at once; VoiceOver itself;
 dragging a tab and middle-click on a tab; a host that reconnects under several
@@ -2025,42 +2029,52 @@ tabs; and the installed app.
 
 ## Headless accessibility guard
 
-Accessible text helpers (`a11y_text`, `tag`, and `section_label`) now require
-explicit place-based element IDs instead of deriving IDs from rendered text, and
-duplicate IDs found across the scene suite (the Editor custom-command notes,
-repeated harness states on Settings → Agents, queued follow-up labels, repeated
-skill badges, and the colliding title/button ID on Project settings agent rows)
-have been fixed.
+Accessible text helpers (`a11y_text`, `tag`, and `section_label`) require an
+explicit element ID that names the text's place instead of deriving it from the
+text. The duplicates this exposed across the scene suite (the Editor
+custom-command notes, repeated harness states on Settings → Agents, queued
+follow-up labels, repeated skill badges, and the colliding title and button IDs
+on Project settings agent rows) are fixed.
 
-Because the pinned GPUI test window never activates `Window::a11y`, the headless
-test suite uses a debug-only prepaint collector (`crates/plait/src/ui/a11y.rs`)
-that compiles out to a zero-cost alias in release and non-test builds. It
-records every audited control and text element's GPUI `GlobalElementId` hash
-(the same hash GPUI uses for `accesskit::NodeId`), role, label, and value during
-`Element::prepaint`.
+Because the pinned GPUI test window never activates `Window::a11y`, debug test
+builds use a prepaint collector (`crates/plait/src/ui/a11y.rs`) instead. It
+records each audited control's and text element's `GlobalElementId` hash (the
+value GPUI uses as the `accesskit::NodeId`), role, label and value during
+`Element::prepaint`. Outside debug test builds the wrapper is a plain type
+alias and records nothing.
 
 What the guard covers:
 
-- **Duplicate IDs across all scenes:** every scene in `every_view_draws` runs
+- **Duplicate IDs in every scene:** each scene in `every_view_draws` is drawn
   with the collector active and fails if two elements in a frame produce the
-  same node ID.
-- **Steady-frame reachability:** a dedicated guard test draws two consecutive
-  frames of a workspace with sidebar and tabs, a streaming reply, an approval,
-  the open tab overflow list, Changes/History/Files views, every Settings modal
-  page (including Editor in both default and both-Custom states), and Project
-  settings as a modal. On frame 2 it asserts zero duplicates and verifies that
-  each sidebar thread row, each visible tab and its close control, all four
-  views, and each message remain present and named — catching `.cached()` views
-  whose child prepaint is skipped on steady frames.
-- **Helper discipline:** a source check fails if UI code calls raw `text!()`
-  instead of the explicit-ID helpers.
+  same node ID. Scenes drawn for images (`scripts/snapshots.sh`) are not.
+- **Reachability on a steady frame:** a guard test draws two consecutive frames
+  of a workspace with the sidebar, tabs and a streaming reply; every Settings
+  page and Project settings as modals over it (Editor both at its defaults and
+  with both settings Custom on one program); Changes, History and Files; an
+  approval; and the open tab overflow list. On the second frame it fails on any
+  duplicate, and unless each sidebar thread row, each visible tab and its close
+  control, the four views and each message are present and named. A view drawn
+  with `.cached()` drops out on that frame, so the test fails if the sidebar
+  rows or the tab strip are cached again.
+- **Stable IDs:** sidebar thread rows and their Actions buttons keep their node
+  IDs when the thread list is reordered, and Project settings agent rows keep
+  theirs when a skill is added in front of them.
+- **Nothing outside the collector:** source checks fail on raw `text!()`, on
+  `Text::new` or `InteractiveText` outside `ui/a11y.rs`, and on any `.role(`
+  chain that does not reach the collector. The last is a text scan of the
+  builder chain, not a type check: it accepts `.audited()` in the chain, a
+  helper that returns an audited element, a closure inside an audited chain,
+  and a `let` binding audited later.
 
 What the guard cannot cover:
 
 - It is not VoiceOver and does not run against a real window.
 - It does not exercise GPUI's `Window::a11y` tree builder, AccessKit's tree
-  updates, or macOS `NSAccessibility` bridging, focus announcements, or
+  updates, or the macOS accessibility bridge, focus announcements, or
   assistive actions.
-- Only elements drawn through Plait's audited control and text helpers are
-  recorded; a raw `.role(...)` without `.audited()` would not be observed by the
-  collector.
+- It sees only the states the scenes draw. An element that repeats only with
+  real data (a list longer than any scene draws, two rows that share a key) is
+  caught only if a scene draws it.
+- Synthetic accessibility children are not recorded. Plait's only use of them
+  marks the parent disabled or read-only and adds no nodes.

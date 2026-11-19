@@ -1409,8 +1409,13 @@ node in release builds.
 To prevent text collisions by construction, Plait's accessible text helpers
 (`a11y_text`, `tag`, and `section_label` in `ui/a11y.rs` and `ui/theme.rs`)
 require an explicit place-based `ElementId` (scoped to the setting, row, or
-region) instead of deriving IDs from rendered text. Raw `text!()` calls are
-disallowed in `ui/`. Under `cfg(all(test, debug_assertions))`, `Audited<E>`
+region) instead of deriving IDs from rendered text. Sidebar thread rows and
+Project settings agent rows name each row by what it is (the thread's own row
+view; the skill's list, title and path), not its position, so their IDs hold
+as rows come and go; some other lists (Changes file rows, MCP servers, palette
+rows) still use the position. Raw `text!()`, `Text::new` and `.role(` chains
+that bypass the collector are rejected by source checks in
+`ui/snapshot/a11y.rs`. Under `cfg(all(test, debug_assertions))`, `Audited<E>`
 wraps audited controls and text elements transparently to record each node's
 `GlobalElementId` hash, role, label, and value during `Element::prepaint`. In
 non-test and release builds `Audited<E>` compiles to a zero-cost type alias.
