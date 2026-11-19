@@ -322,6 +322,19 @@ impl Plait {
         }
     }
 
+    /// The open checkout is known to differ from the selected thread's. An
+    /// identity not read yet is not a mismatch: Git status may be slow or
+    /// fail, and a send verifies the bound directory before it leaves.
+    fn checkout_mismatch(&self) -> bool {
+        let Some(id) = self.host.thread.selected.as_deref() else {
+            return false;
+        };
+        match (self.state.checkout_key(), self.host.expected_checkout(id)) {
+            (Some(key), Some(expected)) => key != expected,
+            _ => false,
+        }
+    }
+
     fn checkout_matches_thread(&self) -> bool {
         let Some(id) = self.host.thread.selected.as_deref() else {
             return true;

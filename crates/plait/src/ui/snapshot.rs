@@ -6572,6 +6572,75 @@ fn file_read_lands_after_a_host_reconnect() {
 }
 
 #[core::prelude::v1::test]
+fn sending_does_not_wait_for_a_git_status() {
+    if !isolated("sending_does_not_wait_for_a_git_status") {
+        return;
+    }
+    // A folder that is not a repository: its Git status read fails.
+    let root = std::env::temp_dir().join(format!("plait-send-plain-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let checkout = root.canonicalize().unwrap();
+    let mut harness = Harness::new(&checkout, None, 900., 600.);
+    harness.connect(&checkout, false);
+    // A queued follow-up can be sent while the sample thread runs.
+    harness.update(|plait, _, _| {
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 3;
+    });
+    harness.update(|plait, _, _| {
+        assert!(plait.state.checkout_key().is_none());
+        assert!(
+            plait.can_submit(),
+            "an unread checkout identity is not a mismatch"
+        );
+    });
+    drop(harness);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn sending_stops_for_a_replaced_checkout() {
+    if !isolated("sending_stops_for_a_replaced_checkout") {
+        return;
+    }
+    let root = std::env::temp_dir().join(format!("plait-send-replaced-{}", std::process::id()));
+    let repository = fixture_repository(&root);
+    let mut harness = Harness::new(&repository, None, 900., 600.);
+    harness.connect(&repository, false);
+    // A queued follow-up can be sent while the sample thread runs.
+    harness.update(|plait, _, _| {
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .unwrap()
+            .protocol_version = 3;
+    });
+    harness.update(|plait, _, _| {
+        assert!(plait.can_submit());
+        // The other sample thread was bound to a directory since replaced.
+        let other = "thr_0c44a9d1";
+        let mut replaced = plait.state.checkout_key().unwrap().clone();
+        replaced.inode += 1;
+        plait.host.bind_checkout(other, &replaced).unwrap();
+        plait.host.thread.selected = Some(other.into());
+        let mut snapshot = plait.host.thread.snapshot.as_deref().unwrap().clone();
+        snapshot.id = other.into();
+        plait.host.thread.snapshot = Some(Arc::new(snapshot));
+        assert!(!plait.can_submit(), "a known mismatch still blocks sending");
+    });
+    drop(harness);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[core::prelude::v1::test]
 fn policy_reply_cannot_return_to_an_earlier_checkout_lifetime() {
     if !isolated("policy_reply_cannot_return_to_an_earlier_checkout_lifetime") {
         return;

@@ -850,7 +850,7 @@ impl Plait {
     }
 
     pub(super) fn can_submit(&self) -> bool {
-        if !self.checkout_matches_thread() {
+        if self.checkout_mismatch() {
             return false;
         }
         self.session.ready()
