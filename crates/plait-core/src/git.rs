@@ -774,7 +774,7 @@ fn format_diff(bytes: &[u8], mut truncated: bool, elapsed: Duration, headers: Fi
 
 mod branch;
 mod counts;
-mod log;
+pub mod log;
 pub mod record;
 pub mod review;
 pub mod undo;

@@ -835,6 +835,33 @@ fn staging_runs_clean_filters_but_history_and_diff_reads_do_not() {
 }
 
 #[test]
+fn worktree_graph_read_keeps_merge_parents_and_never_runs_diff_helpers() {
+    let repo = Repo::new();
+    assert!(super::log::graph(&repo.0, &[]).unwrap().0.is_empty());
+    repo.write("a", "base");
+    repo.commit();
+    let base = repo.out(&["rev-parse", "HEAD"]).trim().to_owned();
+    repo.git(&["checkout", "-b", "topic"]);
+    repo.write("b", "topic");
+    repo.commit();
+    let topic = repo.out(&["rev-parse", "HEAD"]).trim().to_owned();
+    repo.git(&["checkout", "main"]);
+    repo.write("c", "main");
+    repo.commit();
+    repo.git(&["merge", "--no-ff", "topic", "-m", "merge"]);
+    let head = repo.out(&["rev-parse", "HEAD"]).trim().to_owned();
+    repo.git(&["config", "diff.external", "false"]);
+    let (commits, more) = super::log::graph(&repo.0, &[head.clone(), topic.clone()]).unwrap();
+    assert!(!more);
+    assert_eq!(commits.len(), 4);
+    assert_eq!(commits[0].commit.id, head);
+    assert_eq!(commits[0].parents.len(), 2);
+    assert_eq!(commits[0].parents[1], topic);
+    assert_eq!(commits.last().unwrap().commit.id, base);
+    assert!(super::log::graph(&repo.0, &["--all".into()]).is_err());
+}
+
+#[test]
 fn log_on_an_unborn_branch_is_empty() {
     let repo = Repo::new();
     assert_eq!(log(&repo.0, None, 0, 10).unwrap(), History::default());

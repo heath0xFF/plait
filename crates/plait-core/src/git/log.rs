@@ -154,3 +154,63 @@ pub fn show(root: &Path, id: &str) -> Result<Diff> {
     diff.elapsed = start.elapsed();
     Ok(diff)
 }
+
+/// A single bounded, hardened read for the project graph; parents retain topology.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GraphCommit {
+    pub commit: Commit,
+    pub parents: Vec<String>,
+}
+pub const GRAPH_LIMIT: usize = 300;
+pub fn graph(root: &Path, heads: &[String]) -> Result<(Vec<GraphCommit>, bool)> {
+    if heads.is_empty() {
+        return Ok((Vec::new(), false));
+    }
+    if heads.len() > 256 || heads.iter().any(|id| !is_object_id(id)) {
+        return Err("Invalid worktree heads.".into());
+    }
+    let mut args = vec![
+        "log",
+        "--topo-order",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-notes",
+        "--no-color",
+        "--no-show-signature",
+        "-z",
+        "--format=%H%x00%h%x00%an%x00%at%x00%s%x00%P",
+        "-n301",
+        "--end-of-options",
+    ];
+    args.extend(heads.iter().map(String::as_str));
+    args.push("--");
+    let args: Vec<_> = args.iter().map(OsStr::new).collect();
+    let raw = command(root, &args, STATUS_LIMIT)?;
+    if raw.truncated {
+        return Err("Worktree history exceeds the safe read limit.".into());
+    }
+    let mut fields: Vec<_> = raw.bytes.split(|b| *b == 0).collect();
+    if fields.last().is_some_and(|s| s.is_empty()) {
+        fields.pop();
+    }
+    if !fields.len().is_multiple_of(6) {
+        return Err("Malformed worktree history.".into());
+    }
+    let mut commits = Vec::new();
+    for fields in fields.chunks(6) {
+        let mut record = fields[..5].join(&0);
+        record.push(0);
+        let commit = parse_log(&record)?.remove(0);
+        let parents = text(fields[5])
+            .split_whitespace()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if parents.iter().any(|id| !is_object_id(id)) {
+            return Err("Malformed worktree parent.".into());
+        }
+        commits.push(GraphCommit { commit, parents });
+    }
+    let more = commits.len() > GRAPH_LIMIT;
+    commits.truncate(GRAPH_LIMIT);
+    Ok((commits, more))
+}

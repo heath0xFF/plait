@@ -40,3 +40,6 @@ pub mod history;
 pub mod navigation;
 
 pub mod display_text;
+pub mod worktree_graph;
+pub mod worktree_removal;
+pub mod worktree_size;

@@ -1,0 +1,368 @@
+//! Pure lane assignment over a bounded topological history. Missing ancestry is unknown.
+use crate::{git::log::GraphCommit, host::worktree::Checkout};
+use std::collections::{HashMap, HashSet};
+#[derive(Clone, Debug)]
+pub struct Lane {
+    pub head: Option<usize>,
+    pub base: Option<usize>,
+    pub parent: Option<usize>,
+    pub merged: bool,
+    pub detached: bool,
+}
+#[derive(Clone, Debug)]
+pub struct Row {
+    pub commit: GraphCommit,
+    pub lane: usize,
+    pub heads: Vec<usize>,
+    /// Each visible line is precomputed; render performs no ancestry search.
+    pub lines: Vec<usize>,
+    pub joins: Vec<(usize, usize)>,
+}
+#[derive(Clone, Debug, Default)]
+pub struct Graph {
+    pub lanes: Vec<Lane>,
+    pub rows: Vec<Row>,
+    pub more: bool,
+    pub columns: usize,
+}
+fn ancestors(
+    tip: Option<&str>,
+    index: &HashMap<&str, usize>,
+    commits: &[GraphCommit],
+) -> HashSet<usize> {
+    let mut found = HashSet::new();
+    let mut pending: Vec<_> = tip.into_iter().collect();
+    while let Some(id) = pending.pop() {
+        if let Some(&i) = index.get(id)
+            && found.insert(i)
+        {
+            pending.extend(commits[i].parents.iter().map(String::as_str));
+        }
+    }
+    found
+}
+pub fn layout(checkouts: &[Checkout], commits: Vec<GraphCommit>, more: bool) -> Graph {
+    let index: HashMap<_, _> = commits
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.commit.id.as_str(), i))
+        .collect();
+    let reach: Vec<_> = checkouts
+        .iter()
+        .map(|c| ancestors(c.head.as_deref(), &index, &commits))
+        .collect();
+    let mut lanes = Vec::new();
+    for (n, checkout) in checkouts.iter().enumerate() {
+        let head = checkout.head.as_deref().and_then(|s| index.get(s).copied());
+        let base = checkout.base.as_deref().and_then(|s| index.get(s).copied());
+        let parent = base.and_then(|b| {
+            reach
+                .iter()
+                .enumerate()
+                .find(|(i, seen)| *i != n && seen.contains(&b))
+                .map(|(i, _)| i)
+        });
+        lanes.push(Lane {
+            head,
+            base,
+            parent,
+            merged: n > 0 && head.is_some_and(|h| reach[0].contains(&h)),
+            detached: n > 0
+                && (base.is_none()
+                    || parent.is_none()
+                    || !base.is_some_and(|b| reach[n].contains(&b))),
+        });
+    }
+    // Keep one trunk commit below the oldest known fork; a cap is labelled separately.
+    let oldest_base = lanes.iter().filter_map(|lane| lane.base).max();
+    let end = oldest_base
+        .and_then(|base| {
+            ((base + 1)..commits.len()).find(|i| reach.first().is_some_and(|r| r.contains(i)))
+        })
+        .map_or(commits.len(), |i| i + 1);
+    let end = if lanes.iter().any(|l| l.detached) {
+        commits.len()
+    } else {
+        end.max(
+            lanes
+                .iter()
+                .filter_map(|l| l.head)
+                .max()
+                .map_or(0, |h| h + 1),
+        )
+    };
+    // The trunk follows first parents; merged side commits retain their lane.
+    let mut trunk = HashSet::new();
+    let mut next = checkouts.first().and_then(|c| c.head.as_deref());
+    while let Some(id) = next {
+        let Some(&i) = index.get(id) else { break };
+        if !trunk.insert(i) {
+            break;
+        }
+        next = commits[i].parents.first().map(String::as_str);
+    }
+    let segments: Vec<_> = checkouts
+        .iter()
+        .enumerate()
+        .map(|(n, c)| {
+            let before = ancestors(c.base.as_deref(), &index, &commits);
+            reach[n]
+                .difference(&before)
+                .copied()
+                .collect::<HashSet<_>>()
+        })
+        .collect();
+    let mut columns = checkouts.len().max(1);
+    let mut node_lanes = vec![0; end];
+    let mut inherited = HashMap::new();
+    for i in 0..end {
+        let lane = if trunk.contains(&i) {
+            0
+        } else if let Some(lane) = segments
+            .iter()
+            .enumerate()
+            .skip(1)
+            .find_map(|(n, r)| r.contains(&i).then_some(n))
+        {
+            lane
+        } else {
+            *inherited.entry(i).or_insert_with(|| {
+                let lane = columns;
+                columns += 1;
+                lane
+            })
+        };
+        node_lanes[i] = lane;
+        for parent in commits[i].parents.iter().take(1) {
+            if let Some(&p) = index.get(parent.as_str()) {
+                inherited.entry(p).or_insert(lane);
+            }
+        }
+    }
+    let mut lines = vec![HashSet::new(); end];
+    let mut joins = vec![Vec::new(); end];
+    for (i, commit) in commits.iter().take(end).enumerate() {
+        let from = node_lanes[i];
+        for (p, parent) in commit.parents.iter().enumerate() {
+            let Some(&to_row) = index.get(parent.as_str()).filter(|&&r| r < end && r > i) else {
+                continue;
+            };
+            let to = node_lanes[to_row];
+            if from != to && lanes.get(from).is_some_and(|l| l.detached) {
+                continue;
+            }
+            let line = if p == 0 { from } else { to };
+            for row in &mut lines[i..=to_row] {
+                row.insert(line);
+            }
+            if from != to {
+                joins[if p == 0 { to_row } else { i }].push((from, to));
+            }
+        }
+    }
+    // Two checkouts can point at the same commit. Each label keeps its own lane.
+    for (n, lane) in lanes.iter().enumerate().skip(1) {
+        if let Some(head) = lane.head.filter(|h| *h < end)
+            && node_lanes[head] != n
+        {
+            lines[head].insert(n);
+            if !lane.detached {
+                joins[head].push((n, node_lanes[head]));
+            }
+        }
+    }
+    let rows = commits
+        .into_iter()
+        .take(end)
+        .enumerate()
+        .map(|(i, commit)| {
+            let mut row_lines = lines[i].iter().copied().collect::<Vec<_>>();
+            row_lines.sort_unstable();
+            Row {
+                commit,
+                lane: node_lanes[i],
+                heads: lanes
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(n, l)| (l.head == Some(i)).then_some(n))
+                    .collect(),
+                lines: row_lines,
+                joins: std::mem::take(&mut joins[i]),
+            }
+        })
+        .collect();
+    Graph {
+        lanes,
+        rows,
+        more,
+        columns,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::{log::Commit, worktree::inventory::Preservation};
+    fn commit(n: usize, parents: &[usize]) -> GraphCommit {
+        GraphCommit {
+            commit: Commit {
+                id: n.to_string(),
+                short: n.to_string(),
+                author: "".into(),
+                time: 0,
+                subject: "".into(),
+            },
+            parents: parents.iter().map(usize::to_string).collect(),
+        }
+    }
+    fn checkout(head: usize, base: Option<usize>) -> Checkout {
+        Checkout {
+            path: format!("/repo/{head}").into(),
+            main: base.is_none(),
+            branch: None,
+            head: Some(head.to_string()),
+            base: base.map(|n| n.to_string()),
+            thread_id: None,
+            identity: None,
+            missing: false,
+            removed: false,
+            preservation: Preservation::default(),
+            creation_id: None,
+            last_used: None,
+        }
+    }
+    #[test]
+    fn merge_parents_and_reordered_nested_lanes_never_draw_a_false_trunk() {
+        let graph = layout(
+            &[checkout(5, None), checkout(3, Some(1))],
+            vec![
+                commit(5, &[4, 3]),
+                commit(4, &[1]),
+                commit(3, &[2]),
+                commit(2, &[1]),
+                commit(1, &[]),
+            ],
+            false,
+        );
+        assert!(graph.lanes[1].merged);
+        assert_eq!(graph.rows[2].lane, 1);
+        assert_eq!(graph.rows[3].lane, 1);
+        assert!(graph.rows[0].joins.contains(&(0, 1)));
+        let nested = layout(
+            &[
+                checkout(5, None),
+                checkout(4, Some(3)),
+                checkout(3, Some(1)),
+            ],
+            vec![
+                commit(5, &[1]),
+                commit(4, &[3]),
+                commit(3, &[2]),
+                commit(2, &[1]),
+                commit(1, &[]),
+            ],
+            false,
+        );
+        assert_eq!(nested.lanes[1].parent, Some(2));
+        assert_eq!(nested.rows[2].lane, 2);
+        assert_eq!(nested.rows[3].lane, 2);
+        assert!(nested.rows[2].joins.contains(&(1, 2)));
+        let historic = layout(
+            &[checkout(5, None)],
+            vec![
+                commit(5, &[4, 3]),
+                commit(4, &[1]),
+                commit(3, &[2]),
+                commit(2, &[1]),
+                commit(1, &[]),
+            ],
+            false,
+        );
+        assert_ne!(historic.rows[2].lane, 0);
+        assert_eq!(historic.rows[2].lane, historic.rows[3].lane);
+    }
+    #[test]
+    fn linear_trunk_and_one_three_twenty_lanes_keep_real_parentage() {
+        for count in [0, 1, 3, 20] {
+            let mut rows = vec![checkout(3, None)];
+            let mut commits = Vec::new();
+            for n in 0..count {
+                rows.push(checkout(10 + n, Some(2)));
+                commits.push(commit(10 + n, &[2]));
+            }
+            commits.extend([commit(3, &[2]), commit(2, &[1]), commit(1, &[])]);
+            let graph = layout(&rows, commits, false);
+            assert_eq!(graph.lanes.len(), count + 1);
+            for lane in &graph.lanes[1..] {
+                assert_eq!(lane.parent, Some(0));
+                assert!(!lane.detached);
+                assert!(!lane.merged);
+            }
+            assert_eq!(
+                graph.rows.iter().filter(|r| !r.joins.is_empty()).count(),
+                usize::from(count > 0)
+            );
+        }
+    }
+    #[test]
+    fn fork_from_worktree_empty_lane_merged_and_lost_base_are_distinct() {
+        let rows = [
+            checkout(5, None),
+            checkout(3, Some(2)),
+            checkout(4, Some(3)),
+            checkout(2, Some(2)),
+            checkout(6, Some(99)),
+        ];
+        let graph = layout(
+            &rows,
+            vec![
+                commit(6, &[1]),
+                commit(5, &[2]),
+                commit(4, &[3]),
+                commit(3, &[2]),
+                commit(2, &[1]),
+                commit(1, &[]),
+            ],
+            false,
+        );
+        assert_eq!(graph.lanes[2].parent, Some(1));
+        assert!(!graph.lanes[2].detached);
+        assert!(graph.lanes[3].merged);
+        assert_eq!(graph.lanes[3].head, graph.lanes[3].base);
+        assert!(graph.lanes[4].detached);
+        assert_eq!(graph.lanes[4].base, None);
+        let rebased = layout(
+            &[checkout(5, None), checkout(6, Some(3))],
+            vec![
+                commit(6, &[2]),
+                commit(5, &[3]),
+                commit(3, &[2]),
+                commit(2, &[]),
+            ],
+            false,
+        );
+        assert!(rebased.lanes[1].detached);
+    }
+    #[test]
+    fn head_on_trunk_is_merged_and_capped_ancestry_stays_unknown() {
+        let merged = layout(
+            &[checkout(5, None), checkout(3, Some(2))],
+            vec![
+                commit(5, &[4]),
+                commit(4, &[3]),
+                commit(3, &[2]),
+                commit(2, &[]),
+            ],
+            false,
+        );
+        assert!(merged.lanes[1].merged);
+        let limited = layout(
+            &[checkout(5, None), checkout(4, Some(1))],
+            vec![commit(5, &[3]), commit(4, &[2])],
+            true,
+        );
+        assert!(limited.more);
+        assert!(limited.lanes[1].detached);
+        assert!(!limited.lanes[1].merged);
+    }
+}
