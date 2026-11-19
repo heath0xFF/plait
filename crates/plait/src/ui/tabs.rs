@@ -38,6 +38,7 @@ actions!(
 pub(super) struct Tabs {
     pub model: WindowTabs,
     pub lifecycle: super::tab_lifecycle::Lifecycle,
+    pub identity: super::tab_identity::Identity,
     strip: Option<Entity<TabStrip>>,
     strip_theme: u32,
     pub host: HostKey,
@@ -46,6 +47,8 @@ pub(super) struct Tabs {
     measured: Option<(f32, bool)>,
     first_visible: usize,
     pub list_open: bool,
+    list_cursor: Option<TabId>,
+    list_scroll: ScrollHandle,
     drag: Option<Drag>,
 }
 struct TabStrip {
@@ -71,6 +74,7 @@ impl Default for Tabs {
         Self {
             model: WindowTabs::new(WindowId(window)),
             lifecycle: Default::default(),
+            identity: Default::default(),
             strip: None,
             strip_theme: 0,
             host: HostKey {
@@ -82,6 +86,8 @@ impl Default for Tabs {
             measured: None,
             first_visible: 0,
             list_open: false,
+            list_cursor: None,
+            list_scroll: ScrollHandle::new(),
             drag: None,
         }
     }
@@ -162,16 +168,43 @@ impl Plait {
             .on_action(cx.listener(|this, _: &MoveTabLeft, _, cx| this.move_active_tab(false, cx)))
             .on_action(cx.listener(|this, _: &MoveTabRight, _, cx| this.move_active_tab(true, cx)))
             .on_action(cx.listener(|this, _: &ListTabs, window, cx| {
-                this.tabs.list_open = !this.tabs.list_open;
-                window.focus(&this.focus, cx);
-                cx.notify();
+                this.toggle_tab_list(window, cx);
             }))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                if event.keystroke.key == "escape" && this.tabs.list_open {
-                    this.tabs.list_open = false;
-                    cx.stop_propagation();
-                    cx.notify();
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if !this.tabs.list_open {
+                    return;
                 }
+                let order = this.tab_list_order();
+                let current = order
+                    .iter()
+                    .position(|(id, _)| Some(*id) == this.tabs.list_cursor)
+                    .unwrap_or(0);
+                let next = match event.keystroke.key.as_str() {
+                    "escape" => {
+                        this.tabs.list_open = false;
+                        None
+                    }
+                    "up" => Some(current.saturating_sub(1)),
+                    "down" => Some((current + 1).min(order.len().saturating_sub(1))),
+                    "home" => Some(0),
+                    "end" => Some(order.len().saturating_sub(1)),
+                    "enter" | "space" => {
+                        if let Some((id, _)) = order.get(current) {
+                            this.activate_tab(*id, window, cx);
+                        }
+                        None
+                    }
+                    _ => return,
+                };
+                if let Some(index) = next
+                    && let Some((id, item)) = order.get(index)
+                {
+                    this.tabs.list_cursor = Some(*id);
+                    this.tabs.list_scroll.scroll_to_item(*item);
+                }
+                window.prevent_default();
+                cx.stop_propagation();
+                cx.notify();
             }));
         jumps!(root, TabJump1 => 1, TabJump2 => 2, TabJump3 => 3, TabJump4 => 4,
             TabJump5 => 5, TabJump6 => 6, TabJump7 => 7, TabJump8 => 8, TabJump9 => 9)
@@ -218,8 +251,8 @@ impl Plait {
     pub(super) fn tab_checkout(&self, root: PathBuf) -> CheckoutKey {
         CheckoutKey {
             host: self.tabs.host.clone(),
+            directory: self.tabs.identity.checkouts.get(&root).copied(),
             root,
-            directory: None,
         }
     }
 
@@ -260,6 +293,15 @@ impl Plait {
                     tab.thread().bookmark().view(),
                 )
             });
+        if target
+            .as_ref()
+            .is_some_and(|(target, _)| target.checkout().host != self.tabs.host)
+        {
+            self.notice = Some("This tab belongs to a different host store. Open the thread from the current sidebar.".into());
+            self.refresh_tab_rows();
+            cx.notify();
+            return;
+        }
         match target {
             Some((ThreadTarget::Existing { id, .. }, view)) => {
                 self.select_host_thread_content(id, window, cx);
@@ -398,9 +440,7 @@ impl Plait {
                         .aria_label("Show all tabs")
                         .tooltip(move |_, cx| tooltip(hover.clone(), cx))
                         .on_activate(cx, |this, window, cx| {
-                            this.tabs.list_open = !this.tabs.list_open;
-                            window.focus(&this.focus, cx);
-                            cx.notify();
+                            this.toggle_tab_list(window, cx);
                         }),
                 )
             })
@@ -634,6 +674,27 @@ impl Plait {
             })
     }
 
+    fn toggle_tab_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.tabs.list_open = !self.tabs.list_open;
+        self.tabs.list_cursor = self.tabs.model.active();
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+    fn tab_list_order(&self) -> Vec<(TabId, usize)> {
+        let mut order = Vec::new();
+        let mut item = 0;
+        if let Some(layout) = &self.tabs.layout {
+            for group in &layout.groups {
+                item += 1;
+                for &id in &group.tabs {
+                    order.push((id, item));
+                    item += 1;
+                }
+            }
+        }
+        order
+    }
+
     pub(super) fn tab_list(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.tabs.list_open {
             return None;
@@ -649,6 +710,7 @@ impl Plait {
             .w(px(320.))
             .max_h(px(336.))
             .overflow_y_scroll()
+            .track_scroll(&self.tabs.list_scroll)
             .p_1()
             .bg(rgb(colors().panel))
             .border_1()
@@ -678,6 +740,9 @@ impl Plait {
                 list = list.child(
                     nav_row(("tab-list", id.get()), meta.title.clone(), meta.active)
                         .role(Role::MenuItem)
+                        .when(self.tabs.list_cursor == Some(id), |el| {
+                            el.bg(rgba(colors().hover))
+                        })
                         .group(SharedString::from(group.clone()))
                         .text_size(px(12.))
                         .tooltip(move |_, cx| tooltip(hover.clone(), cx))

@@ -62,7 +62,7 @@ class HarnessTests(unittest.TestCase):
                  patch.object(runner, 'launch', side_effect=Skipped('no native setup')), \
                  patch.object(runner, 'ax') as native, contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(runner.run(), 1)
-                self.assertEqual(len(runner.results), 45)
+                self.assertEqual(len(runner.results), 46)
                 self.assertEqual(runner.results[-1]['status'], 'SKIPPED')
                 native.assert_not_called()
 
@@ -184,10 +184,10 @@ class HarnessTests(unittest.TestCase):
                  contextlib.redirect_stdout(io.StringIO()) as log:
                 self.assertEqual(runner.run(), 1)
             launch.assert_not_called()
-            self.assertEqual(len(runner.results), 45)
-            self.assertIn('SUMMARY pass=0 fail=1 skipped=44 incomplete=true', log.getvalue())
+            self.assertEqual(len(runner.results), 46)
+            self.assertIn('SUMMARY pass=0 fail=1 skipped=45 incomplete=true', log.getvalue())
             self.assertTrue((output / 'fixture-isolation-ax.txt').exists())
-            self.assertEqual(len(json.loads((output / 'results.json').read_text())), 45)
+            self.assertEqual(len(json.loads((output / 'results.json').read_text())), 46)
 
     def test_deadline_and_sigterm_finish_all_items_without_running_later_ones(self):
         for sig in (signal.SIGALRM, signal.SIGTERM):
@@ -199,7 +199,7 @@ class HarnessTests(unittest.TestCase):
                     self.assertEqual(runner.run(), 1)
                     runner.finish()
                 launch.assert_not_called()
-                self.assertEqual(len(runner.results), 45)
+                self.assertEqual(len(runner.results), 46)
                 self.assertEqual(log.getvalue().count('SUMMARY'), 1)
                 self.assertIn('incomplete=true', log.getvalue())
                 self.assertTrue(all(row['status'] == 'SKIPPED' for row in runner.results[1:]))
@@ -216,7 +216,7 @@ class HarnessTests(unittest.TestCase):
                     self.assertEqual(runner.run(), 1)
                 launch.assert_not_called()
                 self.assertIn('run deadline', log.getvalue())
-                self.assertIn('SUMMARY pass=0 fail=1 skipped=44', log.getvalue())
+                self.assertIn('SUMMARY pass=0 fail=1 skipped=45', log.getvalue())
             finally:
                 signal.setitimer(signal.ITIMER_REAL, 0)
                 signal.signal(signal.SIGALRM, previous)
@@ -235,8 +235,8 @@ class HarnessTests(unittest.TestCase):
             self.assertEqual(command.call_count, 1)
             self.assertEqual(command.call_args.args[0][:2], ['/usr/bin/xcrun', 'swiftc'])
             timer.assert_any_call(signal.ITIMER_REAL, RUN_SECONDS)
-            self.assertIn('SUMMARY pass=0 fail=0 skipped=45 incomplete=true', log.getvalue())
-            self.assertEqual(len(json.loads((output / 'results.json').read_text())), 45)
+            self.assertIn('SUMMARY pass=0 fail=0 skipped=46 incomplete=true', log.getvalue())
+            self.assertEqual(len(json.loads((output / 'results.json').read_text())), 46)
             self.assertLessEqual(RUN_SECONDS, 8 * 60 - 60)
 
     def test_inspector_skips_only_after_sizing_its_own_narrow_window(self):
@@ -258,7 +258,7 @@ class HarnessTests(unittest.TestCase):
     def test_items_are_unique_and_mutating_runs_follow_seed_reading(self):
         with tempfile.TemporaryDirectory() as directory:
             names = [name for name, _ in self.runner(directory).checks()]
-        self.assertEqual(len(names), 43)
+        self.assertEqual(len(names), 44)
         self.assertEqual(len(set(names)), len(names))
         for read in ['find-conversation', 'conversation-text-selection']:
             for write in ['approval-allow-shortcut', 'approval-deny-shortcut', 'streaming-reply', 'turn-undo', 'turn-redo', 'turn-undo-redo-shortcut']:

@@ -200,6 +200,11 @@ pub(super) fn exercise() {
         assert_eq!(p.tabs.model.tabs().len(), 3);
         assert_eq!(p.tabs.model.active(), Some(p.tabs.model.tabs()[1].id()));
     });
+    h.keystroke("cmd-shift-\\");
+    h.update(|p, _, _| assert!(p.tabs.list_open));
+    h.keystroke("down");
+    h.keystroke("enter");
+    h.update(|p, _, _| assert!(!p.tabs.list_open));
     h.keystroke("cmd-9");
     h.update(|p, _, _| {
         assert_eq!(p.tabs.model.active(), Some(p.tabs.model.tabs()[2].id()));

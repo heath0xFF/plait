@@ -53,7 +53,7 @@ impl Plait {
         } else {
             (
                 "Select a thread",
-                "Choose one in the sidebar, or press ⌘1.".into(),
+                "Choose one in the sidebar, or press ⌘⌥1.".into(),
                 Some("New thread"),
             )
         }

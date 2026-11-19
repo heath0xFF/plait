@@ -71,11 +71,11 @@ impl Plait {
 
     /// Show the draft, with any text it kept, in the active project.
     pub(super) fn open_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.request_tab(
-            super::tab_lifecycle::Intent::Open(plait_core::tabs::ThreadTarget::Draft {
+        self.open_tab_target(
+            plait_core::tabs::ThreadTarget::Draft {
                 id: "draft".into(),
                 checkout: self.tab_checkout(self.host.creation.checkout.clone()),
-            }),
+            },
             window,
             cx,
         );
@@ -113,13 +113,19 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.project_of(&self.host.creation.checkout) != checkout {
-            self.change_checkout(checkout.clone(), window, cx);
-            if self.host.creation.checkout != checkout {
-                return;
-            }
-        }
-        self.open_draft(window, cx);
+        let root = if self.project_of(&self.host.creation.checkout) == checkout {
+            self.host.creation.checkout.clone()
+        } else {
+            checkout
+        };
+        self.open_tab_target(
+            plait_core::tabs::ThreadTarget::Draft {
+                id: "draft".into(),
+                checkout: self.tab_checkout(root),
+            },
+            window,
+            cx,
+        );
     }
 
     fn draft_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<Composer> {

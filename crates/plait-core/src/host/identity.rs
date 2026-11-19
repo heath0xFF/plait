@@ -36,6 +36,14 @@ impl Identity {
         })
     }
 }
+pub fn from_review(host_id: String, store: PathBuf) -> Result<HostKey, Error> {
+    Identity {
+        schema: 1,
+        host_id,
+        store,
+    }
+    .verified()
+}
 pub fn read(client: &Client) -> Result<HostKey, Error> {
     let identity: Identity = client.send(&Request {
         op: "host_identity",

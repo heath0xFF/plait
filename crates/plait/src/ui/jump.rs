@@ -1,4 +1,4 @@
-//! Cmd-1 through Cmd-9, and the desktop preferences file that backs them and
+//! Cmd-Option-1 through Cmd-Option-9, and the desktop preferences file that backs them and
 //! the other choices that belong to this desktop.
 
 use super::{Plait, settings, theme::*};

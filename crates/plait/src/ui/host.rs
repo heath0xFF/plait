@@ -140,6 +140,8 @@ impl Plait {
             self.navigation.error =
                 Some("Thread change not confirmed. Refresh to check before trying again.".into());
         }
+        self.tabs.model.disconnected(&self.tabs.host);
+        self.refresh_tab_rows();
         self.host.reconnect();
         self.sync_composer(cx);
         self.host_request(
@@ -151,9 +153,19 @@ impl Plait {
             |this, result, window, cx| match result {
                 Ok(status) => {
                     if this.host.apply_status(this.host.connection.epoch, status) {
+                        this.verify_tab_identity(window, cx);
+                        let result = this
+                            .tabs
+                            .model
+                            .reconnected(&this.tabs.host, this.host.connection.epoch);
+                        this.tab_error(result);
                         this.load_threads(window, cx);
-                        this.refresh_turn_review(cx);
-                        if let Some(id) = this.host.thread.selected.clone() {
+                        if !this.tabs.identity.verified {
+                            this.refresh_turn_review(cx);
+                        }
+                        if !this.tabs.identity.verified
+                            && let Some(id) = this.host.thread.selected.clone()
+                        {
                             this.watch_thread(id, window, cx);
                         }
                     }
@@ -207,16 +219,11 @@ impl Plait {
         else {
             return;
         };
-        if self.host.thread.selected.as_ref() == Some(&id) {
-            self.settings_open = false;
-            cx.notify();
-            return;
-        }
-        self.request_tab(
-            super::tab_lifecycle::Intent::Open(plait_core::tabs::ThreadTarget::Existing {
+        self.open_tab_target(
+            plait_core::tabs::ThreadTarget::Existing {
                 id,
                 checkout: self.tab_checkout(checkout),
-            }),
+            },
             window,
             cx,
         );
@@ -247,7 +254,6 @@ impl Plait {
             }
             self.change_checkout(checkout, window, cx);
         }
-        self.mark_thread_read(&id, cx);
         self.navigation.menu = None;
         self.navigation.rename = None;
         window.focus(&self.focus, cx);
@@ -307,7 +313,7 @@ impl Plait {
         self.workspace.composers.insert(id, composer);
     }
 
-    fn watch_thread(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn watch_thread(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         self.workspace.host_watch = None;
         self.host.thread.watch_epoch += 1;
         let epoch = self.host.connection.epoch;
@@ -440,6 +446,8 @@ impl Plait {
         }
         self.workspace.host_watch = None;
         self.host.connection.connected = false;
+        self.tabs.model.disconnected(&self.tabs.host);
+        self.refresh_tab_rows();
         self.host.connection.error = Some(error.to_string());
         self.refresh_turn_review(cx);
         self.sync_composer(cx);

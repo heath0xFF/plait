@@ -25,6 +25,8 @@ pub(super) enum EditorRecord {
 #[derive(Default)]
 pub(super) struct Lifecycle {
     pub busy: bool,
+    pub view_revision: u64,
+    pub presenting: bool,
     pub editors: Vec<(ThreadTarget, EditorRecord)>,
 }
 
@@ -35,7 +37,34 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.tabs.identity.opening += 1;
         if self.tabs.lifecycle.busy {
+            return;
+        }
+        if self.host.creation.creating || self.host.creation.pending_create.is_some() {
+            let same_checkout = match &intent {
+                Intent::Open(target) => target.checkout().root == self.host.creation.checkout,
+                Intent::Activate(id) => self.tabs.model.get(*id).is_some_and(|t| {
+                    t.thread().target().checkout().root == self.host.creation.checkout
+                }),
+                Intent::Close(id) => self.tabs.model.active() != Some(*id),
+                Intent::Navigate(_) => false,
+            };
+            if !same_checkout {
+                self.notice = Some("Resolve the pending thread creation before changing checkout or closing its tab.".into());
+                cx.notify();
+                return;
+            }
+        }
+        if let Intent::Activate(id) = &intent
+            && self
+                .tabs
+                .model
+                .get(*id)
+                .is_some_and(|t| t.thread().target().checkout().host != self.tabs.host)
+        {
+            self.notice = Some("This tab belongs to a different host store. Open the thread from the current sidebar.".into());
+            cx.notify();
             return;
         }
         let unchanged = match &intent {
@@ -249,8 +278,11 @@ impl Plait {
         if self.tab_error(result) {
             if previous != self.tabs.model.active() {
                 self.park_workspace(cx);
+                self.tabs.lifecycle.presenting = true;
                 self.present_tab(window, cx);
+                self.tabs.lifecycle.presenting = false;
             }
+            self.settings_open = false;
             self.tabs.list_open = false;
             self.refresh_tab_rows();
             self.retire_editor_cache(cx);
@@ -258,7 +290,7 @@ impl Plait {
         }
     }
 
-    fn park_workspace(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn park_workspace(&mut self, cx: &mut Context<Self>) {
         self.workspace.cancelled.store(true, Ordering::Release);
         self.workspace.host_watch = None;
         self.host.select(None);
@@ -288,6 +320,7 @@ impl Plait {
             return;
         };
         let lifetime = tab.lifetime();
+        let view_revision = self.tabs.lifecycle.view_revision;
         let owner = self.host.read_stamp();
         let target = tab.thread().target().clone();
         let record = tab.thread().bookmark().clone();
@@ -328,7 +361,8 @@ impl Plait {
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                if this.tabs.model.active() != Some(lifetime.tab)
+                if this.tabs.lifecycle.view_revision != view_revision
+                    || this.tabs.model.active() != Some(lifetime.tab)
                     || !this.host.accepts_read(&owner)
                     || this
                         .tabs

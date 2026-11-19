@@ -704,3 +704,45 @@ fn closing_a_thread_again_replaces_its_older_history_entry() {
     assert_eq!(w.reopen(|_| Some(Some(1))), Ok(None));
     assert_eq!(w.active(), Some(a));
 }
+
+#[test]
+fn verifying_a_session_host_preserves_order_bookmarks_and_closed_history() {
+    let mut w = window();
+    let provisional = HostKey {
+        id: "session-1".into(),
+        store: "/".into(),
+    };
+    let target = |id: &str| ThreadTarget::Existing {
+        id: id.into(),
+        checkout: CheckoutKey {
+            host: provisional.clone(),
+            root: "/checkout".into(),
+            directory: None,
+        },
+    };
+    let a = w.open(target("a"), Some(1)).unwrap();
+    let bookmark = BookmarkRecord::capture(&rich_bookmark(ThreadView::Files)).unwrap();
+    w.save_bookmark(a, bookmark.clone()).unwrap();
+    let old = w.read_stamp(a).unwrap();
+    let b = w.open(target("b"), Some(1)).unwrap();
+    w.close(b, false).unwrap();
+    let checkout = CheckoutKey {
+        host: host(),
+        root: "/checkout".into(),
+        directory: Some(DirectoryIdentity {
+            device: 1,
+            inode: 2,
+        }),
+    };
+    w.verify_session_host(&provisional, &host(), std::slice::from_ref(&checkout))
+        .unwrap();
+    assert_eq!(w.active(), Some(a));
+    assert_eq!(w.get(a).unwrap().thread().bookmark(), &bookmark);
+    assert_eq!(w.get(a).unwrap().thread().target().checkout(), &checkout);
+    assert!(!w.accepts_read(old));
+    let reopened = w
+        .reopen(|target| (target.checkout() == &checkout).then_some(Some(1)))
+        .unwrap()
+        .unwrap();
+    assert_ne!(reopened, b);
+}

@@ -289,6 +289,20 @@ class Acceptance:
         self.ready = True
         return f'PID {self.app.pid}; {result.stdout.strip().replace(chr(10), "; ")}'
 
+    def thread_tabs(self):
+        self.find('Open tabs')
+        self.find('New thread tab', 'control')
+        self.key('cmd+t')
+        self.ax('find', '--prefix', 'New thread —', '--role', 'control')
+        self.key('cmd+1')
+        self.find('Message to agent', 'field')
+        self.key('cmd+9')
+        self.ax('wait-selected', '--prefix', 'New thread —', '--role', 'control')
+        self.key('cmd+w')
+        self.ax('absent', '--prefix', 'New thread —', '--role', 'control')
+        self.find('Message to agent', 'field')
+        return 'tab row stays visible; Cmd-T opens a draft, numbered keys switch, and Cmd-W closes only that empty tab'
+
     def lights(self):
         self.tab('Conversation')
         self.sidebar(False)
@@ -626,6 +640,7 @@ class Acceptance:
     def checks(self):
         checks = [
             ('traffic-lights-sidebar-hidden', self.lights),
+            ('thread-tab-row-and-keys', self.thread_tabs),
             ('drag-sidebar-bar', lambda: self.bar_drag(True)),
             ('drag-header-bar', lambda: self.bar_drag(False)),
             ('double-click-system-setting', self.double_click),

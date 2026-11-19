@@ -23,6 +23,7 @@ impl Plait {
             if window.is_window_active()
                 && !this.settings_open
                 && this.workspace.tab == super::Workspace::Conversation
+                && this.conversation_snapshot().is_some()
                 && let Some(id) = this.host.thread.selected.clone()
             {
                 this.mark_thread_read(&id, cx);
@@ -115,6 +116,8 @@ impl Plait {
                     this.host.connection.threads = all;
                     this.apply_thread_activity(true, window, cx);
                     this.rebuild_projects(cx);
+                    this.tabs.identity.catalog_ready = true;
+                    this.verify_tab_identity(window, cx);
                     this.restore_thread_selection(window, cx);
                     true
                 })
@@ -206,9 +209,10 @@ impl Plait {
         }
         let visible = (window.is_window_active()
             && !self.settings_open
-            && self.workspace.tab == super::Workspace::Conversation)
-            .then_some(self.host.thread.selected.as_deref())
-            .flatten();
+            && self.workspace.tab == super::Workspace::Conversation
+            && self.conversation_snapshot().is_some())
+        .then_some(self.host.thread.selected.as_deref())
+        .flatten();
         let mut preferences = self.preferences.value.clone();
         let notifications =
             preferences

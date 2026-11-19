@@ -241,6 +241,20 @@ impl Plait {
                 this.conversation_rows_changed(cx);
                 this.restore_ready_bookmarks(cx);
                 this.restore_tab_image(window, cx);
+                if this.workspace.tab == super::Workspace::Conversation
+                    && !this.settings_open
+                    && window.is_window_active()
+                {
+                    this.mark_thread_read(&id, cx);
+                }
+                if let Some(stamp) = this
+                    .tabs
+                    .model
+                    .active()
+                    .and_then(|id| this.tabs.model.read_stamp(id))
+                {
+                    this.tabs.model.finish_activation(stamp);
+                }
                 if this.workspace.history.enabled
                     && this.workspace.history.loading.is_none()
                     && let Some(live) = this.host.thread.snapshot.as_ref()

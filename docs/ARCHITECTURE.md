@@ -461,11 +461,15 @@ implemented.
 only width or metadata changes rerun measured layout. The active thread
 adds a 36-point view row. Keyboard and sidebar commands dispatch to the
 model, while presentation remains in the single workspace container.
-Cold workspace hydration and durable desktop integration are separate work. `WindowTabs` owns at most 100 ordered `TabRecord`s,
+The desktop hydrates only the active workspace; durable launch integration uses the separate tab-preference codec. `WindowTabs` owns at most 100 ordered `TabRecord`s,
 one active ID, and a session-only stack of up to 20 closed bookmarks.
 `TabContent::Thread` is its only content variant. A thread identity includes
-its host and store; its expected checkout separately includes the canonical
-root and, when verified, directory device/inode. Opening a thread activates
+its host and store; its expected checkout includes the host-supplied root verbatim
+and, when verified, directory device/inode. The additive `host_identity` read
+verifies the host before a first thread exists. Older hosts fall back to
+`turn_review_info` once a thread exists; until verification, tabs work silently
+for the session and are neither saved nor restored. A replaced checkout is
+reported on sidebar open, with instructions to close its old tab and reopen. Opening a thread activates
 its existing tab. New-thread drafts deduplicate by exact checkout; a creation
 acknowledgement replaces the draft in place without changing its tab position.
 
@@ -511,7 +515,8 @@ content, restores anchors where they survive, and explains a missing position.
 
 The active conversation accounts retained text, projection and container
 capacities against 96 MiB and evicts farthest history entries while retaining the
-visible anchor. Repository diff/patch caches share a 16 MiB byte budget. The
+visible anchor. A single part that cannot fit reports the reading limit without
+changing stored history. Repository diff/patch caches share a 16 MiB byte budget. The
 editor cache is limited to 8 MiB; prompt recall also has byte limits. These are
 payload budgets, not total process RSS or GPU-memory guarantees.
 

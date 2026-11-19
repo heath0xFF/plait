@@ -142,6 +142,7 @@ impl Plait {
 
     /// Show `path` in the Files tab, at `line` (zero-based) when given.
     pub(super) fn open_file(&mut self, path: PathBuf, line: Option<usize>, cx: &mut Context<Self>) {
+        self.tabs.lifecycle.view_revision += 1;
         let root = self.file_root();
         let viewer = &mut self.workspace.file_viewer;
         let same = viewer.path.as_ref() == Some(&path) && viewer.root == root;

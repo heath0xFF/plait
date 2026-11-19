@@ -204,6 +204,13 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.tabs.lifecycle.presenting
+            && self.tabs.model.active().is_some()
+            && self.host.creation.checkout != path
+        {
+            self.open_draft_in(path, window, cx);
+            return;
+        }
         if self.host.creation.creating || self.host.creation.pending_create.is_some() {
             self.notice =
                 Some("Resolve the pending thread creation before changing checkout.".into());

@@ -41,7 +41,7 @@ pub struct DirectoryIdentity {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CheckoutKey {
     pub host: HostKey,
-    /// Canonicalized and verified off the UI thread by the caller.
+    /// The host-supplied root verbatim; verify its directory off the UI thread.
     pub root: PathBuf,
     pub directory: Option<DirectoryIdentity>,
 }
@@ -315,6 +315,63 @@ impl WindowTabs {
             .checked_add(1)
             .ok_or(TabError::IdentityExhausted)?;
         Ok(self.serial)
+    }
+
+    /// Promote provisional session identities once the host has answered. Existing
+    /// verified identities are never rebound by a sidebar click or reconnect.
+    pub fn verify_session_host(
+        &mut self,
+        previous: &HostKey,
+        host: &HostKey,
+        checkouts: &[CheckoutKey],
+    ) -> Result<(), TabError> {
+        let promote = |target: &ThreadTarget| {
+            let mut target = target.clone();
+            let checkout = match &mut target {
+                ThreadTarget::Existing { checkout, .. } | ThreadTarget::Draft { checkout, .. } => {
+                    checkout
+                }
+            };
+            if &checkout.host == previous && checkout.directory.is_none() {
+                checkout.host = host.clone();
+                checkout.directory = checkouts
+                    .iter()
+                    .find(|c| &c.host == host && c.root == checkout.root)
+                    .and_then(|c| c.directory);
+            }
+            target
+        };
+        if self
+            .serial
+            .checked_add(self.tabs.len() as u64 + 1)
+            .is_none()
+        {
+            return Err(TabError::IdentityExhausted);
+        }
+        for tab in &self.tabs {
+            validate_record(&promote(tab.thread().target()), tab.thread().bookmark())?;
+        }
+        for tab in &self.closed {
+            validate_record(&promote(&tab.target), &tab.bookmark)?;
+        }
+        for index in 0..self.tabs.len() {
+            let target = promote(self.tabs[index].thread().target());
+            if &target != self.tabs[index].thread().target() {
+                self.tabs[index].lifetime.generation = self.next_serial()?;
+                let thread = self.tabs[index].content.thread_mut();
+                thread.target = target;
+                thread.residency = Residency::Cold {
+                    reason: ColdReason::Replaced,
+                };
+            }
+        }
+        for tab in &mut self.closed {
+            tab.target = promote(&tab.target);
+        }
+        if let Some(id) = self.active {
+            self.activate(id)?;
+        }
+        Ok(())
     }
 
     /// Sidebar and New thread both use this transition. One draft per checkout.

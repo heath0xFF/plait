@@ -6529,6 +6529,7 @@ fn file_reads_cannot_follow_the_same_name_into_another_checkout() {
     let b = fixture_repository(&root.join("b"));
     std::fs::write(a.join("same.txt"), "From A\n").unwrap();
     std::fs::write(b.join("same.txt"), "From B\n").unwrap();
+    std::fs::write(b.join("src/review.rs"), "pub fn only_from_b() {}\n").unwrap();
     let mut harness = Harness::new(&a, None, 900., 600.);
     harness.connect(&a, false);
     harness.update(|plait, window, cx| {
@@ -6556,8 +6557,25 @@ fn file_reads_cannot_follow_the_same_name_into_another_checkout() {
         plait.change_checkout(b.clone(), window, cx);
     });
     harness.update(|plait, _, _| {
-        assert!(plait.workspace.file_viewer.opened.is_none());
-        assert!(plait.workspace.file_viewer.path.is_none());
+        // Returning to B restores B's file, never A's retired read.
+        assert_eq!(plait.workspace.file_viewer.root, b);
+        assert_eq!(
+            plait.workspace.file_viewer.path,
+            Some("src/review.rs".into())
+        );
+        assert!(
+            format!(
+                "{:?}",
+                plait
+                    .workspace
+                    .file_viewer
+                    .opened
+                    .as_ref()
+                    .unwrap()
+                    .contents
+            )
+            .contains("only_from_b")
+        );
     });
     drop(harness);
     std::fs::remove_dir_all(root).unwrap();

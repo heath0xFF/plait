@@ -36,6 +36,7 @@ mod settings_providers;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod snapshot;
 mod tab_bookmark;
+mod tab_identity;
 mod tab_lifecycle;
 mod tabs;
 mod text_field;
@@ -583,7 +584,7 @@ impl Plait {
 
     /// The Git inspector beside the conversation: wide windows, unless hidden.
     pub(super) fn shows_inspector(&self, wide: bool) -> bool {
-        wide && !self.preferences.value.hide_inspector
+        wide && self.tabs.model.active().is_some() && !self.preferences.value.hide_inspector
     }
 
     /// Show or hide the Git inspector and remember the choice. A narrow window
@@ -642,6 +643,7 @@ impl Plait {
     }
 
     fn show_tab(&mut self, tab: Workspace, window: &mut Window, cx: &mut Context<Self>) {
+        self.tabs.lifecycle.view_revision += 1;
         let conversation = Workspace::Conversation;
         if self.workspace.tab == conversation && tab != conversation {
             self.leave_conversation_focus(window, cx);
@@ -662,6 +664,8 @@ impl Plait {
             self.check_file(cx);
         }
         if tab == Workspace::Conversation
+            && self.conversation_snapshot().is_some()
+            && window.is_window_active()
             && !self.settings_open
             && let Some(id) = self.host.thread.selected.clone()
         {
@@ -787,67 +791,67 @@ impl Plait {
 
     /// Conversation, Changes, History, and Files: the views of the open checkout.
     fn workspace_switch(&self, cx: &mut Context<Self>) -> Div {
+        let views = self
+            .tabs
+            .model
+            .active()
+            .and_then(|id| self.tabs.model.get(id))
+            .map(|tab| tab.content().view_commands())
+            .unwrap_or_default();
         let changed = self
             .state
             .repository
             .snapshot()
             .ready()
-            .map(|snapshot| snapshot.changes.len())
-            .filter(|count| *count > 0);
-        segmented()
-            .child(
-                segment(
+            .map(|s| s.changes.len())
+            .filter(|n| *n > 0);
+        let mut controls = segmented();
+        for &view in views {
+            let (id, title, action, hover) = match view {
+                Workspace::Conversation => (
                     "conversation-tab",
                     "Conversation",
-                    self.workspace.tab == Workspace::Conversation,
-                )
-                .aria_keyshortcuts(self.shortcut_aria("view.conversation"))
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.show_tab(Workspace::Conversation, window, cx)
-                })),
-            )
-            .child(
-                segment(
+                    "view.conversation",
+                    "Read this thread and write a message.",
+                ),
+                Workspace::Changes => (
                     "changes-tab",
                     "Changes",
-                    self.workspace.tab == Workspace::Changes,
-                )
-                .aria_keyshortcuts(self.shortcut_aria("view.changes"))
-                // The accessible name stays "Changes"; the count is visual.
-                .when_some(changed, |el, count| {
-                    el.child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(rgb(colors().subtle))
-                            .child(count.to_string()),
-                    )
-                })
-                .on_click(
-                    cx.listener(|this, _, window, cx| {
-                        this.show_tab(Workspace::Changes, window, cx)
-                    }),
+                    "view.changes",
+                    "Review changes in this thread’s checkout.",
                 ),
-            )
-            .child(
-                segment(
+                Workspace::History => (
                     "history-tab",
                     "History",
-                    self.workspace.tab == Workspace::History,
-                )
-                .aria_keyshortcuts(self.shortcut_aria("view.history"))
-                .on_click(
-                    cx.listener(|this, _, window, cx| {
-                        this.show_tab(Workspace::History, window, cx)
-                    }),
+                    "view.history",
+                    "Read commits in this thread’s checkout.",
                 ),
-            )
-            .child(
-                segment("files-tab", "Files", self.workspace.tab == Workspace::Files)
-                    .aria_keyshortcuts(self.shortcut_aria("view.files"))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.show_tab(Workspace::Files, window, cx)
-                    })),
-            )
+                Workspace::Files => (
+                    "files-tab",
+                    "Files",
+                    "view.files",
+                    "Read files in this thread’s checkout.",
+                ),
+            };
+            controls = controls.child(
+                segment(id, title, self.workspace.tab == view)
+                    .aria_keyshortcuts(self.shortcut_aria(action))
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| thread_controls::TextTooltip(hover.into()))
+                            .into()
+                    })
+                    .when_some(changed.filter(|_| view == Workspace::Changes), |el, n| {
+                        el.child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(rgb(colors().subtle))
+                                .child(n.to_string()),
+                        )
+                    })
+                    .on_activate(cx, move |this, window, cx| this.show_tab(view, window, cx)),
+            );
+        }
+        controls
     }
 
     /// Where the selected thread runs: Project, Machine, and its checkout branch.
