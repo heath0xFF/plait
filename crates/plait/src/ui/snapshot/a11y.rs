@@ -42,16 +42,35 @@ fn named_drafts_keep_accessibility_ids_through_title_edits() {
     let mut h = Harness::new(&repo, None, 1380., 860.);
     h.connect(&repo, false);
     h.update(|p, w, cx| {
-        p.tabs = Default::default();
-        p.park_workspace(cx);
+        // Keep the thread and add the other tab kind without asking the host.
+        let checkout = p.tab_checkout(repo.clone());
+        p.tabs
+            .model
+            .open(
+                plait_core::tabs::TabTarget::Worktrees { checkout },
+                Some(p.host.connection.epoch),
+            )
+            .unwrap();
         p.open_draft(w, cx);
     });
     h.type_draft("Same first line");
     h.update(|p, w, cx| p.open_draft(w, cx));
     h.type_draft("Same first line");
-    h.update(|p, _, _| p.tabs.list_open = true);
+    h.update(|p, _, _| {
+        assert_eq!(p.tabs.rows.len(), 4);
+        assert_eq!(p.tabs.draft_titles.len(), 2);
+        let worktrees = p.tabs.rows.iter().find(|row| row.worktrees).unwrap();
+        assert_eq!(worktrees.title, "Worktrees");
+        assert_eq!(worktrees.word, "");
+        p.tabs.list_open = true;
+    });
     let first = steady_frame(&mut h, "same draft titles");
     for role in [Role::Tab, Role::MenuItem] {
+        assert!(first.has_node(role, |n| {
+            n.label
+                .as_deref()
+                .is_some_and(|label| label.starts_with("Worktrees"))
+        }));
         let nodes: Vec<_> = first
             .nodes
             .iter()

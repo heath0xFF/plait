@@ -826,10 +826,11 @@ the default. Both shortcuts can be changed in Settings → Keyboard.
 
 ### Tabs
 
-The 40-point top row holds the native window buttons, sidebar toggle, thread
-and Worktrees tabs, and New tab control. It stays visible with the sidebar hidden. Drag the
-empty right end to move the window; double-clicking it follows the system's
-title-bar preference. The 36-point second row holds the active thread's
+The 40-point top row holds the native window buttons, sidebar toggle, thread,
+draft and Worktrees tabs, and New tab control. It stays visible with the sidebar
+hidden. Drag the empty right end to move the window; double-clicking it follows
+the system's title-bar preference. The 36-point second row holds the active
+thread's
 project, branch, four views, and inspector toggle. An empty workspace has no
 second row.
 Tab order, the tab in front, and each view's bookmark are saved separately in
@@ -846,10 +847,10 @@ the current draft is empty. Each tab keeps its own text, images, project, model,
 harness, permissions, thinking level, and Project busy choice. Sending creates
 a thread in that tab; other drafts stay as they are. A draft takes its title
 from the first nonblank line of its message, trimmed, with each run of spaces
-or tabs shown as one space, and limited to 120 characters. Empty and images-only drafts are called **New thread**. The same
-title appears in its tab, the overflow list, and the sidebar's current draft
-row. Connected drafts with a known model say **Ready**, including tabs behind
-the one in front; disconnected tabs say **Offline**. Cmd-1 through Cmd-8 select
+or tabs shown as one space, and limited to 120 characters. Empty and images-only
+drafts are called **New thread**. The same title appears in its tab, the overflow
+list, and the sidebar's current draft row. Connected drafts with a known model
+say **Ready**, including tabs behind the one in front; disconnected tabs say **Offline**. Cmd-1 through Cmd-8 select
 tabs by position; Cmd-9 selects the last. Cmd-Shift-[ and Cmd-Shift-] cycle
 through tabs; Control-Shift-Left and Control-Shift-Right move the active tab.
 Drag a tab to reorder it. The overflow control opens all tabs grouped by state;
@@ -858,6 +859,13 @@ Restore reads at most 10,000 entries and 16 MiB of tab preferences to bound dama
 input. All saved open drafts, including empty ones, return in their saved order;
 recovered drafts without tab records append after them. Draft content still uses
 the separate 4 MiB recovery journal and its visible save-failure rules.
+
+A project’s **Worktrees** command opens its own tab, or selects it if it is
+already open. That tab is always called **Worktrees** and shows the project’s
+branches, worktrees and storage instead of a thread’s four views. It can be
+reordered, closed and reopened like a thread tab. Closing or discarding a draft
+beside it can bring Worktrees to the front; the workspace is empty only when no
+tabs remain.
 
 Cmd-W or middle-click closes a tab without stopping its run. Cmd-Shift-T reopens
 the most recently closed tab, including a nonempty draft or pending creation.

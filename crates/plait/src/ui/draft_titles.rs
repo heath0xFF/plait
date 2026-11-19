@@ -2,7 +2,7 @@
 use super::{Plait, session::UNTITLED};
 use gpui::*;
 use plait_core::tabs::{
-    ThreadTarget,
+    TabTarget,
     row::{TabMetadata, TabState},
 };
 
@@ -55,7 +55,7 @@ impl Plait {
         let mut titles = std::collections::HashMap::new();
         self.tabs.draft_row = None;
         for (index, (tab, row)) in self.tabs.model.tabs().iter().zip(rows).enumerate() {
-            let ThreadTarget::Draft { id, checkout } = tab.thread().target() else {
+            let TabTarget::Draft { id, checkout } = tab.session().target() else {
                 continue;
             };
             let saved = self

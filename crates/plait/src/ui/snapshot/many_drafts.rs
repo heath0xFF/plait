@@ -238,9 +238,45 @@ pub(super) fn scenes(h: &mut Harness, suffix: &str) {
         }
     });
     h.capture(&format!("tabs-many-drafts-{suffix}"));
-    h.update(|p, _, _| p.tabs.list_open = true);
+    let extra = h
+        .window
+        .update(&mut h.cx, |p, _, _| {
+            let active = p.tabs.model.active().unwrap();
+            let checkout = p.tab_checkout(p.host.creation.checkout.clone());
+            let worktrees = p
+                .tabs
+                .model
+                .open(
+                    TabTarget::Worktrees {
+                        checkout: checkout.clone(),
+                    },
+                    Some(p.host.connection.epoch),
+                )
+                .unwrap();
+            let thread = p
+                .tabs
+                .model
+                .open(
+                    TabTarget::Existing {
+                        id: THREAD.into(),
+                        checkout,
+                    },
+                    Some(p.host.connection.epoch),
+                )
+                .unwrap();
+            p.tabs.model.activate(active).unwrap();
+            p.tabs.list_open = true;
+            p.refresh_tab_rows();
+            [worktrees, thread]
+        })
+        .unwrap();
     h.capture(&format!("tabs-named-drafts-list-{suffix}"));
-    h.update(|p, _, _| p.tabs.list_open = false);
+    h.update(|p, _, _| {
+        p.tabs.list_open = false;
+        for id in extra {
+            p.tabs.model.close(id, false).unwrap();
+        }
+    });
     h.update(|p, w, cx| {
         while p.tabs.model.tabs().len() < 300 {
             p.open_draft(w, cx);
@@ -571,6 +607,20 @@ fn restore_with_open_empty_draft(worktrees_front: bool) {
                 .is_draft()
         );
         assert_eq!(p.worktrees_visible(), worktrees_front);
+        assert_eq!(
+            p.tabs.draft_titles.get("open-empty").map(String::as_str),
+            Some("New thread")
+        );
+        assert_eq!(
+            p.tabs.draft_titles.get("closed-text").map(String::as_str),
+            Some("Kept text")
+        );
+        assert_eq!(p.tabs.draft_titles.len(), 2);
+        if worktrees_front {
+            let row = p.tabs.rows.iter().find(|row| row.worktrees).unwrap();
+            assert_eq!(row.title, "Worktrees");
+            assert!(p.tabs.draft_row.is_none());
+        }
         let data = p.session.data.as_ref().unwrap();
         let mut ids: Vec<_> = data.draft_tabs.keys().map(String::as_str).collect();
         ids.sort();

@@ -803,7 +803,8 @@ impl Plait {
                             .text_color(rgb(colors().muted))
                             .into_any_element()
                     } else {
-                        dot(tint(meta.state, meta.active || meta.word == "Ready")).into_any_element()
+                        dot(tint(meta.state, meta.active || meta.word == "Ready"))
+                            .into_any_element()
                     }),
             )
             .child(

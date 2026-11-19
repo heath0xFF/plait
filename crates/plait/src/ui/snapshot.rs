@@ -50,6 +50,7 @@ mod isolation;
 mod many_drafts;
 mod mcp;
 mod messages;
+mod mixed_tabs;
 mod settings_modal;
 mod showcase;
 mod tabs;

@@ -171,15 +171,17 @@ impl Plait {
     /// Clear the draft and its choices. A creation already sent still
     /// finishes on the host, but its reply opens nothing and sends nothing.
     pub(super) fn discard_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let tab = self.tabs.model.active().filter(|id| {
-            self.tabs.model.get(*id).is_some_and(|tab| matches!(tab.thread().target(),
-                plait_core::tabs::ThreadTarget::Draft { id, .. } if self.draft.id.as_ref() == Some(id)))
-        });
+        let Some(tab) = self.tabs.model.active().filter(|id| {
+            self.tabs.model.get(*id).is_some_and(|tab| {
+                matches!(tab.session().target(),
+                plait_core::tabs::TabTarget::Draft { id, .. } if self.draft.id.as_ref() == Some(id))
+            })
+        }) else {
+            return;
+        };
         // Closing the front tab is refused while another creation is unanswered;
         // refuse first, so the draft is not erased under a tab that stays open.
-        if tab.is_some()
-            && (self.host.creation.creating || self.host.creation.pending_create.is_some())
-        {
+        if self.host.creation.creating || self.host.creation.pending_create.is_some() {
             self.notice =
                 Some("Resolve the pending thread creation before discarding this draft.".into());
             cx.notify();
@@ -192,9 +194,7 @@ impl Plait {
             generation: self.draft.generation + 1,
             ..Default::default()
         };
-        if let Some(tab) = tab {
-            self.request_tab(super::tab_lifecycle::Intent::Close(tab), window, cx);
-        }
+        self.request_tab(super::tab_lifecycle::Intent::Close(tab), window, cx);
         cx.notify();
     }
 
@@ -212,8 +212,8 @@ impl Plait {
             return;
         };
         if self.tabs.model.get(tab).is_some_and(|tab| {
-            matches!(tab.thread().target(),
-            plait_core::tabs::ThreadTarget::Draft { id, .. } if self.draft.id.as_ref() == Some(id))
+            matches!(tab.session().target(),
+            plait_core::tabs::TabTarget::Draft { id, .. } if self.draft.id.as_ref() == Some(id))
         }) {
             self.request_tab(super::tab_lifecycle::Intent::Close(tab), window, cx);
         }
