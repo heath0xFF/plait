@@ -363,6 +363,83 @@ fn a11y_tree_has_no_duplicates_and_exposes_required_nodes() {
     let _ = std::fs::remove_dir_all(&scratch);
 }
 
+/// Node ids of each sidebar thread row and its Actions button (drawn only on
+/// hosts that can manage threads), by thread id.
+fn thread_row_ids(harness: &mut Harness, frame: &A11yFrame) -> Vec<(String, u64, Option<u64>)> {
+    let mut threads = Vec::new();
+    harness.update(|plait, _, _| {
+        for thread in &plait.host.connection.threads {
+            threads.push((thread.id.clone(), plait.thread_name(&thread.id)));
+        }
+    });
+    threads
+        .into_iter()
+        .map(|(id, name)| {
+            let prefix = format!("Thread {id} · ");
+            let actions = format!("Actions for {name}");
+            let find = |role: Role, matches: &dyn Fn(&str) -> bool| {
+                frame
+                    .nodes
+                    .iter()
+                    .find(|node| node.role == role && node.label.as_deref().is_some_and(matches))
+                    .map(|node| node.node_id)
+            };
+            let row = find(Role::TreeItem, &|label| label.starts_with(&prefix))
+                .unwrap_or_else(|| panic!("no sidebar row for thread {id}"));
+            let button = find(Role::Button, &|label| label == actions);
+            (id, row, button)
+        })
+        .collect()
+}
+
+/// Assistive technology keeps its place by node id, so a thread row must keep
+/// its id when the host's list moves it (a new thread, an archive, activity).
+#[core::prelude::v1::test]
+fn sidebar_rows_keep_their_ids_when_threads_reorder() {
+    if !isolated("a11y::sidebar_rows_keep_their_ids_when_threads_reorder") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-a11y-order-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&scratch);
+    let repository = fixture_repository(&scratch);
+    let mut harness = Harness::new(&repository, None, 1380., 860.);
+    harness.connect(&repository, false);
+    tabs::install(&mut harness, 3);
+    // Version 3 hosts manage threads, so each row also draws its Actions button.
+    harness.update(|plait, _, _| {
+        plait
+            .host
+            .connection
+            .status
+            .as_mut()
+            .expect("connected status")
+            .protocol_version = 3;
+    });
+    let before = steady_frame(&mut harness, "threads-in-host-order");
+    let mut before = thread_row_ids(&mut harness, &before);
+    assert!(before.len() >= 3, "expected several sidebar threads");
+    assert!(
+        before.iter().all(|(_, _, button)| button.is_some()),
+        "every row should draw its Actions button: {before:?}"
+    );
+
+    harness.update(|plait, _, cx| {
+        plait.host.connection.threads.reverse();
+        cx.notify();
+    });
+    let after = steady_frame(&mut harness, "threads-reversed");
+    let mut after = thread_row_ids(&mut harness, &after);
+    before.sort();
+    after.sort();
+    assert_eq!(
+        before, after,
+        "a thread row's node ids changed when the list was reordered"
+    );
+
+    drop(harness);
+    let _ = std::fs::remove_dir_all(&scratch);
+}
+
 /// Every `.rs` file under `src/ui`, except this guard, with comments and the
 /// contents of string literals blanked to spaces. Offsets and line breaks are
 /// kept, so a hit maps back to its line.

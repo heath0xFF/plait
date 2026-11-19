@@ -456,8 +456,10 @@ impl Plait {
                 }),
             )
             .child(
+                // Each row is its own view, keyed by thread, so these ids are
+                // already unique; an index would change as the list moves.
                 nav_row(
-                    ("host-thread", index),
+                    "host-thread",
                     format!(
                         "Thread {} · {} · {} / {}. {}{}{}",
                         id,
@@ -533,7 +535,7 @@ impl Plait {
             .when(self.host.protocol() >= 3, |el| {
                 el.child(
                     icon_button(
-                        ("thread-actions", index),
+                        "thread-actions",
                         "more",
                         format!("Actions for {}", self.thread_name(&menu_id)),
                     )
