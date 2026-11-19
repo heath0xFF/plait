@@ -679,3 +679,42 @@ pub(super) fn parked_counts() {
     drop(h);
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+/// A New thread tab in front shows its thread once created, whichever view is open.
+pub(super) fn created_in_front() {
+    let scratch = std::env::temp_dir().join(format!("plait-tab-created-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut h = Harness::new(&repository, None, 900., 600.);
+    h.connect(&repository, false);
+    install(&mut h, 1);
+    h.update(|p, w, cx| {
+        p.host.connection.connected = false;
+        p.open_draft(w, cx);
+        assert!(p.draft.open);
+        let mut created = p.host.connection.threads[0].clone();
+        created.id = "created-thread".into();
+        created.checkout = p.host.creation.checkout.clone();
+        p.host.connection.threads.push(created);
+        p.draft.sending = Some(super::super::new_thread::Sending {
+            generation: p.draft.generation,
+            request_id: "create-1".into(),
+            text: "First message".into(),
+            images: Vec::new(),
+            revision: 1,
+            approval: None,
+            choice: None,
+        });
+        p.show_tab(super::super::Workspace::Changes, w, cx);
+        p.deliver_draft("created-thread".into(), w, cx);
+        let active = p.tabs.model.get(p.tabs.model.active().unwrap()).unwrap();
+        assert!(matches!(
+            active.thread().target(),
+            ThreadTarget::Existing { id, .. } if id == "created-thread"
+        ));
+        assert_eq!(p.host.thread.selected.as_deref(), Some("created-thread"));
+        assert_eq!(p.workspace.tab, super::super::Workspace::Changes);
+        assert!(p.workspace.composers.contains_key("created-thread"));
+    });
+    drop(h);
+    std::fs::remove_dir_all(scratch).unwrap();
+}

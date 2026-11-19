@@ -491,6 +491,11 @@ impl Plait {
         let draft_tab = self.tabs.model.tabs().iter().find(|tab| {
             matches!(tab.thread().target(), plait_core::tabs::ThreadTarget::Draft { checkout, .. } if checkout.root == self.host.creation.checkout)
         }).map(|tab| (tab.id(), tab.thread().target().checkout().clone()));
+        // The draft's tab in front becomes the thread's, whatever view it shows.
+        let in_front = draft_tab
+            .as_ref()
+            .is_some_and(|(tab, _)| self.tabs.model.active() == Some(*tab));
+        let view = self.workspace.tab;
         let composer = self.draft.composer.take();
         if composer.is_none()
             && let Some(data) = &mut self.session.data
@@ -552,8 +557,11 @@ impl Plait {
             Ok(pending) => self.retry_submission_id(&id, &pending.request_id, window, cx),
             Err(error) => self.set_thread_notice(id.clone(), error, true),
         }
-        if visible {
+        if visible || in_front {
             self.open_created_thread(id, window, cx);
+            if view != Workspace::Conversation {
+                self.show_tab(view, window, cx);
+            }
         } else {
             self.capture_session(cx);
         }

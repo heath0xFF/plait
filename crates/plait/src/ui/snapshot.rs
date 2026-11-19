@@ -6789,3 +6789,11 @@ fn parked_tab_line_counts_stay_with_their_thread() {
     }
     tabs::parked_counts();
 }
+
+#[core::prelude::v1::test]
+fn created_thread_shows_in_its_front_tab_from_any_view() {
+    if !isolated("created_thread_shows_in_its_front_tab_from_any_view") {
+        return;
+    }
+    tabs::created_in_front();
+}
