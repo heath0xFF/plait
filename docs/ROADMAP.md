@@ -13,7 +13,7 @@ messages, and the first part of M9 step 2 (a run's closing line opens exactly
 what that run changed) shipped in v0.1.0-preview.17. Thread tabs shipped in
 v0.1.0-preview.18. A second thread in a busy project, in its own worktree,
 and any number of New thread tabs shipped in v0.1.0-preview.20. The Worktrees
-graph, and draft tabs named by their first line, shipped in v0.1.0-preview.21.
+graph, and draft tabs named by their first line, shipped in v0.1.0-preview.22.
 The rest of
 M9 steps 2 and 3, MCP browser sign-in, and M8 step 3 are the current work.**
 
@@ -604,7 +604,7 @@ exclusion, preparation cancellation, lost replies and resource failures. Live
 provider limits and native focus/accessibility behavior still need separate
 acceptance; headless tests do not claim those results.
 
-**Shipped in v0.1.0-preview.21: Worktrees.** One project graph per window is the first tab content
+**Shipped in v0.1.0-preview.22: Worktrees.** One project graph per window is the first tab content
 that is not a thread. It opens from the sidebar project menu, command palette,
 Project settings and a worktree thread's context line. The graph presents actual
 commit ancestry, host-owned preservation facts, bounded cached storage accounting

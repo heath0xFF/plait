@@ -2376,3 +2376,29 @@ Not exercised: a real window on this tree before the tag (the native
 acceptance check runs on CI after the push, with its new mode for the first
 time); Remove against a live host; the Worktrees view on a second volume;
 live models; VoiceOver; Linux execution; and the installed app.
+
+## Release check for v0.1.0-preview.22
+
+v0.1.0-preview.21 was tagged and not published. On CI, the test in which the
+production runtime edits Plait's own source and runs Cargo inside the command
+sandbox reached its 240-second limit, in both the check and the installed
+suite, and nothing else failed. That test built the core crate and ran its
+whole suite, twice. It had taken 208 and 223 seconds on CI for the two
+releases before, and the core crate grew. It now runs the tests of the module
+the turn edits, and asserts that the regression test the first turn adds ran
+and that the second turn, with the source restored, no longer has it. Here
+the test takes 20 seconds where it took 56.
+
+This release is v0.1.0-preview.21's tree with that one change to a test. The
+record above describes what it contains, what its reviews found, the known
+limits, and what was not exercised.
+
+On 2026-11-19, on the commit before this record, `bash scripts/check.sh` exited
+0 with the Git that CI's fixtures use first on the path: 951 Rust tests (275
+desktop, 642 core, 18 host, 16 helper integration), 562 runtime tests,
+TypeScript checks, and release builds. This record, the README's release
+line, and the release number in two roadmap lines are the only changes after
+it. Scenes and frame cost were not measured again: the change touches one
+runtime test.
+
+Not verified: that the test now fits CI's limit, until this tag's own run.
