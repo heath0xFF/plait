@@ -347,10 +347,6 @@ fn drafts_restart_in_order_with_images_settings_and_evicted_history() {
     }
     h.update(|p, w, cx| p.open_draft(w, cx));
     wait_tabs(&mut h);
-    h.update(|p, w, cx| {
-        p.discard_draft(w, cx);
-        p.capture_session(cx);
-    });
     let (order, save) = h
         .window
         .update(&mut h.cx, |p, w, cx| {
@@ -688,5 +684,116 @@ fn titles_follow_edits_without_rebuilding_sibling_rows() {
         assert!(p.tabs.rows.iter().all(|r| r.word == "Offline"));
     });
     drop(h);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+#[core::prelude::v1::test]
+fn discard_closes_only_its_draft_without_journal_or_history_recovery() {
+    if !isolated("many_drafts::discard_closes_only_its_draft_without_journal_or_history_recovery") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-draft-discard-{}", std::process::id()));
+    let repo = fixture_repository(&scratch);
+    let (directory, store) = plait_core::session::locations().unwrap();
+    let (journal, data) = plait_core::session::Journal::open(&directory, store).unwrap();
+    let mut h = Harness::new(&repo, None, 900., 600.);
+    h.connect(&repo, false);
+    h.update(|p, w, cx| {
+        p.tabs = Default::default();
+        p.park_workspace(cx);
+        p.session.data = Some(data);
+        p.session.journal = Some(journal.clone());
+        p.open_draft(w, cx);
+    });
+    h.type_draft("Keep this sibling");
+    let sibling = h
+        .window
+        .update(&mut h.cx, |p, _, _| p.draft.id.clone().unwrap())
+        .unwrap();
+    for state in ["empty", "text", "choice", "pending"] {
+        h.update(|p, w, cx| p.open_draft(w, cx));
+        wait_tabs(&mut h);
+        if state != "empty" {
+            h.type_draft("Throw this away");
+        }
+        let discarded = h
+            .window
+            .update(&mut h.cx, |p, w, cx| {
+                if matches!(state, "choice" | "pending") {
+                    set_pending(p, "discard-request");
+                    p.draft.pending.as_mut().unwrap().choice = state == "choice";
+                    p.draft.sending = Some(crate::ui::new_thread::Sending {
+                        generation: p.draft.generation,
+                        request_id: "discard-request".into(),
+                        text: "Throw this away".into(),
+                        images: Vec::new(),
+                        revision: 1,
+                        approval: None,
+                        choice: None,
+                    });
+                    p.capture_session(cx);
+                }
+                let id = p.draft.id.clone().unwrap();
+                p.discard_draft(w, cx);
+                id
+            })
+            .unwrap();
+        wait_tabs(&mut h);
+        h.update(|p, _, cx| {
+            assert_eq!(p.tabs.model.tabs().len(), 1, "{state}");
+            assert_eq!(p.tabs.model.closed_len(), 0, "{state}");
+            assert_eq!(p.draft.id.as_ref(), Some(&sibling));
+            assert_eq!(draft_text(p, cx), "Keep this sibling");
+            assert!(!p.draft_isolation_choice());
+            assert!(!p.tabs.lifecycle.drafts.contains_key(&discarded));
+            let data = p.session.data.as_ref().unwrap();
+            assert!(!data.draft_tabs.contains_key(&discarded));
+            assert_eq!(data.draft_tabs[&sibling].draft.text, "Keep this sibling");
+        });
+        journal.flush().unwrap();
+        h.keystroke("cmd-shift-t");
+        wait_tabs(&mut h);
+        h.update(|p, _, _| assert_eq!(p.tabs.model.tabs().len(), 1));
+    }
+    h.update(|p, w, cx| p.open_draft(w, cx));
+    wait_tabs(&mut h);
+    h.type_draft("Right neighbour");
+    h.keystroke("cmd-1");
+    wait_tabs(&mut h);
+    h.update(|p, w, cx| p.discard_draft(w, cx));
+    wait_tabs(&mut h);
+    h.update(|p, _, cx| {
+        assert_eq!(draft_text(p, cx), "Right neighbour");
+        assert_eq!(p.tabs.model.tabs().len(), 1);
+        assert_eq!(p.tabs.model.closed_len(), 0);
+        assert!(
+            !p.session
+                .data
+                .as_ref()
+                .unwrap()
+                .draft_tabs
+                .contains_key(&sibling)
+        );
+    });
+    h.update(|p, w, cx| p.discard_draft(w, cx));
+    wait_tabs(&mut h);
+    h.update(|p, _, _| {
+        assert!(p.tabs.model.tabs().is_empty());
+        assert_eq!(p.tabs.model.active(), None);
+        assert_eq!(p.tabs.model.closed_len(), 0);
+        assert!(p.session.data.as_ref().unwrap().draft_tabs.is_empty());
+        assert!(p.draft.composer.is_none() && !p.draft.open);
+    });
+    journal.flush().unwrap();
+    h.keystroke("cmd-shift-t");
+    h.update(|p, _, _| assert!(p.tabs.model.tabs().is_empty()));
+    drop(h);
+    drop(journal);
+    let (_, saved) =
+        plait_core::session::Journal::open(&directory, plait_core::session::locations().unwrap().1)
+            .unwrap();
+    assert!(saved.draft_tabs.is_empty());
+    assert!(saved.new_drafts.is_empty());
+    assert!(saved.new_draft.is_none());
     std::fs::remove_dir_all(scratch).unwrap();
 }

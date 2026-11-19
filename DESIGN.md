@@ -18,7 +18,7 @@ nonempty draft preserves it for reopening; older closed drafts remain recoverabl
 when the twenty-entry view history expires. A draft's title is its first nonblank
 message line, trimmed and capped at 120 characters, or New thread for empty and
 images-only drafts. Its tab, overflow entry, and current sidebar row share that
-title.
+title. Discard removes the draft and closes its tab without reopen history.
 Connected drafts with a known model say Ready in inactive tabs too.
 Hidden drafts draw no content, and
 large overflow lists draw only visible rows. Settings and

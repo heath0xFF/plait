@@ -141,7 +141,16 @@ impl Plait {
             .child(chips)
             .child(
                 button("draft-discard", "Discard")
-                    .aria_description("Clear this new thread. Escape does the same.")
+                    .aria_description("Discard this draft and close its tab. Escape does the same.")
+                    .tooltip(|_, cx| {
+                        cx.new(|_| {
+                            super::thread_controls::TextTooltip(
+                                "Discard this draft and close its tab. It cannot be reopened."
+                                    .into(),
+                            )
+                        })
+                        .into()
+                    })
                     .on_activate(cx, |this, window, cx| this.discard_draft(window, cx)),
             )
     }

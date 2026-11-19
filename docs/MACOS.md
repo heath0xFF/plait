@@ -867,6 +867,14 @@ end with their content and choices. They also return after restart. Closing the 
 leaves an empty workspace; another Cmd-W closes the window. Cmd-Shift-W closes
 the window directly.
 
+**Discard** (or Escape in the draft) removes that draft from recovery and closes
+its tab. Its right neighbour comes to the front, or its left neighbour if it
+was last; discarding the only tab leaves an empty workspace. Cmd-Shift-T cannot
+bring a discarded draft back. Other drafts are kept. Discard first cancels any
+unanswered **Project busy** choice. It is also available while creation is
+unconfirmed: a creation already sent can finish on the host, but its reply
+does not open a tab or send the discarded first message.
+
 Cmd-Option-period answers the open thread's approval card with **Deny once**
 and Cmd-Option-Y with **Allow once**. Each button shows its shortcut as the
 keymap binds it. The keys act only when the card is on screen and its buttons

@@ -1361,12 +1361,14 @@ fn a_draft_creates_its_thread_only_when_sent_and_keeps_its_request_id() {
         );
         assert_eq!(draft_text(plait, cx), "Queue the status refresh");
     });
-    // Escape clears it.
+    // Escape removes this tab and returns to its empty neighbour.
     harness.keystroke("escape");
     harness.update(|plait, _, cx| {
-        assert!(!plait.draft.open && plait.draft.sending.is_none());
+        assert!(plait.draft.open && plait.draft.sending.is_none());
         assert_eq!(draft_text(plait, cx), "");
         assert!(plait.draft.pending.is_none());
+        assert_eq!(plait.tabs.model.tabs().len(), 2);
+        assert_eq!(plait.tabs.model.closed_len(), 0);
     });
     drop(harness);
     std::fs::remove_dir_all(scratch).unwrap();
@@ -1504,7 +1506,7 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
         });
     };
     harness.update(|plait, window, cx| {
-        // Discarded: the thread is listed, and nothing opens or is sent.
+        // Discarded: return to the neighbouring thread; the late reply sends nothing.
         plait.open_draft(window, cx);
         sent(plait, "discarded", "Gone");
         plait.discard_draft(window, cx);
@@ -1518,7 +1520,7 @@ fn a_creation_reply_lands_only_on_the_draft_that_sent_it() {
                 .iter()
                 .all(|t| t.id != "thr_discarded")
         );
-        assert!(plait.host.thread.selected.is_none());
+        assert_eq!(plait.host.thread.selected.as_deref(), Some(THREAD));
         assert!(!plait.workspace.composers.contains_key("thr_discarded"));
         assert!(plait.host.submissions.all("thr_discarded").is_empty());
 

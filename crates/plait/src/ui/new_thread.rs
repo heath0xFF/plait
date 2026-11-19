@@ -171,14 +171,20 @@ impl Plait {
     /// Clear the draft and its choices. A creation already sent still
     /// finishes on the host, but its reply opens nothing and sends nothing.
     pub(super) fn discard_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab = self.tabs.model.active().filter(|id| {
+            self.tabs.model.get(*id).is_some_and(|tab| matches!(tab.thread().target(),
+                plait_core::tabs::ThreadTarget::Draft { id, .. } if self.draft.id.as_ref() == Some(id)))
+        });
         self.cancel_isolation(cx);
         window.focus(&self.focus, cx);
         self.clear_new_draft(cx);
         self.draft = super::new_thread::Draft {
-            id: self.draft.id.clone(),
             generation: self.draft.generation + 1,
             ..Default::default()
         };
+        if let Some(tab) = tab {
+            self.request_tab(super::tab_lifecycle::Intent::Close(tab), window, cx);
+        }
         cx.notify();
     }
 

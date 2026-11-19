@@ -565,7 +565,8 @@ notifications update just the mounted draft's cached row when that title changes
 equal-width tab layout and overflow grouping remain intact. Parking refreshes
 that title from the composer, while restored cold tabs derive it once from
 already-loaded draft text. Rendering reads cached titles only. Titles do not add
-fields to the journal or tab preferences.
+fields to the journal or tab preferences. Discard clears the draft's journal
+entry and closes its tab as an empty draft, keeping it out of reopen history.
 
 ### Worktrees graph
 
