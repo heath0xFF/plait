@@ -144,7 +144,7 @@ impl Plait {
     }
 
     /// The level the thread starts at; none for a model without thinking levels.
-    fn draft_thinking_chip(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+    fn draft_thinking_chip(&self, cx: &mut Context<Self>) -> Option<Control> {
         let level = self.draft_thinking()?;
         let source = if self.draft.thinking.is_some() {
             "Chosen for this thread"
@@ -226,7 +226,7 @@ impl Plait {
     }
 
     /// A harness's own modes, or Plait's Ask and Auto for Pi, in the same place.
-    fn draft_permissions(&self, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+    fn draft_permissions(&self, cx: &mut Context<Self>) -> Option<Control> {
         let harness = self.draft_harness();
         let locked = self.draft_locked();
         if harness != HarnessId::Pi {
@@ -280,7 +280,7 @@ impl Plait {
                         .child(
                             div()
                                 .text_color(rgb(colors().muted))
-                                .child(text!(format!("Creating thread with {model}…"))),
+                                .child(text!(format!("Creating thread with {model}…")).audited()),
                         )
                         .into_any_element(),
                 );
@@ -300,7 +300,7 @@ impl Plait {
                             .flex_1()
                             .min_w_0()
                             .text_color(rgb(colors().amber))
-                            .child(text!(format!("Thread not confirmed. {detail}"))),
+                            .child(text!(format!("Thread not confirmed. {detail}")).audited()),
                     )
                     .child(if connected {
                         toned_button("draft-retry", "Retry", Tone::Filled)
@@ -322,7 +322,7 @@ impl Plait {
                             .flex_1()
                             .min_w_0()
                             .text_color(rgb(colors().red))
-                            .child(text!(error.clone())),
+                            .child(text!(error.clone()).audited()),
                     )
                     .into_any_element(),
             );

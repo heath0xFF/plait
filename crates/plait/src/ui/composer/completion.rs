@@ -6,7 +6,7 @@
 //! `selected_value` when the user accepts. Rows report clicks and wheel
 //! scrolling through one callback. The owner positions the returned element.
 
-use crate::ui::theme::{self, ROW_HEIGHT, colors};
+use crate::ui::theme::{self, AuditA11y, Control, ROW_HEIGHT, colors};
 use gpui::{prelude::*, *};
 use std::{ops::Range, rc::Rc};
 
@@ -137,7 +137,7 @@ impl<T> Completion<T> {
         &self,
         id: &'static str,
         on_event: impl Fn(CompletionEvent, &mut Window, &mut App) + 'static,
-    ) -> Option<Stateful<Div>> {
+    ) -> Option<Control> {
         if !self.is_visible() {
             return None;
         }
@@ -147,6 +147,7 @@ impl<T> Completion<T> {
             .id(id)
             .role(Role::ListBox)
             .aria_label(self.name.clone())
+            .audited()
             .w_full()
             .p_1()
             .rounded_lg()
@@ -172,13 +173,13 @@ impl<T> Completion<T> {
                         .truncate()
                         .text_size(px(11.))
                         .text_color(rgb(colors().subtle))
-                        .child(text!(id = (id, usize::MAX), note)),
+                        .child(text!(id = (id, usize::MAX), note).audited()),
                 )
             });
         Some(list)
     }
 
-    fn row(&self, id: &'static str, index: usize, on_event: OnEvent) -> Stateful<Div> {
+    fn row(&self, id: &'static str, index: usize, on_event: OnEvent) -> Control {
         let item = &self.items[index];
         let selected = index == self.selected;
         let click = on_event.clone();
@@ -186,6 +187,7 @@ impl<T> Completion<T> {
             .id((id, index))
             .role(Role::ListBoxOption)
             .aria_label(item.name.clone())
+            .audited()
             .aria_selected(selected)
             .aria_position_in_set(index + 1)
             .aria_size_of_set(self.items.len())

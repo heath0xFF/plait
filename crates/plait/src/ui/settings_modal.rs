@@ -134,6 +134,7 @@ impl Plait {
             } else {
                 "Settings"
             })
+            .audited()
             .track_focus(&self.settings_focus)
             .tab_group()
             .tab_stop(false)

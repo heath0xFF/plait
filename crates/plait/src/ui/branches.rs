@@ -113,7 +113,7 @@ impl Plait {
         compact: bool,
         branch: &str,
         cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
+    ) -> Control {
         let blocker = self.branch_blocker();
         let shortcut = self.shortcut_label("git.switch_branch");
         let hover = match shortcut.as_str() {

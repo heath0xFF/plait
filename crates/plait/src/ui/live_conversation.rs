@@ -280,6 +280,7 @@ impl Plait {
             .id(id)
             .role(Role::Group)
             .aria_label(label)
+            .audited()
             .relative()
             .w_full()
             .min_w_0()
@@ -425,6 +426,7 @@ impl Plait {
             .id(SharedString::from(format!("turn-record-{id}")))
             .role(Role::Group)
             .aria_label(format!("This turn: {}", summary.label()))
+            .audited()
             .relative()
             .overflow_x_hidden()
             .gap_x(px(6.))
@@ -486,6 +488,7 @@ impl Plait {
             .id("live-stream")
             .role(Role::Group)
             .aria_label(format!("Plait is writing: {text}"))
+            .audited()
             .w_full()
             .min_w_0()
             .gap_1()
@@ -760,7 +763,7 @@ impl Plait {
                         .text_size(px(11.))
                         .text_color(rgb(colors().muted))
                         .truncate()
-                        .child(text!(id = "link-destination", format!("Opens {url}"))),
+                        .child(text!(id = "link-destination", format!("Opens {url}")).audited()),
                 )
             })
             .into_any_element()
@@ -926,6 +929,7 @@ impl Plait {
                                 "Exact tool arguments: {}. Risk: {}. {}",
                                 approval.details, approval.risk, dirty_note
                             ))
+                            .audited()
                             .max_h(px(140.))
                             .overflow_y_scroll()
                             .px_3()
@@ -999,7 +1003,7 @@ impl Plait {
     fn live_banners(&self, pending: bool, cx: &mut Context<Self>) -> Vec<Div> {
         let mut banners = Vec::new();
         if let Some(error) = self.host.connection.error.clone() {
-            banners.push(banner(colors().red).child(text!(error)));
+            banners.push(banner(colors().red).child(text!(error).audited()));
         }
         if !self.host.connection.connected {
             let connecting = self.host.connection.connecting;
@@ -1171,6 +1175,7 @@ Tone::Filled,
                             .id("turn-state")
                             .role(Role::Group)
                             .aria_label(name)
+                            .audited()
                             .tooltip({
                                 let tip = self.legacy_record_tip();
                                 move |_, cx| {

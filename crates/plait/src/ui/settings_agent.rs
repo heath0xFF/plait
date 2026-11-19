@@ -638,7 +638,7 @@ impl Plait {
                 div()
                     .text_size(px(12.))
                     .text_color(rgb(if quiet { colors().muted } else { colors().text }))
-                    .child(text!(id = (id, index), item.title.clone())),
+                    .child(text!(id = (id, index), item.title.clone()).audited()),
             );
             if !item.detail.is_empty() {
                 text = text.child(tag(item.detail.clone(), colors().muted).truncate());

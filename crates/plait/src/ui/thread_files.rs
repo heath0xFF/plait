@@ -298,6 +298,7 @@ impl Plait {
             .id("thread-files-toggle")
             .role(Role::Button)
             .aria_expanded(!collapsed)
+            .audited()
             .aria_label(format!(
                 "{count} {} changed by this thread, {added} lines added, {removed} removed",
                 if count == 1 { "file" } else { "files" }
@@ -363,7 +364,7 @@ fn counts(added: Option<usize>, removed: Option<usize>) -> Div {
         })
 }
 
-fn file_row(index: usize, count: &LineCount, cx: &mut Context<Plait>) -> Stateful<Div> {
+fn file_row(index: usize, count: &LineCount, cx: &mut Context<Plait>) -> Control {
     let name = count
         .path
         .file_name()
@@ -379,6 +380,7 @@ fn file_row(index: usize, count: &LineCount, cx: &mut Context<Plait>) -> Statefu
         .id(("thread-file", index))
         .role(Role::Button)
         .aria_label(format!("Show {} in Changes", count.path.display()))
+        .audited()
         .h(px(ROW_HEIGHT))
         .px_3()
         .gap_2()

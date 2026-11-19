@@ -386,6 +386,7 @@ impl Plait {
             .id("commit-box")
             .role(Role::Group)
             .aria_label("Commit")
+            .audited()
             .flex_shrink_0()
             .px_3()
             .py_2()

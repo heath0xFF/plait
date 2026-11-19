@@ -1,3 +1,4 @@
+pub(crate) mod a11y;
 mod actions;
 mod appearance;
 mod branches;
@@ -639,6 +640,7 @@ impl Plait {
             .id("inspector-note")
             .role(Role::Group)
             .aria_label("Git inspector unavailable at this window width")
+            .audited()
             .flex_shrink_0()
             .px_4()
             .py_2()
@@ -650,7 +652,7 @@ impl Plait {
                 format!(
                     "The Git inspector needs a window wider than {WIDE_WINDOW} points. Git status and diffs are in Changes."
                 )
-            )))
+            ).audited()))
             .child(
                 toned_button("inspector-note-changes", "Show Changes", Tone::Filled).on_activate(
                     cx,
@@ -949,7 +951,7 @@ impl Plait {
                 .gap(px(5.))
                 .min_w_0()
                 .child(icon(glyph).size(px(12.)).text_color(rgb(colors().subtle)))
-                .child(div().truncate().child(text!(id = id, label)))
+                .child(div().truncate().child(text!(id = id, label).audited()))
         };
         row()
             .w_full()
@@ -970,7 +972,7 @@ impl Plait {
                         .min_w_0()
                         .truncate()
                         .text_color(rgb(colors().subtle))
-                        .child(text!(id = "environment-model", model)),
+                        .child(text!(id = "environment-model", model).audited()),
                 )
             })
             .child(div().flex_1())
@@ -990,13 +992,16 @@ impl Plait {
             .border_color(rgb(colors().border))
             .text_size(px(11.))
             .text_color(rgb(colors().subtle))
-            .child(text!(format!(
-                "UI {} µs · peak {} µs · switch {} µs · first {} ms",
-                self.last_render_us,
-                self.max_render_us,
-                self.switch_us,
-                self.first_render_ms.unwrap_or(0)
-            )))
+            .child(
+                text!(format!(
+                    "UI {} µs · peak {} µs · switch {} µs · first {} ms",
+                    self.last_render_us,
+                    self.max_render_us,
+                    self.switch_us,
+                    self.first_render_ms.unwrap_or(0)
+                ))
+                .audited(),
+            )
     }
 }
 
@@ -1314,7 +1319,7 @@ impl Render for Plait {
 
         self.last_render_us = start.elapsed().as_micros();
         self.max_render_us = self.max_render_us.max(self.last_render_us);
-        root
+        root.audited()
     }
 }
 

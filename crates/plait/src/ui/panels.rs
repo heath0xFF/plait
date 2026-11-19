@@ -115,6 +115,7 @@ impl Plait {
             .id(id)
             .role(Role::Splitter)
             .aria_label(label)
+            .audited()
             .aria_description("Drag to resize. Double-click to restore the default width.")
             .absolute()
             .top_0()

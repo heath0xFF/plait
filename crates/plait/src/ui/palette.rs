@@ -641,17 +641,13 @@ impl Palette {
     }
 
     /// A quiet text button for the row's second action.
-    fn aside_button(
-        &self,
-        row: usize,
-        label: SharedString,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
+    fn aside_button(&self, row: usize, label: SharedString, cx: &mut Context<Self>) -> Control {
         let entity = cx.weak_entity();
         div()
             .id(("palette-aside", row))
             .role(Role::Button)
             .aria_label(label.clone())
+            .audited()
             .flex_shrink_0()
             .px(px(6.))
             .h(px(20.))
@@ -684,6 +680,7 @@ impl Palette {
             .id(("palette-heading", row))
             .role(Role::Heading)
             .aria_label(text.clone())
+            .audited()
             .w_full()
             .h(px(ROW_HEIGHT))
             .px_2()
@@ -694,7 +691,7 @@ impl Palette {
             .into_any_element()
     }
 
-    fn toggle(&self, row: usize, item: &Item, on: bool, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn toggle(&self, row: usize, item: &Item, on: bool, cx: &mut Context<Self>) -> Control {
         let name = self.options.mark.clone().unwrap_or_else(|| "Mark".into());
         let entity = cx.weak_entity();
         div()
@@ -702,6 +699,7 @@ impl Palette {
             .role(Role::Button)
             .aria_label(format!("{name}: {}", item.title))
             .aria_toggled(if on { Toggled::True } else { Toggled::False })
+            .audited()
             .flex()
             .flex_shrink_0()
             .items_center()
@@ -808,6 +806,7 @@ impl Palette {
             .id("palette-list")
             .role(Role::ListBox)
             .aria_label(format!("{} results", self.options.name))
+            .audited()
             .py_1()
             .child(
                 uniform_list(
@@ -876,12 +875,13 @@ impl Palette {
 }
 
 /// The list row without its content: identity, selection, and state.
-fn row_base(row: usize, item: &Item, selected: bool) -> Stateful<Div> {
+fn row_base(row: usize, item: &Item, selected: bool) -> Control {
     self::row()
         .id(("palette-row", row))
         .role(Role::ListBoxOption)
         .aria_label(item.spoken())
         .aria_selected(selected)
+        .audited()
         // Focus stays in the search field; the selected row reports as focused.
         .when(selected, |el| el.aria_active_descendant())
         .w_full()
@@ -900,7 +900,7 @@ fn message(text: SharedString) -> AnyElement {
         .text_size(px(12.))
         .line_height(px(19.))
         .text_color(rgb(colors().muted))
-        .child(text!(text))
+        .child(text!(text).audited())
         .into_any_element()
 }
 
@@ -920,6 +920,7 @@ impl Render for Palette {
             .id("palette")
             .role(Role::Dialog)
             .aria_label(self.options.name.clone())
+            .audited()
             .key_context("PlaitPalette")
             .on_action(cx.listener(|this, _: &Up, _, cx| this.move_by(false, 1, cx)))
             .on_action(cx.listener(|this, _: &Down, _, cx| this.move_by(true, 1, cx)))

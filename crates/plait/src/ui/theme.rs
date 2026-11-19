@@ -2,7 +2,11 @@ use gpui::{prelude::*, *};
 use plait_core::host;
 use std::borrow::Cow;
 
+pub use super::a11y::{AuditA11y, Audited};
 pub use plait_core::theme::{Palette, mix};
+
+/// Interactive control element: audited in debug tests, zero-cost `Stateful<Div>` otherwise.
+pub type Control = Audited<Stateful<Div>>;
 
 thread_local! {
     /// The palette every view draws with. Per thread, so parallel UI tests
@@ -146,7 +150,7 @@ pub enum Tone {
 }
 
 /// Focusable, keyboard-reachable base for every original control.
-fn control(id: impl Into<ElementId>, name: SharedString, tone: Tone) -> Stateful<Div> {
+fn control(id: impl Into<ElementId>, name: SharedString, tone: Tone) -> Control {
     let base = row()
         .id(id)
         .role(Role::Button)
@@ -157,7 +161,8 @@ fn control(id: impl Into<ElementId>, name: SharedString, tone: Tone) -> Stateful
         .rounded_md()
         .border_1()
         .border_color(gpui::transparent_black())
-        .focus_visible(|s| s.border_color(rgb(colors().blue)));
+        .focus_visible(|s| s.border_color(rgb(colors().blue)))
+        .audited();
     match tone {
         Tone::Ghost => base
             .text_color(rgb(colors().muted))
@@ -178,7 +183,7 @@ fn control(id: impl Into<ElementId>, name: SharedString, tone: Tone) -> Stateful
     }
 }
 
-pub fn button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Stateful<Div> {
+pub fn button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Control {
     toned_button(id, label, Tone::Ghost)
 }
 
@@ -186,7 +191,7 @@ pub fn toned_button(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
     tone: Tone,
-) -> Stateful<Div> {
+) -> Control {
     let label = label.into();
     let raised = matches!(tone, Tone::Filled | Tone::Primary);
     control(id, label.clone(), tone)
@@ -204,7 +209,7 @@ pub fn quiet_button(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
     group: impl Into<SharedString>,
-) -> Stateful<Div> {
+) -> Control {
     button(id, label)
         .h(px(22.))
         .opacity(0.)
@@ -217,7 +222,7 @@ pub fn icon_button(
     id: impl Into<ElementId>,
     glyph: &'static str,
     name: impl Into<SharedString>,
-) -> Stateful<Div> {
+) -> Control {
     toned_icon_button(id, glyph, name, Tone::Ghost)
 }
 
@@ -226,7 +231,7 @@ pub fn toned_icon_button(
     glyph: &'static str,
     name: impl Into<SharedString>,
     tone: Tone,
-) -> Stateful<Div> {
+) -> Control {
     // GPUI tints a glyph with its own color, not the control's text color.
     let tint = match tone {
         Tone::Ghost => colors().muted,
@@ -242,11 +247,7 @@ pub fn toned_icon_button(
 
 /// Full-width row for the navigation rail and lists. Callers add the content,
 /// and `aria_selected` where the row's role supports selection.
-pub fn nav_row(
-    id: impl Into<ElementId>,
-    name: impl Into<SharedString>,
-    selected: bool,
-) -> Stateful<Div> {
+pub fn nav_row(id: impl Into<ElementId>, name: impl Into<SharedString>, selected: bool) -> Control {
     let tone = if selected {
         Tone::Selected
     } else {
@@ -269,7 +270,7 @@ pub trait ButtonAction {
     ) -> Self;
 }
 
-impl ButtonAction for Stateful<Div> {
+impl<E: StatefulInteractiveElement> ButtonAction for E {
     fn on_activate<T: 'static>(
         self,
         cx: &Context<T>,
@@ -294,7 +295,7 @@ pub trait DisabledControl {
     fn disabled(self, disabled: bool) -> Self;
 }
 
-impl DisabledControl for Stateful<Div> {
+impl<E: StatefulInteractiveElement + Styled + FluentBuilder> DisabledControl for E {
     fn disabled(self, disabled: bool) -> Self {
         self.when(disabled, |el| {
             el.opacity(0.5)
@@ -311,7 +312,7 @@ pub fn tag(text: impl Into<SharedString>, color: u32) -> Div {
     div()
         .text_size(px(11.))
         .text_color(rgb(color))
-        .child(text!(id = text.clone(), text))
+        .child(text!(id = text.clone(), text).audited())
 }
 
 /// Rounded, outlined label for metadata: a machine, a state. Callers add children.
@@ -356,7 +357,7 @@ pub fn segmented() -> Div {
         .border_color(rgb(colors().border))
 }
 
-pub fn segment(id: impl Into<ElementId>, label: &'static str, selected: bool) -> Stateful<Div> {
+pub fn segment(id: impl Into<ElementId>, label: &'static str, selected: bool) -> Control {
     let tone = if selected {
         Tone::Selected
     } else {
@@ -369,7 +370,7 @@ pub fn segment(id: impl Into<ElementId>, label: &'static str, selected: bool) ->
 }
 
 /// Compact on/off filter: outlined when off, filled when on.
-pub fn chip(id: impl Into<ElementId>, label: &'static str, on: bool) -> Stateful<Div> {
+pub fn chip(id: impl Into<ElementId>, label: &'static str, on: bool) -> Control {
     let tone = if on { Tone::Selected } else { Tone::Ghost };
     control(id, label.into(), tone)
         .h(px(22.))
@@ -439,12 +440,13 @@ pub fn harness_glyph(id: plait_core::host::harness::HarnessId) -> Option<&'stati
     }
 }
 
-pub fn empty(title: &'static str, detail: impl Into<SharedString>) -> Stateful<Div> {
+pub fn empty(title: &'static str, detail: impl Into<SharedString>) -> Control {
     let detail = detail.into();
     column()
         .id(title)
         .role(Role::Group)
         .aria_label(format!("{title}. {detail}"))
+        .audited()
         .flex_1()
         .min_h_0()
         .justify_center()

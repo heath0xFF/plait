@@ -41,6 +41,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(debug_assertions)]
+mod a11y;
 mod branches;
 mod find;
 mod mcp;
@@ -735,6 +737,13 @@ impl Harness {
         self.cx
             .update_window(window, |_, window, cx| window.draw(cx).clear(cx))
             .expect("draw");
+    }
+
+    /// Run layout and paint with the debug accessibility collector active.
+    #[cfg(debug_assertions)]
+    fn draw_a11y(&mut self) -> super::a11y::A11yFrame {
+        let (_, frame) = super::a11y::collect(|| self.draw());
+        frame
     }
 
     /// Draw the scene, which runs layout and paint, and save it when rendering.

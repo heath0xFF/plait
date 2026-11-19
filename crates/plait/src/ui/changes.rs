@@ -86,12 +86,7 @@ pub(super) struct HunkTarget {
 }
 
 /// Shown on hover beside a hunk's `@@` line; built only for visible rows.
-fn hunk_button(
-    target: &HunkTarget,
-    hunk: usize,
-    header: &str,
-    cx: &mut Context<Plait>,
-) -> Stateful<Div> {
+fn hunk_button(target: &HunkTarget, hunk: usize, header: &str, cx: &mut Context<Plait>) -> Control {
     let owner = target.checkout;
     let epoch = target.epoch;
     let stage = target.mode == DiffMode::Unstaged;
@@ -123,7 +118,7 @@ fn discard_hunk_button(
     hunk: usize,
     header: &str,
     cx: &mut Context<Plait>,
-) -> Stateful<Div> {
+) -> Control {
     let owner = target.checkout;
     let epoch = target.epoch;
     let op = WriteOp::Discard {
@@ -182,6 +177,7 @@ fn file_heading(line: usize, name: &Arc<str>, directory: &Arc<str>) -> AnyElemen
         .id(("diff-file", line))
         .role(Role::Heading)
         .aria_label(path)
+        .audited()
         .w_full()
         .h(px(DIFF_LINE_HEIGHT))
         .px_4()
@@ -224,9 +220,9 @@ fn split_path(change: &Change) -> (String, String) {
 }
 
 impl Plait {
-    fn file_row(&self, index: usize, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn file_row(&self, index: usize, cx: &mut Context<Self>) -> Control {
         let Some(snapshot) = self.state.repository.snapshot().ready() else {
-            return div().id(("file", index));
+            return div().id(("file", index)).audited();
         };
         let change = &snapshot.changes[index];
         let selected = self
@@ -871,6 +867,7 @@ impl Plait {
                                             .id(("diff-line", index))
                                             .role(Role::Group)
                                             .aria_label(SharedString::from(line.text.clone()))
+                                            .audited()
                                             .gap_0()
                                             .w_full()
                                             .h(px(DIFF_LINE_HEIGHT))

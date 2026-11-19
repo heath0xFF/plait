@@ -33,7 +33,7 @@ impl Plait {
         commit: &Commit,
         now: i64,
         cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
+    ) -> Control {
         let selected = self.state.repository.selected_commit() == Some(&commit.id);
         let id = commit.id.clone();
         column()
@@ -44,6 +44,7 @@ impl Plait {
                 commit.subject, commit.author, commit.short
             ))
             .aria_selected(selected)
+            .audited()
             .w_full()
             .h(px(48.))
             .px_3()

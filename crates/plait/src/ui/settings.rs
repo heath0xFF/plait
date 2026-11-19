@@ -114,7 +114,7 @@ pub(super) fn section(title: &'static str) -> Div {
                 .text_size(px(13.))
                 .font_weight(FontWeight::MEDIUM)
                 // Several section headings can appear in one accessibility tree.
-                .child(text!(id = title, title)),
+                .child(text!(id = title, title).audited()),
         )
 }
 
@@ -213,7 +213,7 @@ impl Plait {
                     div()
                         .text_size(px(12.))
                         .text_color(rgb(colors().red))
-                        .child(text!(error)),
+                        .child(text!(error).audited()),
                 )
             })
             .when(!self.host.connection.connected, |el| {

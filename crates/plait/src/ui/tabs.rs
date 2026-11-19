@@ -154,7 +154,10 @@ impl Plait {
         self.window_drag = false;
     }
 
-    pub(super) fn covered_tab_control(&self, control: Stateful<Div>) -> Stateful<Div> {
+    pub(super) fn covered_tab_control<E: StatefulInteractiveElement + FluentBuilder>(
+        &self,
+        control: E,
+    ) -> E {
         control.when(self.settings_open, |el| {
             el.tab_stop(false)
                 // GPUI otherwise handles assistive Focus without the modal's hit test.
@@ -613,6 +616,7 @@ impl Plait {
             .id("tab-row")
             .role(Role::TabList)
             .aria_label("Open tabs")
+            .audited()
             .gap_0()
             .min_w_0()
             .h_full()
@@ -652,6 +656,7 @@ impl Plait {
             .role(Role::Tab)
             .aria_label(format!("{} — {}", meta.title, meta.state.word(true)))
             .aria_selected(meta.active)
+            .audited()
             .focusable()
             .tab_stop(true)
             .map(|el| self.covered_tab_control(el))
@@ -766,7 +771,7 @@ impl Plait {
         visible: bool,
         group: String,
         cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
+    ) -> Control {
         // Twenty identical "Close tab" names would not say which tab closes.
         icon_button(("close-tab", id.get()), "close", close_name(title))
             .size(px(18.))
@@ -821,6 +826,7 @@ impl Plait {
             .id("all-tabs-list")
             .role(Role::Menu)
             .aria_label("All open tabs")
+            .audited()
             .absolute()
             .top(px(CHROME_HEIGHT))
             .right(px(48.))

@@ -483,7 +483,11 @@ impl Plait {
             return Some(
                 bar()
                     .child(dot(colors().blue))
-                    .child(div().text_color(rgb(colors().muted)).child(text!(label)))
+                    .child(
+                        div()
+                            .text_color(rgb(colors().muted))
+                            .child(text!(label).audited()),
+                    )
                     .into_any_element(),
             );
         }
@@ -499,10 +503,13 @@ impl Plait {
                             .flex_1()
                             .min_w_0()
                             .text_color(rgb(colors().amber))
-                            .child(text!(format!(
-                                "Thread with {} is not confirmed. {detail}",
-                                model_label(model)
-                            ))),
+                            .child(
+                                text!(format!(
+                                    "Thread with {} is not confirmed. {detail}",
+                                    model_label(model)
+                                ))
+                                .audited(),
+                            ),
                     )
                     .child(if connected {
                         toned_button("retry-create-thread", "Retry thread creation", Tone::Filled)
@@ -526,7 +533,7 @@ impl Plait {
                         .flex_1()
                         .min_w_0()
                         .text_color(rgb(colors().red))
-                        .child(text!(format!("Thread not created. {error}"))),
+                        .child(text!(format!("Thread not created. {error}")).audited()),
                 )
                 .into_any_element(),
         )

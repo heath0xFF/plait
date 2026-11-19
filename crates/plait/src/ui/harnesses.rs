@@ -817,7 +817,9 @@ impl Plait {
                         div()
                             .text_size(px(12.))
                             .text_color(rgb(colors().text))
-                            .child(text!(id = ("harness-name", index), harness.name.clone())),
+                            .child(
+                                text!(id = ("harness-name", index), harness.name.clone()).audited(),
+                            ),
                     )
                     .child(
                         row()

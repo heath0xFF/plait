@@ -19,7 +19,7 @@ mod trigger;
 pub use commands::{AgentCommand, CommandId};
 pub use completion::{Completion, CompletionEvent, CompletionItem};
 
-use super::theme::{self, ButtonAction, DisabledControl, colors};
+use super::theme::{self, AuditA11y, ButtonAction, DisabledControl, colors};
 use commands::COMMANDS;
 use draft::Draft;
 use gpui::{prelude::*, *};
@@ -1299,6 +1299,7 @@ impl Render for Composer {
                     .id("composer-input")
                     .role(Role::MultilineTextInput)
                     .aria_label("Message to agent")
+                    .audited()
                     .aria_description(description)
                     .aria_value(self.draft.value.text.clone())
                     .aria_placeholder(PLACEHOLDER)

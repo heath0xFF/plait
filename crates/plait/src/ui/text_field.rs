@@ -4,7 +4,7 @@
 //! Enter, Escape, and the vertical arrows in its own key context; the field
 //! leaves those keys unbound so they reach the parent.
 
-use super::theme::{ROW_HEIGHT, colors, tag};
+use super::theme::{AuditA11y, ROW_HEIGHT, colors, tag};
 use gpui::{prelude::*, *};
 use std::{borrow::Cow, ops::Range};
 use unicode_segmentation::UnicodeSegmentation;
@@ -899,6 +899,7 @@ impl Render for TextField {
             .id(("text-field", cx.entity_id()))
             .role(self.role)
             .aria_label(self.name.clone())
+            .audited()
             .aria_value(if self.secret {
                 String::new()
             } else {

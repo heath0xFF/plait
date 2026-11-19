@@ -254,7 +254,7 @@ pub(super) fn editor_button(
     name: &str,
     shortcut: String,
     cx: &mut Context<Plait>,
-) -> Stateful<Div> {
+) -> super::theme::Control {
     let plait = cx.weak_entity();
     super::theme::button(id, "Editor")
         .aria_label(format!("Open {name} in your editor"))
@@ -274,7 +274,7 @@ pub(super) fn finder_button(
     id: &'static str,
     name: &str,
     cx: &mut Context<Plait>,
-) -> Stateful<Div> {
+) -> super::theme::Control {
     let plait = cx.weak_entity();
     super::theme::button(id, "Finder")
         .aria_label(format!("Show {name} in Finder"))

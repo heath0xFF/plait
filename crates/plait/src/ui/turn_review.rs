@@ -455,7 +455,7 @@ impl Plait {
             )
         }
     }
-    pub(super) fn review_scope_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+    pub(super) fn review_scope_button(&self, cx: &mut Context<Self>) -> Control {
         let (label, detail) = self.review_scope_text();
         button("review-scope", "")
             .aria_label(label.clone())

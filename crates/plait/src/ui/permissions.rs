@@ -40,7 +40,7 @@ impl Plait {
         id: impl Into<ElementId>,
         permissions: Permissions,
         cx: &mut Context<Self>,
-    ) -> Option<Stateful<Div>> {
+    ) -> Option<Control> {
         let row = self.harness_row(permissions.harness)?;
         if row.modes.is_empty() {
             return None;
@@ -118,7 +118,7 @@ pub(super) fn menu_chip(
     value: SharedString,
     tip: SharedString,
     blocked: Option<&'static str>,
-) -> Stateful<Div> {
+) -> Control {
     let name = match caption {
         Some(caption) => format!("{caption}: {value}"),
         None => value.to_string(),

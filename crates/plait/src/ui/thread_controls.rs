@@ -333,7 +333,12 @@ impl Plait {
                     .flex_shrink_1()
                     .aria_label(format!("Change thread model: {model_name}"))
                     .aria_description(reason.unwrap_or("Choose a model for the next run."))
-                    .child(div().min_w_0().truncate().child(text!(model_name)))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .child(text!(model_name).audited()),
+                    )
                     .on_activate(cx, |this, window, cx| this.open_thread_models(window, cx)),
                 reason,
             ));
@@ -681,7 +686,7 @@ pub(super) fn approval_label(mode: ApprovalMode) -> &'static str {
 /// A control that cannot be used now, such as the model during a run. It
 /// keeps its place and stays readable, in hint color, and hover says why.
 /// Pressing it still answers: its action reports the same reason.
-pub(super) fn locked(control: Stateful<Div>, reason: Option<&'static str>) -> Stateful<Div> {
+pub(super) fn locked(control: Control, reason: Option<&'static str>) -> Control {
     let Some(reason) = reason else {
         return control;
     };
@@ -728,7 +733,7 @@ impl Plait {
     /// Opens the run-settings menu. The label is this thread's approval mode
     /// and nothing more: the command policy belongs to the project, and its
     /// own settings page says what it is.
-    fn run_settings_button(&self, id: String, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn run_settings_button(&self, id: String, cx: &mut Context<Self>) -> Control {
         let own = self.thread_approval(&id);
         let label = approval_label(own.unwrap_or_else(|| self.default_approval()));
         let tip = if own.is_some() {
@@ -1031,7 +1036,7 @@ impl Plait {
 
 /// The harness's logo where the composer row starts; its name and version are
 /// the hover text and what assistive technology reads. Without a logo, the name.
-fn harness_mark(id: HarnessId, label: SharedString, tip: SharedString) -> Stateful<Div> {
+fn harness_mark(id: HarnessId, label: SharedString, tip: SharedString) -> Control {
     let hover = tip.clone();
     div()
         .id("thread-harness")
@@ -1043,6 +1048,7 @@ fn harness_mark(id: HarnessId, label: SharedString, tip: SharedString) -> Statef
         .role(Role::Image)
         .aria_label(label.clone())
         .aria_description(tip)
+        .audited()
         .tooltip(move |_, cx| cx.new(|_| TextTooltip(hover.to_string())).into())
         .map(|el| match harness_logo(id) {
             Some(logo) => el.child(logo.text_color(rgb(colors().muted))),

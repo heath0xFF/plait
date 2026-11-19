@@ -643,6 +643,7 @@ impl Plait {
             .gap_1()
             .role(Role::RadioGroup)
             .aria_label(label)
+            .audited()
             .child(section_label(label))
             .children(self.themes.of(light).enumerate().map(|(index, theme)| {
                 let selected = theme.name == chosen;

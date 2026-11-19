@@ -547,6 +547,7 @@ impl Plait {
             .id("project-tree")
             .role(Role::Tree)
             .aria_label("Projects, machines, and threads")
+            .audited()
             .flex_1()
             .min_h_0()
             .px_2()
@@ -663,6 +664,7 @@ impl Plait {
                     tag(error, colors().amber)
                         .id("navigation-error")
                         .role(Role::Alert)
+                        .audited()
                         .line_height(px(16.)),
                 )
             })
@@ -1082,7 +1084,7 @@ impl Plait {
 }
 
 /// A small icon control for the filter row, named on hover.
-fn tool(id: &'static str, glyph: &'static str, name: &'static str) -> Stateful<Div> {
+fn tool(id: &'static str, glyph: &'static str, name: &'static str) -> Control {
     icon_button(id, glyph, name)
         .size(px(24.))
         .tooltip(move |_, cx| cx.new(|_| TextTooltip(name.into())).into())
