@@ -495,45 +495,42 @@ the person has sandboxed: a trusted project, the default, already runs any
 tool as the person. It is built when a sandboxed project needs a tool with
 network access or the person's own credentials.
 
-## Agreed next: thread tabs
+## Thread tabs
 
-Thread tabs are planned and agreed, not yet implemented in the desktop UI. The
-settled behavior and implementation stages are recorded here so workspace state
-separation can proceed without reopening product decisions:
+**Built:** one thread per tab, a 40-point top row that stays visible with the
+sidebar hidden, a 36-point row for the thread's Conversation, Changes, History
+and Files views, and a state-grouped overflow list. Sidebar clicks open or
+activate a thread's tab. Each checkout has one New thread draft tab; creating
+its thread replaces the draft in place. Closing never stops a run or removes
+a worktree. Closing the last tab leaves an empty workspace.
 
-- **Tab content and uniqueness.** A tab holds one thread initially (a tagged
-  content kind with one implementation, leaving room for later content kinds
-  without implementing terminals or browsers now). Each thread has at most one
-  tab in a window; clicking a thread in the sidebar opens its tab or activates
-  the existing tab. Closing a tab flushes its draft/bookmark state and leaves
-  host runs and worktrees intact.
-- **Chrome and shortcuts (planned for the tab-UI stage).** Tabs will occupy a
-  top row visible even when the sidebar is hidden, clearing visible traffic
-  lights. A second row will hold the thread's four views (Conversation,
-  Changes, History, Files). Settings and Project settings will move to window
-  modals that preserve the active tab and view underneath. `Cmd-1` through
-  `Cmd-9` will select tabs, `Cmd-W` will close the active tab, `Cmd-Shift-W`
-  the window, `Cmd-Shift-T` reopen a closed tab, and `Ctrl-Tab` /
-  `Ctrl-Shift-Tab` cycle tabs.
-- **Residency and cost limits.** Only the visible workspace retains loaded
-  conversation history, Markdown projections, decoded images, diffs, files,
-  and its snapshot subscription. Cold tabs retain lightweight restorable
-  bookmarks and drafts without active fetching, parsing, layout, or painting.
-- **Stage boundaries.** Preparatory stages first separate plain core scopes,
-  move thread presentation out of the root window view, and route operations
-  and checkout context by owner while keeping today's single-selection behavior.
-  Later stages add cold workspace retention, the tab strip and view row, modal
-  settings, v2 durable tab/bookmark recovery, authoritative checkout write
-  exclusion, host-owned worktree creation, independent multi-checkout capacity,
-  a durable checkout queue, and optional storage/seeding/read-only extensions.
-- **Agreed v2 recovery layout (for the persistence stage).** Extend the private
-  desktop journal with a `schema_version: 2` index storing tab order, active
-  ID, thread-to-record references, and small bookmark headers, while storing
-  large drafts, pending submissions, and extended view blobs in separate
-  bounded, atomically replaced private files keyed by opaque IDs. Retain the
-  v1 backup until a validated reopen succeeds, keep existing host/checkout
-  identity checks and the 16-item per-thread submission bound, and leave unknown
-  future schemas untouched.
+Cmd-1 through Cmd-8 select positions; Cmd-9 selects the last tab. Cmd-W closes
+a tab, Cmd-Shift-W closes the window, Cmd-Shift-T reopens one of the last twenty
+closed tabs, and Cmd-Shift-[ / Cmd-Shift-] cycle. Sidebar jumps use
+Cmd-Option-1 through Cmd-Option-9. Tabs can be dragged or moved with
+Control-Shift-Left / Control-Shift-Right.
+
+Only the active workspace retains loaded transcripts, projections, files,
+diffs, images and its snapshot subscription. Cold tabs keep bounded bookmarks;
+editor history spills to private records. Background reads retain their owner
+and visibility guards, while accepted mutations finish into their owner ledgers.
+Tab order, active identity and bookmarks are saved separately in `tabs.json`,
+with debounced atomic writes and total decoding after host and checkout
+verification. Drafts and submissions remain in the existing recovery journal.
+
+**Still planned:** other tab content kinds, many concurrent threads in one
+checkout, Settings modals, authoritative checkout write exclusion, host-owned
+worktree creation, independent multi-checkout capacity, a durable checkout
+queue, and optional storage, seeding and read-only extensions. Tabs do not
+change the host's current execution admission or single-writer rules.
+
+The agreed v2 recovery index/blob layout remains planned, with its own
+compatibility review and retained v1 backup. The shipped v1 journal is limited
+to 4 MiB serialized, 512 records and 256 KiB per draft. Twenty maximal drafts
+and a separate 4 MiB resident submission cache are not supported capacity
+promises. At a limit, the last good journal remains intact; required saves
+refuse submission or closing instead of discarding current work.
+
 - **Agreed proposed host capabilities (for the concurrency stages).** Use a
   protocol revision after 6 with explicit capability flags
   (`worktree_threads_v1`, `checkout_queue_v1`, `execution_class_v1`,

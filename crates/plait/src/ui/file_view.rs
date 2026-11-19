@@ -142,12 +142,19 @@ impl Plait {
 
     /// Show `path` in the Files tab, at `line` (zero-based) when given.
     pub(super) fn open_file(&mut self, path: PathBuf, line: Option<usize>, cx: &mut Context<Self>) {
+        if !self.ensure_view_tab() {
+            cx.notify();
+            return;
+        }
         self.tabs.lifecycle.view_revision += 1;
+        self.pause_conversation(None, cx);
+        self.workspace.restore_pending[3] = false;
         let root = self.file_root();
         let viewer = &mut self.workspace.file_viewer;
         let same = viewer.path.as_ref() == Some(&path) && viewer.root == root;
         viewer.reveal = line;
         self.workspace.tab = Workspace::Files;
+        self.queue_tab_save(cx);
         self.settings_open = false;
         if same && self.workspace.file_viewer.opened.is_some() {
             self.reveal_line(cx);
@@ -232,6 +239,9 @@ impl Plait {
 
     /// Reread the open file if its size or time changed. Cheap: one stat.
     pub(super) fn check_file(&mut self, cx: &mut Context<Self>) {
+        if self.workspace.tab != Workspace::Files {
+            return;
+        }
         let owner = self.host.read_stamp();
         let cancelled = self.workspace.cancelled.clone();
         let expected = self.state.checkout_key().cloned();

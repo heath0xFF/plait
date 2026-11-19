@@ -47,6 +47,9 @@ fn install_projects(harness: &mut Harness, count: usize, projects: bool) {
             if index == 6 {
                 thread.status = ThreadStatus::Interrupted;
             }
+            if index == 7 {
+                thread.status = ThreadStatus::Stopped;
+            }
             if count == 20 && (index == 10 || index == 11) {
                 thread.status = ThreadStatus::Running;
             }
@@ -165,6 +168,36 @@ pub(super) fn walk(
         )
     });
     h.capture(&format!("tabs-bookmark-evicted-{suffix}"));
+    h.connect(repository, false);
+    install(&mut h, 3);
+    h.update(|p, _, _| {
+        p.notice = None;
+        let first = p.tabs.model.tabs()[0].id();
+        p.tabs.model.move_tab(first, 2).unwrap();
+        p.tabs.model.activate(first).unwrap();
+        p.workspace.tab = super::super::Workspace::Conversation;
+        p.host.connection.connected = false;
+        p.tabs.model.disconnected(&p.tabs.host);
+    });
+    h.capture(&format!("tabs-restored-offline-{suffix}"));
+    h.update(|p, _, _| {
+        p.notice =
+            Some("Tabs not saved: storage is unavailable. Previous saved tabs are intact.".into())
+    });
+    h.capture(&format!("tabs-save-failed-{suffix}"));
+    h.update(|p, w, cx| {
+        p.notice = None;
+        p.open_draft(w, cx);
+        p.draft.composer.as_ref().unwrap().update(cx, |c, cx| {
+            c.restore_draft(
+                "Continue checking the checkout after restart.".into(),
+                3,
+                None,
+                cx,
+            )
+        });
+    });
+    h.capture(&format!("tabs-recovered-draft-{suffix}"));
 }
 
 pub(super) fn exercise() {
@@ -309,6 +342,303 @@ pub(super) fn cold_workspaces() {
             p.workspace.composers[THREAD].read(cx).saved_draft().0,
             "Draft survives parking"
         )
+    });
+    drop(h);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+pub(super) fn restore_preferences() {
+    use plait_core::{
+        session::Journal,
+        tabs::{CheckoutKey, HostKey, persistence, storage},
+    };
+    let scratch = std::env::temp_dir().join(format!("plait-tab-restore-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let saved_path = scratch.join("desktop/tabs.json");
+    let (journal, data) = Journal::open(&scratch.join("session"), "/tab-test-host".into()).unwrap();
+    let mut h = Harness::new(&repository, None, 900., 600.);
+    h.connect(&repository, false);
+    install(&mut h, 3);
+    let host = HostKey {
+        id: "verified-test-host".into(),
+        store: "/tab-test-host".into(),
+    };
+    let checkout = CheckoutKey {
+        host: host.clone(),
+        root: repository.clone(),
+        directory: super::super::tab_identity::directory(&repository),
+    };
+    h.update(|p, w, cx| {
+        p.host.connection.connected = false;
+        p.install_tab_identity(host.clone(), vec![checkout.clone()], cx);
+        p.session.journal = Some(journal.clone());
+        p.session.data = Some(data);
+        p.tabs.identity.catalog_ready = true;
+        p.tabs.persistence.requested = true;
+        p.tabs.persistence.loaded = true;
+        p.tabs.persistence.restored = true;
+        p.tabs.persistence.writable = true;
+        p.tabs.persistence.path = Some(saved_path.clone());
+        p.tabs.persistence.window = Some(w.window_handle());
+        p.workspace.composers[THREAD].update(cx, |c, cx| {
+            c.restore_draft("Saved unsent draft".into(), 5, None, cx)
+        });
+        p.capture_session(cx);
+        p.workspace.tab = super::super::Workspace::Files;
+        p.workspace.file_viewer.path = Some("src/review.rs".into());
+    });
+    h.draw();
+    let revision = h
+        .window
+        .update(&mut h.cx, |p, _, _| p.tabs.persistence.save_revision())
+        .unwrap();
+    h.pointer(PlatformInput::Scroll(ScrollEvent {
+        position: point(px(500.), px(200.)),
+        delta: ScrollDelta::Pixels(point(px(0.), px(100.))),
+        ..Default::default()
+    }));
+    h.update(|p, _, _| assert!(p.tabs.persistence.save_revision() > revision));
+    let previous = h
+        .window
+        .update(&mut h.cx, |p, w, cx| {
+            let lifetime = p
+                .tabs
+                .model
+                .get(p.tabs.model.active().unwrap())
+                .unwrap()
+                .lifetime();
+            let save = p.flush_tab_preferences(Some(w), cx).unwrap();
+            (lifetime, save)
+        })
+        .unwrap();
+    previous.1.write().unwrap();
+    let bytes = storage::read(&saved_path).unwrap().unwrap();
+    // A delayed writer cannot replace the most recently requested view.
+    let old = h
+        .window
+        .update(&mut h.cx, |p, w, cx| {
+            p.workspace.tab = super::super::Workspace::History;
+            p.flush_tab_preferences(Some(w), cx).unwrap()
+        })
+        .unwrap();
+    let newest = h
+        .window
+        .update(&mut h.cx, |p, w, cx| {
+            p.workspace.tab = super::super::Workspace::Files;
+            p.flush_tab_preferences(Some(w), cx).unwrap()
+        })
+        .unwrap();
+    newest.write().unwrap();
+    old.write().unwrap();
+    assert_eq!(storage::read(&saved_path).unwrap().unwrap(), bytes);
+    h.update(|p, w, cx| {
+        p.tabs.persistence.restored = false;
+        p.tabs.persistence.edited = false;
+        p.tabs.persistence.bytes = Some(bytes);
+        p.host.connection.epoch += 1;
+        p.try_restore_tabs(w, cx);
+        assert!(!p.tabs.persistence.restored);
+        assert!(!p.tab_identity_current());
+        p.install_tab_identity(host.clone(), vec![checkout.clone()], cx);
+        p.try_restore_tabs(w, cx);
+        assert_eq!(p.tabs.model.tabs().len(), 3);
+        assert_eq!(p.workspace.tab, super::super::Workspace::Files);
+        assert_eq!(p.workspace.file_viewer.path, Some("src/review.rs".into()));
+        assert!(!p.tabs.model.accepts_lifetime(previous.0));
+        assert_eq!(p.workspace.composers.len(), 1);
+        assert_eq!(
+            p.workspace.composers[THREAD].read(cx).saved_draft().0,
+            "Saved unsent draft"
+        );
+    });
+    let saved = storage::read(&saved_path).unwrap().unwrap();
+    h.update(|p, w, cx| {
+        // Choosing a tab before restore completes keeps that choice in front.
+        let chosen = p.tabs.model.tabs()[1].id();
+        p.tabs.model.activate(chosen).unwrap();
+        p.tabs.persistence.restored = false;
+        p.tabs.persistence.edited = true;
+        p.tabs.persistence.bytes = Some(saved.clone());
+        p.try_restore_tabs(w, cx);
+        assert_eq!(p.tabs.model.active(), Some(chosen));
+        assert_eq!(p.tabs.model.tabs().len(), 3);
+        // Closing every tab before restore finishes is also an explicit choice.
+        let ids: Vec<_> = p.tabs.model.tabs().iter().map(|t| t.id()).collect();
+        for id in ids {
+            p.tabs.model.close(id, false).unwrap();
+        }
+        p.tabs.persistence.restored = false;
+        p.tabs.persistence.bytes = Some(saved);
+        p.try_restore_tabs(w, cx);
+        assert!(p.tabs.model.tabs().is_empty());
+    });
+    for damaged in [b"{".as_slice(), b"{\"schema_version\":1,\"tabs\":false}"] {
+        h.update(|p, w, cx| {
+            p.tabs.persistence.restored = false;
+            p.tabs.persistence.edited = false;
+            p.tabs.persistence.bytes = Some(damaged.to_vec());
+            p.try_restore_tabs(w, cx);
+            assert!(p.tabs.model.tabs().is_empty());
+            assert!(p.host.thread.selected.is_none());
+        });
+    }
+    let future = b"{\"schema_version\":99,\"tabs\":[]}";
+    storage::write(&saved_path, future).unwrap();
+    h.update(|p, w, cx| {
+        p.tabs.persistence.restored = false;
+        p.tabs.persistence.writable = true;
+        p.tabs.persistence.bytes = Some(future.to_vec());
+        p.try_restore_tabs(w, cx);
+        assert!(p.tabs.model.tabs().is_empty());
+        assert!(!p.tabs.persistence.writable);
+        assert!(p.flush_tab_preferences(Some(w), cx).is_none());
+    });
+    assert_eq!(storage::read(&saved_path).unwrap().unwrap(), future);
+    // A nonempty draft restores even though no host thread has been created for it.
+    let draft_path = scratch.join("desktop/draft-tabs.json");
+    h.update(|p, w, cx| {
+        p.tabs.persistence.writable = true;
+        p.tabs.persistence.path = Some(draft_path.clone());
+        p.open_draft(w, cx);
+        p.draft.composer.as_ref().unwrap().update(cx, |c, cx| {
+            c.restore_draft("Unsent first message".into(), 7, None, cx)
+        });
+        p.capture_session(cx);
+    });
+    h.window
+        .update(&mut h.cx, |p, w, cx| {
+            p.flush_tab_preferences(Some(w), cx).unwrap()
+        })
+        .unwrap()
+        .write()
+        .unwrap();
+    let draft_bytes = storage::read(&draft_path).unwrap().unwrap();
+    h.update(|p, w, cx| {
+        p.tabs.persistence.restored = false;
+        p.tabs.persistence.edited = false;
+        p.tabs.persistence.bytes = Some(draft_bytes);
+        p.try_restore_tabs(w, cx);
+        assert_eq!(p.tabs.model.tabs().len(), 1);
+        assert!(p.draft.open);
+        assert!(p.workspace.composers.is_empty());
+        assert_eq!(
+            p.draft.composer.as_ref().unwrap().read(cx).saved_draft().0,
+            "Unsent first message"
+        );
+    });
+    // A snapshot remains decodable without a live connection or loaded workspace.
+    let checkouts = vec![checkout];
+    let summaries = h
+        .window
+        .update(&mut h.cx, |p, _, _| p.host.connection.threads.clone())
+        .unwrap();
+    let context = persistence::RestoreContext {
+        host: &host,
+        threads: &summaries,
+        checkouts: &checkouts,
+        drafts: &[],
+        connection: None,
+    };
+    assert_eq!(
+        persistence::decode(future, super::super::tabs::fresh_window_id(), &context).status,
+        persistence::RestoreStatus::UnknownVersion
+    );
+    drop(h);
+    drop(journal);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+pub(super) fn journal_limit() {
+    let scratch = std::env::temp_dir().join(format!("plait-tab-cap-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let directory = scratch.join("session");
+    let (journal, data) =
+        plait_core::session::Journal::open(&directory, "/tab-test-host".into()).unwrap();
+    let mut h = Harness::new(&repository, None, 900., 600.);
+    h.connect(&repository, false);
+    install(&mut h, 20);
+    h.update(|p, _, cx| {
+        p.host.connection.connected = false;
+        p.session.journal = Some(journal.clone());
+        p.session.data = Some(data);
+        p.capture_session(cx);
+    });
+    journal.flush().unwrap();
+    let last_good = std::fs::read(directory.join("desktop.json")).unwrap();
+    h.update(|p, w, cx| {
+        let data = p.session.data.as_mut().unwrap();
+        let mut thread = data.threads[THREAD].clone();
+        thread.draft.text = "x".repeat(256 * 1024);
+        for summary in p.host.connection.threads.iter().skip(1) {
+            data.threads.insert(summary.id.clone(), thread.clone());
+        }
+        journal.queue(data.clone());
+        p.capture_session(cx);
+        let next = p.tabs.model.tabs()[1].id();
+        p.request_tab(super::super::tab_lifecycle::Intent::Activate(next), w, cx);
+    });
+    super::undo::wait(&mut h, |p| !p.tabs.lifecycle.busy);
+    h.update(|p, _, cx| {
+        assert_eq!(p.tabs.model.active(), Some(p.tabs.model.tabs()[0].id()));
+        assert_eq!(p.host.thread.selected.as_deref(), Some(THREAD));
+        assert_eq!(p.workspace.composers.len(), 1);
+        assert!(p.notice.as_deref().unwrap().contains("could not be saved"));
+        assert_eq!(p.session.data.as_ref().unwrap().threads.len(), 20);
+        assert_eq!(
+            p.session.data.as_ref().unwrap().threads["tab-thread-19"]
+                .draft
+                .text
+                .len(),
+            256 * 1024
+        );
+        assert!(p.workspace.composers[THREAD].read(cx).text().is_empty());
+    });
+    assert!(journal.flush().unwrap_err().contains("exceeds 4 MiB"));
+    assert_eq!(
+        std::fs::read(directory.join("desktop.json")).unwrap(),
+        last_good
+    );
+    drop(h);
+    drop(journal);
+    std::fs::remove_dir_all(scratch).unwrap();
+}
+
+pub(super) fn unloaded_views() {
+    use plait_core::tabs::bookmark::{ConversationScroll, ThreadBookmark};
+    let scratch = std::env::temp_dir().join(format!("plait-tab-views-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let mut h = Harness::new(&repository, None, 900., 600.);
+    h.connect(&repository, false);
+    h.update(|p, w, cx| {
+        p.host.connection.connected = false;
+        let stamp = p.host.read_stamp();
+        let formatted = p.workspace.formatted.clone();
+        p.show_tab(super::super::Workspace::Changes, w, cx);
+        assert!(!p.host.accepts_read(&stamp));
+        assert!(p.workspace.host_watch.is_none());
+        p.conversation_changed(w, cx);
+        assert!(Arc::ptr_eq(&formatted, &p.workspace.formatted));
+        let mut saved = ThreadBookmark::default();
+        saved.conversation.scroll = ConversationScroll::Anchored {
+            row: "message:older".into(),
+            offset_millipoints: 12000,
+        };
+        saved.conversation.before = Some("older-page".into());
+        saved.changes.path = Some("src/review.rs".into());
+        saved.history.commit = Some("a".repeat(40));
+        saved.files.path = Some("src/review.rs".into());
+        saved.files.line = 2;
+        p.workspace.restore = Some(saved.clone());
+        p.workspace.restore_pending = [true; 4];
+        let captured = p.capture_tab_bookmark(Some(w), cx);
+        assert_eq!(captured.conversation.scroll, saved.conversation.scroll);
+        assert_eq!(captured.conversation.before, saved.conversation.before);
+        assert_eq!(captured.changes, saved.changes);
+        assert_eq!(captured.history, saved.history);
+        assert_eq!(captured.files.path, saved.files.path);
+        assert_eq!(captured.files.line, saved.files.line);
+        p.open_file("src/review.rs".into(), Some(0), cx);
+        assert!(!p.workspace.restore_pending[3]);
     });
     drop(h);
     std::fs::remove_dir_all(scratch).unwrap();

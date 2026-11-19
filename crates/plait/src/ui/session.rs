@@ -85,6 +85,7 @@ impl Plait {
             })
             .unwrap_or(true)
         });
+        self.load_tab_preferences(window, cx);
         self.session.required = true;
         self.session.loading = true;
         self.session.note = Some("Restoring saved workspace…".into());
@@ -115,10 +116,19 @@ impl Plait {
                     Ok((journal, data, path)) => {
                         // This observer outlives the window. Closing it must flush the latest draft.
                         let quit_journal = journal.clone();
+                        let quit_view = cx.weak_entity();
+                        let quit_window = window.window_handle();
                         let app: &mut App = cx;
                         app.on_app_quit(move |cx| {
                             let journal = quit_journal.clone();
+                            let tabs = quit_window.update(cx, |_, window, cx| {
+                                quit_view.update(cx, |this, cx| {
+                                    this.capture_session(cx);
+                                    this.flush_tab_preferences(Some(window), cx)
+                                })
+                            }).ok().and_then(Result::ok).flatten();
                             cx.background_executor().spawn(async move {
+                                if let Some(tabs) = tabs && let Err(error) = tabs.write() { eprintln!("Plait tabs: {error}"); }
                                 if let Err(error) = journal.flush() { eprintln!("Plait workspace: {error}"); }
                             })
                         }).detach();
@@ -143,6 +153,8 @@ impl Plait {
                             this.session.restore_thread = selected;
                         }
                         this.capture_session(cx);
+                        this.verify_tab_identity(window, cx);
+                        this.try_restore_tabs(window, cx);
                     }
                     Err(error) => this.session.note = Some(format!("Workspace recovery unavailable: {error} Sending is disabled to protect saved work.")),
                 }
@@ -170,11 +182,16 @@ impl Plait {
             }
             return;
         };
+        let tabs = self.flush_tab_preferences(Some(window), cx);
         self.session.closing = true;
         self.sync_composer(cx);
-        let task = cx
-            .background_executor()
-            .spawn(async move { journal.flush() });
+        let task = cx.background_executor().spawn(async move {
+            journal.flush()?;
+            if let Some(tabs) = tabs {
+                tabs.write()?;
+            }
+            Ok::<_, String>(())
+        });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
             let _ = this.update_in(cx, |this, window, cx| match result {
@@ -264,6 +281,9 @@ impl Plait {
     }
 
     pub(super) fn restore_thread_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.tabs.persistence.requested && !self.tabs.persistence.restored {
+            return;
+        }
         if let Some(id) = self.session.restore_thread.take()
             && self.host.thread.selected.is_none()
             && let Some(summary) = self
@@ -319,6 +339,7 @@ impl Plait {
     }
 
     pub(super) fn capture_session(&mut self, cx: &mut Context<Self>) {
+        self.queue_tab_save(cx);
         let Some(data) = &self.session.data else {
             return;
         };

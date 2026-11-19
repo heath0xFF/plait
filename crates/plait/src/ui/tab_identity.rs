@@ -10,6 +10,8 @@ use std::{collections::HashMap, os::unix::fs::MetadataExt, path::PathBuf};
 #[derive(Default)]
 pub(super) struct Identity {
     pub verified: bool,
+    verified_epoch: Option<u64>,
+    pub pending: Option<(HostKey, Vec<CheckoutKey>)>,
     pub checkouts: HashMap<PathBuf, DirectoryIdentity>,
     pub catalog_ready: bool,
     pub generation: u64,
@@ -25,6 +27,11 @@ pub(super) fn directory(root: &std::path::Path) -> Option<DirectoryIdentity> {
 }
 
 impl Plait {
+    pub(super) fn tab_identity_current(&self) -> bool {
+        !self.tabs.identity.verified
+            || self.tabs.identity.verified_epoch == Some(self.host.connection.epoch)
+    }
+
     pub(super) fn verify_tab_identity(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if cfg!(test) || !self.host.connection.connected {
             return;
@@ -42,6 +49,10 @@ impl Plait {
             .collect();
         roots.extend(self.preferences.value.navigation.opened.iter().cloned());
         roots.push(self.host.creation.checkout.clone());
+        if let Some(data) = &self.session.data {
+            roots.extend(data.new_drafts.keys().cloned());
+            roots.extend(data.new_draft.as_ref().map(|(root, _)| root.clone()));
+        }
         roots.sort();
         roots.dedup();
         let task = cx.background_executor().spawn(async move {
@@ -74,24 +85,52 @@ impl Plait {
                 let Some((host, checkouts)) = result else {
                     return;
                 };
-                this.install_tab_identity(host, checkouts, cx);
-                this.restore_thread_selection(window, cx);
-                let owned = this
-                    .tabs
-                    .model
-                    .active()
-                    .and_then(|id| this.tabs.model.get(id))
-                    .is_some_and(|t| t.thread().target().checkout().host == this.tabs.host);
-                if owned
-                    && this.workspace.host_watch.is_none()
-                    && let Some(id) = this.host.thread.selected.clone()
-                {
-                    this.watch_thread(id, window, cx);
-                    this.refresh_turn_review(cx);
+                if this.tabs.lifecycle.busy || this.tabs.lifecycle.hydrating {
+                    this.tabs.identity.pending = Some((host, checkouts));
+                } else {
+                    this.finish_tab_identity(host, checkouts, window, cx);
                 }
             });
         })
         .detach();
+    }
+
+    fn finish_tab_identity(
+        &mut self,
+        host: HostKey,
+        checkouts: Vec<CheckoutKey>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.install_tab_identity(host, checkouts, cx);
+        self.sync_composer(cx);
+        self.try_restore_tabs(window, cx);
+        self.restore_thread_selection(window, cx);
+        let owned = self
+            .tabs
+            .model
+            .active()
+            .and_then(|id| self.tabs.model.get(id))
+            .is_some_and(|t| t.thread().target().checkout().host == self.tabs.host);
+        if owned
+            && self.workspace.host_watch.is_none()
+            && let Some(id) = self.host.thread.selected.clone()
+        {
+            self.watch_thread(id, window, cx);
+            self.refresh_turn_review(cx);
+        }
+    }
+    pub(super) fn apply_pending_tab_identity(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.tabs.lifecycle.busy
+            && !self.tabs.lifecycle.hydrating
+            && let Some((host, checkouts)) = self.tabs.identity.pending.take()
+        {
+            self.finish_tab_identity(host, checkouts, window, cx);
+        }
     }
 
     pub(super) fn install_tab_identity(
@@ -109,6 +148,9 @@ impl Plait {
             if !self.tab_error(result) {
                 return;
             }
+            self.tabs
+                .lifecycle
+                .verify_pending(&previous, &host, &checkouts);
             for (target, _) in &mut self.tabs.lifecycle.editors {
                 let checkout = match target {
                     ThreadTarget::Existing { checkout, .. }
@@ -130,15 +172,20 @@ impl Plait {
         }
         self.tabs.host = host;
         self.tabs.identity.verified = true;
+        self.tabs.identity.verified_epoch = Some(self.host.connection.epoch);
         self.tabs.identity.checkouts = checkouts
             .into_iter()
             .filter_map(|c| c.directory.map(|d| (c.root, d)))
             .collect();
-        let result = self
-            .tabs
-            .model
-            .reconnected(&self.tabs.host, self.host.connection.epoch);
-        self.tab_error(result);
+        if self.host.connection.connected {
+            let result = self
+                .tabs
+                .model
+                .reconnected(&self.tabs.host, self.host.connection.epoch);
+            self.tab_error(result);
+        } else {
+            self.tabs.model.disconnected(&self.tabs.host);
+        }
         self.refresh_tab_rows();
         cx.notify();
     }

@@ -16,7 +16,7 @@ struct SavedTab {
     bookmark: BookmarkRecord,
 }
 #[derive(Serialize)]
-struct SavedWindow {
+pub struct SavedWindow {
     schema_version: u32,
     active: Option<TabId>,
     tabs: Vec<SavedTab>,
@@ -67,6 +67,11 @@ impl RestoreContext<'_> {
 /// not erase tabs, and `decode` validates on restore. Only drafts the caller
 /// knows are recoverable are kept, so empty drafts are omitted.
 pub fn encode(window: &WindowTabs, context: &RestoreContext<'_>) -> Result<Vec<u8>, TabError> {
+    encode_document(&capture(window, context))
+}
+
+/// Copy small owned records on an event; serialize them on the background executor.
+pub fn capture(window: &WindowTabs, context: &RestoreContext<'_>) -> SavedWindow {
     let tabs = window
         .tabs
         .iter()
@@ -81,12 +86,23 @@ pub fn encode(window: &WindowTabs, context: &RestoreContext<'_>) -> Result<Vec<u
         })
         .collect::<Vec<_>>();
     let active = window.active.filter(|id| tabs.iter().any(|t| t.id == *id));
-    let bytes = serde_json::to_vec(&SavedWindow {
+    SavedWindow {
         schema_version: SCHEMA_VERSION,
         active,
         tabs,
-    })
-    .map_err(|_| TabError::InvalidBookmark)?;
+    }
+}
+impl SavedWindow {
+    pub fn set_bookmark(&mut self, id: TabId, bookmark: BookmarkRecord) -> Result<(), TabError> {
+        if let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) {
+            validate_record(&tab.target, &bookmark)?;
+            tab.bookmark = bookmark;
+        }
+        Ok(())
+    }
+}
+pub fn encode_document(document: &SavedWindow) -> Result<Vec<u8>, TabError> {
+    let bytes = serde_json::to_vec(document).map_err(|_| TabError::InvalidBookmark)?;
     if bytes.len() > FILE_LIMIT {
         return Err(TabError::BookmarkTooLarge);
     }

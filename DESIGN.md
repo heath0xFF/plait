@@ -9,10 +9,9 @@ follow the [originality policy](docs/ORIGINALITY.md).
 Judge changes by task completion, clarity, keyboard use, accessibility, and
 measured responsiveness. Keep controls useful and state easy to inspect.
 
-The [agreed thread-tab stages](docs/ROADMAP.md#agreed-next-thread-tabs)
-start with internal ownership changes. The layout and interaction rules below
-describe the current single workspace; the tab row and modal settings ship in
-later stages.
+[Thread tabs](docs/ROADMAP.md#thread-tabs) keep recent work available without
+keeping hidden views loaded. Tab state belongs to the model; the native rows
+present it with measured widths, words, and accessible names.
 
 ## Layout
 Compact Project → Machine → Thread rail; conversation or diff workspace;

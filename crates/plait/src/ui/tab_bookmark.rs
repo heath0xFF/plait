@@ -234,6 +234,31 @@ impl Plait {
                 }
             }
         };
+        // An unvisited view has no loaded geometry yet; keep its semantic location.
+        if let Some(saved) = &w.restore {
+            if w.restore_pending[0] {
+                bookmark.conversation.scroll = saved.conversation.scroll.clone();
+                bookmark.conversation.before = saved.conversation.before.clone();
+                bookmark.conversation.pages = saved.conversation.pages;
+                if bookmark.details.selection.is_none() {
+                    bookmark.details.selection = saved.details.selection.clone();
+                }
+            }
+            if w.restore_pending[1] {
+                bookmark.changes = saved.changes.clone();
+            }
+            if w.restore_pending[2] {
+                bookmark.history = saved.history.clone();
+            }
+            if w.restore_pending[3] {
+                let find = bookmark.files.find;
+                bookmark.files = saved.files.clone();
+                bookmark.files.find = find;
+            }
+            if bookmark.panels.enlarged_image.is_none() {
+                bookmark.panels.enlarged_image = saved.panels.enlarged_image.clone();
+            }
+        }
         bookmark
     }
 
@@ -269,19 +294,6 @@ impl Plait {
         if let Some(composer) = self.visible_composer() {
             composer.update(cx, |c, _| c.restore_cursor(&bookmark.draft));
         }
-        if let Some(path) = &bookmark.changes.path {
-            self.state.repository.restore_path(
-                path.into(),
-                if bookmark.changes.staged {
-                    plait_core::model::DiffMode::Staged
-                } else {
-                    plait_core::model::DiffMode::Unstaged
-                },
-            );
-        }
-        if let Some(commit) = &bookmark.history.commit {
-            self.state.repository.select_commit(commit.clone());
-        }
         if let ChangeScope::Recorded {
             record,
             original,
@@ -289,23 +301,22 @@ impl Plait {
         } = &bookmark.changes.scope
             && let Some(thread) = self.host.thread.selected.clone()
         {
-            self.open_turn_review(
-                plait_core::review::recorded::Target {
-                    thread,
-                    checkout: self.host.creation.checkout.clone(),
-                    record: record.clone(),
-                    original: original.clone(),
-                    path: bookmark.changes.path.as_ref().map(Into::into),
-                },
-                window,
-                cx,
-            );
+            self.clear_turn_review();
+            self.workspace.turn_review.window = Some(window.window_handle());
+            self.workspace.turn_review.target = Some(plait_core::review::recorded::Target {
+                thread,
+                checkout: self.host.creation.checkout.clone(),
+                record: record.clone(),
+                original: original.clone(),
+                path: bookmark.changes.path.as_ref().map(Into::into),
+            });
             self.workspace.turn_review.current = *compare_current;
         }
         let focus = bookmark.focus;
+        let view = bookmark.view;
         self.workspace.restore_pending = [true; 4];
         self.workspace.restore = Some(bookmark);
-        self.show_tab(self.workspace.tab, window, cx);
+        self.show_tab(view, window, cx);
         match focus {
             FocusTarget::Composer => self.focus_composer(window, cx),
             FocusTarget::ConversationFind => {
@@ -412,26 +423,25 @@ impl Plait {
             self.workspace.restore_pending[1] = false;
         }
         if self.workspace.restore_pending[2]
-            && let Some(anchor) = &bookmark.history.anchor
-            && self
-                .state
-                .repository
-                .view
-                .history
-                .patch
-                .ready()
-                .is_some_and(|d| d.fingerprint() == anchor.fingerprint)
+            && let Some(patch) = self.state.repository.view.history.patch.ready()
         {
-            set_offset(&self.workspace.commit_scroll, anchor.offset_millipoints);
-            self.workspace
-                .commit_scroll
-                .0
-                .borrow()
-                .base_handle
-                .set_offset(point(
-                    pixels(anchor.horizontal_millipoints),
-                    pixels(anchor.offset_millipoints),
-                ));
+            if let Some(anchor) = &bookmark.history.anchor {
+                if patch.fingerprint() == anchor.fingerprint {
+                    set_offset(&self.workspace.commit_scroll, anchor.offset_millipoints);
+                    self.workspace
+                        .commit_scroll
+                        .0
+                        .borrow()
+                        .base_handle
+                        .set_offset(point(
+                            pixels(anchor.horizontal_millipoints),
+                            pixels(anchor.offset_millipoints),
+                        ));
+                } else {
+                    self.notice =
+                        Some("The commit patch changed. Showing its current contents.".into());
+                }
+            }
             self.workspace.restore_pending[2] = false;
         }
         if self.workspace.restore_pending[3] && self.workspace.file_viewer.opened.is_some() {

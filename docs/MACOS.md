@@ -255,6 +255,11 @@ The Mac recovery journal is
 JSON, not encrypted by Plait, and can contain sensitive prompt text. Normal
 window close and Cmd-Q wait for a save. Force quit and power loss can lose the
 last unsaved keystrokes. Accepted work remains in the independent host store.
+The journal holds at most 4 MiB of serialized recovery data, 512 saved
+thread/draft records and 256 KiB per draft. If it would exceed a limit, the
+previous good file stays intact and current work stays in memory. Sending and
+required close or tab-switch saves report the failure and keep the work open.
+Twenty drafts of the maximum size are not a supported capacity.
 
 If recovery reports an error, do not delete or reset the journal. Close duplicate
 Plait clients first. Keep a copy of the file before repair; malformed or unknown
@@ -648,6 +653,12 @@ empty right end to move the window; double-clicking it follows the system's
 title-bar preference. The 36-point second row holds the active thread's
 project, branch, four views, and inspector toggle. An empty workspace has no
 second row.
+Tab order, the tab in front, and each view's bookmark are saved separately in
+`~/Library/Application Support/Plait/tabs.json`. Saving is debounced; closing
+normally waits for it. Launch waits for verified host and checkout identities
+before restoring. A damaged or unsupported file gives a valid empty workspace;
+future versions are left untouched. A host that cannot yet provide its identity
+still supports tabs for the current session without an extra prompt.
 
 Clicking a sidebar thread opens it at the end or switches to its existing tab.
 Cmd-T and Cmd-N open the project's New thread draft. Cmd-1 through Cmd-8 select

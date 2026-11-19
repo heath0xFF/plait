@@ -34,6 +34,11 @@ ui/                     GPUI layout, actions, focus, lists, theme
   text_field.rs         single-line input: IME, selection, clipboard, undo
   navigation.rs         virtualized projects and threads, filtering and management
   navigation_host.rs    cross-checkout listing, live summaries, and notifications
+  tabs.rs               measured native rows, overflow and keyboard dispatch
+  tab_identity.rs       background host/directory verification and safe promotion
+  tab_lifecycle.rs      park, hydrate and retire the single mounted workspace
+  tab_bookmark.rs       semantic locations, selection, find and editor bookmarks
+  tab_persistence.rs    debounced tab saves and verified launch restore
   host.rs               host connection, thread watch, creation, and request guards
   conversation.rs       no-thread state and the Git inspector
   live_conversation.rs  real host messages, ordered tools, and approvals
@@ -94,6 +99,8 @@ tabs.rs                 headless tab order, lifetimes, transitions, and cold res
 tabs/bookmark.rs        bounded semantic workspace bookmarks; no loaded content
 tabs/row.rs             catalog-derived tab labels and measured-width overflow grouping
 tabs/persistence.rs     pure versioned tab-preferences codecs; no journal access
+tabs/storage.rs         bounded no-follow reads and private atomic tab writes
+session/blobs.rs        bounded private bookmark and parked-editor records
 transcript.rs           stable row identity and incremental list-change plans
 history.rs              stored/live merging, text parts, memory limits, run wording
 history/records.rs      complete record pages, run membership and closing-line projection
@@ -555,10 +562,19 @@ not a newest-200 watch subset. Archived threads may restore. Known disconnected
 identities can remain offline; missing identities drop silently. Nonempty draft
 tabs restore only when their caller already knows the draft is recoverable;
 these codecs neither read nor require the recovery journal. Closed history,
-resident payloads, and submission data are never serialized. The UI stage must
-supply background bounded no-follow reads, private (0600) debounced atomic writes,
-save-failure handling, extended-blob storage, and activation hydration. It must leave an unsupported
-future tab-preferences version untouched instead of overwriting it.
+resident payloads, and submission data are never serialized. The desktop uses
+bounded no-follow reads and private (0600) atomic writes on its background
+executor. Input and tab transitions debounce saves for 400 ms; closing flushes
+the current bookmark and journal. A serialized writer rejects superseded work,
+keeps the previous file on failure, and reports a retryable save notice. Extended
+bookmarks use bounded private records. A future version disables tab writes for
+that session so it remains untouched. Opening tabs before restore completes
+keeps that action in front while the other recoverable tabs are added.
+A reconnect must verify identity again before restoring or writing tab state.
+Unvisited views retain their saved locations until their content loads; opening
+a file or commit explicitly replaces that pending location. Leaving Conversation
+detaches its snapshot watch and cancels projection work; returning reloads its
+saved history window before restoring the anchor.
 
 **The v1 draft and submission recovery journal is unchanged.** Its proposed v2
 index/blob redesign remains planned work with a separate compatibility review.
@@ -567,8 +583,10 @@ records, and 256 KiB per draft. Exceeding a limit keeps the previous good file;
 submission and required close/park saves fail explicitly while the current work
 stays in memory. Twenty maximal drafts and a separate 4 MiB resident submission
 cache are not supported capacity promises of this release.
-The new tab codecs are tested without touching saved preferences or a journal;
-they do not yet restore tabs in the desktop window.
+The codecs are tested without filesystem access. Separate private-file and
+isolated GPUI window tests cover saving, valid restore, damaged input and future
+versions. Launch restoration waits for a complete catalog and verified identity;
+an offline or older host can be used with session tabs until verification succeeds.
 
 ## Git boundary
 

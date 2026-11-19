@@ -352,7 +352,7 @@ impl Plait {
 
     /// Put the cursor in the commit message, on the Changes tab.
     pub(super) fn focus_commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.workspace.tab = super::Workspace::Changes;
+        self.show_tab(super::Workspace::Changes, window, cx);
         window.focus(&self.workspace.commit_message.focus_handle(cx), cx);
         cx.notify();
     }

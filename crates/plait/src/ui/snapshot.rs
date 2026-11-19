@@ -798,6 +798,8 @@ impl Harness {
             // Mirror select_host_thread without opening a socket.
             plait.host.thread.selected = Some(THREAD.into());
             plait.workspace.history = Default::default();
+            plait.workspace.restore = None;
+            plait.workspace.restore_pending = [false; 4];
             plait.host.thread.snapshot = Some(Arc::new(thread_snapshot(&checkout, approval)));
             plait.workspace.formatted = Arc::new(plait_core::markdown::Transcript::update(
                 &plait.workspace.formatted,
@@ -806,6 +808,7 @@ impl Harness {
             plait.settings_open = false;
             plait.settings_page = SettingsPage::default();
             plait.new_thread_open = false;
+            plait.draft = Default::default();
             plait.workspace.tab = super::Workspace::Conversation;
             let composer = cx.new(|cx| Composer::new(window, cx));
             plait.workspace.composers.insert(THREAD.into(), composer);
@@ -6738,4 +6741,28 @@ fn cold_tabs_restore_views_and_reject_retired_reads() {
         return;
     }
     tabs::cold_workspaces();
+}
+
+#[core::prelude::v1::test]
+fn tabs_restore_good_damaged_and_future_state() {
+    if !isolated("tabs_restore_good_damaged_and_future_state") {
+        return;
+    }
+    tabs::restore_preferences();
+}
+
+#[core::prelude::v1::test]
+fn tab_journal_limit_preserves_open_work() {
+    if !isolated("tab_journal_limit_preserves_open_work") {
+        return;
+    }
+    tabs::journal_limit();
+}
+
+#[core::prelude::v1::test]
+fn views_suspend_reads_and_keep_unloaded_bookmarks() {
+    if !isolated("views_suspend_reads_and_keep_unloaded_bookmarks") {
+        return;
+    }
+    tabs::unloaded_views();
 }

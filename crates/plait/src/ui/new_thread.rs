@@ -313,6 +313,9 @@ impl Plait {
 
     /// Why the draft cannot be sent now, beyond what disables its composer.
     pub(super) fn draft_blocked(&self) -> Option<String> {
+        if !self.tab_identity_current() {
+            return Some("Checking the reconnected host…".into());
+        }
         if self.host.creation.pending_create.is_some() && !self.draft_pending() {
             return Some("Another new thread is unconfirmed · retry it above first.".into());
         }

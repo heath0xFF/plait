@@ -118,6 +118,7 @@ impl Plait {
                     this.rebuild_projects(cx);
                     this.tabs.identity.catalog_ready = true;
                     this.verify_tab_identity(window, cx);
+                    this.try_restore_tabs(window, cx);
                     this.restore_thread_selection(window, cx);
                     true
                 })

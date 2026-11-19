@@ -691,7 +691,7 @@ impl Plait {
             return cx.notify();
         }
         self.workspace.line_pick = None;
-        self.workspace.tab = super::Workspace::Conversation;
+        self.show_tab(super::Workspace::Conversation, window, cx);
         cx.notify();
     }
 

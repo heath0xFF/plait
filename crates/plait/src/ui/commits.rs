@@ -73,6 +73,7 @@ impl Plait {
                     .child(age(commit.time, now)),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
+                this.workspace.restore_pending[2] = false;
                 this.state.repository.select_commit(id.clone());
                 this.workspace.commit_scroll = UniformListScrollHandle::new();
                 this.pump(cx);

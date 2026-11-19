@@ -27,7 +27,35 @@ pub(super) struct Lifecycle {
     pub busy: bool,
     pub view_revision: u64,
     pub presenting: bool,
+    pub hydrating: bool,
+    hydrate_generation: u64,
+    pending: std::collections::VecDeque<Intent>,
     pub editors: Vec<(ThreadTarget, EditorRecord)>,
+}
+
+impl Lifecycle {
+    pub(super) fn verify_pending(
+        &mut self,
+        previous: &plait_core::tabs::HostKey,
+        host: &plait_core::tabs::HostKey,
+        checkouts: &[plait_core::tabs::CheckoutKey],
+    ) {
+        for intent in &mut self.pending {
+            if let Intent::Open(target) = intent {
+                let checkout = match target {
+                    ThreadTarget::Existing { checkout, .. }
+                    | ThreadTarget::Draft { checkout, .. } => checkout,
+                };
+                if &checkout.host == previous {
+                    checkout.host = host.clone();
+                    checkout.directory = checkouts
+                        .iter()
+                        .find(|c| c.root == checkout.root)
+                        .and_then(|c| c.directory);
+                }
+            }
+        }
+    }
 }
 
 impl Plait {
@@ -37,8 +65,15 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.tabs.persistence.edited = true;
         self.tabs.identity.opening += 1;
         if self.tabs.lifecycle.busy {
+            if self.tabs.lifecycle.pending.len() < 64 {
+                self.tabs.lifecycle.pending.push_back(intent);
+            } else {
+                self.notice = Some("Tab changes are still saving. Try again shortly.".into());
+                cx.notify();
+            }
             return;
         }
         if self.host.creation.creating || self.host.creation.pending_create.is_some() {
@@ -163,6 +198,8 @@ impl Plait {
                 this.tabs.lifecycle.busy = false;
                 match result {
                     Err(error) => {
+                        this.tabs.lifecycle.pending.clear();
+                        this.apply_pending_tab_identity(window, cx);
                         this.notice = Some(format!(
                             "Tab kept open because work could not be saved: {error}"
                         ));
@@ -283,14 +320,29 @@ impl Plait {
                 self.tabs.lifecycle.presenting = false;
             }
             self.settings_open = false;
+            if self.workspace.tab == super::Workspace::Conversation
+                && self.conversation_snapshot().is_some()
+                && window.is_window_active()
+                && let Some(id) = self.host.thread.selected.clone()
+            {
+                self.mark_thread_read(&id, cx);
+            }
             self.tabs.list_open = false;
             self.refresh_tab_rows();
             self.retire_editor_cache(cx);
+            self.queue_tab_save(cx);
+            self.try_restore_tabs(window, cx);
             cx.notify();
+        }
+        self.apply_pending_tab_identity(window, cx);
+        if let Some(intent) = self.tabs.lifecycle.pending.pop_front() {
+            self.request_tab(intent, window, cx);
         }
     }
 
     pub(super) fn park_workspace(&mut self, cx: &mut Context<Self>) {
+        self.tabs.lifecycle.hydrating = false;
+        self.tabs.lifecycle.hydrate_generation += 1;
         self.workspace.cancelled.store(true, Ordering::Release);
         self.workspace.host_watch = None;
         self.host.select(None);
@@ -343,6 +395,9 @@ impl Plait {
         let Some(journal) = self.session.journal.clone() else {
             return;
         };
+        self.tabs.lifecycle.hydrating = true;
+        self.tabs.lifecycle.hydrate_generation += 1;
+        let generation = self.tabs.lifecycle.hydrate_generation;
         let task = cx.background_executor().spawn(async move {
             let bookmark = match record {
                 BookmarkRecord::Inline { .. } => record.inline(),
@@ -361,6 +416,10 @@ impl Plait {
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
             let _ = this.update_in(cx, |this, window, cx| {
+                if generation != this.tabs.lifecycle.hydrate_generation {
+                    return;
+                }
+                this.tabs.lifecycle.hydrating = false;
                 if this.tabs.lifecycle.view_revision != view_revision
                     || this.tabs.model.active() != Some(lifetime.tab)
                     || !this.host.accepts_read(&owner)
@@ -370,6 +429,7 @@ impl Plait {
                         .get(lifetime.tab)
                         .is_none_or(|tab| tab.lifetime() != lifetime)
                 {
+                    this.apply_pending_tab_identity(window, cx);
                     return;
                 }
                 match result {
@@ -389,6 +449,7 @@ impl Plait {
                         this.restore_tab_bookmark(ThreadBookmark::default(), window, cx);
                     }
                 }
+                this.apply_pending_tab_identity(window, cx);
                 cx.notify();
             });
         })
@@ -429,7 +490,7 @@ impl Plait {
     }
 }
 
-fn record_name(kind: &str) -> String {
+pub(super) fn record_name(kind: &str) -> String {
     format!(
         "{kind}-{}-{}-{}",
         std::process::id(),

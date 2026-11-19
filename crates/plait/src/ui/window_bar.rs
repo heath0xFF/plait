@@ -1,5 +1,4 @@
-//! One window bar: the rail's top strip and the header share a row with the
-//! native traffic lights, and their empty parts move the window.
+//! The top tab row is the window bar; its empty space moves the window.
 
 use super::{Plait, theme::CHROME_HEIGHT};
 use gpui::*;

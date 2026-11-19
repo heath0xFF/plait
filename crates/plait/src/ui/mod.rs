@@ -38,6 +38,7 @@ mod snapshot;
 mod tab_bookmark;
 mod tab_identity;
 mod tab_lifecycle;
+mod tab_persistence;
 mod tabs;
 mod text_field;
 pub mod theme;
@@ -407,6 +408,8 @@ impl Plait {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.workspace.restore_pending[1] = false;
+        self.pause_conversation(Some(window), cx);
         window.focus(&self.focus, cx);
         self.interaction = Some(Instant::now());
         match step {
@@ -643,19 +646,60 @@ impl Plait {
     }
 
     fn show_tab(&mut self, tab: Workspace, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.ensure_view_tab() {
+            cx.notify();
+            return;
+        }
+        if tab == Workspace::Conversation && self.draft.open && self.draft.composer.is_none() {
+            self.open_draft_content(window, cx);
+        }
         self.tabs.lifecycle.view_revision += 1;
         let conversation = Workspace::Conversation;
+        let previous = self.workspace.tab;
         if self.workspace.tab == conversation && tab != conversation {
+            self.pause_conversation(Some(window), cx);
             self.leave_conversation_focus(window, cx);
         } else if self.workspace.tab != conversation && tab == conversation {
             self.return_conversation_focus(window, cx);
         }
         self.workspace.tab = tab;
+        if tab == conversation
+            && previous != conversation
+            && self.host.connection.connected
+            && !cfg!(test)
+            && let Some(id) = self.host.thread.selected.clone()
+        {
+            self.watch_thread(id, window, cx);
+        }
+        self.queue_tab_save(cx);
         if tab == Workspace::Changes {
+            if self.workspace.restore_pending[1]
+                && let Some(saved) = self.workspace.restore.as_ref()
+                && let Some(path) = saved.changes.path.as_ref()
+            {
+                self.state.repository.restore_path(
+                    path.into(),
+                    if saved.changes.staged {
+                        DiffMode::Staged
+                    } else {
+                        DiffMode::Unstaged
+                    },
+                );
+                self.pump(cx);
+            }
             self.refresh_turn_review(cx);
         }
         if tab == Workspace::History {
             self.state.repository.request_history();
+            if self.workspace.restore_pending[2]
+                && let Some(commit) = self
+                    .workspace
+                    .restore
+                    .as_ref()
+                    .and_then(|b| b.history.commit.clone())
+            {
+                self.state.repository.select_commit(commit);
+            }
             self.pump(cx);
         } else {
             self.state.repository.leave_history();
@@ -1161,6 +1205,8 @@ impl Render for Plait {
             .on_action(cx.listener(|_, _: &Minimize, window, _| window.minimize_window()))
             .map(|root| self.on_jump_actions(root, cx))
             .map(|root| self.on_tab_actions(root, cx))
+            .capture_key_up(cx.listener(|this, _, _, cx| this.queue_tab_save(cx)))
+            .capture_any_mouse_up(cx.listener(|this, _, _, cx| this.queue_tab_save(cx)))
             .map(|root| self.on_ways_out_actions(root, cx))
             .on_action(
                 cx.listener(|this, _: &UndoLastTurn, window, cx| this.undo_last_turn(window, cx)),
@@ -1175,6 +1221,7 @@ impl Render for Plait {
             .text_color(rgb(colors().text))
             .text_size(px(13.))
             .font_family(".SystemUIFont")
+            .child(self.tab_save_input(cx))
             .child(self.tab_row(window, cx))
             .child(
                 row()

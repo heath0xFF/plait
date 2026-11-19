@@ -7,6 +7,7 @@
 pub mod bookmark;
 pub mod persistence;
 pub mod row;
+pub mod storage;
 
 use crate::thread_view::{SelectedThreadState, ThreadRepositoryView, ThreadView};
 use bookmark::BookmarkRecord;

@@ -59,6 +59,14 @@ impl Plait {
         self.workspace.clear_turn_review();
     }
     pub(super) fn refresh_turn_review(&mut self, cx: &mut Context<Self>) {
+        if !self.tab_identity_current()
+            || !matches!(
+                self.workspace.tab,
+                Workspace::Conversation | Workspace::Changes
+            )
+        {
+            return;
+        }
         if cfg!(test) && self.workspace.turn_review.target.is_none() {
             return;
         }
@@ -75,7 +83,13 @@ impl Plait {
         self.pump_turn_review(cx);
     }
     fn pump_turn_review(&mut self, cx: &mut Context<Self>) {
-        if self.workspace.turn_review.running || !self.workspace.turn_review.pending {
+        if self.workspace.turn_review.running
+            || !self.workspace.turn_review.pending
+            || !matches!(
+                self.workspace.tab,
+                Workspace::Conversation | Workspace::Changes
+            )
+        {
             return;
         }
         let Some(stamp) = self.review_stamp() else {
@@ -97,6 +111,7 @@ impl Plait {
         let snapshot = self.state.repository.snapshot().ready().cloned();
         let history = self.host.thread.snapshot.clone();
         let task_stamp = stamp.clone();
+        let read_record = self.workspace.tab == Workspace::Changes;
         let task = cx.background_executor().spawn(async move {
             let client = Client::from_environment()?;
             let info = review::info(&client, &task_stamp.thread)?;
@@ -108,7 +123,7 @@ impl Plait {
                 status: None,
                 error: None,
             };
-            let Some(target) = &task_stamp.target else {
+            let Some(target) = task_stamp.target.as_ref().filter(|_| read_record) else {
                 return Ok::<_, host::Error>(result);
             };
             if !result.info.features.record_diff {
@@ -293,6 +308,7 @@ impl Plait {
             return;
         };
         let path = file.path.clone();
+        self.workspace.restore_pending[1] = false;
         if let Some(target) = self.workspace.turn_review.target.as_mut() {
             target.path = Some(path);
         }
@@ -315,6 +331,7 @@ impl Plait {
             return;
         }
         self.workspace.turn_review.current = current;
+        self.workspace.restore_pending[1] = false;
         self.workspace.diff_scroll = UniformListScrollHandle::new();
         self.workspace.line_pick = None;
         self.refresh_turn_review(cx);

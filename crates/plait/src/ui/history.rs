@@ -22,6 +22,8 @@ pub(super) enum Load {
 }
 #[derive(Default)]
 pub(super) struct HistoryView {
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+    resume: bool,
     pub retained_bytes: usize,
     pub cache: Arc<History>,
     pub display: Option<Arc<Snapshot>>,
@@ -35,6 +37,18 @@ pub(super) struct HistoryView {
     pub expanded: HashSet<String>,
     pub now: u64,
     timer: bool,
+}
+impl HistoryView {
+    fn pause(&mut self) {
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.cancelled = Default::default();
+        self.resume = true;
+        self.loading = None;
+        self.projecting = false;
+        self.timer = false;
+        self.tried = None;
+    }
 }
 fn millis() -> u64 {
     SystemTime::now()
@@ -59,6 +73,34 @@ fn tail_stamp(snapshot: &Snapshot) -> u64 {
     hash.finish()
 }
 impl Plait {
+    pub(super) fn pause_conversation(&mut self, window: Option<&Window>, cx: &App) {
+        if self.workspace.tab != super::Workspace::Conversation {
+            return;
+        }
+        let bookmark = self.capture_tab_bookmark(window, cx);
+        let records_current = self.records_current();
+        if let Some(saved) = self.workspace.restore.as_mut() {
+            saved.conversation = bookmark.conversation;
+            saved.panels.enlarged_image = bookmark.panels.enlarged_image;
+        } else {
+            self.workspace.restore = Some(bookmark);
+        }
+        self.workspace.restore_pending[0] = true;
+        self.workspace.host_watch = None;
+        self.host.thread.watch_epoch += 1;
+        // Loaded immutable records still describe the same observed snapshot.
+        if records_current && let Some(stamp) = self.workspace.turn_records.stamp.as_mut() {
+            stamp.watch = self.host.thread.watch_epoch;
+        }
+        self.workspace
+            .cancelled
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.workspace.cancelled = Default::default();
+        self.workspace.file_viewer.retire_read();
+        self.workspace.images = Default::default();
+        self.workspace.history.pause();
+    }
+
     pub(super) fn conversation_snapshot(&self) -> Option<&Snapshot> {
         self.workspace
             .history
@@ -67,7 +109,19 @@ impl Plait {
             .or(self.host.thread.snapshot.as_deref())
     }
     pub(super) fn conversation_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.workspace.tab != super::Workspace::Conversation {
+            return;
+        }
         self.workspace.history.enabled = self.host.protocol() >= 3;
+        if std::mem::take(&mut self.workspace.history.resume) {
+            self.workspace.history.cache = Default::default();
+            let before = self
+                .workspace
+                .restore
+                .as_ref()
+                .and_then(|b| b.conversation.before.clone());
+            self.load_history(Load::Restore(before), window, cx);
+        }
         if self.workspace.restore_pending[0]
             && !self.workspace.history.cache.loaded
             && let Some(before) = self
@@ -148,6 +202,7 @@ impl Plait {
         let records = self.workspace.turn_records.data.clone();
         let record_generation = self.workspace.turn_records.data_generation;
         let cancelled = self.workspace.cancelled.clone();
+        let view_cancelled = self.workspace.history.cancelled.clone();
         let anchor = self
             .conversation_snapshot()
             .and_then(|s| {
@@ -160,7 +215,8 @@ impl Plait {
         let task = cx.background_executor().spawn(async move {
             let mut cache = (*cache).clone();
             loop {
-                if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                if cancelled.load(std::sync::atomic::Ordering::Acquire)
+                    || view_cancelled.load(std::sync::atomic::Ordering::Acquire) {
                     return None;
                 }
                 let display = if enabled {
@@ -188,7 +244,8 @@ impl Plait {
                     &previous,
                     &display,
                     &stored,
-                    &|| cancelled.load(std::sync::atomic::Ordering::Acquire),
+                    &|| cancelled.load(std::sync::atomic::Ordering::Acquire)
+                        || view_cancelled.load(std::sync::atomic::Ordering::Acquire),
                 )?;
                 let retained = cache.retained_bytes()
                     + display.retained_bytes()
@@ -270,6 +327,7 @@ impl Plait {
     }
     pub(super) fn load_history(&mut self, load: Load, window: &mut Window, cx: &mut Context<Self>) {
         if !self.workspace.history.enabled
+            || self.workspace.tab != super::Workspace::Conversation
             || !self.host.connection.connected
             || self.workspace.history.loading.is_some()
         {

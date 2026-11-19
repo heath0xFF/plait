@@ -140,6 +140,7 @@ impl Plait {
             self.navigation.error =
                 Some("Thread change not confirmed. Refresh to check before trying again.".into());
         }
+        self.tabs.identity.pending = None;
         self.tabs.model.disconnected(&self.tabs.host);
         self.refresh_tab_rows();
         self.host.reconnect();
@@ -154,11 +155,13 @@ impl Plait {
                 Ok(status) => {
                     if this.host.apply_status(this.host.connection.epoch, status) {
                         this.verify_tab_identity(window, cx);
-                        let result = this
-                            .tabs
-                            .model
-                            .reconnected(&this.tabs.host, this.host.connection.epoch);
-                        this.tab_error(result);
+                        if !this.tabs.identity.verified {
+                            let result = this
+                                .tabs
+                                .model
+                                .reconnected(&this.tabs.host, this.host.connection.epoch);
+                            this.tab_error(result);
+                        }
                         this.load_threads(window, cx);
                         if !this.tabs.identity.verified {
                             this.refresh_turn_review(cx);
@@ -277,7 +280,7 @@ impl Plait {
         }
         self.capture_session(cx);
         self.sync_composer(cx);
-        if self.host.connection.connected {
+        if self.host.connection.connected && self.tab_identity_current() {
             self.watch_thread(id, window, cx);
         }
         cx.notify();
@@ -314,6 +317,9 @@ impl Plait {
     }
 
     pub(super) fn watch_thread(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.tab_identity_current() || self.workspace.tab != super::Workspace::Conversation {
+            return;
+        }
         self.workspace.host_watch = None;
         self.host.thread.watch_epoch += 1;
         let epoch = self.host.connection.epoch;
@@ -901,6 +907,7 @@ impl Plait {
         self.session.ready()
             && self.navigation.available.get(&self.host.creation.checkout) != Some(&false)
             && self.host.connection.connected
+            && self.tab_identity_current()
             && !self.host.thread.controlling
             && !self.thread_configuration_pending()
             && self.host.thread.snapshot.as_ref().is_some_and(|snapshot| {

@@ -11,6 +11,9 @@ use std::{
 };
 
 static WINDOW_IDS: AtomicU64 = AtomicU64::new(1);
+pub(super) fn fresh_window_id() -> WindowId {
+    WindowId(WINDOW_IDS.fetch_add(1, Ordering::Relaxed))
+}
 
 actions!(
     plait,
@@ -39,6 +42,7 @@ pub(super) struct Tabs {
     pub model: WindowTabs,
     pub lifecycle: super::tab_lifecycle::Lifecycle,
     pub identity: super::tab_identity::Identity,
+    pub persistence: super::tab_persistence::Persistence,
     strip: Option<Entity<TabStrip>>,
     strip_theme: u32,
     pub host: HostKey,
@@ -69,12 +73,13 @@ struct Drag {
 }
 impl Default for Tabs {
     fn default() -> Self {
-        let window = WINDOW_IDS.fetch_add(1, Ordering::Relaxed);
+        let window = fresh_window_id().0;
         // Unverified hosts can use session tabs; this identity is never durable.
         Self {
             model: WindowTabs::new(WindowId(window)),
             lifecycle: Default::default(),
             identity: Default::default(),
+            persistence: Default::default(),
             strip: None,
             strip_theme: 0,
             host: HostKey {
@@ -248,6 +253,31 @@ impl Plait {
         self.tab_error(result.map(|_| ()))
     }
 
+    /// A checkout view opened before any thread belongs to its unsent draft tab.
+    pub(super) fn ensure_view_tab(&mut self) -> bool {
+        if self.tabs.model.active().is_some() {
+            return true;
+        }
+        let target = ThreadTarget::Draft {
+            id: "draft".into(),
+            checkout: self.tab_checkout(self.host.creation.checkout.clone()),
+        };
+        let result = self.tabs.model.open(
+            target,
+            self.host
+                .connection
+                .connected
+                .then_some(self.host.connection.epoch),
+        );
+        if !self.tab_error(result.map(|_| ())) {
+            return false;
+        }
+        self.draft.open = true;
+        self.tabs.persistence.edited = true;
+        self.refresh_tab_rows();
+        true
+    }
+
     pub(super) fn tab_checkout(&self, root: PathBuf) -> CheckoutKey {
         CheckoutKey {
             host: self.tabs.host.clone(),
@@ -350,6 +380,7 @@ impl Plait {
         let result = self.tabs.model.move_tab(id, to);
         self.tab_error(result);
         self.refresh_tab_rows();
+        self.queue_tab_save(cx);
         cx.notify();
     }
 
@@ -486,6 +517,7 @@ impl Plait {
                     let result = this.tabs.model.move_tab(id, to);
                     this.tab_error(result);
                     this.refresh_tab_rows();
+                    this.queue_tab_save(cx);
                     cx.notify();
                 }
             }),
