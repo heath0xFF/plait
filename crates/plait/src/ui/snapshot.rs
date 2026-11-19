@@ -6797,3 +6797,11 @@ fn created_thread_shows_in_its_front_tab_from_any_view() {
     }
     tabs::created_in_front();
 }
+
+#[core::prelude::v1::test]
+fn tabs_save_while_the_draft_journal_is_over_its_limit() {
+    if !isolated("tabs_save_while_the_draft_journal_is_over_its_limit") {
+        return;
+    }
+    tabs::journal_limit_saves_tabs();
+}

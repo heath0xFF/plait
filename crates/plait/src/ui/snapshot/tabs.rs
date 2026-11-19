@@ -718,3 +718,60 @@ pub(super) fn created_in_front() {
     drop(h);
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+/// The tab file does not depend on the draft journal staying under its limit.
+pub(super) fn journal_limit_saves_tabs() {
+    use plait_core::{
+        session::Journal,
+        tabs::{CheckoutKey, HostKey, storage},
+    };
+    let scratch = std::env::temp_dir().join(format!("plait-tab-full-{}", std::process::id()));
+    let repository = fixture_repository(&scratch);
+    let saved_path = scratch.join("desktop/tabs.json");
+    let (journal, data) = Journal::open(&scratch.join("session"), "/tab-test-host".into()).unwrap();
+    let mut h = Harness::new(&repository, None, 900., 600.);
+    h.connect(&repository, false);
+    install(&mut h, 20);
+    let host = HostKey {
+        id: "verified-test-host".into(),
+        store: "/tab-test-host".into(),
+    };
+    let checkout = CheckoutKey {
+        host: host.clone(),
+        root: repository.clone(),
+        directory: super::super::tab_identity::directory(&repository),
+    };
+    h.update(|p, w, cx| {
+        p.host.connection.connected = false;
+        p.install_tab_identity(host.clone(), vec![checkout.clone()], cx);
+        p.session.journal = Some(journal.clone());
+        p.session.data = Some(data);
+        p.capture_session(cx);
+        p.tabs.identity.catalog_ready = true;
+        p.tabs.persistence.requested = true;
+        p.tabs.persistence.loaded = true;
+        p.tabs.persistence.restored = true;
+        p.tabs.persistence.writable = true;
+        p.tabs.persistence.path = Some(saved_path.clone());
+        p.tabs.persistence.window = Some(w.window_handle());
+        let data = p.session.data.as_mut().unwrap();
+        let mut thread = data.threads[THREAD].clone();
+        thread.draft.text = "x".repeat(256 * 1024);
+        for summary in p.host.connection.threads.iter().skip(1) {
+            data.threads.insert(summary.id.clone(), thread.clone());
+        }
+        journal.queue(data.clone());
+    });
+    assert!(journal.flush().unwrap_err().contains("exceeds 4 MiB"));
+    h.window
+        .update(&mut h.cx, |p, w, cx| {
+            p.flush_tab_preferences(Some(w), cx).unwrap()
+        })
+        .unwrap()
+        .write()
+        .unwrap();
+    assert!(storage::read(&saved_path).unwrap().is_some());
+    drop(h);
+    drop(journal);
+    std::fs::remove_dir_all(scratch).unwrap();
+}

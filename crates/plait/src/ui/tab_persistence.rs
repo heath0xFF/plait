@@ -63,7 +63,9 @@ impl SaveRequest {
         if self.revision != self.gate.revision.load(Ordering::Acquire) {
             return Ok(());
         }
-        self.journal.flush()?;
+        // Save drafts first when possible. A journal over its limit reports itself;
+        // the tab file stays independent, and the decoder omits drafts not yet durable.
+        let _ = self.journal.flush();
         if let Some((id, bookmark)) = self.active {
             let record =
                 match BookmarkRecord::capture(&bookmark) {
