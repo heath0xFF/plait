@@ -400,6 +400,11 @@ impl Composer {
         self.draft.value.text.is_empty() && self.images.references.is_empty()
     }
 
+    /// Nothing typed, attached, or still being attached.
+    pub fn holds_nothing(&self) -> bool {
+        self.is_empty() && !self.images.loading
+    }
+
     pub fn restore_cancelled(&mut self, text: &str, revision: u64, cx: &mut Context<Self>) -> bool {
         if !self.is_empty() || self.draft.revision != revision || self.draft.marked.is_some() {
             return false;

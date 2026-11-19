@@ -46,7 +46,7 @@ impl Plait {
                                 .mx_auto()
                                 // Escape reaches here when the composer has nothing else to close.
                                 .on_action(cx.listener(|this, _: &composer::Cancel, window, cx| {
-                                    this.discard_draft(window, cx)
+                                    this.escape_draft(window, cx)
                                 }))
                                 .child(composer),
                         )
@@ -141,7 +141,7 @@ impl Plait {
             .child(chips)
             .child(
                 button("draft-discard", "Discard")
-                    .aria_description("Discard this draft and close its tab. Escape does the same.")
+                    .aria_description("Discard this draft and close its tab.")
                     .tooltip(|_, cx| {
                         cx.new(|_| {
                             super::thread_controls::TextTooltip(

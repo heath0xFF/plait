@@ -786,8 +786,9 @@ model and permissions to that harness's defaults: Pi's saved default model, or
 the harness's most recently used model, else its first. Switching project keeps
 the new thread open and shows that repository in the inspector. While it is
 open, a **New thread** row marks where it will land in the sidebar. Opening
-another thread sets it aside in its own tab with its text; Escape or
-**Discard** removes it and closes that tab (see Tabs). Draft text and image references are saved per checkout
+another thread sets it aside in its own tab with its text. **Discard** removes
+it and closes that tab (see Tabs); Escape closes the tab only when the draft
+holds nothing. Draft text and image references are saved per checkout
 in the desktop recovery journal across restarts. Cmd-Shift-N opens it with the
 model list open. A thread with no title
 yet reads **New thread**. **New Thread in Worktree** (Cmd-Option-N) asks the
@@ -867,13 +868,17 @@ end with their content and choices. They also return after restart. Closing the 
 leaves an empty workspace; another Cmd-W closes the window. Cmd-Shift-W closes
 the window directly.
 
-**Discard** (or Escape in the draft) removes that draft from recovery and closes
-its tab. Its right neighbour comes to the front, or its left neighbour if it
-was last; discarding the only tab leaves an empty workspace. Cmd-Shift-T cannot
-bring a discarded draft back. Other drafts are kept. Discard first cancels any
-unanswered **Project busy** choice. It is also available while creation is
-unconfirmed: a creation already sent can finish on the host, but its reply
-does not open a tab or send the discarded first message.
+**Discard** removes that draft from recovery and closes its tab. Its right
+neighbour comes to the front, or its left neighbour if it was last; discarding
+the only tab leaves an empty workspace. Cmd-Shift-T cannot bring a discarded
+draft back. Other drafts are kept. Discard first cancels any unanswered
+**Project busy** choice. It is also available while creation is unconfirmed: a
+creation already sent can finish on the host, but its reply does not open a tab
+or send the discarded first message. While a creation that belongs to no draft
+is unanswered, Discard is refused with a notice and the draft is kept. Escape in
+a draft that holds nothing closes its tab as Cmd-W does; in a draft with text,
+images, a **Project busy** choice or an unanswered first send, it does nothing,
+so a reflexive key press cannot throw typed work away.
 
 Cmd-Option-period answers the open thread's approval card with **Deny once**
 and Cmd-Option-Y with **Allow once**. Each button shows its shortcut as the
@@ -965,7 +970,7 @@ already arrived at once.
 | @ | List checkout files at the start of a word; type to filter |
 | / | List local commands when it is the first character of an empty draft |
 | Up / Down, Enter or Tab, Escape | With a suggestion list open: choose, accept, dismiss |
-| Escape | Close the suggestion list, then leave message recall; in a new-thread draft, then discard the draft and close its tab |
+| Escape | Close the suggestion list, then leave message recall; then, in a new-thread draft that holds nothing, close its tab |
 | Escape twice | Stop the running agent, when pressed twice within 1.5 seconds |
 | Option-Delete / Option-Fn-Delete | Delete the previous / next word |
 | Cmd-Delete / Cmd-Fn-Delete | Delete to the start / end of the line |

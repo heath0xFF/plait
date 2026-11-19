@@ -1361,8 +1361,15 @@ fn a_draft_creates_its_thread_only_when_sent_and_keeps_its_request_id() {
         );
         assert_eq!(draft_text(plait, cx), "Queue the status refresh");
     });
-    // Escape removes this tab and returns to its empty neighbour.
+    // Escape leaves a draft that holds anything as it is.
     harness.keystroke("escape");
+    harness.update(|plait, _, cx| {
+        assert_eq!(draft_text(plait, cx), "Queue the status refresh");
+        assert!(plait.draft.pending.is_some());
+        assert_eq!(plait.tabs.model.tabs().len(), 3);
+    });
+    // Discard removes this tab and returns to its empty neighbour.
+    harness.update(|plait, window, cx| plait.discard_draft(window, cx));
     harness.update(|plait, _, cx| {
         assert!(plait.draft.open && plait.draft.sending.is_none());
         assert_eq!(draft_text(plait, cx), "");

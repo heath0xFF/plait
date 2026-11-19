@@ -918,3 +918,128 @@ fn closing_a_draft_keeps_it_for_reopen_and_discarding_does_not() {
     drop(h);
     std::fs::remove_dir_all(scratch).unwrap();
 }
+
+#[core::prelude::v1::test]
+fn escape_closes_only_a_draft_that_holds_nothing() {
+    if !isolated("many_drafts::escape_closes_only_a_draft_that_holds_nothing") {
+        return;
+    }
+    let scratch = std::env::temp_dir().join(format!("plait-draft-escape-{}", std::process::id()));
+    let repo = fixture_repository(&scratch);
+    let (directory, store) = plait_core::session::locations().unwrap();
+    let (journal, data) = plait_core::session::Journal::open(&directory, store).unwrap();
+    let mut h = Harness::new(&repo, None, 900., 600.);
+    h.connect(&repo, false);
+    h.update(|p, w, cx| {
+        p.tabs = Default::default();
+        p.park_workspace(cx);
+        p.session.data = Some(data);
+        p.session.journal = Some(journal.clone());
+        p.open_draft(w, cx);
+    });
+    let id = |h: &mut Harness| {
+        h.window
+            .update(&mut h.cx, |p, _, _| p.draft.id.clone().unwrap())
+            .unwrap()
+    };
+    // Text: the draft, its tab, its journal entry and focus all stay.
+    h.type_draft("Typed by hand");
+    let typed = id(&mut h);
+    h.keystroke("escape");
+    h.keystroke("escape");
+    wait_tabs(&mut h);
+    h.window
+        .update(&mut h.cx, |p, w, cx| {
+            assert_eq!(p.tabs.model.tabs().len(), 1);
+            assert_eq!(draft_text(p, cx), "Typed by hand");
+            let data = p.session.data.as_ref().unwrap();
+            assert_eq!(data.draft_tabs[&typed].draft.text, "Typed by hand");
+            let composer = p.draft.composer.as_ref().unwrap();
+            assert!(composer.focus_handle(cx).contains_focused(w, cx));
+        })
+        .unwrap();
+    // Only an image: it stays too.
+    let image = plait_core::images::persist(include_bytes!(
+        "../../../../../runtime/test/support/images/0.png"
+    ))
+    .unwrap();
+    h.update(|p, w, cx| p.open_draft(w, cx));
+    wait_tabs(&mut h);
+    h.update(|p, _, cx| {
+        p.draft
+            .composer
+            .clone()
+            .unwrap()
+            .update(cx, |c, cx| c.restore_images(vec![image], cx));
+    });
+    h.keystroke("escape");
+    wait_tabs(&mut h);
+    h.update(|p, _, cx| {
+        assert_eq!(p.tabs.model.tabs().len(), 2);
+        assert!(!p.draft.composer.as_ref().unwrap().read(cx).is_empty());
+    });
+    // A suggestion list: Escape closes only the list.
+    h.update(|p, w, cx| p.open_draft(w, cx));
+    wait_tabs(&mut h);
+    h.type_draft("/");
+    let suggestions = |h: &mut Harness| {
+        h.window
+            .update(&mut h.cx, |p, _, cx| {
+                p.draft
+                    .composer
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .suggestion_names()
+            })
+            .unwrap()
+    };
+    assert!(!suggestions(&mut h).is_empty());
+    h.keystroke("escape");
+    wait_tabs(&mut h);
+    assert!(suggestions(&mut h).is_empty());
+    h.update(|p, _, cx| {
+        assert_eq!(p.tabs.model.tabs().len(), 3);
+        assert_eq!(draft_text(p, cx), "/");
+    });
+    // Emptied again: Escape closes it as an empty draft, and the empty draft
+    // to its right comes forward.
+    h.update(|p, w, cx| p.open_draft(w, cx));
+    wait_tabs(&mut h);
+    h.keystroke("cmd-3");
+    wait_tabs(&mut h);
+    h.keystroke("cmd-a");
+    h.type_draft("");
+    let emptied = id(&mut h);
+    h.keystroke("escape");
+    wait_tabs(&mut h);
+    h.update(|p, _, cx| {
+        assert_eq!(p.tabs.model.tabs().len(), 3);
+        assert_eq!(p.tabs.model.closed_len(), 0);
+        assert!(
+            !p.session
+                .data
+                .as_ref()
+                .unwrap()
+                .draft_tabs
+                .contains_key(&emptied)
+        );
+        assert_eq!(draft_text(p, cx), "");
+        assert_eq!(p.tabs.model.active(), Some(p.tabs.model.tabs()[2].id()));
+    });
+    // The last empty tab leaves the empty workspace.
+    for _ in 0..2 {
+        h.keystroke("cmd-1");
+        wait_tabs(&mut h);
+        h.update(|p, w, cx| p.discard_draft(w, cx));
+        wait_tabs(&mut h);
+    }
+    h.keystroke("escape");
+    wait_tabs(&mut h);
+    h.update(|p, _, _| {
+        assert!(p.tabs.model.tabs().is_empty());
+        assert_eq!(p.tabs.model.closed_len(), 0);
+    });
+    drop(h);
+    std::fs::remove_dir_all(scratch).unwrap();
+}

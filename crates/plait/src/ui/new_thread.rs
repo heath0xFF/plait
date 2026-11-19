@@ -5,7 +5,7 @@
 //! The draft lands in the active checkout. Its harness, model, thinking level,
 //! and permissions are chosen in the row above its composer; until then each
 //! follows its default, and the harness follows Settings → New threads. Leaving the
-//! draft keeps its text; Escape or Discard clears it.
+//! draft keeps its text; Discard removes it and closes its tab.
 
 use super::{
     Plait, Workspace,
@@ -196,6 +196,27 @@ impl Plait {
             self.request_tab(super::tab_lifecycle::Intent::Close(tab), window, cx);
         }
         cx.notify();
+    }
+
+    /// Escape is pressed by reflex, so it closes only a draft that holds nothing,
+    /// as closing an empty draft does; a draft with anything in it stays.
+    pub(super) fn escape_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let empty = self.draft.pending.is_none()
+            && !self.draft_isolation_choice()
+            && self
+                .draft
+                .composer
+                .as_ref()
+                .is_some_and(|c| c.read(cx).holds_nothing());
+        let Some(tab) = self.tabs.model.active().filter(|_| empty) else {
+            return;
+        };
+        if self.tabs.model.get(tab).is_some_and(|tab| {
+            matches!(tab.thread().target(),
+            plait_core::tabs::ThreadTarget::Draft { id, .. } if self.draft.id.as_ref() == Some(id))
+        }) {
+            self.request_tab(super::tab_lifecycle::Intent::Close(tab), window, cx);
+        }
     }
 
     /// The harness the draft starts its thread in: the one chosen, else the default.

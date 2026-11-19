@@ -1077,7 +1077,9 @@ and no file is read: the agent receives the text a person would have typed.
 Commands are a table in `composer/commands.rs`; each maps to an action the app
 already has.
 
-Escape closes the suggestion list, then leaves recall. While the agent works,
+Escape closes the suggestion list, then leaves recall. In a new-thread draft a
+further Escape closes the tab only when the draft holds no text, images (loaded
+or loading), Project busy choice or unanswered first send. While the agent works,
 two Escape presses within 1.5 seconds stop the run; one press only arms the
 gesture, and any edit or cursor movement cancels it.
 
