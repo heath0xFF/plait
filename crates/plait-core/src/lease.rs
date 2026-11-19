@@ -618,11 +618,15 @@ fn acquire_common_file_in(
     Ok(file)
 }
 
-/// Resolve a Git checkout's canonical working-tree root and common Git directory
-/// using hardened read-only Git flags.
+/// Resolve a Git checkout's canonical working-tree root and common Git directory.
+/// A checkout root is read from its `.git` entry; anything else asks Git, with
+/// hardened read-only flags.
 pub fn resolve_git_checkout(path: &Path) -> Result<GitCheckoutPaths, LeaseError> {
     let canonical = fs::canonicalize(path)
         .map_err(|error| LeaseError::io(format!("Cannot resolve checkout: {error}")))?;
+    if let Some(paths) = paths_from_dot_git(&canonical) {
+        return Ok(paths);
+    }
     let mut command = crate::git::base_command(&canonical);
     command.args([
         "-c",
@@ -650,6 +654,9 @@ pub fn resolve_git_checkout(path: &Path) -> Result<GitCheckoutPaths, LeaseError>
 pub fn resolve_common_dir(path: &Path) -> Result<PathBuf, LeaseError> {
     let canonical = fs::canonicalize(path)
         .map_err(|error| LeaseError::io(format!("Cannot resolve repository: {error}")))?;
+    if let Some(paths) = paths_from_dot_git(&canonical) {
+        return Ok(paths.common_dir);
+    }
     let mut command = crate::git::base_command(&canonical);
     command.args([
         "-c",
@@ -669,6 +676,66 @@ pub fn resolve_common_dir(path: &Path) -> Result<PathBuf, LeaseError> {
     }
     fs::canonicalize(Path::new(common))
         .map_err(|error| LeaseError::io(format!("Cannot resolve Git common directory: {error}")))
+}
+
+/// The paths Git itself would report for a checkout whose root is `root`, read
+/// from `root/.git` without starting Git: every desktop write resolves its
+/// lease, and a `git rev-parse` cost about a quarter of a staging write.
+/// `None` sends the caller to Git: no `.git` entry here (a subdirectory, or a
+/// `core.worktree` layout), a symlink, or a form this does not read.
+fn paths_from_dot_git(root: &Path) -> Option<GitCheckoutPaths> {
+    let entry = root.join(".git");
+    let meta = fs::symlink_metadata(&entry).ok()?;
+    let git_dir = if meta.is_dir() {
+        entry
+    } else if meta.is_file() {
+        // As Git's read_gitfile: one `gitdir: <path>` line, relative to the root.
+        let text = small_text(&entry)?;
+        let target = text.strip_prefix("gitdir: ")?.trim_end();
+        if target.is_empty() {
+            return None;
+        }
+        root.join(target)
+    } else {
+        return None;
+    };
+    if !fs::symlink_metadata(git_dir.join("HEAD")).ok()?.is_file() {
+        return None;
+    }
+    // As Git's get_common_dir: `commondir`, without trailing line ends, relative to the Git directory.
+    let common = match fs::symlink_metadata(git_dir.join("commondir")) {
+        Ok(meta) if meta.is_file() => {
+            let text = small_text(&git_dir.join("commondir"))?;
+            let target = text.trim_end_matches(['\n', '\r']);
+            if target.is_empty() {
+                return None;
+            }
+            git_dir.join(target)
+        }
+        Ok(_) => return None,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => git_dir,
+        Err(_) => return None,
+    };
+    let common_dir = fs::canonicalize(common).ok()?;
+    common_dir.is_dir().then(|| GitCheckoutPaths {
+        root: root.to_path_buf(),
+        common_dir,
+    })
+}
+
+/// A short UTF-8 Git pointer file, or `None` if it is longer than any pointer.
+fn small_text(path: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    File::open(path)
+        .ok()?
+        .take(4097)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() > 4096 {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
 }
 
 /// Resolve a Git checkout to its canonical working-tree toplevel and acquire its
@@ -750,6 +817,169 @@ mod tests {
         fs::write(dir.join("README.md"), "hello\n").unwrap();
         git(dir, &["add", "."]);
         git(dir, &["commit", "-qm", "init"]);
+    }
+
+    fn git_paths(dir: &Path) -> GitCheckoutPaths {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args([
+                "rev-parse",
+                "--path-format=absolute",
+                "--show-toplevel",
+                "--git-common-dir",
+            ])
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "rev-parse in {dir:?}");
+        let text = String::from_utf8(out.stdout).unwrap();
+        let mut lines = text.lines().map(|line| fs::canonicalize(line).unwrap());
+        GitCheckoutPaths {
+            root: lines.next().unwrap(),
+            common_dir: lines.next().unwrap(),
+        }
+    }
+
+    #[test]
+    fn dot_git_paths_match_what_git_reports() {
+        let scratch = Scratch::new("dotgit");
+        let main = scratch.0.join("main");
+        init_repo(&main);
+        let linked = scratch.0.join("linked");
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "linked",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+        // A relative `gitdir:` line, as Git writes with relative worktree paths.
+        let relative = scratch.0.join("relative");
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "relative",
+                relative.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+        fs::write(
+            relative.join(".git"),
+            "gitdir: ../main/.git/worktrees/relative\n",
+        )
+        .unwrap();
+        let module = scratch.0.join("module");
+        init_repo(&module);
+        git(
+            &main,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                module.to_str().unwrap(),
+                "sub",
+            ],
+        );
+        let bare = scratch.0.join("bare.git");
+        git(
+            &scratch.0,
+            &[
+                "clone",
+                "-q",
+                "--bare",
+                main.to_str().unwrap(),
+                bare.to_str().unwrap(),
+            ],
+        );
+        let bare_tree = scratch.0.join("bare-tree");
+        git(
+            &bare,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "bare-tree",
+                bare_tree.to_str().unwrap(),
+                "main",
+            ],
+        );
+
+        for root in [&main, &linked, &relative, &main.join("sub"), &bare_tree] {
+            let root = fs::canonicalize(root).unwrap();
+            assert_eq!(
+                paths_from_dot_git(&root),
+                Some(git_paths(&root)),
+                "{root:?}"
+            );
+            assert_eq!(
+                resolve_git_checkout(&root).unwrap(),
+                git_paths(&root),
+                "{root:?}"
+            );
+        }
+        // A subdirectory, a symlinked `.git` or an unreadable pointer is left to Git.
+        let nested = fs::canonicalize(&main).unwrap().join("nested");
+        fs::create_dir(&nested).unwrap();
+        assert_eq!(paths_from_dot_git(&nested), None);
+        assert_eq!(resolve_git_checkout(&nested).unwrap(), git_paths(&main));
+        fs::remove_file(relative.join(".git")).unwrap();
+        symlink(linked.join(".git"), relative.join(".git")).unwrap();
+        assert_eq!(paths_from_dot_git(&relative), None);
+        fs::remove_file(relative.join(".git")).unwrap();
+        fs::write(relative.join(".git"), "not a pointer\n").unwrap();
+        assert_eq!(paths_from_dot_git(&relative), None);
+    }
+
+    #[test]
+    fn a_checkout_lease_starts_no_git_process() {
+        let scratch = Scratch::new("spawns");
+        let leases = scratch.0.join("leases");
+        let main = scratch.0.join("main");
+        init_repo(&main);
+        let linked = scratch.0.join("linked");
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "linked",
+                linked.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+        for root in [&main, &linked] {
+            let before = crate::git::SPAWNED.with(|count| count.get());
+            let lease = acquire_git_checkout_in(
+                &leases,
+                root,
+                None,
+                LeaseClass::Exclusive,
+                Some(Duration::ZERO),
+            )
+            .unwrap();
+            assert_eq!(
+                crate::git::SPAWNED.with(|count| count.get()),
+                before,
+                "{root:?}"
+            );
+            drop(lease);
+        }
     }
 
     #[test]

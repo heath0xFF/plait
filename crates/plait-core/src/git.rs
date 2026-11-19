@@ -170,6 +170,12 @@ pub(crate) fn run_readonly(command: &mut Command) -> Result<Vec<u8>> {
     Ok(output.bytes)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Git processes this thread has started, so tests can hold a path to its cost.
+    pub(crate) static SPAWNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Run to completion under a deadline. `input` goes to stdin from its own
 /// thread so a full pipe cannot stall the output readers or the deadline.
 fn run(
@@ -178,6 +184,8 @@ fn run(
     limit: usize,
     timeout: Duration,
 ) -> Result<Raw> {
+    #[cfg(test)]
+    SPAWNED.with(|count| count.set(count.get() + 1));
     let stdin = if input.is_some() {
         Stdio::piped()
     } else {
