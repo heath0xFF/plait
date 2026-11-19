@@ -386,9 +386,11 @@ thread or pending draft through a lost reply and an explicit retry.
 Changing a queued thread's model, thinking, harness permission mode or command policy makes
 that waiter fail with a reason when its turn comes. Send again with the choices
 you intend. The next message's approval choice does not change an already
-accepted message's approval. A removed or replaced checkout, unavailable harness/model or
-unconfirmed cleanup also cannot start it; a failed waiter does not strand the
-rest of the line. A checkout holds at most 32 pending messages and 32 MiB of
+accepted message's approval. A removed or replaced checkout or an unavailable
+harness or model also cannot start it; a failed waiter does not strand the rest
+of the line. An unconfirmed cleanup blocks the whole checkout, so it holds the
+line instead: the first waiting thread shows the cleanup reason, and after the
+cleanup is confirmed, **Resume** continues in order. A checkout holds at most 32 pending messages and 32 MiB of
 queued text and images, including held messages and follow-ups. A full queue
 refuses the extra send plainly and keeps its draft.
 

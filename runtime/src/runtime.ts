@@ -778,6 +778,11 @@ export class Runtime {
         if (this.closing) return;
         const reason = resourceFailure(error) ?? failure(error);
         if (reason.code === 'busy' || reason.code === 'resource_exhausted' && this.capacity.maximum !== undefined && this.active.size >= this.capacity.maximum) { this.wakeQueue(); return; }
+        if (reason.code === 'cleanup_uncertain') {
+          // The whole checkout is blocked, not this message: failing each head would empty the line.
+          this.store.waiters.holdCheckout(root); snapshot.status = 'error'; snapshot.error = reason; this.save(snapshot);
+          this.changed('#'); return;
+        }
         if (next.kind === 'checkout') {
           this.store.waiters.set(next.thread_id,next.request_id,'failed',reason);
           this.store.cancel(next.thread_id,next.request_id);

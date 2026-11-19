@@ -127,3 +127,17 @@ test('a host stop during admission holds the waiter instead of failing it',async
  await until(()=>h.runtime.store.waiters.get(a,'about-to-start')!.state==='started'&&h.runtime.active.size===0);
  assert.equal(h.runtime.snapshot(a).messages.filter(m=>m.id==='request-about-to-start').length,1);
 });
+test('an unconfirmed cleanup holds the line instead of failing every waiter',async t=>{
+ const {cleanupHelper}=await import('../src/cleanup.ts');const h=await fixture(t);
+ const a=await thread(h.runtime,h.root,'a'),b=await thread(h.runtime,h.root,'b');
+ const lease=await acquireCheckout(h.root);await h.runtime.handle(queue(a,'first'));await h.runtime.handle(queue(b,'second'));
+ await cleanupHelper('begin',h.root,'held-cleanup','A process still owns this checkout.',lease);
+ await cleanupHelper('mark',h.root,'held-cleanup','A process still owns this checkout.',lease);
+ await lease.close();
+ // The shared contention timer retries after the lease frees, then meets the cleanup marker.
+ await until(()=>h.runtime.store.waiters.get(a,'first')!.state!=='waiting');
+ assert.deepEqual(h.runtime.store.waiters.line(h.root).map(w=>[w.request_id,w.state]),[['first','held'],['second','held']]);
+ assert.equal(h.runtime.snapshot(a).error?.code,'cleanup_uncertain');assert.match(h.runtime.snapshot(a).error!.message,/A process still owns this checkout/);
+ assert.equal(h.runtime.store.inputs(a).length,0);assert.equal(h.runtime.active.size,0);
+ for(const [id,request] of [[a,'first'],[b,'second']])await h.runtime.handle({op:'cancel_checkout_wait',thread_id:id,request_id:request});
+});

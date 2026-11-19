@@ -2693,7 +2693,7 @@ checkouts have independent drains and never share a queue head.
 | State | Transition |
 | --- | --- |
 | `waiting` | Durable acceptance; the host considers it when the checkout frees. |
-| `held` | Host startup changes every not-started input to held. Resume changes the whole checkout's held line to waiting. |
+| `held` | Host startup changes every not-started input to held, and so does an unconfirmed cleanup met at admission, which records its reason on the head's thread. Resume changes the whole checkout's held line to waiting. |
 | `started` | Revalidation and lease acquisition succeed; moving the input into the conversation and recording start are one transaction. Normal run/Stop/recovery states now own it. |
 | `cancelled` | Cancel or Stop removes a pending input and its image associations. Its request ID stays used; it never runs. |
 | `failed` | A checkout waiter fails revalidation or admission, records its reason, and leaves the line. The next waiter is considered. |
@@ -2702,7 +2702,8 @@ Before start the host rechecks the saved folder identity, cleanup exclusion,
 harness/model availability, cancellation and settings. A changed model, thinking
 level, permission mode or command policy fails the waiter explicitly; it does
 not silently substitute new settings. Send again with the intended choices.
-Cleanup uncertainty never grants a lease. No before-record is taken while an
+Cleanup uncertainty never grants a lease; it holds the checkout's line rather
+than failing each waiter in turn. No before-record is taken while an
 input waits: recording begins only after normal run admission. A failed
 before-record is a normal failed run, with no harness execution.
 

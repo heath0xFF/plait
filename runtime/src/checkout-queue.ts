@@ -75,6 +75,8 @@ export class CheckoutQueue {
   set(thread: string, request: string, state: WaitState, error?: Failure) {
     this.store.db.prepare(`UPDATE checkout_waiters SET state=?,error=? WHERE thread=? AND request=? AND ${pending}`).run(state,error ? JSON.stringify(error) : null,thread,request);
   }
+  /** Holds every waiting input of one checkout, as a restart does; only Resume releases it. */
+  holdCheckout(checkout: string) { this.store.db.prepare("UPDATE checkout_waiters SET state='held' WHERE checkout=? AND state='waiting'").run(checkout); }
   hold(thread: string) { this.store.db.prepare("UPDATE checkout_waiters SET state='held' WHERE thread=? AND kind='follow_up' AND state='waiting'").run(thread); }
   resume(checkout: string) { this.store.db.prepare("UPDATE checkout_waiters SET state='waiting' WHERE checkout=? AND state='held'").run(checkout); }
   resumeThread(thread: string) { this.store.db.prepare("UPDATE checkout_waiters SET state='waiting' WHERE thread=? AND kind='follow_up' AND state='held'").run(thread); }
