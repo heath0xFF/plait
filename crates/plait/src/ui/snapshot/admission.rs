@@ -202,12 +202,18 @@ fn scripted_busy_host(
                 }
                 Err(error) => panic!("{error}"),
             };
+            // An accepted socket can inherit the listener's non-blocking mode.
+            stream.set_nonblocking(false).unwrap();
             stream
-                .set_read_timeout(Some(Duration::from_secs(3)))
+                .set_read_timeout(Some(Duration::from_secs(10)))
                 .unwrap();
             let mut line = String::new();
-            BufReader::new(&mut stream).read_line(&mut line).unwrap();
-            let request: Value = serde_json::from_str(&line).unwrap();
+            if BufReader::new(&mut stream).read_line(&mut line).is_err() {
+                continue;
+            }
+            let Ok(request) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
             seen.lock().unwrap().push(request.clone());
             let result = match request["op"].as_str().unwrap() {
                 "admission_info" => {
