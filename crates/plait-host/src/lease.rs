@@ -84,11 +84,60 @@ pub fn acquire(args: Vec<String>) -> io::Result<()> {
     let (_expected_file, expected_lock_id) = open_lock_file(&lease_dir_fd, &expected_name)
         .map_err(|error| io::Error::other(error.to_string()))?;
     verify_inherited_lock_fd(3, expected_lock_id)?;
-    if mode != "common" {
-        git_cleanup::require_clear(id)
-            .map_err(|error| io::Error::other(format!("cleanup_uncertain: {error}")))?;
+    if let Err(error) = lock_mode(mode, id, timeout_ms) {
+        // A lent Git child may hold these locks: explain its saved state.
+        if mode != "common" {
+            git_cleanup::require_clear(id)
+                .map_err(|error| io::Error::other(format!("cleanup_uncertain: {error}")))?;
+        }
+        return Err(error);
     }
 
+    if let Err(error) = verify_dir_still(&canonical, id) {
+        if matches!(mode, "writer" | "exclusive") {
+            unsafe {
+                libc::flock(4, libc::LOCK_UN);
+            }
+        }
+        unsafe {
+            libc::flock(3, libc::LOCK_UN);
+        }
+        return Err(io::Error::other(format!("identity: {error}")));
+    }
+    let clear = match mode {
+        "common" => Ok(()),
+        // Only with the locks held: a desktop that dies after this check can
+        // no longer free its lease beside a surviving Git child.
+        "reader" => git_cleanup::require_clear(id)
+            .and_then(|()| cleanup::require_clear_for_reader(&lease_dir, id)),
+        _ => git_cleanup::require_clear(id).and_then(|()| cleanup::require_clear(id)),
+    };
+    if let Err(error) = clear {
+        // These descriptors belong to Node. Close in this helper alone would
+        // leave its copies locked after a rejected admission.
+        if mode != "reader" {
+            unsafe {
+                libc::flock(4, libc::LOCK_UN);
+            }
+        }
+        unsafe {
+            libc::flock(3, libc::LOCK_UN);
+        }
+        return Err(io::Error::other(format!("cleanup_uncertain: {error}")));
+    }
+    if owner_fd {
+        let (_, owner_id) = open_lock_file(&lease_dir_fd, &cleanup::owner_lock_name(id))
+            .map_err(io::Error::other)?;
+        verify_inherited_lock_fd(5, owner_id)?;
+        if !try_flock_fd(5, libc::LOCK_EX).map_err(io::Error::other)? {
+            return Err(io::Error::other("busy: Cleanup ownership is still held."));
+        }
+    }
+    Ok(())
+}
+
+/// Takes the mode's locks in Level 1 -> Level 2 order, releasing any on refusal.
+fn lock_mode(mode: &str, id: DirIdentity, timeout_ms: u64) -> io::Result<()> {
     match mode {
         "reader" => {
             if !try_flock_fd(3, libc::LOCK_SH).map_err(|e| io::Error::other(e.to_string()))? {
@@ -128,44 +177,6 @@ pub fn acquire(args: Vec<String>) -> io::Result<()> {
             }
         }
         _ => return Err(io::Error::other("unknown lock-fd mode")),
-    }
-
-    if let Err(error) = verify_dir_still(&canonical, id) {
-        if matches!(mode, "writer" | "exclusive") {
-            unsafe {
-                libc::flock(4, libc::LOCK_UN);
-            }
-        }
-        unsafe {
-            libc::flock(3, libc::LOCK_UN);
-        }
-        return Err(io::Error::other(format!("identity: {error}")));
-    }
-    let clear = match mode {
-        "common" => Ok(()),
-        "reader" => cleanup::require_clear_for_reader(&lease_dir, id),
-        _ => cleanup::require_clear(id),
-    };
-    if let Err(error) = clear {
-        // These descriptors belong to Node. Close in this helper alone would
-        // leave its copies locked after a rejected admission.
-        if mode != "reader" {
-            unsafe {
-                libc::flock(4, libc::LOCK_UN);
-            }
-        }
-        unsafe {
-            libc::flock(3, libc::LOCK_UN);
-        }
-        return Err(io::Error::other(format!("cleanup_uncertain: {error}")));
-    }
-    if owner_fd {
-        let (_, owner_id) = open_lock_file(&lease_dir_fd, &cleanup::owner_lock_name(id))
-            .map_err(io::Error::other)?;
-        verify_inherited_lock_fd(5, owner_id)?;
-        if !try_flock_fd(5, libc::LOCK_EX).map_err(io::Error::other)? {
-            return Err(io::Error::other("busy: Cleanup ownership is still held."));
-        }
     }
     Ok(())
 }

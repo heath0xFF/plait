@@ -1146,3 +1146,66 @@ fn worktree_checkout_gets_ordinary_modes_under_the_private_host_umask() {
     assert_eq!(mode(&store.join(format!("worktrees/{id}.json"))), 0o600);
     git(&root, &["worktree", "remove", path.to_str().unwrap()]);
 }
+
+#[test]
+fn host_admission_checks_git_records_only_while_holding_the_checkout_locks() {
+    use plait_core::lease::{git_cleanup, open_verified_dir, prepare_checkout_lock};
+    use std::os::{fd::AsRawFd, unix::process::CommandExt};
+    use std::time::{Duration, Instant};
+
+    let base = Scratch::new();
+    let root = repository(&base.0);
+    let prepared = prepare_checkout_lock(&root).unwrap();
+    let id = open_verified_dir(&root).unwrap().2;
+    // A record checked before the locks is a check a dying desktop can pass:
+    // its lease frees after the check while its Git child still runs.
+    assert!(git_cleanup::unconfirmed(id).unwrap().is_none());
+    let lease_dir = PathBuf::from(std::env::var_os("PLAIT_LEASE_DIR").unwrap());
+    let record =
+        fs::File::open(lease_dir.join(format!("git-cleanup-{:016x}-{:016x}.lock", id.dev, id.ino)))
+            .unwrap();
+    assert_eq!(unsafe { libc::flock(record.as_raw_fd(), libc::LOCK_EX) }, 0);
+    let lifecycle = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&prepared.lock_path)
+        .unwrap();
+    let dir = fs::File::open(&prepared.root).unwrap();
+    let (lfd, dfd) = (lifecycle.as_raw_fd(), dir.as_raw_fd());
+    let mut helper = Command::new(env!("CARGO_BIN_EXE_plait-host"));
+    helper.args(["lock-fd", "writer"]).arg(&prepared.root);
+    unsafe {
+        helper.pre_exec(move || {
+            let a = libc::fcntl(lfd, libc::F_DUPFD_CLOEXEC, 10);
+            let b = libc::fcntl(dfd, libc::F_DUPFD_CLOEXEC, 10);
+            if a < 0 || b < 0 || libc::dup2(a, 3) < 0 || libc::dup2(b, 4) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut helper = helper.spawn().unwrap();
+    // While the helper waits on the record, the lifecycle lock must already be its.
+    let probe = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&prepared.lock_path)
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut locked_first = false;
+    while Instant::now() < deadline {
+        if unsafe { libc::flock(probe.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            locked_first = true;
+            break;
+        }
+        unsafe { libc::flock(probe.as_raw_fd(), libc::LOCK_UN) };
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    unsafe { libc::flock(record.as_raw_fd(), libc::LOCK_UN) };
+    let status = helper.wait().unwrap();
+    assert!(
+        locked_first,
+        "lock-fd read the Git record before taking the checkout locks"
+    );
+    assert!(status.success());
+}
