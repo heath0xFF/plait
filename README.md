@@ -191,7 +191,9 @@ Dashed boxes are planned, not shipped.
 ## Status
 
 Plait is an early preview, built in the open and used daily to build itself.
-The latest release is **v0.1.0-preview.23**.
+The latest preview is on the
+[Releases page](https://github.com/heath0xFF/plait/releases); every merge that
+changes the app publishes the next one.
 
 - **Mac only, local only.** Remote hosts and Linux execution are
   [planned](docs/ROADMAP.md).

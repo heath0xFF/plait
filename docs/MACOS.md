@@ -1333,12 +1333,12 @@ The workflow launches the installed client and captures its window when the
 runner has a display. These are scripted checks, not live-model acceptance or
 validation on your Mac. See [verification](VERIFICATION.md) for results.
 
-Branch builds upload a `plait-macos-arm64-…` workflow artifact, which expires
-after 14 days. A version tag's run builds and checks the release once, then a
+A merge to `main` that changes the app is built once: the run uploads a
+`plait-macos-arm64-…` workflow artifact, which expires after 14 days, and a
 separate publish job creates an immutable GitHub prerelease with the DMG,
-packages, installer script, and checksums; pushing that commit to `main`
-afterwards does not build it again. A failed build or installer test publishes
-nothing. The job's only secret is the update signing key, which signs
+packages, installer script, and checksums, numbered after the last preview.
+The tests run before the merge, on the pull request. A failed build or
+installer test publishes nothing. The job's only secret is the update signing key, which signs
 `update.json` for in-app updates (see [Releasing](RELEASING.md)); the app and
 packages are not Developer ID signed. [Issue #6](https://github.com/heath0xFF/plait/issues/6)
 tracks Developer ID signing and notarization.

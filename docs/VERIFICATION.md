@@ -731,11 +731,9 @@ A completely passing run removes it. An all-skipped native run exits zero with
 explicit skips unless interrupted.
 
 CI uploads these files and the console log. The check runs in a job of its
-own after packaging, for release tags and for other pushes to `main`, on the
-package that run built, without installing it. It is advisory
-(`continue-on-error`): publishing does not wait for it, and its failures do
-not fail the run. A release commit is built once, by its tag's run; pushing
-that commit to `main` afterwards starts no second macOS build.
+own after packaging, on each release build, on the package that run built,
+without installing it. It is advisory (`continue-on-error`): publishing does
+not wait for it, and its failures do not fail the run.
 
 Verified without a window: Swift compilation and pure selector, flag decoding,
 tab-row empty-right-end geometry (recorded one-tab, full-row and wide trees,
@@ -2493,3 +2491,18 @@ native acceptance check has no item for them yet); live models; a provider
 sign-out while a message waits, other than simulated; an outside program
 holding the checkout for a long time; VoiceOver; Linux execution; and the
 installed app.
+
+## Releases after v0.1.0-preview.23
+
+From the release after v0.1.0-preview.23, a preview is published by merging
+to `main`, not by a hand-made tag (see [Releasing](RELEASING.md)). The tests
+run once, on the pull request, by GitHub: the macOS check and the Linux
+check. The build runs once, on `main`. The per-release records above end
+here. What was reviewed, measured and left unverified for a change is written
+in its pull request, and what stays true is kept in the sections of this
+document that describe each check.
+
+The first run of the real-window check as its own job, on a commit that held
+the fix for Redo by shortcut, passed 42 of 46 items and skipped 4, with no
+failure: the first run with none. Twenty-six of the passes needed a forced
+frame and say so.

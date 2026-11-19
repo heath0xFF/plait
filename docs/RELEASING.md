@@ -1,43 +1,46 @@
 # Releasing Plait
 
 Installed per-user apps and headless hosts update from GitHub Releases. A
-release is a pushed tag; the macOS workflow builds, tests, signs the update
-manifest, and publishes.
+release is made by merging to `main`: GitHub builds what was merged, signs the
+update manifest, and publishes the next preview. Nobody tags by hand.
 
-## Publish a preview
+## How a change reaches a release
 
-1. Keep the Cargo version for `plait` and `plait-host` the same
-   (`MAJOR.MINOR.PATCH`). A preview tag adds `-preview.N`, counting from 1.
-2. Get the release commit ready on a branch. The tests for what changed pass,
-   and a change that writes a person's files, or a file an older build reads,
-   has been read by someone who did not write it. A release is built and
-   checked once, by its tag's run: a full local `scripts/check.sh` before
-   tagging is not required, and repeats what that run does. Render the scenes
-   and measure frame cost only when the change touches drawing.
-3. Tag that commit and push the tag alone.
-
-   ```sh
-   git tag v0.1.0-preview.7
-   git push origin v0.1.0-preview.7
-   ```
-
-4. The **macOS build** workflow builds from that tag. Its check job (format,
-   lint, tests, and the real command sandbox) and package job run side by
-   side; the package job builds the installers and runs the installer smoke
-   test, including migration to the prebuilt per-user install. Its publish job
-   writes `update.json`, signs it, and publishes the release with the app
+1. **Work on a branch.** `main` changes only through a pull request; GitHub
+   refuses a direct push.
+2. **Open a pull request.** GitHub runs the tests on it: the macOS check
+   (format, lint, tests, and the real command sandbox) and the Linux check. A
+   request that changes only prose skips the macOS check. The request can merge
+   when both pass and it is up to date with `main`, so what was tested is what
+   is merged. A change that writes a person's files, or a file an older build
+   reads, is also read by someone who did not write it before it merges.
+3. **Merge.** The push to `main` is not tested again. If `main` now holds code
+   that ships and has not been released, the **macOS build** workflow builds it
+   once: the package job builds the installers and runs the installer smoke
+   test, including migration to the prebuilt per-user install, and the publish
+   job writes `update.json`, signs it, and publishes the release with the app
    archive, host archive, packages, DMG, and checksums. The
    [native acceptance check](VERIFICATION.md#native-acceptance-check) drives
    the same package in a job of its own; it is advisory, and publishing does
    not wait for it.
-5. When the release is published, push the commit to `main`. That push does
-   not build or check on macOS again, because the tag's run did both for this
-   commit; the Linux check runs. If the tag's run fails, nothing is published
-   and the tag stays as it is: fix the branch and tag the next number.
+
+A merge that changes only docs, tests or CI publishes nothing;
+`scripts/release_plan.py` holds the list of paths that never reach an
+installed app.
+
+## Preview numbers
+
+Keep the Cargo version for `plait` and `plait-host` the same
+(`MAJOR.MINOR.PATCH`). A preview is `v<version>-preview.N`. The workflow takes
+the next `N` after the highest tag for that version, and creates the tag with
+the release, on the commit it built, only when the build and the installer
+test have passed. A build that fails uses up no number: fix it with another
+pull request.
 
 Installed apps see the release on their next launch or **Check for Updates…**.
 The updater compares the signed version, so each release needs a newer tag.
-Published tags and assets are not rewritten.
+Published tags and assets are not rewritten. A few earlier numbers have a tag
+and no release, from when tags were pushed by hand; they stay as they are.
 
 ## Update signing key
 

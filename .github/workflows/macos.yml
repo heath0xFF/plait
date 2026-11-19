@@ -3,53 +3,56 @@ name: macOS build
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# Main and tag builds always finish: a newer push waits behind the running
-# build rather than cancelling it, and GitHub keeps only the newest waiting one.
-# Pull requests still cancel superseded builds.
+# A build on main always finishes: a newer push waits behind the running build
+# rather than cancelling it, and GitHub keeps only the newest waiting one, which
+# holds every change before it. Pull requests cancel superseded runs.
 concurrency:
   group: macos-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # A release is built once. Its tag's run builds, checks and publishes the
-  # commit, so the push of that same commit to main skips both macOS jobs.
+  # A change is tested once, on its pull request, and built once, when it
+  # reaches main. This job decides which of the two this run is, and for main
+  # whether it holds unreleased code that ships and which preview that makes.
   plan:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      build: ${{ steps.decide.outputs.build }}
+      test: ${{ steps.decide.outputs.test }}
+      release: ${{ steps.decide.outputs.release }}
+      tag: ${{ steps.decide.outputs.tag }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Every tag and the pull request's base are needed to compare against.
+          fetch-depth: 0
       - id: decide
         env:
-          REPOSITORY: ${{ github.repository }}
-          COMMIT: ${{ github.sha }}
+          BASE: ${{ github.event.pull_request.base.sha }}
         run: |
-          build=true
-          if [[ $GITHUB_EVENT_NAME == push && $GITHUB_REF == refs/heads/main ]]; then
-            # A failed lookup leaves build=true: building twice is the safe mistake.
-            if git ls-remote --tags "https://github.com/$REPOSITORY" 'v*' | awk -v commit="$COMMIT" '$1 == commit' | grep -q .; then
-              build=false
-              echo "A release tag names $COMMIT; that tag's run built and checked it." >> "$GITHUB_STEP_SUMMARY"
-            fi
-          fi
-          echo "build=$build" >> "$GITHUB_OUTPUT"
+          case "$GITHUB_EVENT_NAME" in
+            pull_request) python3 scripts/release_plan.py pull-request "$BASE" ;;
+            push) python3 scripts/release_plan.py main ;;
+            # A run started by hand tests the branch it was started on.
+            *) printf 'test=true\nrelease=false\n' ;;
+          esac | tee -a "$GITHUB_OUTPUT"
 
-  # Checks and packaging run side by side; publishing needs both.
+  # The tests that gate a merge. They run on the pull request, not again on main.
   check:
     needs: plan
-    if: needs.plan.outputs.build == 'true'
+    if: needs.plan.outputs.test == 'true'
     runs-on: macos-26
     timeout-minutes: 45
     env:
       MACOSX_DEPLOYMENT_TARGET: '15.0'
-      # The package job builds and tests the release binaries.
+      # The release binaries are built and tested once, by the package job on main.
       PLAIT_CHECK_SKIP_RELEASE: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -76,10 +79,39 @@ jobs:
           npm test
       - name: Check installer planning
         run: python3 -m unittest discover -s scripts -p 'test_release_*.py'
-      # Saved from main only, once per lockfile and toolchain, so a build does not spend
-      # minutes uploading a cache that differs only in Plait's own crates.
+
+  # A pull request can read a build cache only if main saved it, and the tests
+  # no longer run on main. When the lockfile or toolchain changes, main builds
+  # the test binaries once and saves them for the pull requests that follow.
+  test-cache:
+    needs: plan
+    # A lockfile or toolchain change always ships, so it always makes a release.
+    if: needs.plan.outputs.release == 'true'
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: tools
+        uses: ./.github/actions/macos-tools
+      - name: Look for this lockfile's test cache
+        id: cargo-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/debug
+          key: macos26-${{ runner.arch }}-${{ steps.tools.outputs.cache-id }}-check-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          lookup-only: true
+      - name: Build the test binaries
+        if: steps.cargo-cache.outputs.cache-hit != 'true'
+        run: cargo test --locked --workspace --no-run
       - name: Save native build cache
-        if: always() && github.ref == 'refs/heads/main' && steps.cargo-cache.outcome == 'success' && steps.cargo-cache.outputs.cache-hit != 'true'
+        if: steps.cargo-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
@@ -88,14 +120,16 @@ jobs:
             target/debug
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
+  # The one build of a release: installers, the installer test, and the
+  # package the real-window check and the publish job both use.
   package:
     needs: plan
-    if: needs.plan.outputs.build == 'true'
+    if: needs.plan.outputs.release == 'true'
     runs-on: macos-26
     timeout-minutes: 45
     env:
       MACOSX_DEPLOYMENT_TARGET: '15.0'
-      PLAIT_RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+      PLAIT_RELEASE_TAG: ${{ needs.plan.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -140,7 +174,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Save native build cache
-        if: always() && github.ref == 'refs/heads/main' && steps.cargo-cache.outcome == 'success' && steps.cargo-cache.outputs.cache-hit != 'true'
+        if: always() && steps.cargo-cache.outcome == 'success' && steps.cargo-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: |
@@ -155,7 +189,6 @@ jobs:
   # publishing does not wait for it, and its failures do not fail the run.
   acceptance:
     needs: package
-    if: github.event_name == 'push'
     runs-on: macos-26
     timeout-minutes: 20
     continue-on-error: true
@@ -204,9 +237,10 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  # The preview's number is taken only here, when everything before it passed:
+  # a build that fails uses up no number and leaves no tag behind.
   publish:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [check, package]
+    needs: [plan, package]
     runs-on: ubuntu-24.04
     permissions:
       actions: read
@@ -214,7 +248,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      RELEASE_TAG: ${{ github.ref_name }}
+      RELEASE_TAG: ${{ needs.plan.outputs.tag }}
       ARTIFACT: plait-macos-arm64-${{ github.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -259,8 +293,9 @@ jobs:
             '' \
             'The attached installed-client images show that labeled test, not a personal-account session.' \
             'See docs/MACOS.md, docs/SELF-HOSTING.md, and docs/VERIFICATION.md at this tag for setup and limits.' > notes.md
-          gh release create "$RELEASE_TAG" --verify-tag --prerelease --draft \
-            --title "Plait $RELEASE_TAG — local preview" --notes-file notes.md \
+          # The tag is created with the release, on the commit this run built.
+          gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --prerelease --draft \
+            --title "Plait $RELEASE_TAG — local preview" --notes-file notes.md --generate-notes \
             release/*.dmg release/*.pkg release/*.zip release/*.tar.gz release/*.sha256 \
             release/update.json release/update.json.sig \
             release/install.sh release/release.json release/Plait-Release-*.json release/installed-client*.png
