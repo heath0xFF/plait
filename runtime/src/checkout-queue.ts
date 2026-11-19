@@ -78,7 +78,8 @@ export class CheckoutQueue {
   /** Holds every waiting input of one checkout, as a restart does; only Resume releases it. */
   holdCheckout(checkout: string) { this.store.db.prepare("UPDATE checkout_waiters SET state='held' WHERE checkout=? AND state='waiting'").run(checkout); }
   hold(thread: string) { this.store.db.prepare("UPDATE checkout_waiters SET state='held' WHERE thread=? AND kind='follow_up' AND state='waiting'").run(thread); }
-  resume(checkout: string) { this.store.db.prepare("UPDATE checkout_waiters SET state='waiting' WHERE checkout=? AND state='held'").run(checkout); }
+  /** A held follow-up keeps its own thread's next-send rule; another thread's Resume does not release it. */
+  resume(checkout: string) { this.store.db.prepare("UPDATE checkout_waiters SET state='waiting' WHERE checkout=? AND kind='checkout' AND state='held'").run(checkout); }
   resumeThread(thread: string) { this.store.db.prepare("UPDATE checkout_waiters SET state='waiting' WHERE thread=? AND kind='follow_up' AND state='held'").run(thread); }
   summary(thread: string, checkout: string): QueueSummary | null {
     const line = this.line(checkout); const at = line.findIndex(waiter => waiter.thread_id === thread && waiter.kind === 'checkout');

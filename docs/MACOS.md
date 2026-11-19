@@ -378,8 +378,9 @@ box. Hover shows its place in line and that it waits for the checkout. **Cancel*
 removes its first waiting message and leaves the rest in order. If that message
 just started, Cancel requests Stop, which also clears that thread's remaining
 queued input as usual. A host restart changes
-not-started messages to **Held**. **Resume** releases the whole checkout's held
-line in order; interrupted runs are never replayed. Closing a tab or the desktop
+not-started messages to **Held**. **Resume** releases the checkout's held Wait
+messages in order; interrupted runs are never replayed. Another thread's held
+**Follow-up** messages stay held until that thread's next send. Closing a tab or the desktop
 leaves a running host's queue alone. Messages and images remain with their own
 thread or pending draft through a lost reply and an explicit retry.
 

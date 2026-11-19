@@ -2652,7 +2652,7 @@ existing reply shapes are unchanged:
 | `submit_checkout {thread_id,request_id,text,approval?,images?}` | The existing acceptance fields `{thread_id,request_id,accepted:true}` after a durable commit. Approval defaults to `ask`; image IDs refer to completed thread-owned uploads. An available checkout may start immediately. |
 | `checkout_queue {thread_id}` | `{schema:1,thread_id,checkout,waiters}` with up to 32 checkout waiter receipts in acceptance order: pending inputs first for inclusion, then recent terminal receipts. Each has `request_id`, `state`, `position` (zero when terminal), and nullable `error`. Cancellation replies always include the requested receipt. |
 | `cancel_checkout_wait {thread_id,request_id}` | The same queue receipt. Waiting or held input becomes cancelled. If that exact input already started and is still the active run, the operation requests the existing Stop. It never stops a later run or silently discards an executing input. Repeating cancellation is safe. |
-| `resume_checkout_queue {thread_id}` | The same queue receipt. Explicitly releases all held inputs for this thread's checkout in their original order, including held follow-ups. It does not replay an interrupted run. |
+| `resume_checkout_queue {thread_id}` | The same queue receipt. Explicitly releases every held checkout waiter for this thread's checkout in its original order. A held follow-up is not released: it keeps its own thread's next-send rule. It does not replay an interrupted run. |
 | `list_threads_queue {checkout?,limit?,cursor?,archived?}` | The version 6 thread-page shape, adding nullable `checkout_queue` to each summary. The normal listing's pagination and bounds apply. |
 | `watch_threads_queue {archived?}` | The existing shared summary-event stream, with the same queue addition. No separate watcher per waiter is required. |
 
@@ -2685,15 +2685,15 @@ eligible order gets the next writer lease. A later follow-up cannot bypass an
 earlier checkout waiter, and a direct submit cannot jump an eligible line.
 Steering explicitly joins the current run; a steering input that was not taken
 uses its original place for a later run. Follow-ups held after their own run
-fails remain ineligible until the existing next-send action or Resume; they do
-not prevent other threads' waiters from advancing. A restart-held checkout
+fails, or at a restart, remain ineligible until their own thread's next send;
+another thread's Resume does not release them, and they do not prevent other threads' waiters from advancing. A restart-held checkout
 waiter keeps its place and holds later inputs until Resume or Cancel. Independent
 checkouts have independent drains and never share a queue head.
 
 | State | Transition |
 | --- | --- |
 | `waiting` | Durable acceptance; the host considers it when the checkout frees. |
-| `held` | Host startup changes every not-started input to held, and so does an unconfirmed cleanup met at admission, which records its reason on the head's thread. Resume changes the whole checkout's held line to waiting. |
+| `held` | Host startup changes every not-started input to held, and so does an unconfirmed cleanup met at admission, which records its reason on the head's thread. Resume changes the checkout's held checkout waiters to waiting. |
 | `started` | Revalidation and lease acquisition succeed; moving the input into the conversation and recording start are one transaction. Normal run/Stop/recovery states now own it. |
 | `cancelled` | Cancel or Stop removes a pending input and its image associations. Its request ID stays used; it never runs. |
 | `failed` | A checkout waiter fails revalidation or admission, records its reason, and leaves the line. The next waiter is considered. |

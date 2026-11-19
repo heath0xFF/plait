@@ -141,3 +141,17 @@ test('an unconfirmed cleanup holds the line instead of failing every waiter',asy
  assert.equal(h.runtime.store.inputs(a).length,0);assert.equal(h.runtime.active.size,0);
  for(const [id,request] of [[a,'first'],[b,'second']])await h.runtime.handle({op:'cancel_checkout_wait',thread_id:id,request_id:request});
 });
+test('Resume releases checkout waiters, never another thread held follow-ups',async t=>{
+ const h=await fixture(t),hold=barrier();let began=false;
+ h.faux.setResponses([async()=>{began=true;await hold.waiting;throw new Error('run failed');},fauxAssistantMessage('waiter ran')]);
+ const a=await thread(h.runtime,h.root,'a'),b=await thread(h.runtime,h.root,'b');
+ await run(h.runtime,b,'b-run');await until(()=>began);
+ await h.runtime.handle({op:'submit',protocol_version:6,thread_id:b,request_id:'b-follow',text:'b-follow',when_busy:'follow_up',approval:'auto'});
+ hold.release();await until(()=>h.runtime.active.size===0);assert.equal(h.runtime.store.waiters.get(b,'b-follow')!.state,'held');
+ const lease=await acquireCheckout(h.root);await h.runtime.handle(queue(a,'a-wait'));await h.restart();await lease.close();
+ await h.runtime.handle({op:'resume_checkout_queue',thread_id:a});
+ await until(()=>h.runtime.store.waiters.get(a,'a-wait')!.state==='started'&&h.runtime.active.size===0);
+ // B's follow-up waits for B's own next send, as it did before the checkout queue existed.
+ assert.equal(h.runtime.store.waiters.get(b,'b-follow')!.state,'held');assert.equal(h.runtime.snapshot(b).queued!.length,1);
+ await h.runtime.handle({op:'cancel_queued',protocol_version:6,thread_id:b,request_id:'b-follow'});
+});
