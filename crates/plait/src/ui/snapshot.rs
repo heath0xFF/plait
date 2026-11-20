@@ -117,6 +117,51 @@ fn isolated(test: &str) -> bool {
     false
 }
 
+/// Reads the one request on a connection a scripted host just accepted, or
+/// `None` when its client left without sending one.
+///
+/// A client can be gone before it is served: the build-output watch closes as
+/// soon as its creation ends. macOS then refuses the read timeout with EINVAL.
+/// That is not the host's failure, and a read from a departed client cannot
+/// block, so the request it sent is still read and the host keeps serving.
+fn scripted_request(
+    stream: &mut std::os::unix::net::UnixStream,
+    patience: Duration,
+) -> Option<serde_json::Value> {
+    use std::io::BufRead;
+    // An accepted socket can inherit the listener's non-blocking mode.
+    stream.set_nonblocking(false).ok()?;
+    let _ = stream.set_read_timeout(Some(patience));
+    let mut line = String::new();
+    std::io::BufReader::new(stream).read_line(&mut line).ok()?;
+    serde_json::from_str(&line).ok()
+}
+
+#[core::prelude::v1::test]
+fn a_scripted_host_outlives_a_client_that_left() {
+    use std::io::Write;
+    use std::os::unix::net::{UnixListener, UnixStream};
+    // Unix sockets have a short pathname limit.
+    let path = PathBuf::from("/tmp").join(format!("plait-scripted-{}.sock", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let listener = UnixListener::bind(&path).unwrap();
+    // Gone without a request, gone after one, and still waiting for a reply.
+    drop(UnixStream::connect(&path).unwrap());
+    let mut sent = UnixStream::connect(&path).unwrap();
+    writeln!(sent, "{{\"op\":\"watch_build_output\"}}").unwrap();
+    drop(sent);
+    let mut waiting = UnixStream::connect(&path).unwrap();
+    writeln!(waiting, "{{\"op\":\"submit\"}}").unwrap();
+    let next = || {
+        let (mut stream, _) = listener.accept().unwrap();
+        scripted_request(&mut stream, Duration::from_secs(3))
+    };
+    assert_eq!(next(), None);
+    assert_eq!(next().unwrap()["op"], "watch_build_output");
+    assert_eq!(next().unwrap()["op"], "submit");
+    std::fs::remove_file(path).unwrap();
+}
+
 /// Real text shaping for the headless window, with the app's own fonts.
 #[cfg(target_os = "macos")]
 fn text_system() -> Arc<dyn PlatformTextSystem> {

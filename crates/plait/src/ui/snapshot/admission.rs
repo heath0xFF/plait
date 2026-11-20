@@ -2,7 +2,7 @@
 use super::*;
 use serde_json::{Value, json};
 use std::{
-    io::{BufRead, BufReader, Write},
+    io::Write,
     os::unix::{fs::PermissionsExt, net::UnixListener},
     sync::{
         Mutex,
@@ -44,12 +44,9 @@ fn choice_flow() {
                 }
                 Err(error) => panic!("{error}"),
             };
-            stream
-                .set_read_timeout(Some(Duration::from_secs(3)))
-                .unwrap();
-            let mut line = String::new();
-            BufReader::new(&mut stream).read_line(&mut line).unwrap();
-            let request: Value = serde_json::from_str(&line).unwrap();
+            let Some(request) = scripted_request(&mut stream, Duration::from_secs(3)) else {
+                continue;
+            };
             seen.lock().unwrap().push(request.clone());
             let result = match request["op"].as_str().unwrap() {
                 "admission_info" => {
@@ -219,12 +216,9 @@ fn concurrent_drafts() {
                 }
                 Err(e) => panic!("{e}"),
             };
-            stream
-                .set_read_timeout(Some(Duration::from_secs(3)))
-                .unwrap();
-            let mut line = String::new();
-            BufReader::new(&mut stream).read_line(&mut line).unwrap();
-            let request: Value = serde_json::from_str(&line).unwrap();
+            let Some(request) = scripted_request(&mut stream, Duration::from_secs(3)) else {
+                continue;
+            };
             seen.lock().unwrap().push(request.clone());
             let receipt = |request_id: &str,
                            state: &str,
@@ -407,16 +401,7 @@ fn scripted_busy_host(
                 }
                 Err(error) => panic!("{error}"),
             };
-            // An accepted socket can inherit the listener's non-blocking mode.
-            stream.set_nonblocking(false).unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(10)))
-                .unwrap();
-            let mut line = String::new();
-            if BufReader::new(&mut stream).read_line(&mut line).is_err() {
-                continue;
-            }
-            let Ok(request) = serde_json::from_str::<Value>(&line) else {
+            let Some(request) = scripted_request(&mut stream, Duration::from_secs(10)) else {
                 continue;
             };
             seen.lock().unwrap().push(request.clone());
