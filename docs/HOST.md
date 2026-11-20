@@ -2556,8 +2556,10 @@ source identities fail preparation. Another volume, unsupported cloning,
 insufficient space, cancellation or a failed check starts cold with a reason.
 Other platforms start cold because cloning is unavailable.
 
-An idle checkout supplies an immutable seed under `build-output-seeds` while
-holding its writer lease. Approval changes and successful run completion
+The project's main checkout, while idle, supplies an immutable seed under
+`build-output-seeds` while Plait holds its writer lease. A linked worktree never
+supplies one: one thread's output must not replace a fuller seed or become every
+later thread's starting cache. Approval changes and successful run completion
 schedule a low-priority refresh; creation also tries a refresh if its source is
 idle. A local admission or run aborts that helper and waits for its process exit
 before taking its writer lease. A private, verified FIFO beside the shared
@@ -2579,7 +2581,8 @@ external write.
 For trusted projects, Codex and Claude Code, approved output is installed in the
 new checkout. Sandboxed Pi receives approved `target` in its private per-thread
 build cache; other approved output stays in the checkout. A successful sandboxed
-Pi run can supply the next seed's target from its private cache. Credentials,
+Pi run in the main checkout can supply the next seed's target from its private
+cache. Credentials,
 Cargo home and unapproved caches are never seeded. Python environments are
 refused; other caches with absolute paths should be recreated instead.
 
