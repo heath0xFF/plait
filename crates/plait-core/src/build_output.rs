@@ -230,6 +230,7 @@ fn clone_with(
         links: Vec::new(),
     };
     walk.visit(source, destination, Path::new(""), 0)?;
+    set_mode(destination, &stat(source)?)?;
     for (path, target) in &walk.links {
         if resolves_inside(path, target, &walk.members) {
             let parent = path.parent().unwrap();
@@ -505,6 +506,7 @@ impl Walk<'_> {
                 if id(&stat_at(src.as_raw_fd(), name)?) != id(&before) {
                     return Err(moving());
                 }
+                set_mode(&output, &before)?;
             }
             libc::S_IFREG if locked(&before) => self.counts.skip(
                 path,
@@ -567,6 +569,17 @@ impl Walk<'_> {
         }
         Ok(())
     }
+}
+/// Directories start owner-only while they fill; afterwards they get the
+/// source's permissions, as a checkout would. The owner keeps full access so
+/// a read-only source directory never makes its clone impossible to remove.
+fn set_mode(directory: &OwnedFd, source: &libc::stat) -> io::Result<()> {
+    let mode = (source.st_mode & 0o777) | 0o700;
+    // SAFETY: an open directory descriptor this clone created.
+    if unsafe { libc::fchmod(directory.as_raw_fd(), mode as libc::mode_t) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 /// A clone keeps the source's file flags. An immutable or append-only clone
 /// could never be rolled back, refreshed or removed with its worktree.
