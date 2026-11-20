@@ -182,6 +182,7 @@ fn immutable_files_are_skipped_so_the_clone_can_always_be_removed() {
     let expected = id(&stat(&dst).unwrap());
     remove_owned(&tree.0, Path::new("dst"), expected).unwrap();
 }
+#[cfg(target_os = "macos")]
 #[test]
 fn cloned_directories_keep_the_source_permissions_and_stay_removable() {
     use std::os::unix::fs::PermissionsExt;
@@ -214,6 +215,7 @@ fn cloned_directories_keep_the_source_permissions_and_stay_removable() {
     remove_owned(&tree.0, Path::new("dst"), expected).unwrap();
     fs::set_permissions(tree.0.join("src/sealed"), fs::Permissions::from_mode(0o755)).unwrap();
 }
+#[cfg(target_os = "macos")]
 #[test]
 fn an_unreadable_file_fails_the_clone_and_names_the_file() {
     use std::os::unix::fs::PermissionsExt;
