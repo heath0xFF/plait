@@ -15,13 +15,13 @@ const pause=()=>new Promise(resolve=>setTimeout(resolve,20));
 async function until(done:()=>boolean) {const end=Date.now()+30000;while(!done()){assert.ok(Date.now()<end,'Queue did not settle');await pause();}}
 class FakeRuntime extends Runtime {override async resources(){return {skills:[],templates:[],problems:[],mcpServers:[],mcpEntries:new Map()};}}
 async function fixture(t:Parameters<typeof setup>[0]) {
- const {root,base}=await setup(t);const directory=join(base,'host');await mkdir(directory,{mode:0o700});
+ const {root,base}=await setup(t);const directory=await mkdtemp(join(tmpdir(),'plait-queue-host-'));
  // Lock and cleanup records are named by a folder's device and inode and are never removed, and Linux hands a removed
  // folder's inode to the next one. Each test keeps its own, so it cannot inherit a hold an earlier test left on purpose.
  const leases=await mkdtemp(join(tmpdir(),'plait-leases-'));process.env.PLAIT_LEASE_DIR=leases;const models=createModels();const faux=fauxProvider({tokensPerSecond:1e8});models.setProvider(faux.provider);
  let runtime=new FakeRuntime(directory,models,new Set(['faux']));
  // A closing runtime can still write a record, so its directory is outside the folder the test removes first and goes last.
- t.after(async()=>{await runtime.close();await rm(leases,{recursive:true,force:true,maxRetries:5,retryDelay:50});});
+ t.after(async()=>{await runtime.close();await rm(directory,{recursive:true,force:true});await rm(leases,{recursive:true,force:true,maxRetries:5,retryDelay:50});});
  return {root,base,faux,get runtime(){return runtime;},restart:async()=>{await runtime.close();runtime=new FakeRuntime(directory,models,new Set(['faux']));}};
 }
 async function thread(runtime:Runtime,root:string,id:string){const result:any=await runtime.handle({op:'create_thread',protocol_version:6,request_id:id,checkout:root,provider:'faux',model_id:'faux-1'});return result.thread.id as string;}
