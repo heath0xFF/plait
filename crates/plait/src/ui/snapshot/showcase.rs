@@ -704,6 +704,8 @@ fn stage_worktrees(harness: &mut Harness, repository: &Path) {
         ),
     ];
     let mut rows = vec![Checkout {
+        build_directories: Vec::new(),
+        build_output: None,
         path: repository.into(),
         main: true,
         branch: Some("main".into()),
@@ -717,6 +719,7 @@ fn stage_worktrees(harness: &mut Harness, repository: &Path) {
         missing: false,
         removed: false,
         preservation: Preservation {
+            build_output: None,
             changed: Some(4),
             unpushed: Some(0),
             exclusive: Some(0),
@@ -750,6 +753,8 @@ fn stage_worktrees(harness: &mut Harness, repository: &Path) {
             None
         };
         rows.push(Checkout {
+            build_directories: Vec::new(),
+            build_output: None,
             path: path.clone(),
             main: false,
             branch: Some(format!("plait/{suffix}")),
@@ -763,6 +768,7 @@ fn stage_worktrees(harness: &mut Harness, repository: &Path) {
             missing: false,
             removed: false,
             preservation: Preservation {
+                build_output: None,
                 changed: Some(changed),
                 unpushed: Some(unpushed),
                 exclusive: Some(0),

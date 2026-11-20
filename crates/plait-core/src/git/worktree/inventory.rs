@@ -5,6 +5,8 @@ use super::*;
 #[serde(deny_unknown_fields)]
 pub struct Preservation {
     pub changed: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_output: Option<u64>,
     pub unpushed: Option<u64>,
     pub exclusive: Option<u64>,
     pub refusal: Option<String>,
@@ -20,7 +22,21 @@ impl Preservation {
 const DIRTY: &str = "This worktree has uncommitted or ignored files. Preserve or remove them before removing the worktree.";
 const EXCLUSIVE: &str = "This worktree has commits that are on no branch (made on a detached HEAD or kept only by its own refs). Removing it would lose them. Put them on a branch, then remove the worktree.";
 
-pub(super) fn preservation(path: &Path, main: &Path, allow_unpushed: bool) -> Result<Preservation> {
+pub(super) fn preservation_with_output(
+    path: &Path,
+    main: &Path,
+    allow_unpushed: bool,
+    approved: &[String],
+) -> Result<Preservation> {
+    let approved: Vec<PathBuf> = approved
+        .iter()
+        .filter_map(|directory| crate::git::build_output::validate(path, directory).ok())
+        .collect();
+    let known = |name: &[u8]| {
+        use std::os::unix::ffi::OsStrExt;
+        let candidate = Path::new(std::ffi::OsStr::from_bytes(name));
+        covered_ignored(path, candidate, &approved)
+    };
     let dirty = read_worktree(
         path,
         &[
@@ -33,11 +49,16 @@ pub(super) fn preservation(path: &Path, main: &Path, allow_unpushed: bool) -> Re
     )?;
     let mut entries = dirty.split(|b| *b == 0).filter(|v| !v.is_empty());
     let mut changed = 0;
+    let mut build_output = 0;
     while let Some(entry) = entries.next() {
         if entry.len() < 4 {
             return Err("Invalid Git status entry.".into());
         }
-        changed += 1;
+        if &entry[..2] == b"!!" && known(&entry[3..]) {
+            build_output += 1;
+        } else {
+            changed += 1;
+        }
         if entry[..2].iter().any(|c| matches!(c, b'R' | b'C')) {
             entries.next().ok_or("Incomplete Git rename.")?;
         }
@@ -81,12 +102,53 @@ pub(super) fn preservation(path: &Path, main: &Path, allow_unpushed: bool) -> Re
     });
     Ok(Preservation {
         changed: Some(changed),
+        build_output: (!approved.is_empty()).then_some(build_output),
         unpushed: publication.ok(),
         exclusive: exclusive.ok(),
         refusal,
         can_keep_local,
     })
 }
+/// Git can collapse an ignored parent above an approved directory. Expand only
+/// those ancestors; any sibling outside the approved list still preserves it.
+fn covered_ignored(root: &Path, path: &Path, approved: &[PathBuf]) -> bool {
+    use crate::worktree_size::{id, list, open_at, stat_at};
+    use std::os::{
+        fd::{AsRawFd, OwnedFd},
+        unix::ffi::OsStrExt,
+    };
+    fn visit(fd: &OwnedFd, path: &Path, approved: &[PathBuf], depth: usize) -> bool {
+        if depth > 128 {
+            return false;
+        }
+        let mut entries = 0;
+        list(fd, |name| {
+            entries += 1;
+            let next = path.join(std::ffi::OsStr::from_bytes(name.to_bytes()));
+            if approved.iter().any(|p| next.starts_with(p)) {
+                return true;
+            }
+            if !approved.iter().any(|p| p.starts_with(&next)) {
+                return false;
+            }
+            let Ok(before) = stat_at(fd.as_raw_fd(), name) else {
+                return false;
+            };
+            let Ok(child) = open_at(fd.as_raw_fd(), name) else {
+                return false;
+            };
+            id(&before) == id(&child.1) && visit(&child.0, &next, approved, depth + 1)
+        }) && entries > 0
+    }
+    if approved.iter().any(|p| path.starts_with(p)) {
+        return true;
+    }
+    if !approved.iter().any(|p| p.starts_with(path)) {
+        return false;
+    }
+    crate::build_output::directory(root, path).is_ok_and(|(fd, _)| visit(&fd, path, approved, 0))
+}
+
 fn publication(path: &Path) -> Result<u64> {
     let remote = text_read(path, &["rev-parse", "--symbolic-full-name", "@{upstream}"])
         .map_err(|_| "This worktree has unpushed or unknown publication status. Explicitly confirm preserving only the local branch.".to_owned())?;
@@ -112,6 +174,8 @@ pub struct Checkout {
     pub missing: bool,
     pub removed: bool,
     pub preservation: Preservation,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub build_directories: Vec<String>,
 }
 /// All registered checkouts, including ones created outside Plait. Never infer ownership.
 /// One configuration read per checkout serves the whole pass.
@@ -125,12 +189,21 @@ pub fn inventory_of(
     records: &[ManagedWorktree],
     only: Option<&Path>,
 ) -> Result<Vec<Checkout>> {
-    crate::git::sharing_config(|| read_inventory(root, records, only))
+    inventory_with_output(root, records, only, &[])
+}
+pub fn inventory_with_output(
+    root: &Path,
+    records: &[ManagedWorktree],
+    only: Option<&Path>,
+    approved: &[String],
+) -> Result<Vec<Checkout>> {
+    crate::git::sharing_config(|| read_inventory(root, records, only, approved))
 }
 fn read_inventory(
     root: &Path,
     records: &[ManagedWorktree],
     only: Option<&Path>,
+    approved: &[String],
 ) -> Result<Vec<Checkout>> {
     let paths = crate::lease::resolve_git_checkout(root).map_err(String::from)?;
     let raw = read_worktree(&paths.root, &["worktree", "list", "--porcelain", "-z"])?;
@@ -186,6 +259,7 @@ fn read_inventory(
             missing,
             removed: false,
             preservation: Preservation::default(),
+            build_directories: approved.to_vec(),
         });
     }
     let main = rows
@@ -208,7 +282,7 @@ fn read_inventory(
         if rows.len() == 256 {
             return Err("This repository has more than 256 checkout records. Use Git to inspect the full list.".into());
         }
-        rows.push(Checkout {path:record.path.clone(),main:false,branch:Some(record.branch.clone()),head:text_read(&main,&["rev-parse","--verify",&format!("refs/heads/{}^{{commit}}",record.branch)]).ok(),base:Some(record.parent.base.clone()),thread_id:Some(record.thread_id.clone()),identity:record.identity.clone(),missing:true,removed:true,preservation:Preservation {refusal:Some("This worktree was removed. Its branch, thread history and private build cache remain.".into()),..Default::default()}});
+        rows.push(Checkout {build_directories:approved.to_vec(),path:record.path.clone(),main:false,branch:Some(record.branch.clone()),head:text_read(&main,&["rev-parse","--verify",&format!("refs/heads/{}^{{commit}}",record.branch)]).ok(),base:Some(record.parent.base.clone()),thread_id:Some(record.thread_id.clone()),identity:record.identity.clone(),missing:true,removed:true,preservation:Preservation {refusal:Some("This worktree was removed. Its branch, thread history and private build cache remain.".into()),..Default::default()}});
     }
     for row in &mut rows {
         if row.removed {
@@ -223,7 +297,7 @@ fn read_inventory(
                 row.path.display()
             ))
         } else {
-            preservation(&row.path, &main, false)
+            preservation_with_output(&row.path, &main, false, approved)
         };
         row.preservation = result.unwrap_or_else(|error| Preservation {
             refusal: Some(error),
@@ -311,7 +385,7 @@ mod tests {
         let mut repo = Repo::new();
         repo.0 = repo.0.canonicalize().unwrap();
         fs::write(repo.0.join("file"), "committed\n").unwrap();
-        fs::write(repo.0.join(".gitignore"), "*.log\n").unwrap();
+        fs::write(repo.0.join(".gitignore"), "*.log\n.env\n").unwrap();
         repo.git(&["add", "."]);
         repo.git(&["commit", "-qm", "initial"]);
         let tree =
@@ -558,6 +632,32 @@ mod tests {
             ("ignored", &|t| {
                 fs::write(t.path.join("out.log"), "x").unwrap()
             }),
+            ("approved output only", &|t| {
+                fs::create_dir(t.path.join("artifacts.log")).unwrap();
+                fs::write(t.path.join("artifacts.log/library"), "output").unwrap();
+            }),
+            ("approved output plus env", &|t| {
+                fs::create_dir(t.path.join("artifacts.log")).unwrap();
+                fs::write(t.path.join("artifacts.log/library"), "output").unwrap();
+                fs::write(t.path.join(".env"), "secret").unwrap();
+            }),
+            ("nested approved output", &|t| {
+                fs::create_dir_all(t.path.join("artifacts.log/sub")).unwrap();
+                fs::write(t.path.join("artifacts.log/sub/library"), "output").unwrap();
+            }),
+            ("nested output plus sibling", &|t| {
+                fs::create_dir_all(t.path.join("artifacts.log/sub")).unwrap();
+                fs::write(t.path.join("artifacts.log/sub/library"), "output").unwrap();
+                fs::write(t.path.join("artifacts.log/secret"), "preserve").unwrap();
+            }),
+            ("unapproved output", &|t| {
+                fs::create_dir(t.path.join("unapproved.log")).unwrap();
+                fs::write(t.path.join("unapproved.log/library"), "output").unwrap();
+            }),
+            ("revoked output", &|t| {
+                fs::create_dir(t.path.join("artifacts.log")).unwrap();
+                fs::write(t.path.join("artifacts.log/library"), "output").unwrap();
+            }),
             ("staged", &|t| {
                 fs::write(t.path.join("file"), "staged\n").unwrap();
                 git_in(&t.path, &["add", "file"]);
@@ -618,17 +718,36 @@ mod tests {
                     git_in(&tree.path, &["branch", &upstream]);
                 }
                 setup(&tree);
-                let facts = inventory(&repo.0, std::slice::from_ref(&tree)).unwrap()[1]
-                    .preservation
-                    .clone();
+                let approved =
+                    if matches!(*name, "approved output only" | "approved output plus env") {
+                        vec!["artifacts.log".into()]
+                    } else if matches!(
+                        *name,
+                        "nested approved output" | "nested output plus sibling"
+                    ) {
+                        vec!["artifacts.log/sub".into()]
+                    } else {
+                        Vec::new()
+                    };
+                let facts =
+                    inventory_with_output(&repo.0, std::slice::from_ref(&tree), None, &approved)
+                        .unwrap()[1]
+                        .preservation
+                        .clone();
                 let preview = if allow_unpushed && facts.can_keep_local {
                     None
                 } else {
                     facts.refusal.clone()
                 };
                 let identity = tree.identity.clone().unwrap();
-                let removal =
-                    remove_managed_worktree(tree.clone(), &identity, allow_unpushed, |_| Ok(()));
+                let removal = remove_managed_with_output(
+                    tree.clone(),
+                    &identity,
+                    allow_unpushed,
+                    |_| Ok(()),
+                    &mut |root, args, timeout, leases| git_holding(root, args, timeout, leases[0]),
+                    |_| Ok(approved),
+                );
                 match (&preview, &removal) {
                     (None, Ok(removed)) => assert_eq!(removed.stage, ManagedStage::Removed),
                     (Some(preview), Err(removal)) => {
@@ -642,9 +761,11 @@ mod tests {
                 }
                 assert_eq!(
                     preview.is_none(),
-                    *name == "published"
-                        || (allow_unpushed
-                            && matches!(*name, "no upstream" | "local upstream" | "unpushed")),
+                    matches!(
+                        *name,
+                        "published" | "approved output only" | "nested approved output"
+                    ) || (allow_unpushed
+                        && matches!(*name, "no upstream" | "local upstream" | "unpushed")),
                     "{name}, keep local: {allow_unpushed}"
                 );
                 clean(&tree);

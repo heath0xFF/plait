@@ -13,6 +13,11 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         only: Option<PathBuf>,
     },
+    ProjectWorktreesBuild {
+        checkout: PathBuf,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        only: Option<PathBuf>,
+    },
     WorktreeInfo {
         checkout: PathBuf,
     },
@@ -317,6 +322,8 @@ mod tests {
 pub struct Inventory {
     pub schema: u32,
     pub worktree_inventory_v1: bool,
+    #[serde(default)]
+    pub worktree_build_output_v1: bool,
     pub checkouts: Vec<Checkout>,
 }
 #[derive(Clone, Debug, Deserialize)]
@@ -334,6 +341,10 @@ pub struct Checkout {
     pub preservation: crate::git::worktree::inventory::Preservation,
     pub creation_id: Option<String>,
     pub last_used: Option<u64>,
+    #[serde(default)]
+    pub build_directories: Vec<String>,
+    #[serde(default)]
+    pub build_output: Option<crate::build_output::Outcome>,
 }
 impl Inventory {
     pub fn verified(self) -> Result<Self, Error> {
@@ -358,7 +369,20 @@ impl Inventory {
             return Err(invalid());
         }
         for (index, row) in self.checkouts.iter().enumerate() {
-            if !path(&row.path)
+            if row.build_directories.len() > crate::build_output::MAX_PATHS
+                || row
+                    .build_directories
+                    .iter()
+                    .any(|p| crate::build_output::relative(p).is_err())
+                || row
+                    .build_output
+                    .as_ref()
+                    .is_some_and(|o| !super::build_output::valid_outcome(o))
+                || (!self.worktree_build_output_v1
+                    && (row.build_output.is_some()
+                        || !row.build_directories.is_empty()
+                        || row.preservation.build_output.is_some()))
+                || !path(&row.path)
                 || !paths.insert(&row.path)
                 || row.main != main_at(index)
                 || row.identity.as_ref().is_some_and(|id| !identity(id))
@@ -383,6 +407,7 @@ impl Inventory {
                     .is_some_and(|s| s.is_empty() || s.len() > 8192)
                 || [
                     row.preservation.changed,
+                    row.preservation.build_output,
                     row.preservation.unpushed,
                     row.preservation.exclusive,
                     row.last_used,
@@ -408,27 +433,33 @@ impl Inventory {
         Ok(self)
     }
 }
-pub fn inventory(client: &Client, checkout: PathBuf) -> Result<Inventory, Error> {
-    let reply: Inventory = client
-        .send(&Request::ProjectWorktrees {
-            checkout,
-            only: None,
-        })
-        .map_err(compatibility)?;
-    reply.verified()
+fn read_inventory(
+    client: &Client,
+    checkout: PathBuf,
+    only: Option<PathBuf>,
+) -> Result<Inventory, Error> {
+    match client.send(&Request::ProjectWorktreesBuild {
+        checkout: checkout.clone(),
+        only: only.clone(),
+    }) {
+        Ok(reply) => Ok(reply),
+        Err(Error::Rejected(e)) if e.code == "invalid_request" => client
+            .send(&Request::ProjectWorktrees { checkout, only })
+            .map_err(compatibility),
+        Err(error) => Err(error),
+    }
 }
-/// One checkout's live row. Every host with `project_worktrees` knows `only`.
+pub fn inventory(client: &Client, checkout: PathBuf) -> Result<Inventory, Error> {
+    read_inventory(client, checkout, None)?.verified()
+}
+/// One checkout's live row, falling back to inventory on an older host.
 pub fn inventory_row(
     client: &Client,
     checkout: PathBuf,
     only: PathBuf,
     main: bool,
 ) -> Result<Checkout, Error> {
-    let reply: Inventory = client.send(&Request::ProjectWorktrees {
-        checkout,
-        only: Some(only.clone()),
-    })?;
-    reply.verified_row(&only, main)
+    read_inventory(client, checkout, Some(only.clone()))?.verified_row(&only, main)
 }
 
 #[cfg(test)]

@@ -184,7 +184,7 @@ pub struct Identity {
     pub ino: String,
 }
 impl Identity {
-    fn read(path: &Path) -> Result<Self> {
+    pub fn read(path: &Path) -> Result<Self> {
         let meta = fs::symlink_metadata(path).map_err(|e| e.to_string())?;
         if !meta.is_dir() || path.canonicalize().map_err(|e| e.to_string())? != path {
             return Err("Worktree directory identity changed.".into());
@@ -194,13 +194,13 @@ impl Identity {
             ino: meta.ino().to_string(),
         })
     }
-    fn checked(&self, path: &Path) -> Result<()> {
+    pub fn checked(&self, path: &Path) -> Result<()> {
         if Self::read(path)? != *self {
             return Err("Worktree directory identity changed.".into());
         }
         Ok(())
     }
-    fn lease(&self) -> Result<crate::lease::DirIdentity> {
+    pub fn lease(&self) -> Result<crate::lease::DirIdentity> {
         Ok(crate::lease::DirIdentity {
             dev: self.dev.parse().map_err(|_| "Invalid device identity.")?,
             ino: self.ino.parse().map_err(|_| "Invalid inode identity.")?,
@@ -682,11 +682,23 @@ pub fn remove_managed_worktree(
 }
 /// Holds checkout exclusion until the supervisor has reclaimed Git descendants.
 pub fn remove_managed_supervised(
+    record: ManagedWorktree,
+    expected: &Identity,
+    allow_unpushed: bool,
+    save: impl FnMut(&ManagedWorktree) -> Result<()>,
+    mutate: &mut Mutation<'_>,
+) -> Result<ManagedWorktree> {
+    remove_managed_with_output(record, expected, allow_unpushed, save, mutate, |_| {
+        Ok(Vec::new())
+    })
+}
+pub fn remove_managed_with_output(
     mut record: ManagedWorktree,
     expected: &Identity,
     allow_unpushed: bool,
     mut save: impl FnMut(&ManagedWorktree) -> Result<()>,
     mutate: &mut Mutation<'_>,
+    policy: impl FnOnce(&Parent) -> Result<Vec<String>>,
 ) -> Result<ManagedWorktree> {
     if record.identity.as_ref() != Some(expected) {
         return Err("Removal identity does not match the host-owned worktree.".into());
@@ -747,7 +759,14 @@ pub fn remove_managed_supervised(
     .map_err(String::from)?;
     verify_managed(&record)?;
     verify_repository(&record.parent)?;
-    inventory::preservation(&record.path, &record.parent.main, allow_unpushed)?.require_safe()?;
+    let approved = policy(&record.parent)?;
+    inventory::preservation_with_output(
+        &record.path,
+        &record.parent.main,
+        allow_unpushed,
+        &approved,
+    )?
+    .require_safe()?;
     record.stage = ManagedStage::Removing;
     save(&record)?;
     mutate(
@@ -835,6 +854,8 @@ fn worktree_only_commits(path: &Path, main: &Path) -> Result<u64> {
 pub enum HelperRequest {
     Inventory {
         root: PathBuf,
+        #[serde(default)]
+        store: Option<PathBuf>,
         records: Vec<ManagedWorktree>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         only: Option<PathBuf>,

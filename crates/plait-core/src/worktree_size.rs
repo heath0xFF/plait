@@ -49,23 +49,35 @@ pub fn measure_bounded(
     duration: Duration,
     cancelled: &AtomicBool,
 ) -> Result<Size, String> {
+    measure_output(root, cache, skip, (limit, duration), cancelled, &[])
+}
+fn measure_output(
+    root: &Path,
+    cache: Option<&Path>,
+    skip: &HashSet<DirId>,
+    bounds: (usize, Duration),
+    cancelled: &AtomicBool,
+    approved: &[String],
+) -> Result<Size, String> {
+    let (limit, duration) = bounds;
     let mut walk = Walk {
         result: Size::default(),
         seen: HashSet::new(),
         stack: Vec::new(),
         skip,
+        approved,
         limit,
         deadline: Instant::now() + duration,
     };
     let checkout =
         open_root(root).map_err(|_| "The checkout folder is missing or replaced.".to_owned())?;
-    walk.enter(checkout, false, true);
+    walk.enter(checkout, false, Path::new(""));
     if let Some(cache) = cache
         && cache != root
         && fs::symlink_metadata(cache).is_ok()
     {
         match open_root(cache) {
-            Ok(dir) => walk.enter(dir, true, false),
+            Ok(dir) => walk.enter(dir, true, Path::new("")),
             Err(_) => walk.result.incomplete = true,
         }
     }
@@ -86,6 +98,7 @@ struct Entry {
     parent: Rc<OwnedFd>,
     name: CString,
     build: bool,
+    relative: PathBuf,
     device: u64,
 }
 struct Walk<'a> {
@@ -93,13 +106,14 @@ struct Walk<'a> {
     seen: HashSet<DirId>,
     stack: Vec<Entry>,
     skip: &'a HashSet<DirId>,
+    approved: &'a [String],
     limit: usize,
     deadline: Instant,
 }
 impl Walk<'_> {
     /// Queue a directory's entries. `top` marks the checkout's own top level,
     /// where conventional output folders count as build output.
-    fn enter(&mut self, dir: (OwnedFd, libc::stat), build: bool, top: bool) {
+    fn enter(&mut self, dir: (OwnedFd, libc::stat), build: bool, relative: &Path) {
         let (fd, stat) = dir;
         if !self.seen.insert(id(&stat)) {
             return;
@@ -113,14 +127,17 @@ impl Walk<'_> {
                 return false;
             }
             if name.to_bytes() != b".git" {
+                let path = relative.join(std::ffi::OsStr::from_bytes(name.to_bytes()));
                 let output = build
-                    || top
+                    || self.approved.iter().any(|p| path == Path::new(p))
+                    || relative.as_os_str().is_empty()
                         && std::str::from_utf8(name.to_bytes())
                             .is_ok_and(|s| BUILD_DIRS.contains(&s));
                 self.stack.push(Entry {
                     parent: parent.clone(),
                     name: name.to_owned(),
                     build: output,
+                    relative: path,
                     device,
                 });
             }
@@ -153,7 +170,7 @@ impl Walk<'_> {
             // The name may have been replaced since it was read: open it without
             // following a link and require the directory that was listed.
             match open_at(entry.parent.as_raw_fd(), &entry.name) {
-                Ok(dir) if id(&dir.1) == id(&stat) => self.enter(dir, entry.build, false),
+                Ok(dir) if id(&dir.1) == id(&stat) => self.enter(dir, entry.build, &entry.relative),
                 _ => self.result.incomplete = true,
             }
         }
@@ -169,7 +186,7 @@ unsafe fn errno() -> *mut libc::c_int {
 }
 // `dev_t` and `ino_t` differ in width and sign between macOS and Linux.
 #[allow(clippy::unnecessary_cast)]
-fn id(stat: &libc::stat) -> DirId {
+pub(crate) fn id(stat: &libc::stat) -> DirId {
     (stat.st_dev as u64, stat.st_ino as u64)
 }
 fn checked(fd: libc::c_int) -> io::Result<(OwnedFd, libc::stat)> {
@@ -190,16 +207,16 @@ fn checked(fd: libc::c_int) -> io::Result<(OwnedFd, libc::stat)> {
 }
 const DIR_FLAGS: libc::c_int =
     libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
-fn open_root(path: &Path) -> io::Result<(OwnedFd, libc::stat)> {
+pub(crate) fn open_root(path: &Path) -> io::Result<(OwnedFd, libc::stat)> {
     let path = CString::new(path.as_os_str().as_bytes())?;
     // SAFETY: a valid NUL-terminated path.
     checked(unsafe { libc::open(path.as_ptr(), DIR_FLAGS) })
 }
-fn open_at(parent: libc::c_int, name: &CStr) -> io::Result<(OwnedFd, libc::stat)> {
+pub(crate) fn open_at(parent: libc::c_int, name: &CStr) -> io::Result<(OwnedFd, libc::stat)> {
     // SAFETY: `parent` is an open directory and `name` one NUL-terminated component.
     checked(unsafe { libc::openat(parent, name.as_ptr(), DIR_FLAGS) })
 }
-fn stat_at(parent: libc::c_int, name: &CStr) -> io::Result<libc::stat> {
+pub(crate) fn stat_at(parent: libc::c_int, name: &CStr) -> io::Result<libc::stat> {
     // SAFETY: as in `open_at`; `stat` is plain data the kernel fills.
     let mut stat = unsafe { std::mem::zeroed::<libc::stat>() };
     let status =
@@ -212,7 +229,7 @@ fn stat_at(parent: libc::c_int, name: &CStr) -> io::Result<libc::stat> {
 }
 /// Calls `each` with every name in the directory except `.` and `..` until it
 /// returns false. Returns false when the listing stopped early or failed.
-fn list(dir: &OwnedFd, mut each: impl FnMut(&CStr) -> bool) -> bool {
+pub(crate) fn list(dir: &OwnedFd, mut each: impl FnMut(&CStr) -> bool) -> bool {
     // SAFETY: `dup` of an open descriptor; `fdopendir` takes ownership of the
     // duplicate and `closedir` releases both.
     let copy = unsafe { libc::dup(dir.as_raw_fd()) };
@@ -277,7 +294,14 @@ pub fn measure_verified(
             );
         }
     }
-    measure(&key.root, cache, skip, cancelled)
+    measure_output(
+        &key.root,
+        cache,
+        skip,
+        (ENTRY_LIMIT, DEADLINE),
+        cancelled,
+        &key.build_directories,
+    )
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Key {
@@ -287,6 +311,7 @@ pub struct Key {
     pub last_used: Option<u64>,
     pub changed: Option<u64>,
     pub removed: bool,
+    pub build_directories: Vec<String>,
 }
 #[derive(Default)]
 pub struct Cache(Vec<(Key, Size)>);
@@ -309,6 +334,24 @@ impl Cache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn approved_nested_custom_directories_count_as_build_output() {
+        let root = std::env::temp_dir().join(format!("plait-custom-size-{}", std::process::id()));
+        fs::create_dir_all(root.join("runtime/artifacts")).unwrap();
+        fs::write(root.join("runtime/artifacts/library"), [0u8; 19]).unwrap();
+        fs::write(root.join("runtime/source"), [0u8; 7]).unwrap();
+        let size = measure_output(
+            &root,
+            None,
+            &HashSet::new(),
+            (100, Duration::from_secs(2)),
+            &AtomicBool::new(false),
+            &["runtime/artifacts".into()],
+        )
+        .unwrap();
+        assert_eq!((size.source, size.build), (7, 19));
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn sizes_bound_entries_deadline_links_and_cache_without_claiming_reclaimed_space() {
         let root = std::env::temp_dir().join(format!("plait-size-{}", std::process::id()));
@@ -340,6 +383,7 @@ mod tests {
         cancel.store(true, Ordering::Relaxed);
         assert!(measure(&root, None, &none, &cancel).is_err());
         let key = Key {
+            build_directories: Vec::new(),
             root: root.clone(),
             identity: None,
             head: Some("a".into()),

@@ -218,6 +218,7 @@ fn bytes(n: u64) -> String {
 }
 fn key(row: &Checkout) -> Key {
     Key {
+        build_directories: row.build_directories.clone(),
         root: row.path.clone(),
         identity: row.identity.clone(),
         head: row.head.clone(),

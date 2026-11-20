@@ -53,7 +53,7 @@ pub(super) fn install(h: &mut Harness, count: usize) {
             let title=match i {0=>"Main checkout".into(),1=>"Retry requests after rate limits".into(),2=>"Read the local project settings".into(),3=>"Keep attachments across restarts".into(),_=>format!("Worktree {i}")};
             let id=format!("worktree-scene-{i}");
             if i > 0 { p.host.connection.threads.push(ThreadSummary{id:id.clone(),checkout:path.clone(),title:Some(title),status:if i==1{ThreadStatus::Running}else if i==2{ThreadStatus::AwaitingApproval}else{ThreadStatus::Idle},..Default::default()}); }
-            rows.push(Checkout {path,main:i==0,branch:Some(if i==0{"main".into()}else{format!("plait/topic-{i}")}),head:Some(oid(if i==0{10}else{100+i})),base:(i>0).then(||oid(9-i.min(6))),thread_id:(i>0).then_some(id),identity:Some(plait_core::git::worktree::Identity{dev:"1".into(),ino:(i+1).to_string()}),missing:false,removed:false,preservation:Preservation{changed:Some(if i==2{3}else{0}),unpushed:Some(if i==1{2}else{0}),exclusive:Some(0),can_keep_local:i>0 && i!=2,refusal:if i==1{Some("This worktree has unpushed commits. Push them or explicitly confirm preserving only the local branch.".into())}else if i==2{Some("This worktree has uncommitted or ignored files. Preserve or remove them before removing the worktree.".into())}else if i==0{Some("The main checkout cannot be removed here.".into())}else{None}},creation_id:(i>0).then(||format!("creation-{i}")),last_used:Some(super::super::commits::now() as u64*1000-i as u64*300000)});
+            rows.push(Checkout { build_directories: Vec::new(), build_output: None,path,main:i==0,branch:Some(if i==0{"main".into()}else{format!("plait/topic-{i}")}),head:Some(oid(if i==0{10}else{100+i})),base:(i>0).then(||oid(9-i.min(6))),thread_id:(i>0).then_some(id),identity:Some(plait_core::git::worktree::Identity{dev:"1".into(),ino:(i+1).to_string()}),missing:false,removed:false,preservation:Preservation { build_output: None,changed:Some(if i==2{3}else{0}),unpushed:Some(if i==1{2}else{0}),exclusive:Some(0),can_keep_local:i>0 && i!=2,refusal:if i==1{Some("This worktree has unpushed commits. Push them or explicitly confirm preserving only the local branch.".into())}else if i==2{Some("This worktree has uncommitted or ignored files. Preserve or remove them before removing the worktree.".into())}else if i==0{Some("The main checkout cannot be removed here.".into())}else{None}},creation_id:(i>0).then(||format!("creation-{i}")),last_used:Some(super::super::commits::now() as u64*1000-i as u64*300000)});
             if i>0 {commits.push(commit(100+i,9-i.min(6),(if i==1{"Retry transient failures"}else if i==2{"Validate project overrides"}else{"Preserve draft attachments"}).to_string()));}
         }
         for n in (1..=10).rev(){commits.push(commit(n,n-1,match n {10=>"Keep thread tabs independent".into(),9=>"Read host-owned worktrees".into(),8=>"Preserve the checkout identity".into(),_=>format!("Project change {n}")}));}
@@ -440,6 +440,7 @@ fn remove_waits_for_a_run_in_that_worktree() {
             .position(|r| r.thread_id.as_deref() == Some("worktree-scene-1"))
             .unwrap();
         p.worktrees.rows[at].preservation = Preservation {
+            build_output: None,
             changed: Some(0),
             unpushed: Some(0),
             exclusive: Some(0),
