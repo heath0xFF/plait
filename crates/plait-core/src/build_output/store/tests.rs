@@ -510,3 +510,20 @@ fn a_seedless_attempt_records_nothing_so_creation_can_capture_and_retry() {
         b"target source"
     );
 }
+#[cfg(target_os = "macos")]
+#[test]
+fn clearing_every_approval_removes_the_project_seed() {
+    let f = Fixture::new();
+    f.approve(&["target"]);
+    f.seed().unwrap();
+    let summary = seed_summary(&f.store, &f.identity).unwrap().unwrap();
+    assert_eq!((summary.files, summary.bytes), (1, 13));
+    f.approve(&[]);
+    f.seed().unwrap();
+    assert_eq!(seed_directories(&f), 0);
+    assert!(seed_summary(&f.store, &f.identity).unwrap().is_none());
+    assert_eq!(
+        fs::read(f.root.join("target/file")).unwrap(),
+        b"target source"
+    );
+}

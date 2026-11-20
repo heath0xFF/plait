@@ -44,6 +44,8 @@ pub(super) struct View {
     pub hovered: Option<usize>,
     pub ages: Vec<String>,
     pub total: String,
+    /// Logical bytes of the project's build seed, from the last full read.
+    pub seed_bytes: Option<u64>,
     pub largest: f32,
     pub words: Vec<&'static str>,
     pub openable: Vec<bool>,
@@ -101,6 +103,7 @@ impl View {
         self.hovered = None;
         self.ages.clear();
         self.total.clear();
+        self.seed_bytes = None;
         self.largest = 1.;
         self.words.clear();
         self.openable.clear();
@@ -112,7 +115,7 @@ impl View {
             .iter()
             .filter_map(|s| s.as_ref().and_then(|s| s.as_ref().ok()))
             .map(Size::total)
-            .fold(0u64, u64::saturating_add);
+            .fold(self.seed_bytes.unwrap_or(0), u64::saturating_add);
         let incomplete = self.sizes.iter().any(|s| {
             s.as_ref()
                 .is_none_or(|s| s.as_ref().map_or(true, |s| s.incomplete))
@@ -207,7 +210,7 @@ fn size_label(size: Option<&Result<Size, String>>) -> String {
         ),
     }
 }
-fn bytes(n: u64) -> String {
+pub(super) fn bytes(n: u64) -> String {
     if n >= 1 << 30 {
         format!("{:.1} GiB", n as f64 / (1u64 << 30) as f64)
     } else if n >= 1 << 20 {
@@ -406,13 +409,17 @@ impl Plait {
             let (commits, more) = plait_core::git::log::graph(&inventory.checkouts[0].path, &heads)
                 .map_err(host::Error::Protocol)?;
             let graph = worktree_graph::layout(&inventory.checkouts, commits, more);
-            Ok((inventory.checkouts, graph))
+            Ok((inventory.checkouts, graph, inventory.seed_bytes))
         });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
                 this.worktrees.reading = false;
                 if this.accepts_worktrees(stamp, generation) {
+                    let result = result.map(|(rows, graph, seed)| {
+                        this.worktrees.seed_bytes = seed;
+                        (rows, graph)
+                    });
                     this.install_worktree_read(result, stamp, generation, cx);
                 }
                 this.run_queued_worktree_read(cx);

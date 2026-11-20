@@ -158,6 +158,13 @@ impl Plait {
             if info.policy.paths.is_empty() {
                 content = content.child(tag("build-empty", "None approved", colors().muted));
             }
+            if let Some(seed) = &info.seed {
+                // A labelled node, not a plain tag, so the size reaches assistive technology.
+                let label = format!("Seed · {}", super::worktrees_view::bytes(seed.bytes));
+                content = content.child(div().id("build-seed").role(Role::Label).aria_label(label.clone())
+                    .text_size(px(11.)).text_color(rgb(colors().muted)).child(StyledText::new(label))
+                    .tooltip(|_, cx| cx.new(|_| TextTooltip("Logical size of the build seed new worktrees are cloned from. Its blocks are shared with the checkout until either changes, so this is not space removing it would free; once the checkout is rebuilt, the seed keeps the old blocks. It is removed when no directory is approved.".into())).into()).audited());
+            }
             for (i, path) in info.policy.paths.iter().enumerate() {
                 let path = path.clone();
                 let value = path.clone();

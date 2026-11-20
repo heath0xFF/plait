@@ -9,7 +9,7 @@ import type { Managed } from './worktrees.ts';
 export type Counts = { files: number; links: number; skipped: number; bytes: number; elapsed_ms: number; notes: string[] };
 export type Outcome = { warm: boolean; reason: string; directories: string[]; counts: Counts };
 export type BuildState = { phase: 'waiting' | 'cloning' | 'warm' | 'cold'; files: number; outcome: Outcome | null };
-export type BuildInfo = { schema: 1; worktree_build_output_v1: true; policy: { schema: 1; project: string; identity: FileIdentity; revision: number; paths: string[] }; suggestions: string[] };
+export type BuildInfo = { schema: 1; worktree_build_output_v1: true; policy: { schema: 1; project: string; identity: FileIdentity; revision: number; paths: string[] }; suggestions: string[]; seed: { bytes: number; files: number; verified_at: number } | null };
 const emptyCounts = (): Counts => ({ files: 0, links: 0, skipped: 0, bytes: 0, elapsed_ms: 0, notes: [] });
 const cold = (reason: string): Outcome => ({ warm: false, reason, directories: [], counts: emptyCounts() });
 

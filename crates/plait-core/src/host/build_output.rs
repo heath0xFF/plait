@@ -49,6 +49,9 @@ pub struct Info {
     pub worktree_build_output_v1: bool,
     pub policy: Policy,
     pub suggestions: Vec<String>,
+    /// The published seed, when the host reports one.
+    #[serde(default)]
+    pub seed: Option<crate::build_output::store::SeedSummary>,
 }
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -124,6 +127,11 @@ fn verified(info: Info) -> Result<Info, Error> {
         || !paths(&info.policy.paths)
         || !paths(&info.suggestions)
         || info.policy.revision > 9_007_199_254_740_991
+        || info.seed.as_ref().is_some_and(|seed| {
+            [seed.bytes, seed.files, seed.verified_at]
+                .into_iter()
+                .any(|n| n > 9_007_199_254_740_991)
+        })
     {
         return Err(invalid());
     }
@@ -231,6 +239,18 @@ mod tests {
         assert!(serde_json::from_value::<Progress>(extra).is_err());
         let mut info = json!({"schema":1,"worktree_build_output_v1":true,"policy":{"schema":1,"project":"/repo","identity":{"dev":"1","ino":"2"},"revision":1,"paths":["target"]},"suggestions":["runtime/node_modules"]});
         assert!(verified(serde_json::from_value(info.clone()).unwrap()).is_ok());
+        info["seed"] = json!({"bytes":2048,"files":3,"verified_at":1});
+        assert_eq!(
+            verified(serde_json::from_value(info.clone()).unwrap())
+                .unwrap()
+                .seed
+                .unwrap()
+                .bytes,
+            2048
+        );
+        info["seed"] = json!({"bytes":u64::MAX,"files":3,"verified_at":1});
+        assert!(verified(serde_json::from_value(info.clone()).unwrap()).is_err());
+        info["seed"] = json!(null);
         info["policy"]["paths"] = json!(["../other"]);
         assert!(verified(serde_json::from_value(info).unwrap()).is_err());
     }

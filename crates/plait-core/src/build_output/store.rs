@@ -74,6 +74,25 @@ struct Seed {
     #[serde(default)]
     verified_at: u64,
 }
+/// What a published seed holds, as recorded when it was taken: logical bytes,
+/// not a promise of reclaimable space (its blocks are shared copy-on-write).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeedSummary {
+    pub bytes: u64,
+    pub files: u64,
+    pub verified_at: u64,
+}
+/// Reads the pointer only: no walk, no Git.
+pub fn seed_summary(store: &Path, main_identity: &Identity) -> io::Result<Option<SeedSummary>> {
+    Ok(
+        policy::read::<Seed>(&seed_pointer(store, main_identity)?)?.map(|seed| SeedSummary {
+            bytes: seed.counts.bytes,
+            files: seed.counts.files,
+            verified_at: seed.verified_at,
+        }),
+    )
+}
 pub fn run() -> io::Result<()> {
     // This helper starts no descendants. EOF means its host died: stop promptly
     // and let the next host recover its durable transaction before admission.
@@ -118,7 +137,8 @@ fn execute(request: Request) -> io::Result<Value> {
             let (main, identity) = policy::project(&root)?;
             let policy = policy::load(&store, &main, &identity)?;
             let suggestions = git::build_output::suggestions(&main).map_err(io::Error::other)?;
-            json!({"schema":1,"worktree_build_output_v1":true,"policy":policy,"suggestions":suggestions})
+            let seed = seed_summary(&store, &identity)?;
+            json!({"schema":1,"worktree_build_output_v1":true,"policy":policy,"suggestions":suggestions,"seed":seed})
         }
         Request::Set {
             store,
@@ -128,7 +148,8 @@ fn execute(request: Request) -> io::Result<Value> {
             paths,
         } => {
             let policy = policy::set(&store, &root, &identity, revision, paths)?;
-            json!({"schema":1,"worktree_build_output_v1":true,"policy":policy,"suggestions":[]})
+            let seed = seed_summary(&store, &policy.identity)?;
+            json!({"schema":1,"worktree_build_output_v1":true,"policy":policy,"suggestions":[],"seed":seed})
         }
         Request::Seed {
             store,
@@ -405,13 +426,16 @@ fn seed(
     }
     let _seeder = seeder_lock(store, &main_identity)?;
     let approved = policy::load(store, &main, &main_identity)?;
+    let pointer = seed_pointer(store, &main_identity)?;
     if approved.paths.is_empty() {
+        // A seed pins the old blocks once the source is rebuilt: with nothing
+        // approved it is only the person's disk, so it goes.
+        remove_project_seed(&pointer, &main_identity)?;
         return Ok(SeedReply {
             outcome: Outcome::cold("No build directories are approved for this project."),
             checked_at: now,
         });
     }
-    let pointer = seed_pointer(store, &main_identity)?;
     let previous: Option<Seed> = policy::read(&pointer)?;
     let current = previous
         .as_ref()
@@ -563,6 +587,19 @@ fn capture_seed(
         let _ = fs::remove_file(pending);
     }
     result
+}
+fn remove_project_seed(pointer: &Path, main_identity: &Identity) -> io::Result<()> {
+    let folder = pointer.parent().unwrap();
+    let key = policy::key(main_identity)?;
+    let retired = folder.join(format!("{key}.retired.json"));
+    let pending = folder.join(format!("{key}.pending.json"));
+    for journal in [pointer, pending.as_path()] {
+        if let Some(seed) = policy::read::<Seed>(journal)? {
+            retire(&retired, seed)?;
+            fs::remove_file(journal)?;
+        }
+    }
+    delete_retired(folder, &retired)
 }
 /// Seeds waiting to be deleted. A list, so an interrupted deletion is resumed
 /// by the next refresh and no abandoned seed is forgotten.

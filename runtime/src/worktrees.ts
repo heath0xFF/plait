@@ -177,7 +177,10 @@ export class Worktrees {
       operations.push(JSON.parse(raw) as Operation);
     }
     const records = operations.flatMap(op => op.worktree ? [op.worktree] : []);
-    const checkouts = await worktreeHelper<Array<{ path: string; thread_id: string | null; preservation: { refusal: string | null; can_keep_local: boolean } }>>({ action: 'inventory', root: checkout, store: this.directory, records, ...(only === undefined ? {} : { only }) });
+    type Rows = Array<{ path: string; thread_id: string | null; preservation: { refusal: string | null; can_keep_local: boolean } }>;
+    const reply = await worktreeHelper<Rows | { checkouts: Rows; seed_bytes: number | null }>({ action: 'inventory', root: checkout, store: this.directory, records, ...(only === undefined ? {} : { only }) });
+    const checkouts = Array.isArray(reply) ? reply : reply.checkouts;
+    const seedBytes = Array.isArray(reply) ? null : reply.seed_bytes;
     if (only !== undefined && (checkouts.length !== 1 || checkouts[0].path !== only)) fail('invalid_request', 'That folder is not one of this project’s checkouts.');
     const rows = checkouts.map(row => {
       const operation = operations.find(op => op.thread_id === row.thread_id);
@@ -195,7 +198,7 @@ export class Worktrees {
       else { delete output.build_directories; delete (row.preservation as { build_output?: unknown }).build_output; }
       return { ...output, creation_id: operation?.request_id ?? null, last_used: thread?.updated_at != null ? Number(thread.updated_at) : null };
     });
-    const result = { schema: 1, worktree_inventory_v1: true, ...(build ? { worktree_build_output_v1: true } : {}), checkouts: rows };
+    const result = { schema: 1, worktree_inventory_v1: true, ...(build ? { worktree_build_output_v1: true, seed_bytes: seedBytes } : {}), checkouts: rows };
     if (Buffer.byteLength(JSON.stringify(result)) > 750_000) fail('too_large', 'Worktree inventory is too large. Use Git to inspect it.');
     return result;
   }
