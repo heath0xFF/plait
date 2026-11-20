@@ -633,6 +633,7 @@ export class Runtime {
       // Recovery owns this host's lease until its record finishes. Accept now;
       // the detached run waits for it instead of blocking the request deadline.
       // A placement probe briefly holds the lease; wait for it rather than collide.
+      await this.worktrees.builds.yieldToRun(snapshot.checkout);
       await this.admissions.probing(snapshot.checkout);
       if (!this.records.busy(snapshot.checkout)) lease = await acquireCheckout(snapshot.checkout, 'writer');
       const save = () => this.save(snapshot);
@@ -845,6 +846,7 @@ export class Runtime {
       if (!session.lease) {
         await this.records.settled(snapshot.checkout);
         await checkRoot(snapshot.checkout, session.rootIdentity);
+        await this.worktrees.builds.yieldToRun(snapshot.checkout);
         session.lease = await acquireCheckout(snapshot.checkout, 'writer');
       }
       await this.beginCleanup(session);
@@ -928,6 +930,7 @@ export class Runtime {
       if (snapshot.status === 'error' || snapshot.status === 'interrupted') this.store.waiters.hold(snapshot.id);
       this.changed('#');
       for (const root of this.store.waiters.roots()) this.drainCheckout(root);
+      if (!snapshot.error) this.worktrees.builds.scheduleSeed(snapshot.checkout, snapshot.harness?.id !== 'codex' && snapshot.harness?.id !== 'claude' && session.commandPolicy === 'sandboxed' ? snapshot.id : '');
     }
   }
   /** A Codex thread's run: one Codex turn, under Codex's own sandbox and Plait's approvals. */

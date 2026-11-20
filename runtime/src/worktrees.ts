@@ -1,4 +1,5 @@
 // Durable, explicit worktree operations. Existing protocol reply shapes stay unchanged.
+import { BuildOutputs } from './build-output.ts';
 import { commandPolicy, setCommandPolicy } from './command/policy.ts';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -86,6 +87,7 @@ export function worktreeHelper<T>(input: unknown): Promise<T> {
 }
 
 export class Worktrees {
+  readonly builds: BuildOutputs;
   private pending = new Map<string, Promise<void>>();
   private admitting = new Map<string, Promise<unknown>>();
   private closing = false;
@@ -99,6 +101,7 @@ export class Worktrees {
     changed: () => void, busy: (root: string) => boolean) {
     this.store = store; this.directory = directory; this.prepare = prepare;
     this.changed = changed; this.busy = busy;
+    this.builds = new BuildOutputs(store, directory, changed, busy);
     store.db.exec(`CREATE TABLE IF NOT EXISTS worktree_operations(request_id TEXT PRIMARY KEY,input TEXT NOT NULL,thread_id TEXT NOT NULL,snapshot TEXT NOT NULL,result TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS worktree_removals(request_id TEXT PRIMARY KEY,input TEXT NOT NULL,creation_id TEXT NOT NULL,result TEXT);`);
     // An admitted request resumes with its saved UUID, base, model and journal.
@@ -108,8 +111,44 @@ export class Worktrees {
     }
     for (const row of store.db.prepare('SELECT input FROM worktree_removals WHERE result IS NULL').all()) this.startRemoval(JSON.parse(String(row.input)));
   }
-  handles(input: unknown) { return handlesWorktrees(input); }
+  handles(input: unknown) { return handlesWorktrees(input) || this.buildRequest(input); }
+  private buildRequest(input: unknown): boolean {
+    return !!input && typeof input === 'object' && ['build_output_info', 'set_build_output', 'watch_build_output', 'skip_build_output', 'project_worktrees_build'].includes(String((input as {op?: unknown}).op));
+  }
+  private async handleBuild(input: unknown) {
+    const value = input as Record<string, unknown>;
+    if (Array.isArray(value)) fail('invalid_request', 'Invalid build output request.');
+    const fields: Record<string, string[]> = { build_output_info: ['checkout'], set_build_output: ['checkout','identity','revision','paths'], watch_build_output: ['request_id','kind'], skip_build_output: ['request_id','kind'], project_worktrees_build: ['checkout'] };
+    const required = fields[String(value.op)];
+    if (Buffer.byteLength(JSON.stringify(value)) > 40000 || required.some(key => !Object.hasOwn(value,key)) || Object.keys(value).some(key => key !== 'op' && !required.includes(key) && !(value.op === 'project_worktrees_build' && key === 'only'))) fail('invalid_request','Unknown or missing build output field.');
+    if (value.checkout !== undefined) path(value.checkout);
+    if (value.op === 'build_output_info') return this.builds.info(value.checkout as string);
+    if (value.op === 'set_build_output') {
+      identity(value.identity);
+      if (!Number.isSafeInteger(value.revision) || Number(value.revision) < 0 || !Array.isArray(value.paths) || value.paths.length > 32 || value.paths.some(p => typeof p !== 'string' || Buffer.byteLength(p) > 1024)) fail('invalid_request','Invalid build output approval.');
+      return this.builds.set(value.checkout as string, value.identity as FileIdentity, Number(value.revision), value.paths as string[]);
+    }
+    if (value.op === 'project_worktrees_build') {
+      if (value.only !== undefined) path(value.only);
+      return this.inventory(value.checkout as string, value.only as string | undefined, true);
+    }
+    if (typeof value.request_id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(value.request_id) || !['worktree','admission'].includes(String(value.kind))) fail('invalid_request','Invalid build output operation identity.');
+    let id = value.request_id;
+    if (value.kind === 'admission') {
+      const row = this.store.db.prepare('SELECT plan FROM thread_admissions WHERE request_id=?').get(id);
+      if (!row && value.op === 'watch_build_output') return { schema: 1, worktree_build_output_v1: true, request_id: value.request_id, thread_id: null, phase: 'waiting', files: 0, outcome: null };
+      if (!row) fail('not_found','Thread admission not found.');
+      const plan = JSON.parse(String(row.plan)) as { worktree: Create | null };
+      if (!plan.worktree) return { schema: 1, worktree_build_output_v1: true, request_id: value.request_id, thread_id: null, phase: 'cold', files: 0, outcome: null };
+      id = plan.worktree.request_id;
+    }
+    if (!this.store.db.prepare('SELECT 1 FROM worktree_operations WHERE request_id=?').get(id) && value.op === 'watch_build_output') return { schema: 1, worktree_build_output_v1: true, request_id: value.request_id, thread_id: null, phase: 'waiting', files: 0, outcome: null };
+    const operation = this.get(id);
+    const state = value.op === 'skip_build_output' ? this.builds.skip(operation.thread_id) : this.builds.state(operation.thread_id);
+    return { schema: 1, worktree_build_output_v1: true, request_id: value.request_id, thread_id: operation.thread_id, ...state, ...(operation.state === 'failed' ? { phase: 'cold', outcome: null } : {}) };
+  }
   async handle(input: unknown) {
+    if (this.buildRequest(input)) return this.handleBuild(input);
     const request = validateWorktree(input);
     if (request.op === 'worktree_info') return { schema: 1, worktree_threads_v1: true, parent: await worktreeHelper<Parent>({ action: 'parent', root: request.checkout }) };
     if (request.op === 'list_worktrees') return this.list();
@@ -127,7 +166,7 @@ export class Worktrees {
     try { return await admission; } finally { if (this.admitting.get(request.request_id) === admission) this.admitting.delete(request.request_id); }
   }
   // With `only`, exactly that checkout's row: a run ending re-reads its own checkout.
-  private async inventory(checkout: string, only?: string) {
+  private async inventory(checkout: string, only?: string, build = false) {
     const operations: Operation[] = []; let bytes = 0;
     for (const row of this.store.db.prepare('SELECT result FROM worktree_operations').iterate()) {
       const raw = String(row.result); bytes += Buffer.byteLength(raw);
@@ -135,7 +174,7 @@ export class Worktrees {
       operations.push(JSON.parse(raw) as Operation);
     }
     const records = operations.flatMap(op => op.worktree ? [op.worktree] : []);
-    const checkouts = await worktreeHelper<Array<{ path: string; thread_id: string | null; preservation: { refusal: string | null; can_keep_local: boolean } }>>({ action: 'inventory', root: checkout, records, ...(only === undefined ? {} : { only }) });
+    const checkouts = await worktreeHelper<Array<{ path: string; thread_id: string | null; preservation: { refusal: string | null; can_keep_local: boolean } }>>({ action: 'inventory', root: checkout, store: this.directory, records, ...(only === undefined ? {} : { only }) });
     if (only !== undefined && (checkouts.length !== 1 || checkouts[0].path !== only)) fail('invalid_request', 'That folder is not one of this project’s checkouts.');
     const rows = checkouts.map(row => {
       const operation = operations.find(op => op.thread_id === row.thread_id);
@@ -148,9 +187,12 @@ export class Worktrees {
         row.preservation.can_keep_local = false;
       }
       const thread = row.thread_id ? this.store.db.prepare('SELECT updated_at FROM threads WHERE id=?').get(row.thread_id) : this.store.db.prepare('SELECT MAX(updated_at) AS updated_at FROM threads WHERE checkout=?').get(row.path);
-      return { ...row, creation_id: operation?.request_id ?? null, last_used: thread?.updated_at != null ? Number(thread.updated_at) : null };
+      const output = row as typeof row & { build_directories?: string[]; build_output?: unknown };
+      if (build) output.build_output = row.thread_id ? this.builds.state(row.thread_id).outcome : null;
+      else { delete output.build_directories; delete (row.preservation as { build_output?: unknown }).build_output; }
+      return { ...output, creation_id: operation?.request_id ?? null, last_used: thread?.updated_at != null ? Number(thread.updated_at) : null };
     });
-    const result = { schema: 1, worktree_inventory_v1: true, checkouts: rows };
+    const result = { schema: 1, worktree_inventory_v1: true, ...(build ? { worktree_build_output_v1: true } : {}), checkouts: rows };
     if (Buffer.byteLength(JSON.stringify(result)) > 750_000) fail('too_large', 'Worktree inventory is too large. Use Git to inspect it.');
     return result;
   }
@@ -203,6 +245,7 @@ export class Worktrees {
       operation.worktree = tree;
       if (tree.stage !== 'ready' || !tree.identity) fail('worktree_failed', tree.error ?? 'Worktree creation did not finish. Existing work was preserved.');
       const snapshot = JSON.parse(String(row.snapshot)) as Snapshot;
+      await this.builds.warm(tree, request.harness === 'pi' && this.store.setting(`worktree_policy:${snapshot.id}`) === 'sandboxed');
       snapshot.checkout = tree.path;
       // Thread admission is idempotent even if the host died before updating result.
       const duplicate = this.store.duplicate('worktree_create', id, request);
@@ -258,5 +301,5 @@ export class Worktrees {
     }
     this.store.db.prepare('UPDATE worktree_removals SET result=? WHERE request_id=?').run(JSON.stringify(receipt), request.request_id);
   }
-  async close() { this.closing = true; await Promise.allSettled([...this.admitting.values()]); await Promise.allSettled([...this.pending.values()]); }
+  async close() { this.closing = true; await this.builds.close(); await Promise.allSettled([...this.admitting.values()]); await Promise.allSettled([...this.pending.values()]); }
 }

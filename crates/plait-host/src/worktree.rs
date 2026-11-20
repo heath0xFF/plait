@@ -36,12 +36,24 @@ fn execute(input: Value) -> io::Result<Value> {
     let result = match request {
         Request::Inventory {
             root,
+            store,
             records,
             only,
         } => {
-            return worktree::inventory::inventory_of(&root, &records, only.as_deref())
-                .and_then(|value| serde_json::to_value(value).map_err(|e| e.to_string()))
-                .map_err(io::Error::other);
+            let approved = if let Some(store) = store {
+                let (main, identity) = plait_core::build_output::store::policy::project(&root)?;
+                plait_core::build_output::store::policy::load(&store, &main, &identity)?.paths
+            } else {
+                Vec::new()
+            };
+            return worktree::inventory::inventory_with_output(
+                &root,
+                &records,
+                only.as_deref(),
+                &approved,
+            )
+            .and_then(|value| serde_json::to_value(value).map_err(|e| e.to_string()))
+            .map_err(io::Error::other);
         }
         Request::Parent { root } => {
             return worktree::worktree_parent(&root)
@@ -74,12 +86,21 @@ fn execute(input: Value) -> io::Result<Value> {
                     "No host-owned worktree record. Imported worktrees cannot be removed here.",
                 )
             })?;
-            worktree::remove_managed_supervised(
+            worktree::remove_managed_with_output(
                 record,
                 &identity,
                 allow_unpushed,
                 |record| save(&path, record).map_err(|e| e.to_string()),
                 &mut supervised_git,
+                |parent| {
+                    plait_core::build_output::store::policy::load(
+                        &store,
+                        &parent.main,
+                        &parent.main_identity,
+                    )
+                    .map(|policy| policy.paths)
+                    .map_err(|e| e.to_string())
+                },
             )
         }
         Request::Read { store, thread_id } => {

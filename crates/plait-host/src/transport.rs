@@ -325,7 +325,7 @@ fn connection(
             .as_str()
             .map(|id| notifications.subscribe(id.to_owned()))
             .transpose()?
-    } else if threads {
+    } else if threads || request["op"] == "watch_build_output" {
         Some(notifications.subscribe(notifications::THREADS.to_owned())?)
     } else {
         None
@@ -343,6 +343,26 @@ fn connection(
     };
     if threads {
         return watch_threads(socket, sidecar, &request, subscription, &reply);
+    }
+    if request["op"] == "watch_build_output" {
+        let mut previous = reply["result"].clone();
+        while subscription.wait(&socket)? {
+            let reply = sidecar
+                .lock()
+                .map_err(|_| io::Error::other("sidecar failed"))?
+                .request(&request)?;
+            if reply["ok"] != true {
+                return send(&mut socket, &reply);
+            }
+            if reply["result"] != previous {
+                send(
+                    &mut socket,
+                    &json!({"event":"build_output","build_output":reply["result"]}),
+                )?;
+                previous = reply["result"].clone();
+            }
+        }
+        return Ok(());
     }
     let mut previous = reply["result"]["thread"].clone();
     while subscription.wait(&socket)? {
