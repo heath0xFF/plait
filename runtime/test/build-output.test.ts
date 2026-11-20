@@ -149,9 +149,38 @@ test('real host restart, Skip and lease preemption interrupt cloned output safel
   // This caller has no BuildOutputs job map. The shared lease registry must
   // wake the other helper, just as it does for a run in another host store.
   let writer:Promise<{elapsed:number;error:unknown}>|undefined;
-  const capture=buildHelper<Outcome>({action:'seed',store:f.store,root:f.repo,identity:info.result.policy.identity,generation:randomUUID(),source_cache:null},undefined,counts=>{
+  // A changed source, so the refresh clones rather than finding it unchanged.
+  await writeFile(join(f.repo,'custom','0','changed'),'output');
+  const capture=buildHelper<Outcome>({action:'seed',store:f.store,root:f.repo,identity:info.result.policy.identity,generation:randomUUID(),source_cache:null,force:true},undefined,counts=>{
     if(!writer&&counts.files>0) { const start=Date.now(); writer=acquireCheckout(f.repo).then(async lease=>{await lease.close();return {elapsed:Date.now()-start,error:null};},error=>({elapsed:Date.now()-start,error})); }
   }).then(value=>({value,error:null}),error=>({value:null,error}));
   const interrupted=await capture; assert.ok(interrupted.error,'seed should yield instead of publishing'); assert.ok(writer);
   const {elapsed,error}=await writer; assert.equal(error,null); assert.ok(elapsed<1000,`seed yield took ${elapsed} ms`); console.log(`shared seed preemption: ${elapsed} ms`);
+});
+
+async function ageSeed(h: Harness) {
+  const { readdir } = await import('node:fs/promises');
+  const folder = join(h.store, 'build-output-seeds');
+  const name = (await readdir(folder)).find(n => /^\d+-\d+\.json$/.test(n)); assert.ok(name, 'no published seed');
+  const seed = JSON.parse(await readFile(join(folder, name), 'utf8')); seed.verified_at = Math.floor(Date.now() / 1000) - 3601;
+  await writeFile(join(folder, name), JSON.stringify(seed));
+  (h.runtime.worktrees.builds as unknown as { checked: Map<string, number> }).checked.clear();
+}
+test('twenty run ends inside the hour start one helper and no clone',{skip:process.platform!=='darwin'},async t=>{
+  const h=await codex(t); await setup(h); const root=(await approve(h,['custom'])).policy.project;
+  const builds=h.runtime.worktrees.builds; await builds.settled();
+  // As after a host restart: the first run end asks the helper once.
+  (builds as unknown as { checked: Map<string, number> }).checked.clear();
+  const before=builds.started.length;
+  for (let n=0;n<20;n++) { builds.scheduleSeed(root,''); await builds.settled(); }
+  assert.deepEqual(builds.started.slice(before),['seed']);
+});
+test('a creation with an old seed clones it at once and refreshes only after admission',{skip:process.platform!=='darwin'},async t=>{
+  const h=await codex(t); await setup(h); await approve(h,['custom']);
+  const builds=h.runtime.worktrees.builds; await builds.settled(); await ageSeed(h);
+  const before=builds.started.length;
+  await create(h,'stale'); await ready(h,'stale');
+  assert.equal((await warmState(h,'stale')).phase,'warm');
+  await builds.settled();
+  assert.deepEqual(builds.started.slice(before),['clone','seed']);
 });

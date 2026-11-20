@@ -49,19 +49,40 @@ export function buildHelper<T>(input: unknown, signal?: AbortSignal, progress?: 
   });
 }
 type Job = { abort: AbortController; done: Promise<unknown> };
+type SeedReply = { outcome: Outcome; checked_at: number };
+type CloneReply = { outcome: Outcome; seedless: boolean };
+/** The helper's SEED_FRESH: a seed that matches the approval and was taken or
+ * found unchanged within the hour is not refreshed after a run. Dependency
+ * output, the part worth cloning, changes with a lockfile, not every run. */
+export const SEED_FRESH_MS = 60 * 60 * 1000;
 export class BuildOutputs {
   private seeds = new Map<string, Job>();
   private clones = new Map<string, Job>();
   private closing = false;
   private seedErrors = new Map<string, string>();
+  /** When the helper last judged each checkout's seed, so a run end inside
+   * the hour starts no process at all. Cleared when approvals change. */
+  private checked = new Map<string, number>();
+  /** Helper actions started, in order; tests count processes with it. */
+  readonly started: string[] = [];
   private store: Store; private directory: string; private changed: () => void; private busy: (root: string) => boolean;
   constructor(store: Store, directory: string, changed: () => void, busy: (root: string) => boolean) {
     this.store = store; this.directory = directory; this.changed = changed; this.busy = busy;
   }
-  async info(checkout: string): Promise<BuildInfo> { return buildHelper({ action: 'info', store: this.directory, root: checkout }); }
+  private helper<T>(input: { action: string } & Record<string, unknown>, signal?: AbortSignal, progress?: (counts: Counts) => void) {
+    // Bounded: a long-lived runtime starts helpers for days; tests read only the recent ones.
+    if (this.started.length >= 256) this.started.shift();
+    this.started.push(input.action); return buildHelper<T>(input, signal, progress);
+  }
+  /** The Refresh control asks for a refresh now, whatever the seed's age. */
+  async info(checkout: string, refresh = false): Promise<BuildInfo> {
+    const info = await this.helper<BuildInfo>({ action: 'info', store: this.directory, root: checkout });
+    if (refresh) this.scheduleSeed(info.policy.project, undefined, true);
+    return info;
+  }
   async set(checkout: string, identity: FileIdentity, revision: number, paths: string[]) {
-    const info = await buildHelper<BuildInfo>({ action: 'set', store: this.directory, root: checkout, identity, revision, paths });
-    this.scheduleSeed(info.policy.project);
+    const info = await this.helper<BuildInfo>({ action: 'set', store: this.directory, root: checkout, identity, revision, paths });
+    this.checked.clear(); this.scheduleSeed(info.policy.project, undefined, true);
     return info;
   }
   state(thread: string): BuildState {
@@ -74,7 +95,7 @@ export class BuildOutputs {
     if (prior.outcome) return prior.outcome;
     // An interrupted installation is rolled back, never silently resumed file by file.
     if (prior.phase === 'cloning') {
-      const outcome = await buildHelper<Outcome>({ action: 'recover', store: this.directory, worktree: tree });
+      const outcome = await this.helper<Outcome>({ action: 'recover', store: this.directory, worktree: tree });
       this.put(tree.thread_id, { phase: outcome.warm ? 'warm' : 'cold', files: outcome.counts.files, outcome }); return outcome;
     }
     const abort = new AbortController();
@@ -87,19 +108,30 @@ export class BuildOutputs {
       try {
         // Seeds come only from the main checkout, even for a worktree made from another.
         const main = tree.parent.main;
-        if (!abort.signal.aborted && !this.busy(main)) {
-          const cancelSeed = () => this.seeds.get(main)?.abort.abort();
-          abort.signal.addEventListener('abort', cancelSeed, { once: true });
-          try { await this.refreshSeed(main); } finally { abort.signal.removeEventListener('abort', cancelSeed); }
+        const clone = (retry: boolean) => {
+          if (abort.signal.aborted) throw new HostError('cancelled', 'Build output cloning was skipped.');
+          return this.helper<CloneReply>({ action: 'clone', store: this.directory, worktree: tree, private_target: privateTarget, retry_seedless: retry }, abort.signal,
+            counts => this.put(tree.thread_id, { phase: 'cloning', files: counts.files, outcome: null }));
+        };
+        // Any published seed that matches the approval is used at once, however
+        // old. Only with none at all does creation wait for a capture.
+        const retry = !this.busy(main);
+        let reply = await clone(retry);
+        if (reply.seedless && retry) {
+          if (!this.busy(main)) {
+            const cancelSeed = () => this.seeds.get(main)?.abort.abort();
+            abort.signal.addEventListener('abort', cancelSeed, { once: true });
+            try { await this.refreshSeed(main, true); } finally { abort.signal.removeEventListener('abort', cancelSeed); }
+          }
+          // This attempt records its outcome, warm or cold.
+          reply = await clone(false);
         }
-        if (abort.signal.aborted) throw new HostError('cancelled', 'Build output cloning was skipped.');
-        outcome = await buildHelper<Outcome>({ action: 'clone', store: this.directory, worktree: tree, private_target: privateTarget }, abort.signal,
-          counts => this.put(tree.thread_id, { phase: 'cloning', files: counts.files, outcome: null }));
-        const seedError = this.seedErrors.get(tree.parent.main);
+        outcome = reply.outcome;
+        const seedError = this.seedErrors.get(main);
         if (!outcome.warm && outcome.reason.includes('no idle build seed') && seedError) outcome = cold(seedError);
       } catch (error) {
         // Recovery finishes before admitting a first message, including after Skip.
-        const recovered = await buildHelper<Outcome>({ action: 'recover', store: this.directory, worktree: tree });
+        const recovered = await this.helper<Outcome>({ action: 'recover', store: this.directory, worktree: tree });
         outcome = recovered.warm ? recovered : cold(error instanceof Error ? error.message : 'Build output cloning failed.');
       }
       outcome.counts.elapsed_ms = Date.now() - started;
@@ -112,26 +144,39 @@ export class BuildOutputs {
     this.store.setSetting(`build_skip:${thread}`, 'yes'); this.clones.get(thread)?.abort.abort();
     return this.state(thread);
   }
-  scheduleSeed(root: string, sourceCache?: string) {
+  /** After a run or an admitted creation. Inside the hour this starts nothing;
+   * after it the helper walks the source and clones only what changed. */
+  scheduleSeed(root: string, sourceCache?: string, force = false) {
     if (sourceCache !== undefined) this.store.setSetting(`build_source:${root}`, sourceCache);
+    const checked = this.checked.get(root);
+    if (!force && checked !== undefined && checked <= Date.now() && Date.now() - checked < SEED_FRESH_MS) return;
     // Queue draining reserves its run synchronously first. A user run always wins.
-    setImmediate(() => { if (!this.closing && !this.busy(root)) void this.refreshSeed(root); });
+    setImmediate(() => { if (!this.closing && !this.busy(root)) void this.refreshSeed(root, force); });
   }
-  private async refreshSeed(root: string): Promise<void> {
+  private async refreshSeed(root: string, force = false): Promise<void> {
     if (this.closing || this.busy(root)) return;
-    const previous = this.seeds.get(root); if (previous) { await previous.done; return; }
+    const previous = this.seeds.get(root);
+    if (previous) { await previous.done; if (force) await this.refreshSeed(root, true); return; }
     const abort = new AbortController();
     const done = (async () => {
       const identity = await rootIdentity(root);
       if (abort.signal.aborted || this.busy(root)) return;
-      await buildHelper({ action: 'seed', store: this.directory, root, identity, generation: randomUUID(), source_cache: this.store.setting(`build_source:${root}`) || null }, abort.signal);
+      const reply = await this.helper<SeedReply>({ action: 'seed', store: this.directory, root, identity, generation: randomUUID(), source_cache: this.store.setting(`build_source:${root}`) || null, force }, abort.signal);
+      this.checked.set(root, reply.checked_at * 1000);
       this.seedErrors.delete(root);
-    })().catch(error => { this.seedErrors.set(root, error instanceof Error ? error.message : 'The build seed could not be prepared.'); });
+    })().catch(error => {
+      // A failure is retried after the same bound, not after every run; a run
+      // that interrupted the refresh leaves the next run end free to retry.
+      if (!abort.signal.aborted) this.checked.set(root, Date.now());
+      this.seedErrors.set(root, error instanceof Error ? error.message : 'The build seed could not be prepared.');
+    });
     this.seeds.set(root, { abort, done });
     try { await done; } finally { if (this.seeds.get(root)?.done === done) this.seeds.delete(root); }
   }
   /** Stops the low-priority helper before a local run attempts its writer lease. */
   async yieldToRun(root: string) { const job = this.seeds.get(root); if (job) { job.abort.abort(); await job.done; } }
+  /** Waits for scheduled and running refreshes without interrupting them. */
+  async settled() { await new Promise(resolve => setImmediate(resolve)); await Promise.allSettled([...this.seeds.values()].map(job => job.done)); }
   async close() {
     this.closing = true; for (const job of [...this.seeds.values(), ...this.clones.values()]) job.abort.abort();
     await Promise.allSettled([...this.seeds.values(), ...this.clones.values()].map(job => job.done));

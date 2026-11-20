@@ -66,10 +66,16 @@ impl Plait {
             Some(cx.subscribe(&field, |_, _, _: &TextFieldEvent, cx| cx.notify()));
         self.build_output.field = Some(field);
         if !cfg!(test) {
-            self.request_build_setting(None, cx);
+            self.request_build_setting(None, false, cx);
         }
     }
-    fn request_build_setting(&mut self, paths: Option<Vec<String>>, cx: &mut Context<Self>) {
+    /// `refresh` is the Refresh control's: the host refreshes the seed now.
+    fn request_build_setting(
+        &mut self,
+        paths: Option<Vec<String>>,
+        refresh: bool,
+        cx: &mut Context<Self>,
+    ) {
         if self.build_output.busy || !self.host.connection.connected {
             return;
         }
@@ -98,7 +104,7 @@ impl Plait {
                     },
                 )?)
             } else {
-                build_output::info(&client, identity.root.clone())?
+                build_output::info(&client, identity.root.clone(), refresh)?
             };
             identity.verify().map_err(host::Error::Protocol)?;
             Ok::<_, host::Error>((info, identity))
@@ -141,7 +147,7 @@ impl Plait {
             return;
         }
         paths.push(value);
-        self.request_build_setting(Some(paths), cx);
+        self.request_build_setting(Some(paths), false, cx);
     }
     pub(super) fn build_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let enabled = self.build_output.info.is_some()
@@ -160,7 +166,7 @@ impl Plait {
                     .child(button(("build-remove", i), "Remove").disabled(!enabled)
                         .tooltip(|_, cx| cx.new(|_| TextTooltip("Stop treating this directory as build output. Existing output stays; it will block worktree removal until approved again or removed manually.".into())).into())
                         .on_activate(cx, move |this, _, cx| {
-                            if let Some(info) = &this.build_output.info { let paths = info.policy.paths.iter().filter(|p| **p != value).cloned().collect(); this.request_build_setting(Some(paths), cx); }
+                            if let Some(info) = &this.build_output.info { let paths = info.policy.paths.iter().filter(|p| **p != value).cloned().collect(); this.request_build_setting(Some(paths), false, cx); }
                         })));
             }
             for (i, path) in info
@@ -190,8 +196,8 @@ impl Plait {
         content = content.when(self.build_output.busy, |el| el.child(tag("build-loading", "Checking", colors().muted)))
             .when_some(self.build_output.note.clone(), |el, note| el.child(tag("build-note", note, colors().amber)))
             .child(button("build-refresh", "Refresh").disabled(self.build_output.busy || !self.host.connection.connected)
-                .tooltip(|_, cx| cx.new(|_| TextTooltip("Read the host's approved list and look for suggestions in project manifests.".into())).into())
-                .on_activate(cx, |this, _, cx| this.request_build_setting(None, cx)));
+                .tooltip(|_, cx| cx.new(|_| TextTooltip("Read the host's approved list, look for suggestions in project manifests, and refresh the build seed now; an unchanged source is not cloned again.".into())).into())
+                .on_activate(cx, |this, _, cx| this.request_build_setting(None, true, cx)));
         settings::setting("Build output", "Approved directories can give new worktrees a warm start. Shared blocks are not reclaimable space.", content).into_any_element()
     }
     pub(super) fn finish_build_watch(&mut self, request: &str, generation: u64) {

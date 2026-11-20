@@ -76,7 +76,15 @@ impl Fixture {
         .unwrap()
     }
     fn seed(&self) -> io::Result<Outcome> {
-        seed(&self.store, &self.root, &self.identity, GENERATION, None)
+        seed(
+            &self.store,
+            &self.root,
+            &self.identity,
+            GENERATION,
+            None,
+            false,
+        )
+        .map(|r| r.outcome)
     }
 }
 impl Drop for Fixture {
@@ -142,7 +150,9 @@ fn a_source_with_a_writer_is_never_seeded() {
     assert!(f.seed().is_err());
     assert!(!seed_pointer(&f.store, &f.identity).unwrap().exists());
     let tree = f.tree();
-    let outcome = transaction::prepare(&f.store, &tree, false).unwrap();
+    let outcome = transaction::prepare(&f.store, &tree, false, false)
+        .map(|r| r.0)
+        .unwrap();
     assert!(!outcome.warm);
     assert!(outcome.reason.contains("no idle build seed"));
     assert!(!tree.path.join("target").exists());
@@ -156,7 +166,9 @@ fn approved_custom_output_is_independent_and_unapproved_data_is_never_copied() {
     let _run = lease::acquire_checkout(&f.root, None, LeaseClass::Writer).unwrap();
     fs::write(f.root.join("assets/file"), "later run").unwrap();
     let tree = f.tree();
-    let result = transaction::prepare(&f.store, &tree, false).unwrap();
+    let result = transaction::prepare(&f.store, &tree, false, false)
+        .map(|r| r.0)
+        .unwrap();
     assert!(result.warm);
     assert_eq!(
         fs::read(tree.path.join("assets/file")).unwrap(),
@@ -168,7 +180,9 @@ fn approved_custom_output_is_independent_and_unapproved_data_is_never_copied() {
     fs::write(tree.path.join("assets/file"), "clone edit").unwrap();
     assert_eq!(fs::read(f.root.join("assets/file")).unwrap(), b"later run");
     assert_eq!(
-        transaction::prepare(&f.store, &tree, false).unwrap(),
+        transaction::prepare(&f.store, &tree, false, false)
+            .map(|r| r.0)
+            .unwrap(),
         result
     );
     let seed: Seed = policy::read(&seed_pointer(&f.store, &f.identity).unwrap())
@@ -187,9 +201,22 @@ fn pi_receives_the_private_target_and_other_output_stays_in_its_worktree() {
     let cache = private_cache(&f.store, GENERATION).unwrap();
     fs::create_dir(cache.join("target")).unwrap();
     fs::write(cache.join("target/file"), "sandbox artifact").unwrap();
-    seed(&f.store, &f.root, &f.identity, GENERATION, Some(GENERATION)).unwrap();
+    seed(
+        &f.store,
+        &f.root,
+        &f.identity,
+        GENERATION,
+        Some(GENERATION),
+        false,
+    )
+    .unwrap();
     let tree = f.tree();
-    assert!(transaction::prepare(&f.store, &tree, true).unwrap().warm);
+    assert!(
+        transaction::prepare(&f.store, &tree, true, false)
+            .map(|r| r.0)
+            .unwrap()
+            .warm
+    );
     assert!(!tree.path.join("target").exists());
     assert_eq!(
         fs::read(private_cache(&f.store, THREAD).unwrap().join("target/file")).unwrap(),
@@ -213,7 +240,9 @@ fn interrupted_install_rolls_back_before_a_retry_and_preserves_adjacent_data() {
         .unwrap()
         .join(format!("{THREAD}.json"));
     policy::save(&file, &journal).unwrap();
-    let result = transaction::prepare(&f.store, &tree, false).unwrap();
+    let result = transaction::prepare(&f.store, &tree, false, false)
+        .map(|r| r.0)
+        .unwrap();
     assert!(!result.warm);
     assert!(result.reason.contains("interrupted"));
     assert!(!tree.path.join("assets").exists());
@@ -225,7 +254,9 @@ fn interrupted_install_rolls_back_before_a_retry_and_preserves_adjacent_data() {
 fn no_approval_starts_cold() {
     let f = Fixture::new();
     let tree = f.tree();
-    let result = transaction::prepare(&f.store, &tree, false).unwrap();
+    let result = transaction::prepare(&f.store, &tree, false, false)
+        .map(|r| r.0)
+        .unwrap();
     assert_eq!(
         result.reason,
         "No build directories are approved for this project."
@@ -249,13 +280,15 @@ fn revoked_seed_is_not_reused_and_a_published_pending_seed_survives_recovery() {
     // A crash after publication but before pending-file removal must not delete
     // the published seed before the next refresh has its replacement ready.
     let next = "12345678-1234-4234-8234-123456789abe";
-    seed(&f.store, &f.root, &f.identity, next, None).unwrap();
+    seed(&f.store, &f.root, &f.identity, next, None, true).unwrap();
     let published: Seed = policy::read(&pointer).unwrap().unwrap();
     assert!(published.path.join("0/file").exists());
     assert!(!pending.exists());
     f.approve(&["assets"]);
     let tree = f.tree();
-    let outcome = transaction::prepare(&f.store, &tree, false).unwrap();
+    let outcome = transaction::prepare(&f.store, &tree, false, false)
+        .map(|r| r.0)
+        .unwrap();
     assert!(!outcome.warm);
     assert!(outcome.reason.contains("current approval"));
     assert!(!tree.path.join("target").exists());
@@ -291,8 +324,10 @@ fn a_linked_worktree_never_replaces_the_project_seed() {
         tree.identity.as_ref().unwrap(),
         next,
         None,
+        false,
     )
-    .unwrap();
+    .unwrap()
+    .outcome;
     assert_eq!(outcome.reason, MAIN_ONLY);
     let after: Seed = policy::read(&pointer).unwrap().unwrap();
     assert_eq!(after.path, before.path);
@@ -341,8 +376,10 @@ fn a_refresh_or_its_old_seed_deletion_never_makes_a_creation_cold() {
             &identity,
             "12345678-1234-4234-8234-123456789abe",
             None,
+            true,
         )
         .unwrap()
+        .outcome
     });
     let wait = |path: &Path| {
         let start = std::time::Instant::now();
@@ -352,15 +389,19 @@ fn a_refresh_or_its_old_seed_deletion_never_makes_a_creation_cold() {
         }
     };
     wait(&pending);
-    let during_capture = transaction::prepare(&f.store, &f.tree(), false).unwrap();
+    let during_capture = transaction::prepare(&f.store, &f.tree(), false, false)
+        .map(|r| r.0)
+        .unwrap();
     assert!(during_capture.warm, "{}", during_capture.reason);
     wait(&retired);
     let during_deletion = transaction::prepare(
         &f.store,
         &tree_for(&f, "12345678-1234-4234-8234-123456789abf"),
         false,
+        false,
     )
-    .unwrap();
+    .unwrap()
+    .0;
     assert!(during_deletion.warm, "{}", during_deletion.reason);
     assert!(refresh.join().unwrap().warm);
     let entries: Vec<_> = fs::read_dir(&folder)
@@ -369,4 +410,103 @@ fn a_refresh_or_its_old_seed_deletion_never_makes_a_creation_cold() {
         .filter(|name| !name.ends_with(".lock") && !name.ends_with(".json"))
         .collect();
     assert_eq!(entries.len(), 1, "{entries:?}");
+}
+#[cfg(target_os = "macos")]
+fn age_seed(f: &Fixture) -> Seed {
+    let pointer = seed_pointer(&f.store, &f.identity).unwrap();
+    let mut seed: Seed = policy::read(&pointer).unwrap().unwrap();
+    seed.verified_at = now() - SEED_FRESH.as_secs() - 1;
+    policy::save(&pointer, &seed).unwrap();
+    seed
+}
+#[cfg(target_os = "macos")]
+fn seed_directories(f: &Fixture) -> usize {
+    let folder = seed_pointer(&f.store, &f.identity).unwrap();
+    fs::read_dir(folder.parent().unwrap())
+        .unwrap()
+        .filter(|e| {
+            let name = e.as_ref().unwrap().file_name().into_string().unwrap();
+            !name.ends_with(".lock") && !name.ends_with(".json")
+        })
+        .count()
+}
+#[cfg(target_os = "macos")]
+#[test]
+fn a_fresh_seed_starts_no_capture_and_an_old_unchanged_one_is_walked_not_cloned() {
+    let f = Fixture::new();
+    f.approve(&["target", "assets"]);
+    f.seed().unwrap();
+    let first: Seed = policy::read(&seed_pointer(&f.store, &f.identity).unwrap())
+        .unwrap()
+        .unwrap();
+    // Inside the hour a refresh needs no lease: a run holding the checkout
+    // does not even make it fail.
+    {
+        let _run = lease::acquire_checkout(&f.root, None, LeaseClass::Writer).unwrap();
+        let fresh = f.seed().unwrap();
+        assert_eq!(fresh.reason, "The build seed is less than an hour old.");
+    }
+    // After the hour an unchanged source is walked, and the seed only re-dated.
+    let aged = age_seed(&f);
+    let unchanged = seed(
+        &f.store,
+        &f.root,
+        &f.identity,
+        "12345678-1234-4234-8234-123456789abe",
+        None,
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        unchanged.outcome.reason,
+        "Build output has not changed since the seed was taken."
+    );
+    let after: Seed = policy::read(&seed_pointer(&f.store, &f.identity).unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.path, first.path);
+    assert!(after.verified_at > aged.verified_at);
+    assert_eq!(unchanged.checked_at, after.verified_at);
+    assert_eq!(seed_directories(&f), 1);
+    // A write of the same size is still a change: the next refresh clones.
+    fs::write(f.root.join("target/file"), "target sourcf").unwrap();
+    age_seed(&f);
+    let changed = seed(
+        &f.store,
+        &f.root,
+        &f.identity,
+        "12345678-1234-4234-8234-123456789abf",
+        None,
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        changed.outcome.reason,
+        "An idle checkout supplied an immutable build seed."
+    );
+    let replaced: Seed = policy::read(&seed_pointer(&f.store, &f.identity).unwrap())
+        .unwrap()
+        .unwrap();
+    assert_ne!(replaced.path, first.path);
+    assert_eq!(
+        fs::read(replaced.path.join("0/file")).unwrap(),
+        b"target sourcf"
+    );
+    assert_eq!(seed_directories(&f), 1);
+}
+#[cfg(target_os = "macos")]
+#[test]
+fn a_seedless_attempt_records_nothing_so_creation_can_capture_and_retry() {
+    let f = Fixture::new();
+    f.approve(&["target"]);
+    let tree = f.tree();
+    let (outcome, seedless) = transaction::prepare(&f.store, &tree, false, true).unwrap();
+    assert!(seedless && !outcome.warm);
+    f.seed().unwrap();
+    let (outcome, seedless) = transaction::prepare(&f.store, &tree, false, true).unwrap();
+    assert!(outcome.warm && !seedless, "{}", outcome.reason);
+    assert_eq!(
+        fs::read(tree.path.join("target/file")).unwrap(),
+        b"target source"
+    );
 }

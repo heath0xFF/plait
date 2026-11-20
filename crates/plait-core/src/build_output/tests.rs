@@ -307,3 +307,21 @@ fn measure_real_shaped_cow_tree() {
     assert_eq!(counts.files, 20000);
     assert_eq!(counts.bytes, 2_621_440_000);
 }
+#[cfg(target_os = "macos")]
+#[test]
+fn a_clone_and_a_stat_walk_agree_until_anything_is_written() {
+    let tree = Tree::new();
+    let src = tree.dir("src");
+    fs::create_dir_all(tree.0.join("src/deps/.bin")).unwrap();
+    fs::write(tree.0.join("src/deps/lib"), "library").unwrap();
+    symlink("../lib", tree.0.join("src/deps/.bin/tool")).unwrap();
+    symlink("/outside", tree.0.join("src/escape")).unwrap();
+    let dst = tree.dir("dst");
+    let (_, cloned) = clone_tree_digest(&src, &dst, &AtomicBool::new(false), &mut |_| {}).unwrap();
+    let walked = fingerprint(&src, &AtomicBool::new(false)).unwrap();
+    assert_eq!(walked, cloned);
+    assert_eq!(fingerprint(&src, &AtomicBool::new(false)).unwrap(), walked);
+    // Same size, same name: only the change time tells.
+    fs::write(tree.0.join("src/deps/lib"), "librarz").unwrap();
+    assert_ne!(fingerprint(&src, &AtomicBool::new(false)).unwrap(), walked);
+}

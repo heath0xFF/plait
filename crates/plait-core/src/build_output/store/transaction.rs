@@ -79,40 +79,48 @@ pub(super) fn recover(store: &Path, tree: &ManagedWorktree) -> io::Result<Outcom
     policy::save(&path, &journal)?;
     Ok(result)
 }
+/// Returns the outcome, and whether it is cold only because no usable seed
+/// exists. With `retry_seedless`, such an attempt records nothing.
 pub(super) fn prepare(
     store: &Path,
     tree: &ManagedWorktree,
     private_target: bool,
-) -> io::Result<Outcome> {
+    retry_seedless: bool,
+) -> io::Result<(Outcome, bool)> {
     let _lease = lease(tree)?;
     let path = journal_path(store, tree)?;
     if let Some(mut journal) = policy::read::<Journal>(&path)? {
         verify(tree, &journal)?;
         if let Some(result) = journal.outcome {
-            return Ok(result);
+            return Ok((result, false));
         }
         rollback(&journal)?;
         let result =
             Outcome::cold("Build output preparation was interrupted; the worktree starts cold.");
         journal.outcome = Some(result.clone());
         policy::save(&path, &journal)?;
-        return Ok(result);
+        return Ok((result, false));
     }
     let mut journal = empty(tree)?;
     policy::save(&path, &journal)?;
     let start = std::time::Instant::now();
     let result = fill(store, tree, private_target, &path, &mut journal);
-    let mut outcome = match result {
+    let (mut outcome, seedless) = match result {
         Ok(result) => result,
         Err(error) => {
             rollback(&journal)?;
-            Outcome::cold(build_output::cold_reason(&error))
+            (Outcome::cold(build_output::cold_reason(&error)), false)
         }
     };
+    if seedless && retry_seedless {
+        // Nothing was staged before the seed check: forget this attempt.
+        fs::remove_file(&path)?;
+        return Ok((outcome, true));
+    }
     outcome.counts.elapsed_ms = start.elapsed().as_millis() as u64;
     journal.outcome = Some(outcome.clone());
     policy::save(&path, &journal)?;
-    Ok(outcome)
+    Ok((outcome, seedless))
 }
 fn fill(
     store: &Path,
@@ -120,29 +128,35 @@ fn fill(
     private_target: bool,
     journal_path: &Path,
     journal: &mut Journal,
-) -> io::Result<Outcome> {
+) -> io::Result<(Outcome, bool)> {
     let approved = policy::load(store, &tree.parent.main, &tree.parent.main_identity)?;
     if approved.paths.is_empty() {
-        return Ok(Outcome::cold(
-            "No build directories are approved for this project.",
+        return Ok((
+            Outcome::cold("No build directories are approved for this project."),
+            false,
         ));
     }
     let Some((seed, _lock)) = published_seed(store, &tree.parent.main_identity)? else {
-        return Ok(Outcome::cold(
-            "The source checkout is busy or unavailable and there is no idle build seed.",
+        return Ok((
+            Outcome::cold(
+                "The source checkout is busy or unavailable and there is no idle build seed.",
+            ),
+            true,
         ));
     };
     if seed.revision != approved.revision {
-        return Ok(Outcome::cold(
-            "The build seed does not match the project's current approval.",
+        return Ok((
+            Outcome::cold("The build seed does not match the project's current approval."),
+            true,
         ));
     }
     seed.identity
         .checked(&seed.path)
         .map_err(io::Error::other)?;
     if seed.directories.is_empty() {
-        return Ok(Outcome::cold(
-            "Approved directories have no build output yet.",
+        return Ok((
+            Outcome::cold("Approved directories have no build output yet."),
+            true,
         ));
     }
     let stage = tree.path.join(&journal.staging);
@@ -235,7 +249,7 @@ fn fill(
     if !outcome.warm {
         outcome.reason = "Approved directories have no build output yet.".into();
     }
-    Ok(outcome)
+    Ok((outcome, false))
 }
 fn rollback(journal: &Journal) -> io::Result<()> {
     journal
