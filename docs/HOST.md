@@ -2493,8 +2493,106 @@ fields, including `protocol_version`, and unknown lifecycle states are refused.
   refuses a missing/local upstream or commits absent from its known remote
   tracking ref. This reflects the last fetch, not a live remote claim.
   `allow_unpushed:true` explicitly accepts keeping those commits only on the
-  retained local branch. Neither value permits deleting uncommitted or ignored
-  files. There is no force flag, branch deletion or automatic cleanup.
+  retained local branch. Neither value permits deleting uncommitted files or
+  ignored content outside
+  the host’s currently approved build directories. Approved ignored output goes
+  with the checkout; the current list is read under the removal lease and common
+  metadata lock, which also serializes policy edits. There is no force flag,
+  branch deletion or automatic cleanup.
+
+### Approved build output
+
+Build output approval is host policy, never repository configuration. The
+owner-only `build-output-policy/<device>-<inode>.json` file contains
+`{schema:1,project,identity,revision,paths}`. `project` is the canonical main
+checkout, `identity` its decimal-string device/inode pair, and `paths` at most
+32 exact relative directories, each at most 1024 bytes. Revisions reject stale
+edits. Policy reads use no-follow, owner/mode/link-count and size checks; writes
+use a synced temporary file and atomic rename. Editing tracked configuration
+cannot widen this list.
+
+The additive `build_output_info {checkout}` and
+`set_build_output {checkout,identity,revision,paths}` return
+`{schema:1,worktree_build_output_v1:true,policy,suggestions}`. A suggestion is
+never approval. Manifests are bounded data reads, never executed: Cargo suggests
+an existing ignored `target`; a package manifest with a lockfile suggests an
+existing ignored `node_modules`. Custom output directories are supported.
+Approval refuses dot components, absolute paths, Git data, linked directories,
+volume boundaries, nested repositories and Python virtual environments
+(`venv`, `.venv` or `pyvenv.cfg`). The entire directory must be ignored and
+contain no tracked or non-ignored files. Git reads retain their hardening;
+`check-ignore` alone disables literal *pathspec* mode because it accepts
+filenames and rejects that flag, receiving NUL-delimited directory names.
+
+`watch_build_output {request_id,kind}` subscribes to one `worktree` or
+`admission` creation. Its initial reply and subsequent `build_output` events
+contain the capability, schema, request ID, nullable thread ID, phase
+(`waiting`, `cloning`, `warm`, `cold`), cumulative file count and nullable
+outcome. `skip_build_output` takes the same identity and cancels preparation.
+An outcome contains `warm`, `reason`, `directories`, and `counts` with `files`,
+`links`, `skipped`, logical `bytes`, `elapsed_ms` and up to 20 diagnostic notes.
+These are pushed on state changes, coalesced by the existing subscription
+channel. No desktop progress polling or render-path filesystem work is added.
+Older hosts make the list unavailable. Existing creation-status retries retain
+their behavior and wait up to 330 seconds for accepted preparation.
+
+`project_worktrees_build {checkout,only?}` adds `worktree_build_output_v1:true`
+to inventory and `build_directories`, nullable `build_output` outcome, and
+nullable `preservation.build_output` to its rows. Older inventory reply shapes
+stay unchanged. Known approved ignored content does not count as `changed`;
+unknown ignored content still blocks removal. Preview and removal use the
+same validation function. Revoking approval immediately restores that
+preservation requirement. Logical size classification includes approved custom
+paths; shared copy-on-write blocks are not a promise of reclaimable storage.
+
+On macOS, the helper uses descriptor-based `fclonefileat` for each regular file
+on the same volume. It creates directories, verifies every opened directory
+against the listed identity, never follows a substituted link, and never makes
+hard links or falls back to copying bytes. It retains only relative links that
+resolve inside the approved directory; escaping, absolute and unresolved links,
+sockets and devices are skipped and reported. Nested repositories and changed
+source identities fail preparation. Another volume, unsupported cloning,
+insufficient space, cancellation or a failed check starts cold with a reason.
+Other platforms start cold because cloning is unavailable.
+
+An idle checkout supplies an immutable seed under `build-output-seeds` while
+holding its writer lease. Approval changes and successful run completion
+schedule a low-priority refresh; creation also tries a refresh if its source is
+idle. A local admission or run aborts that helper and waits for its process exit
+before taking its writer lease. A private, verified FIFO beside the shared
+checkout lease lets another host's admission or writer wake the seed too; it
+allows at most 20 ms for the seed to release its lease before applying the
+ordinary lease check.
+Only the seed helper listens, so no PID is signaled. The listener blocks on an
+OS event, with no polling or clone-length wait. The helper exits
+on host lifetime-pipe EOF, so a host crash cannot leave it cloning indefinitely.
+Another host's writer lease prevents capture too; simultaneous seed use or
+refresh can cause a cold fallback. A busy checkout is never the source: creation
+uses the last published matching seed, or starts cold when none exists. The
+seed is never written by later runs. Capture is bounded to 120 seconds and one
+million entries per directory, with a 150-second helper deadline. A manual
+terminal build is outside Plait's leases and can still change a source during
+capture; identity and timestamp checks detect some changes, not every possible
+external write.
+
+For trusted projects, Codex and Claude Code, approved output is installed in the
+new checkout. Sandboxed Pi receives approved `target` in its private per-thread
+build cache; other approved output stays in the checkout. A successful sandboxed
+Pi run can supply the next seed's target from its private cache. Credentials,
+Cargo home and unapproved caches are never seeded. Python environments are
+refused; other caches with absolute paths should be recreated instead.
+
+The clone is an idempotent creation step after Git and before the first message.
+Owner-only `build-output-operations/<thread>.json` records staging identity and
+installation intentions before exclusive renames. An interrupted installation
+is rolled back on retry or host restart before admission; a completed outcome
+is reused. Partial output is removed by descriptor and recorded identity;
+replaced directories are preserved and admission fails pending inspection.
+Existing destination output is never overwritten. Seeds publish atomically
+under a project seed lock; a pending journal distinguishes an abandoned seed
+from an already published one; a retirement journal keeps old-seed cleanup
+recoverable if a run interrupts it after publication. Refresh replaces only the
+earlier seed, never a worktree. Worktree cleanup remains manual, with no eviction or storage budget.
 
 Creation/removal return `{schema:1,operation}` promptly. An operation includes
 `request_id`, allocated `thread_id`, `state` (`preparing`, `ready`, `failed`,
@@ -2519,7 +2617,8 @@ Private `worktrees/<thread-UUID>.json` journals are owner-only, no-follow,
 size-bounded files replaced atomically and synced. Branch names start with
 `plait/<first-12-UUID-hex-digits>` and extend by four digits on collision up to
 the full UUID. Existing branches, paths and symlinks are never reused. The root
-is `<main-repository>.worktrees/<suffix>`; no artifacts or dirty files are copied.
+is `<main-repository>.worktrees/<suffix>`. Dirty files are never copied; approved
+build output may be cloned after Git completes, before thread admission.
 Git writes the checkout under the usual `022` umask, not the host's owner-only
 one, so its files get the modes an ordinary checkout would have.
 

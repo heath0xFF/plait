@@ -53,6 +53,7 @@ mod messages;
 mod mixed_tabs;
 mod settings_modal;
 mod showcase;
+mod storage;
 mod tabs;
 mod turn_review;
 mod undo;
@@ -2360,6 +2361,7 @@ fn walk(output: Option<&Path>) {
         harness.capture(&format!("no-sidebar-{suffix}"));
         ownership_scenes(&repository, output, suffix, width, height);
         isolation::walk(&repository, output, suffix, width, height);
+        storage::walk(&repository, output, suffix, width, height);
         worktrees_view::walk(&repository, output, suffix, width, height);
     }
     let _ = std::fs::remove_dir_all(&scratch);

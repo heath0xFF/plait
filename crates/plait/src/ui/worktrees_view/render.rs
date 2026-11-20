@@ -335,10 +335,12 @@ impl Plait {
                 .when(tree.creation_id.is_some()&&!tree.main&&!tree.removed,|el|el.child(button("worktrees-remove","Remove").when(cfg!(test), |el| el.tooltip_show_delay(std::time::Duration::ZERO)).disabled(!can_remove || busy || self.worktrees.removal.pending.is_some() || self.worktree_busy || !self.host.connection.connected || self.worktrees.loading || self.worktrees.error.is_some()).text_color(rgb(if can_remove && !busy {colors().text}else{colors().subtle})).tooltip(move |_,cx|hover(remove_reason.clone(),cx)).on_activate(cx,move |this,window,cx|this.ask_remove_view_worktree(&drawn.0,drawn.1.as_ref(),window,cx)))))
             .child(div().text_size(px(12.)).text_color(rgb(colors().muted)).child(a11y_text("worktrees-detail-branch",format!("{} · from {base}",safe_text(tree.branch.as_deref().unwrap_or("Detached"))))))
             .child(hover_text("worktrees-detail-path",path_text.clone(),path_text).min_w_0().w_full().truncate().text_ellipsis_middle().text_size(px(11.)).text_color(rgb(colors().subtle)))
-            .child(a11y_text("worktrees-detail-facts",presentation::preservation_label(facts)))
+            .child(row().flex_wrap().gap_2().child(a11y_text("worktrees-detail-facts",presentation::preservation_label(facts)))
+            .when(facts.build_output.is_some_and(|n|n>0), |el| el.child(hover_text("worktrees-build-output", "Build output".into(), "Ignored content inside the host’s currently approved directories. It goes with this worktree and does not block removal; other ignored content still does.".into())))
+            .when_some(tree.build_output.as_ref(), |el, outcome| el.child(hover_text("worktrees-warmth", if outcome.warm {"Warm".into()}else{"Cold".into()}, format!("{} {} files · {} ms · {} skipped. {}", outcome.reason, outcome.counts.files, outcome.counts.elapsed_ms, outcome.counts.skipped, outcome.counts.notes.join("; "))))))
             .child(hover_text("worktrees-detail-reason",safe_text(&visible_reason),reason).text_size(px(12.)).text_color(rgb(colors().muted)))
             .child(bar)
-            .child(hover_text("worktrees-detail-size",size.map_or_else(||size_label(self.worktrees.sizes[n].as_ref()),|s|format!("{} source · {} build output{}",bytes(s.source),bytes(s.build),if s.incomplete {" · lower bound"}else{""})),"Logical bytes, including private build cache. Shared Git storage excluded; this is not space reclaimable.".into()))
+            .child(hover_text("worktrees-detail-size",size.map_or_else(||size_label(self.worktrees.sizes[n].as_ref()),|s|format!("{} source · {} build output{}",bytes(s.source),bytes(s.build),if s.incomplete {" · lower bound"}else{""})),"Logical bytes, including private build cache. Shared Git storage excluded. Copy-on-write blocks may be shared; removing this worktree does not reclaim all these bytes.".into()))
             .child(a11y_text("worktrees-last-used",format!("Last used: {}",self.worktrees.ages[n]))))
     }
 

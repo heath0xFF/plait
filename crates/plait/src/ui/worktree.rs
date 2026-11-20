@@ -157,6 +157,16 @@ impl Plait {
         .detach();
     }
     fn send_worktree(&mut self, pending: Pending, window: &mut Window, cx: &mut Context<Self>) {
+        let build_generation =
+            if let Request::CreateWorktreeThread { request_id, .. } = &pending.request {
+                Some(self.watch_build_output(
+                    request_id.clone(),
+                    host::build_output::Kind::Worktree,
+                    cx,
+                ))
+            } else {
+                None
+            };
         self.worktree_busy = true;
         self.notice = Some("Creating worktree… You can keep working in another tab.".into());
         cx.notify();
@@ -193,6 +203,7 @@ impl Plait {
                     this.notice = Some("The host connection changed before the worktree reply arrived. Creation is unconfirmed; use New Thread in Worktree again to confirm it.".into());
                     return cx.notify();
                 }
+                if let Request::CreateWorktreeThread { request_id, .. } = &pending.request && let Some(generation) = build_generation { this.finish_build_watch(request_id, generation); }
                 match result {
                     Ok((operation, summary)) => {
                         this.worktree_pending = None;
@@ -415,7 +426,7 @@ pub(super) fn await_operation(
         _ => return Err(host::Error::Protocol("Invalid worktree mutation.".into())),
     };
     let mut operation = worktree::operation(client, request)?;
-    let deadline = Instant::now() + Duration::from_secs(165);
+    let deadline = Instant::now() + Duration::from_secs(330);
     while matches!(operation.state, Stage::Preparing | Stage::Removing) {
         if Instant::now() >= deadline {
             return Err(host::Error::Protocol(

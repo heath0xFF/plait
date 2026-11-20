@@ -3,6 +3,7 @@ mod actions;
 mod admission;
 mod appearance;
 mod branches;
+mod build_output;
 mod changes;
 mod checkout_queue;
 mod cleanup;
@@ -167,6 +168,7 @@ pub struct Plait {
     draft: new_thread::Draft,
     /// A worktree is being created or removed.
     admission: admission::State,
+    build_output: build_output::State,
     worktree_busy: bool,
     worktrees: worktrees_view::View,
     worktree_pending: Option<worktree::Pending>,
@@ -236,6 +238,7 @@ impl Plait {
             new_thread_open: false,
             draft: Default::default(),
             admission: Default::default(),
+            build_output: Default::default(),
             worktree_busy: false,
             worktrees: Default::default(),
             worktree_pending: None,
@@ -1324,6 +1327,7 @@ impl Render for Plait {
                                         .child(notice),
                                 )
                             })
+                            .when_some(self.build_progress_bar(cx), |el, bar| el.child(bar))
                             .when_some(self.creation_bar(cx), |el, bar| el.child(bar))
                             .when(self.workspace.inspector_note && !wide, |el| {
                                 el.child(self.inspector_note(cx))

@@ -605,6 +605,30 @@ choices, path and identity before asking. Both the sidebar and graph use
 `ui/worktree.rs` for the prompt, request and receipt; the sidebar's older-host
 path retains its two explicit choices without inventing live counts.
 
+`build_output` in core owns descriptor-relative CoW cloning, private approval
+policy, immutable seed publication and recoverable installation journals.
+`runtime/build-output.ts` schedules helper processes, preempts seed capture for
+runs, persists outcomes and publishes progress through host notifications.
+Creation awaits preparation before admitting the thread. Sandboxed Pi receives
+approved Cargo output in its existing per-thread cache; other harnesses use the
+checkout. Approval is stored outside tracked project configuration, with a
+revision and the main checkout identity. A verified FIFO in the shared lease
+directory lets admissions in other hosts interrupt capture without signaling a
+PID; only the seed helper listens. Current policy is read under removal's leases
+and common metadata lock; inventory uses the same preservation function.
+Only approved ignored output is exempt from preservation.
+
+`ui/build_output.rs` owns settings request guards and a pushed progress
+subscription, guarded by request generation. Its progress label is prepared
+only when a pushed state changes, not on frames. Project settings offers
+suggestions without approving them; creation exposes Skip, and Worktrees
+presents Warm/Cold and known build output.
+The new inventory operation carries a capability and falls back to the prior
+shape with older hosts. Policy reads, Git validation, clone work and storage
+walks stay off the render path. Render consumes prepared state; clone progress
+adds no timers or filesystem work per frame. Logical accounting classifies
+approved custom paths and never equates shared blocks with reclaimable space.
+
 `git::log::graph` reads at most 300 commits and parents from all checkout heads
 in one command. Pure `worktree_graph::layout` follows the trunk's first parents,
 gives each worktree its head's first-parent chain down to its base, puts merged-in

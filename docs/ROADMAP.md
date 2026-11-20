@@ -621,6 +621,19 @@ stream, without per-waiter desktop polling. Scripted host, parser, draft/image
 recovery and headless accessibility checks cover the contract; installed-window
 and live-provider acceptance remain separate.
 
+**Stage 11, approved copy-on-write build output (implemented).** Project settings
+stores an explicit per-project directory list as host policy. Creation clones
+only approved ignored output on macOS, using immutable idle seeds when the
+source is busy, before admitting the first message. Local runs preempt seed
+refresh; Skip and interrupted preparation recover to a cold checkout. Sandboxed
+Pi receives Cargo output in its private cache. Additive capabilities preserve
+older hosts. The Worktrees view shows Warm or Cold, current known build output
+and logical sizes without promising reclaimed shared blocks. Removal accepts
+approved build output while preserving every other ignored file. There is no
+byte-copy fallback, automatic worktree cleanup, orchestration or merge flow.
+Filesystem, host, protocol and headless scene checks cover these boundaries;
+native window interaction and live harness acceptance remain separate.
+
 **Shipped in v0.1.0-preview.22: Worktrees.** One project graph per window is the first tab content
 that is not a thread. It opens from the sidebar project menu, command palette,
 Project settings and a worktree thread's context line. The graph presents actual
@@ -631,8 +644,8 @@ manual checkout removal are built; automated cleanup and cache deletion are not.
 Headless scenes, lifecycle tests and a fifty-worktree frame case cover this view;
 installed-window acceptance and performance timings remain separate verification.
 
-**Still planned:** further tab content kinds, enforced Pi read-in-place (Stage 10), copy-on-write artifact seeding
-(Stage 11), and further worktree storage management (Stage 12).
+**Still planned:** further tab content kinds, enforced Pi read-in-place (Stage 10), and further worktree storage management
+(Stage 12).
 
 
 **Agreed concurrency decisions (built in the stages named below):**
