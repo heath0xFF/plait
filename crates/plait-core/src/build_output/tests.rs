@@ -215,6 +215,25 @@ fn cloned_directories_keep_the_source_permissions_and_stay_removable() {
     fs::set_permissions(tree.0.join("src/sealed"), fs::Permissions::from_mode(0o755)).unwrap();
 }
 #[test]
+fn an_unreadable_file_fails_the_clone_and_names_the_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let tree = Tree::new();
+    let src = tree.dir("src");
+    let dst = tree.dir("dst");
+    fs::create_dir(tree.0.join("src/deps")).unwrap();
+    fs::write(tree.0.join("src/deps/private"), "x").unwrap();
+    fs::set_permissions(
+        tree.0.join("src/deps/private"),
+        fs::Permissions::from_mode(0o000),
+    )
+    .unwrap();
+    let error = clone_tree(&src, &dst, &AtomicBool::new(false), &mut |_| {}).unwrap_err();
+    assert_eq!(
+        cold_reason(&error),
+        "Cannot read deps/private in the build directory; it is not readable."
+    );
+}
+#[test]
 fn replaced_directory_is_not_followed_and_partial_output_can_be_erased() {
     let tree = Tree::new();
     let src = tree.dir("src");
