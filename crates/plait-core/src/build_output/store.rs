@@ -53,7 +53,7 @@ enum Request {
         worktree: ManagedWorktree,
     },
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Seed {
     revision: u64,
     path: PathBuf,
@@ -155,17 +155,21 @@ fn uuid(id: &str) -> io::Result<()> {
     }
     Ok(())
 }
-fn seed_lock(store: &Path, identity: &Identity, exclusive: bool) -> io::Result<fs::File> {
-    let folder = policy::folder(store, "build-output-seeds")?;
-    let path = folder.join(format!("{}.lock", policy::key(identity)?));
-    let file = fs::OpenOptions::new()
+/// Opens an owner-only lock file. Without `create`, a missing file is `None`.
+fn lock_file(path: &Path, create: bool) -> io::Result<Option<fs::File>> {
+    let file = match fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .create(true)
+        .create(create)
         .truncate(false)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)?;
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(e) if !create && e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
     let meta = file.metadata()?;
     if !meta.is_file()
         || meta.uid() != unsafe { libc::geteuid() }
@@ -174,20 +178,67 @@ fn seed_lock(store: &Path, identity: &Identity, exclusive: bool) -> io::Result<f
     {
         return Err(io::Error::other("Unsafe build seed lock."));
     }
-    if unsafe {
-        libc::flock(
-            file.as_raw_fd(),
-            (if exclusive {
-                libc::LOCK_EX
-            } else {
-                libc::LOCK_SH
-            }) | libc::LOCK_NB,
-        )
-    } != 0
-    {
-        return Err(io::Error::other("Build seed is being prepared or used."));
+    Ok(Some(file))
+}
+fn flock(file: &fs::File, operation: libc::c_int) -> io::Result<bool> {
+    loop {
+        // SAFETY: an open lock file descriptor.
+        if unsafe { libc::flock(file.as_raw_fd(), operation) } == 0 {
+            return Ok(true);
+        }
+        let error = io::Error::last_os_error();
+        match error.raw_os_error() {
+            Some(libc::EINTR) => continue,
+            Some(libc::EWOULDBLOCK) => return Ok(false),
+            _ => return Err(error),
+        }
+    }
+}
+/// One seed refresh per project at a time. Creation never takes this lock.
+fn seeder_lock(store: &Path, identity: &Identity) -> io::Result<fs::File> {
+    let folder = policy::folder(store, "build-output-seeds")?;
+    let file = lock_file(
+        &folder.join(format!("{}.seeding.lock", policy::key(identity)?)),
+        true,
+    )?
+    .unwrap();
+    if !flock(&file, libc::LOCK_EX | libc::LOCK_NB)? {
+        return Err(io::Error::other(
+            "Another build seed refresh is active for this project.",
+        ));
     }
     Ok(file)
+}
+/// Each seed has its own lock: a creation holds it shared while cloning, and
+/// deleting a retired seed waits for it exclusively. A refresh never blocks a
+/// creation from the published seed, and a deletion never removes one in use.
+fn generation_lock(seed: &Path) -> PathBuf {
+    let mut name = seed.file_name().unwrap_or_default().to_owned();
+    name.push(".lock");
+    seed.with_file_name(name)
+}
+/// The published seed, held shared. A pointer that moves while it is being
+/// locked is read again, so a concurrent refresh or deletion cannot make
+/// creation start cold while a seed is published.
+fn published_seed(store: &Path, identity: &Identity) -> io::Result<Option<(Seed, fs::File)>> {
+    let pointer = seed_pointer(store, identity)?;
+    for _ in 0..8 {
+        let Some(seed) = policy::read::<Seed>(&pointer)? else {
+            return Ok(None);
+        };
+        let Some(lock) = lock_file(&generation_lock(&seed.path), false)? else {
+            if policy::read::<Seed>(&pointer)?.is_some_and(|now| now.path == seed.path) {
+                return Ok(None);
+            }
+            continue;
+        };
+        if flock(&lock, libc::LOCK_SH | libc::LOCK_NB)?
+            && policy::read::<Seed>(&pointer)?.is_some_and(|now| now.path == seed.path)
+        {
+            return Ok(Some((seed, lock)));
+        }
+    }
+    Ok(None)
 }
 fn seed_pointer(store: &Path, identity: &Identity) -> io::Result<PathBuf> {
     Ok(policy::folder(store, "build-output-seeds")?
@@ -215,7 +266,7 @@ fn seed(
     if main != root {
         return Ok(Outcome::cold(MAIN_ONLY));
     }
-    let _seed_lock = seed_lock(store, &main_identity, true)?;
+    let _seeder = seeder_lock(store, &main_identity)?;
     let capture = lease::seed::capture(
         root,
         identity.lease().map_err(io::Error::other)?,
@@ -231,29 +282,23 @@ fn seed(
     let pointer = seed_pointer(store, &main_identity)?;
     let previous: Option<Seed> = policy::read(&pointer)?;
     let folder = pointer.parent().unwrap();
-    // Only this project's unfinished staging directory is recovered, never a seed in use.
-    let pending = folder.join(format!("{}.pending.json", policy::key(&main_identity)?));
-    let retired = folder.join(format!("{}.retired.json", policy::key(&main_identity)?));
-    if let Some(old) = policy::read::<Seed>(&retired)? {
-        if previous
-            .as_ref()
-            .is_none_or(|current| current.path != old.path)
-        {
-            remove_seed(folder, &old)?;
-        }
-        fs::remove_file(&retired)?;
-    }
+    let key = policy::key(&main_identity)?;
+    let pending = folder.join(format!("{key}.pending.json"));
+    let retired = folder.join(format!("{key}.retired.json"));
+    // An abandoned capture joins the retired list; it is deleted after this
+    // refresh publishes, so a creation waiting for a seed never waits for it.
     if let Some(old) = policy::read::<Seed>(&pending)? {
         if previous
             .as_ref()
             .is_none_or(|committed| committed.path != old.path)
         {
-            remove_seed(folder, &old)?;
+            retire(&retired, old)?;
         }
         fs::remove_file(&pending)?;
     }
-    let path = folder.join(format!("{}-{generation}", policy::key(&main_identity)?));
+    let path = folder.join(format!("{key}-{generation}"));
     fs::create_dir(&path)?;
+    lock_file(&generation_lock(&path), true)?;
     let mut seed = Seed {
         revision: approved.revision,
         identity: Identity::read(&path).map_err(io::Error::other)?,
@@ -301,7 +346,6 @@ fn seed(
             seed.directories.push(directory.clone());
         }
         identity.checked(root).map_err(io::Error::other)?;
-        drop(capture);
         // A policy edit during the scan cannot publish a widened or stale seed.
         if policy::load(store, &main, &main_identity)?.revision != approved.revision {
             return Err(io::Error::other(
@@ -309,14 +353,10 @@ fn seed(
             ));
         }
         if let Some(previous) = &previous {
-            policy::save(&retired, previous)?;
+            retire(&retired, previous.clone())?;
         }
         policy::save(&pointer, &seed)?;
         published = true;
-        if let Some(previous) = &previous {
-            remove_seed(folder, previous)?;
-            fs::remove_file(&retired)?;
-        }
         fs::remove_file(&pending)?;
         Ok(Outcome {
             warm: !seed.directories.is_empty(),
@@ -325,21 +365,63 @@ fn seed(
             counts: seed.counts.clone(),
         })
     })();
+    drop(capture);
     if result.is_err() && !published {
         remove_seed(folder, &seed)?;
         let _ = fs::remove_file(&pending);
     }
-    result
+    // Deletion holds no source lease and no lock a creation needs; it waits
+    // only for a creation still cloning from the seed being retired.
+    match (result, delete_retired(folder, &retired)) {
+        (Ok(mut outcome), Err(error)) => {
+            outcome
+                .counts
+                .note(format!("An earlier build seed is not deleted yet: {error}"));
+            Ok(outcome)
+        }
+        (result, _) => result,
+    }
+}
+/// Seeds waiting to be deleted. A list, so an interrupted deletion is resumed
+/// by the next refresh and no abandoned seed is forgotten.
+fn retire(list: &Path, seed: Seed) -> io::Result<()> {
+    let mut seeds: Vec<Seed> = policy::read(list)?.unwrap_or_default();
+    if !seeds.iter().any(|s| s.path == seed.path) {
+        seeds.push(seed);
+    }
+    policy::save(list, &seeds)
+}
+fn delete_retired(folder: &Path, list: &Path) -> io::Result<()> {
+    let mut seeds: Vec<Seed> = policy::read(list)?.unwrap_or_default();
+    while let Some(seed) = seeds.first() {
+        remove_seed(folder, seed)?;
+        seeds.remove(0);
+        if seeds.is_empty() {
+            fs::remove_file(list)?;
+        } else {
+            policy::save(list, &seeds)?;
+        }
+    }
+    Ok(())
 }
 fn remove_seed(folder: &Path, seed: &Seed) -> io::Result<()> {
     if seed.path.parent() != Some(folder) {
         return Err(io::Error::other("Invalid build seed path."));
     }
+    let lock_path = generation_lock(&seed.path);
+    let lock = lock_file(&lock_path, false)?;
+    if let Some(lock) = &lock {
+        flock(lock, libc::LOCK_EX)?;
+    }
     build_output::remove_owned(
         folder,
         Path::new(seed.path.file_name().unwrap()),
         identity_pair(&seed.identity)?,
-    )
+    )?;
+    if lock.is_some() {
+        fs::remove_file(lock_path)?;
+    }
+    Ok(())
 }
 fn identity_pair(identity: &Identity) -> io::Result<(u64, u64)> {
     let id = identity.lease().map_err(io::Error::other)?;

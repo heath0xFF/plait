@@ -2569,8 +2569,7 @@ ordinary lease check.
 Only the seed helper listens, so no PID is signaled. The listener blocks on an
 OS event, with no polling or clone-length wait. The helper exits
 on host lifetime-pipe EOF, so a host crash cannot leave it cloning indefinitely.
-Another host's writer lease prevents capture too; simultaneous seed use or
-refresh can cause a cold fallback. A busy checkout is never the source: creation
+Another host's writer lease prevents capture too. A busy checkout is never the source: creation
 uses the last published matching seed, or starts cold when none exists. The
 seed is never written by later runs. Capture is bounded to 120 seconds and one
 million entries per directory, with a 150-second helper deadline. A manual
@@ -2592,11 +2591,15 @@ installation intentions before exclusive renames. An interrupted installation
 is rolled back on retry or host restart before admission; a completed outcome
 is reused. Partial output is removed by descriptor and recorded identity;
 replaced directories are preserved and admission fails pending inspection.
-Existing destination output is never overwritten. Seeds publish atomically
-under a project seed lock; a pending journal distinguishes an abandoned seed
-from an already published one; a retirement journal keeps old-seed cleanup
-recoverable if a run interrupts it after publication. Refresh replaces only the
-earlier seed, never a worktree. Worktree cleanup remains manual, with no eviction or storage budget.
+Existing destination output is never overwritten. One refresh runs per project
+at a time (`<key>.seeding.lock`), and seeds publish atomically. Each seed has its
+own `<seed>.lock`: a creation holds it shared while it clones, rereading the
+pointer if it moves, so neither a refresh nor a deletion makes a creation start
+cold. A pending journal distinguishes an abandoned capture from a published one;
+the retired list (`<key>.retired.json`) names earlier and abandoned seeds, which
+are deleted after the new seed is published and its source lease released,
+each once no creation still clones from it. An interrupted deletion resumes at
+the next refresh. Refresh replaces only earlier seeds, never a worktree. Worktree cleanup remains manual, with no eviction or storage budget.
 
 Creation/removal return `{schema:1,operation}` promptly. An operation includes
 `request_id`, allocated `thread_id`, `state` (`preparing`, `ready`, `failed`,
