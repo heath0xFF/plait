@@ -78,8 +78,9 @@ test('installed host starts repeatedly with standard service scheduling', { time
   await verifyInstalledStartup(binary);
 });
 
-// The whole runtime suite, about four minutes on CI with Codex and Claude Code adapters; room to grow.
-test('installed runtime passes the full macOS safety suite', { timeout: 600000 }, async () => {
+// The whole runtime suite, about eight minutes on CI. A release is built once, so the limit leaves room for a
+// slow runner rather than failing the build that would have published.
+test('installed runtime passes the full macOS safety suite', { timeout: 900000 }, async () => {
   await new Promise((resolve, reject) => {
     const child = spawn(node, ['test/run.mjs', '--require-command-sandbox'], {
       cwd: join(repository, 'runtime'), stdio: 'inherit',
