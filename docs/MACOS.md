@@ -875,7 +875,7 @@ not participate in Plait's leases and can still race a seed capture.
 Git data, nested repositories and Python virtual environments are refused.
 Unapproved ignored directories are never copied. Safe package-manager `.bin`
 links are retained; links leaving the approved directory, absolute or unresolved
-links, sockets and devices are skipped. Recreate other caches that embed absolute
+links, sockets, devices and immutable or append-only files are skipped. Recreate other caches that embed absolute
 paths. Sandboxed Pi's Cargo output is seeded in its private thread cache; trusted
 projects, Codex and Claude Code use checkout output. Removing a checkout still
 retains its separately attributed private cache. Worktrees remain optional and
