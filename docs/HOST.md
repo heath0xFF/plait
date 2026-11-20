@@ -2414,9 +2414,9 @@ non-replay rule, not remote compare-and-swap. No live API behavior is claimed.
 
 ### Not built in this stage
 
-- No desktop UI yet (after thread tabs, the first desktop step adds Settings
-  key entry, an issue picker, and a thread label; a dedicated Linear view
-  arrives later alongside issue-triggered runs).
+- No desktop UI yet. The agreed first step adds Settings key entry, a
+  persistent project-level issue view, draft references, and a source-issue
+  thread label. It does not depend on issue-triggered runs. See [Linear](LINEAR.md).
 - No browser OAuth sign-in or token refresh yet.
 - No automatic writes, background polling, or Linear change notifications.
 - No issue-triggered autonomous runs (their rules are not yet agreed).

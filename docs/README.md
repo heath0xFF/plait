@@ -23,5 +23,6 @@ and Linux command execution are not available.
 ## Planned work
 
 - [Roadmap](ROADMAP.md): milestones, scope, and performance goals.
+- [Antigravity through ACP](ACP.md): agreed adapter contract, not implemented.
 - [Linux sandbox](LINUX-SANDBOX.md): the open containment decision and enablement gates.
 - [ADEMark plan](ADEMARK.md): measurement requirements, not a published benchmark result.

@@ -1,64 +1,184 @@
 # Product roadmap
 
-These are planned milestones, not a list of shipped features. See the
-[README](../README.md) for the current preview and [Verification](VERIFICATION.md)
-for acceptance evidence and open checks. **M2.5 shipped in v0.1.0-preview.8.
-M8 steps 1 and 2 (skills, prompt templates, and user instructions) shipped in
-v0.1.0-preview.9. M7 steps 1 (choosing a harness, and Codex) and 2 (each
-harness's own permissions, and Claude Code threads) shipped in
-v0.1.0-preview.10. Ways out, branches, and search in a conversation shipped in
-v0.1.0-preview.13. M9 step 1 (per-turn undo) shipped in v0.1.0-preview.15. M8
-step 4's tool calls (MCP servers that need no browser sign-in), images in
-messages, and the first part of M9 step 2 (a run's closing line opens exactly
-what that run changed) shipped in v0.1.0-preview.17. Thread tabs shipped in
-v0.1.0-preview.18. A second thread in a busy project, in its own worktree,
-and any number of New thread tabs shipped in v0.1.0-preview.20. The Worktrees
-graph, and draft tabs named by their first line, shipped in v0.1.0-preview.22.
-The checkout queue, which lets a message wait for a busy checkout, shipped in
-v0.1.0-preview.23.
-The rest of
-M9 steps 2 and 3, MCP browser sign-in, and M8 step 3 are the current work.**
+This page sets direction and records scope decisions. The [README](../README.md)
+describes the current app; the [Mac guide](MACOS.md) explains its controls.
+Implementation contracts belong in [HOST.md](HOST.md) and
+[Architecture](ARCHITECTURE.md), not in a second specification here.
+
+## Now / Next / Later
+
+This is the planning order, not a claim that every item is in progress.
+**Now** follows the existing agreement. **Next** contains follow-on choices
+whose relative priority still needs a decision; design proposals are marked.
+**Later** separates conditional work from proposals that need scope agreement.
+
+### Now — installation, then alerts, Antigravity, and Linear
+
+Deliver each as a separate change. Installation comes first, with independent
+client/server lifecycles. These priorities precede the remaining M9 review
+features; their agreed scope remains.
+
+- **Drag-and-drop installation.** Put `Plait.app` and an Applications shortcut
+  in the DMG. On first launch, set up a missing local server without a required
+  installer script. Preserve existing servers and active work. Separate first
+  setup from server replacement before wiring it into startup. See
+  [Client/server platform and installation](#clientserver-platform-and-installation).
+- **Thread alerts.** In-app toasts for other threads while Plait is active;
+  native macOS notifications while it runs in the background. Quit stops new
+  notifications, not host work. Reopening shows unread state without replaying
+  old alerts. Reuse the desktop's existing status stream and notification path.
+- **Antigravity (M7 step 3).** Add a first-class harness through the official
+  `agy acp` interface, using the person's installed CLI and sign-in. Prefer
+  the official ACP SDK over an unofficial bridge. Follow the [agreed contract](ACP.md)
+  for capabilities, permissions, sessions, and the prerequisite refactor;
+  show only the models Antigravity offers to Plait.
+- **Linear view.** A persistent project-level issue view with search, ticket
+  details, references in existing threads, and starting a thread from an issue.
+  Keep a source-issue link and Open in Linear. Reuse the host foundation and
+  verify real read-only API access. This view does not depend on automation.
+
+### Next — independent releases and the review loop
+
+- **Independent client/server releases.** Finish separate update selection,
+  publication, and compatibility checks. Installing or updating a client must
+  not force a server replacement. Keep the bootstrap work compatible with
+  this direction from the first change.
+- **Commit by run (M9 step 2).** Saved before/after diffs are built. Matching
+  current changes to a run and staging independently safe changes remain.
+  Agree authorship wording and overlap handling before implementation.
+- **Since last reviewed (M9 step 3).** Remember the reviewed record for each
+  file and show later changes. Agree what counts as reviewed and how that
+  state is stored. A later edit must make the file appear changed again.
+- **MCP browser authentication (M8 step 4).** Add OAuth token reuse and refresh
+  for configured servers. Header-key and anonymous connections already work.
+- **Workspace decisions.** Decide whether side-by-side conversation, files,
+  and diffs should come before more integrations. This is a design proposal,
+  not an agreed implementation.
+
+### Later — dependencies and explicit gates
+
+- **More harnesses:** other ACP adapters follow Antigravity, with separate
+  capability and compatibility checks.
+- **Concurrency and storage:** Pi read-in-place, further worktree cleanup,
+  and the larger draft recovery format have separate safety and compatibility
+  gates. Tabs, the checkout queue, manual worktree removal, and approved
+  build-output reuse are already built.
+- **Named CLIs (M8 step 3):** wait for a sandboxed project that needs one.
+  Trusted projects already run the person's tools.
+- **Other clients and remote servers (M3/M6):** support other apps through a
+  versioned public protocol, not GPUI or Rust internals. Authenticated remote
+  transport and recovery come first for network access; Linux execution also
+  needs tested containment. No additional client or public listener is built yet.
+- **Developer ID signing and notarization:** deferred. Script-free installation
+  does not remove unsigned-download warnings. Do not remove quarantine or
+  bypass Gatekeeper to simulate a signed release.
+- **Previews, editing, automation, and other ideas:** see
+  [Proposed, not yet agreed](#proposed-not-yet-agreed). These are not an active
+  implementation queue.
+
+Checks belong to each change, not to a general verification phase. Name the
+behavior being checked and the evidence that is missing: for example, draft
+recovery after restart or Undo preserving later edits. Use
+[Verification](VERIFICATION.md) and the relevant pull request to distinguish
+source tests, native-window checks, and live-service checks. Do not treat an
+old unchecked item as proof that a current feature is broken or untested.
 
 ## Milestones
 
-| Milestone | Scope | Status |
+Milestone IDs remain stable for links and contracts; their numbers are not the
+build order. The priority list above controls planning.
+
+| Milestone | Built | Remaining |
 | --- | --- | --- |
-| M1 — Native foundation | GPUI desktop, navigation, conversations, read-only Git status and diffs | Foundation implemented |
-| M2 — Local agents | Real agent events, approved edits and commands, persistent threads, safe Stop and reconnect | Shipped in the local preview; hardening and live installed acceptance continue |
-| M2.5 — Daily driver | Complete, paged conversation history; projects and threads across checkouts with live status; thread titles, rename, and archive; model and thinking changes within a thread; follow-up and steering messages during a run; provider sign-in from the app; selectable, highlighted conversation text and readable tool results; a command palette; optional per-thread worktrees; an opt-in trusted command mode | Shipped in v0.1.0-preview.8; installed acceptance continues ([Verification](VERIFICATION.md#v010-preview8-acceptance)) |
-| M3 — Remote execution | Authenticated host connections, remote project discovery, activity/Git updates, network recovery | Planned; Linux execution requires tested containment first |
-| M4 — Development tools | Git staging, commits and history; file browser/editor; review feedback; process and log views | Git shipped ahead of M3 (staging, hunks, commits, history, push, fetch, fast-forward pull); a read-only file viewer shipped in v0.1.0-preview.8; the rest planned |
-| M5 — Previews | Live HTML, Markdown and MDX, automatic refresh, and selected-content feedback to the agent | Planned |
-| M6 — Multiple machines | Unified project navigation across independent hosts, including disconnected/reconnecting states | Planned |
-| M7 — Any agent harness | Threads run by other agent harnesses (Claude Code, Codex, Pi, omp, Antigravity, and others) beside Pi, with the same conversation, approval, Git, and navigation views | Current work. Steps 1 and 2 (harness choice, Codex, each harness's own permissions, and Claude Code; protocol version 4) shipped in v0.1.0-preview.10; an ACP client follows, agreed first |
-| M8 — Skills, tools, and CLIs | Pi threads use the skills, prompt templates, global instructions, MCP servers, and command-line tools the person already set up for their agent, with each one visible in Settings and every call under Plait's approvals | Steps 1 (skills and user instructions) and 2 (prompt templates, Settings → Agent, and `/` completion) shipped in v0.1.0-preview.9; step 4's MCP tool calls shipped in v0.1.0-preview.17, with browser sign-in still planned; step 3 (named CLIs) waits until a sandboxed project needs it |
-| M9 — Turn records | The host keeps its own record of the checkout before and after every turn, in every harness: per-turn undo first, then committing by turn, review of what changed since the person last looked, and checks the host runs itself | Step 1 shipped in v0.1.0-preview.15; steps 2 and 3 are agreed and are the current work, ahead of M7's ACP client; the later steps are proposed |
+| M1 — Native foundation | GPUI desktop, navigation, conversation, Git reads | Ongoing maintenance |
+| M2 / M2.5 — Local daily use | Durable local agents, history, approvals, provider settings, thread management, search, tabs, and optional worktrees | Drag-and-drop installation and first-launch local-server setup; independent update flows |
+| M3 — Remote execution | Local host boundary | Authenticated connections, remote project discovery, network recovery; Linux containment |
+| M4 — Development tools | Git staging, commits, history, push, fetch, fast-forward pull, branches, file viewer, and editor/terminal handoffs | Editor, review feedback, process and log views |
+| M5 — Previews | — | HTML, Markdown, and MDX with refresh and selected-content feedback |
+| M6 — Multiple machines | — | Unified navigation across independent hosts, including offline states |
+| M7 — Agent harnesses | Pi, Codex, and Claude Code with their own permission modes | ACP client, then other agreed adapters |
+| M8 — Skills and tools | Skills, instructions, prompt templates, and MCP tool calls without browser sign-in | MCP OAuth; named CLIs only when needed |
+| M9 — Turn records | Per-run records, Undo/Redo, and immutable recorded diffs | Staging by run and review tracking; later proposals below |
 
-Do not build the whole roadmap at once. Each change must compile, run, and have
-its own checks. Protocol, storage, and shared-contract changes need agreement
-before implementation.
+Each change must compile, run, and have its own checks. Protocol, storage,
+shared models, and permission changes need agreement before implementation.
+Existing stores must keep loading and older protocol replies must stay compatible.
 
-**Agreed for M2.5:** protocol version 3 and additive storage changes. Version 3
-is negotiated per request, as version 2 is; version 1 and 2 replies stay
-byte-for-byte unchanged and existing stores keep loading. The trusted command
-mode is opt-in per project; the current sandbox stays the default. The
-[host contract](HOST.md) records each addition when it lands.
+Releases must install without development tools, preserve user data, and support
+normal in-app updates. Package migration needs one administrator confirmation;
+active work must finish before migration or host replacement. See
+[Releasing](RELEASING.md) for delivery and review requirements.
 
-**Changed after M7 step 2:** Pi's commands are trusted by default, as Codex
-and Claude Code run out of the box with Full access. The sandbox is opt-in per
-project in the project's settings. Existing stores keep their trusted projects;
-projects at the old default become trusted. No protocol or schema change.
+## Client/server platform and installation
 
-M2.5's self-hosting work is done in source and host tests: ranged file reads,
-retained command output with explicit limits (`read_output`), automatic
-compaction that keeps full history across a host restart, and the
-[development/install/continue workflow](SELF-HOSTING.md). What remains is
-installed acceptance, listed in [Verification](VERIFICATION.md#v010-preview8-acceptance).
+**Agreed direction, not all implemented.** Plait is a client/server platform:
 
-The release installer must install the prebuilt app and host without development
-tools, preserve user data, and produce a per-user installation eligible for
-normal in-app updates. Existing package installs migrate with one administrator
-confirmation; active work must finish before migration or host replacement.
+- **Plait Server** owns execution, durable threads, approvals, checkout safety,
+  process cleanup, and recovery. The existing host and TypeScript runtime are
+  its local implementation. Closing or updating a client does not stop it.
+- **Plait Client** is the native Mac application. Other apps should eventually
+  use the same server through a documented, versioned public protocol.
+- **`plait-core`** is an internal Rust library compiled into programs. It is not
+  an independently installed server or the public integration boundary.
+
+This direction does not require a crate or executable rename, a generic SDK,
+remote transport, or another client in the installation change. The native app
+remains Rust + GPUI. The current owner-authenticated local socket must not be
+exposed as an unauthenticated network service. See [HOST.md](HOST.md) for the
+implemented protocol, not a claim of a complete external-app API.
+
+### First implementation: remove the mandatory installer script
+
+1. Separate **first setup**, **client replacement**, and **server replacement**
+   in the install layer. They have different permissions and safety conditions;
+   app startup must never reuse a function that stops an existing server.
+2. Put the prebuilt app and an Applications shortcut in the DMG. Normal new
+   installations use download → drag into Applications → open. Build tools and
+   Terminal commands are not prerequisites.
+3. Treat the bundled server as a bootstrap copy only. Install a missing server
+   into the existing per-user, versioned location outside the app bundle, then
+   register its service. Never modify the signed app bundle at first launch.
+4. Preserve existing managed or manually started servers, including those with
+   running work or pending approvals. Do not downgrade a server to match the
+   app's bundle. Source builds and explicitly selected development stores must
+   not provision a default server as a side effect.
+5. Run filesystem and service work off the UI thread. Serialize setup attempts,
+   validate the bundle and release identity, and reject unsafe paths. Surface
+   progress, failures, and Retry in the native app. Handle launch from the DMG
+   explicitly rather than registering a service that depends on a mounted disk.
+6. Keep legacy system-wide migration explicit. Do not silently remove root-owned
+   files, ask for administrator access, or stop an unmanaged server on startup.
+   Preserve threads, drafts, credentials, and the independent server lifetime.
+
+Use the existing Rust install layer as the shared foundation, not a shell
+installer invoked from the UI. A client-only replacement must not install,
+activate, or prune server releases. A server replacement must preserve the
+client and use a separate, explicit safe activation path.
+
+Verify new installation, repeated launch, concurrent setup, an existing older
+or newer server, active work, a manual host, development overrides, legacy
+installs, malformed bundles, setup failure/retry, and reopening without replay.
+A test that mocks service startup is not installed-app evidence. Validate a
+real downloaded DMG separately, with quarantine intact. Signing and notarization
+remain deferred; normal macOS security and background-service prompts can remain.
+
+### Independent release contract
+
+The repository already produces separate component artifacts, but the current
+in-app update flow replaces both client and host. That is built behavior, not
+the target contract.
+
+Client and server versions must be independently selectable and publishable.
+Compatibility comes from negotiated protocol versions and capabilities, not
+equal application versions or a shared release tag. Preserve older replies and
+stores, and test supported old/new pairs. An incompatible pair must give a clear
+update requirement, not silently replace either component or replay a request.
+
+Server updates wait for a safe activation point, with new admissions excluded
+before shutdown. They must not interrupt accepted work merely because a client
+was installed or updated. Keep immutable running releases until cleanup is
+proved. The publication format, supported compatibility range, and any new
+protocol fields need a separate concrete contract before implementation.
 
 ## Product structure
 
@@ -92,61 +212,28 @@ on copies of one repository is a different product, and Plait does not aim at
 it: a feature that needs a fleet, a copy of the checkout, or a model call the
 person did not ask for is out of scope.
 
-**Agreed for M4 Git, ahead of M3:** Plait builds Plait, so committing reviewed
-work without leaving the app comes before remote execution. The desktop may
-stage, unstage, and commit, and show commit history and each commit's patch.
-Reads keep their hardening (no filters, hooks, or optional locks). An explicit
-write runs with the repository's own configuration, so staging runs clean
-filters and committing runs hooks, exactly as the person's own Git would. One
-write runs at a time. Push, fetch, discard, branch switching, amend, rebase,
-and other history rewriting are not part of this step.
+### Git and file boundaries
 
-**Agreed next for M4 Git:** push, publish, and fetch, then hunk staging and
-discard. Push runs as the person's own `git push` would; there is no force push.
-Publish pushes a branch with no upstream to `remote.pushDefault`, `origin`, or
-the only remote, and sets that as its upstream. Fetch is explicit, never on a
-timer. Ahead and behind counts come from the status read Plait already makes.
-Credentials stay with Git: the person's helpers and SSH keys apply, and the
-GitHub CLI's credential helper is offered after them for that command only,
-so Plait never reads a token or changes Git configuration. Discard always asks
-for confirmation first. Pull is fast-forward only: Plait fetches, then moves
-the branch to its upstream, and refuses a diverged branch or a pull that would
-overwrite uncommitted changes. Merge and rebase are not part of this step.
+The allowed Git writes are staging and unstaging by file or hunk, committing,
+push and publish, explicit fetch, fast-forward pull, confirmed undoable discard,
+creating and switching local branches, restoring files through run Undo/Redo,
+and adding or removing optional worktrees. No force push, amend, merge, rebase,
+cherry-pick, or branch deletion is added.
 
-**Agreed for M2.5 changed files:** a version 3 `changed_files` operation
-returns the paths a thread's file tools wrote, from the host's existing
-provenance records. The desktop counts their uncommitted lines with a hardened
-Git read and lists them above the composer; Settings → Appearance hides the list.
-Snapshots are unchanged, so older clients are unaffected.
+Reads remain hardened: no optional locks, external diff, textconv, or filters.
+Explicit writes use the person's Git configuration, hooks, filters, and
+credentials. One writer owns a checkout at a time; linked worktrees also
+coordinate writes to shared Git metadata. Work returns by commit, push, and
+pull request, not a new integration command.
 
-**Agreed for M2.5 appearance:** light and dark themes in the desktop only.
-Preferences gain an appearance (System, Light, or Dark) and a theme name for
-each; older files load with the defaults. Base16 scheme files are read from a
-themes folder beside the desktop preferences, and a few MIT-licensed schemes ship
-with their license. Nothing changes in the host or the protocol.
+The file viewer is read-only. Reads are bounded, stay inside the checkout
+without following symlinks, and run off the UI thread. Editing and interactive
+shells use the person's tools through Open in Editor and Open Terminal Here.
+The reading, walking, and find work has provenance in Sidelit (same maintainer,
+MIT); Plait's views remain native GPUI. See the [Mac guide](MACOS.md) and
+[Git boundary](ARCHITECTURE.md#git-boundary) for shipped behavior.
 
-**Shipped in v0.1.0-preview.20 for optional worktrees (Stage 7):** the
-desktop requests one durable
-host-owned worktree thread, with the chosen harness and model. Its branch is
-`plait/<first-12-UUID-hex-digits>` (extended on collision), from an explicit
-captured commit, under `<main-repository>.worktrees/`. New worktrees start cold.
-The host retains creation receipts through retries, disconnection and restart.
-Imported desktop associations group threads but cannot authorize removal.
-Manual removal preserves branches/history, requires the recorded identity and
-fresh lease-protected preservation checks, and never forces removal. Work
-returns by commit, push and pull request; no integration command is added.
-A busy project's choice of a worktree, and the project setting that makes it
-automatic, are under [Thread tabs](#several-threads-in-one-project). The
-checkout queue is built in Stage 9.
-
-**Agreed for M4 file viewer:** open any file in a checkout read-only, with
-line numbers and the same syntax highlighting as the conversation, from a
-quick-open picker and from paths the desktop already shows (changed files,
-tool rows, diffs). Find within the file. Reads stay inside the checkout without
-following symlinks, run off the UI thread, and are bounded in size; binary and
-oversized files say so instead of drawing. An open file reloads when it changes
-on disk. No editing in this step. Sidelit (same maintainer, MIT) is a source
-for the reading, walking, and find logic; Plait's own views stay native GPUI.
+## Harnesses and tools
 
 **Direction for M7, any agent harness:** a thread may be run by another agent
 harness instead of Pi: Claude Code, Codex, omp, Antigravity, and others with a
@@ -176,240 +263,90 @@ place), so the agent itself should be the person's choice.
   no full-snapshot resend per event (adapters send increments), idle threads
   holding no process, and the same 120 Hz reveal for every harness.
 
-Before implementation: agree the protocol additions (harness choice when a
-thread starts, capability flags, increments), the order of harnesses, and how
-installs are found and pinned. Compare other agent workspaces by outcomes
-only, per the originality policy.
+Before adding an adapter, agree its protocol additions, capabilities, and
+install/version checks. Compare other agent workspaces by outcomes only,
+per the [originality policy](ORIGINALITY.md).
 
-**Agreed for M7 step 1, choosing a harness and Codex:** protocol version 4,
-additive: older clients' replies are unchanged. A version 4 `harnesses`
-request lists each harness with its state (ready, not installed, unsupported
-version, signed out) and how to fix it, its version and supported range, its
-capabilities (whether a message sent during a run joins it or waits, per-call
-approvals, thinking levels, usage), and its models; Pi is always listed.
-`create_thread` takes an optional `harness`, Pi by default; a thread stays in
-its harness and records the harness and version of each run. Codex runs
-through the person's installed `codex` (login-shell PATH or a path set in
-Settings), checked against the version Plait's message types are generated
-from: older is refused, newer runs with an untested note. One
-`codex app-server` runs while any Codex thread runs, and none when all are
-idle. Codex keeps its own sign-in, configuration, MCP servers, and
-instructions; Plait reads none of its credentials. Plait sets Codex's sandbox
-from the project's command policy (sandboxed: Codex workspace-write with no
-network, so commands can write the checkout; trusted: full access) and its
-approvals from the approval mode (ask: each request is a Plait approval;
-auto: never asks), and says plainly that Plait's guard on already-modified
-files does not apply. Streaming text, reasoning, tool rows, approvals, Stop,
-steering, usage, model, and thinking level map to the same thread view. The
-host stores translated events as they finish, so history, full text, and
-changed files work as for Pi; an interrupted Codex run is never resumed or
-repeated automatically. Clients keep today's snapshot updates; a replayed
-Codex event stream is measured against the 5 ms per event and frame-cost
-targets, and updates become increments only if those miss. The desktop groups
-models by harness when a thread starts, names the harness, version, and
-protection in the composer line, and lists harnesses in Settings. A scripted
-fake app-server tests runs, approvals, steering, Stop, version checks, and
-restart without a paid model.
+**Built for M7 steps 1 and 2:** Pi, Codex, and Claude Code threads share the
+conversation and Git workspace. Codex uses the person's installed app-server;
+Claude Code uses the person's install through a pinned SDK downloaded only
+with their setup action. Their credentials and configuration remain their own.
+Each harness exposes its own permission modes, not an implied Plait sandbox.
+Pi commands are trusted by default; a project can opt into the command sandbox.
+See the [host contract](HOST.md) for supported versions, setup, and modes.
 
-**Agreed for M7 step 2, harness modes and Claude Code:** in Codex and Claude
-Code threads the harness's own permission modes replace Plait's ask and auto,
-and Plait's project command policy does not apply; Pi threads keep both. Codex
-offers Read only, Ask (workspace sandbox), Approve for me, and Full access
-(Codex's `--yolo`: never asks, no sandbox), Full access by default. Claude Code
-offers Ask, Accept edits, Plan, Auto, and Bypass, Auto by default. Each
-harness's default is a host setting in Settings → Agents. A thread's mode can
-change at any time: Claude Code switches during a run, Codex from its next
-turn. The composer shows the mode the harness reports, not the one requested,
-and says plainly when nothing asks or nothing is sandboxed. Whatever a harness
-asks becomes a Plait approval. Claude Code runs as the person's installed
-`claude` through a pinned Agent SDK, loading their own settings, `CLAUDE.md`
-files, skills, slash commands, hooks, and MCP servers; Plait never offers or
-handles a Claude sign-in. Plait's releases do not include the SDK, whose license
-reserves all rights: setting up Claude Code threads in Settings → Agents has the
-host download that exact version from the npm registry and check it against
-the pinned hash before use. Whatever sign-in the person's `claude` uses, a
-Claude subscription, an API key, or a cloud provider, is accepted. Features
-are checked from what the installed version
-reports. Steering, Stop, usage, and stored history work as for Codex, and each
-run resumes the thread's Claude session. This replaces step 1's mapping from
-command policy and approval mode for Codex, before it is released.
+**Current work:** an ACP client, Antigravity first. The
+[agreed ACP contract](ACP.md) covers capabilities, permissions, session
+recovery, version candidates, and the prerequisite routing and transcript-store
+refactor. Implementation starts with that refactor; ACP support is not built yet.
+The official
+[Antigravity ACP guide](https://antigravity.google/docs/ide/extensions/acp/)
+and [ACP TypeScript SDK](https://github.com/agentclientprotocol/typescript-sdk)
+are the upstream sources; live compatibility still needs verification.
 
-Next, agreed before it starts: step 3, an ACP client, Antigravity first.
+**Built for M8 steps 1, 2, and part of 4:** Pi threads discover the person's
+skills, user instructions, and prompt templates. Settings shows the resources;
+`/` completion inserts skills and templates. Configured MCP tools are found by
+search, with one tool row and one approval decision per call. Discovery is
+bounded, cached, and off the request path. Only names and descriptions enter
+context until needed.
 
-**Direction for M8, skills, tools, and CLIs:** today a Pi thread in Plait sees
-only Plait's five tools (read, read_output, edit, write, command) and the
-project's `AGENTS.md`. The skills, prompt templates, user-level instructions,
-MCP servers, and CLIs a person set up for Pi are invisible to it, so the agent
-is less capable in Plait than in a terminal. M8 closes that gap without
-weakening what protects the checkout.
+Project skills and templates require trust. Project-defined or replaced MCP
+servers require explicit enablement bound to the reviewed configuration;
+a change disables them again. Trusted projects follow the thread's approval
+mode. Sandboxed projects require server enablement and approval for every call.
+Approval gates tool calls, not server startup behavior or network access.
+Secrets never enter the desktop or model context; interrupted calls are never
+replayed. MCP sampling and elicitation are refused.
 
-- **Skills, as the [Agent Skills](https://agentskills.io/specification)
-  format defines them.** Discover `SKILL.md` directories in the locations Pi
-  reads: the Pi agent directory, `~/.agents/skills`, and paths in Pi's
-  settings, then the project's `.agents/skills` and `.pi/skills`. Only each skill's name, description, and
-  location enter the instructions; the model reads the full `SKILL.md` and its
-  bundled files when a task calls for it, through a read-only, bounded,
-  no-symlink read limited to skill directories. `/skill:name` in the composer
-  loads one explicitly. Skills that ship inside a repository are inert until
-  the person trusts that project, as trusted commands are today.
-- **Global instructions and prompt templates.** The person's user-level
-  instructions (`AGENTS.md` or `CLAUDE.md` in the Pi agent directory) join the
-  project's, under the same size bound. Prompt templates
-  appear as `/` commands in the composer.
-- **CLIs the agent knows about.** In trusted command mode, commands already run
-  with the login-shell `PATH`, network, and real `HOME`, but the agent is not
-  told which tools exist. Skills close most of that gap, since they name the
-  CLIs they use. For sandboxed projects, the person can name CLIs that may run
-  outside the sandbox (for example a deployment or search tool that needs the
-  network and its own credentials); each call is still an approval showing the
-  exact command, and the checkout stays read-only to it.
-- **MCP servers before Pi extensions.** MCP servers from the person's Pi
-  configuration run as separate processes, and their tools join the thread
-  under Plait's approval policy, shown as their own tool rows. Large catalogs
-  are found through tool search rather than listed in every request. Pi
-  TypeScript extensions run arbitrary code in the runtime and have a different
-  replay model, so they come after MCP, if at all. External tools are never
-  repeated automatically after a host restart.
-- **Visible and switchable.** Settings lists every skill, template, MCP server,
-  and allowed CLI with where it came from, whether it loaded, and why not, as
-  the themes list does. Each can be turned off per project. Plait never reads
-  or copies a tool's credentials; they stay in the tool's own configuration.
-- **Cheap.** Discovery runs on the host off the request path, is cached, and is
-  rescanned when a thread starts only if its sources changed. Counts and file
-  sizes are bounded. Only names and descriptions cost context until used.
-- **Shared with M7.** Other harnesses load their own skills and MCP servers
-  natively; Plait shows what they report rather than injecting its own.
+**Remaining for step 4:** browser OAuth, reuse and refresh of Pi's saved tokens,
+and provider-backed `auth`. A displayed saved sign-in is not a working OAuth
+connection. The built transports cover stdio and anonymous/header-key HTTP;
+real-server acceptance is separate from scripted transport tests.
 
-**Agreed for M8 step 1, skills and user instructions:** runtime only, with no
-client protocol change. Discovery uses Pi's own package resolution and skill
-loader, never installs a package, and takes project skills only from projects
-set to trusted commands. Skill files are read through the existing bounded,
-no-symlink helper; sandboxed commands may read skill folders and never write
-them. `/skill:name` sends Pi's block. Recorded in the
-[host contract](HOST.md#skills-and-user-instructions).
+**Step 3 waits for a need:** allow a person to name a CLI that a sandboxed
+project may call with network access or its own credentials. Every call must
+show the exact command for approval, and the checkout stays read-only to it.
+Trusted projects already have the person's login-shell environment and tools.
 
-**Agreed for M8 step 2, show what was found, and prompt templates:** a
-version 3 `agent_resources` request returns, for one checkout, each skill and
-template with its source and path, the user instructions file's path and
-size, problems, and whether the project is trusted, never file contents, with
-bounded lists and descriptions. It uses the same discovery as runs. `/name`
-expands a prompt template with Plait's own expander following Pi's documented
-argument rules; project templates need a trusted project, and the expanded
-text is what the conversation shows, as in Pi. Typing `/` in the composer
-lists skills and templates after Plait's own commands, which win a name
-clash; choosing one inserts its text and runs nothing. The project's settings
-list them read-only, with Open folder and Refresh; turning one off stays in Pi's
-settings. Recorded in the [host contract](HOST.md#skills-and-user-instructions).
+Other harnesses load their own skills and MCP servers; Plait does not inject
+Pi's resources into them. Pi TypeScript extensions come after MCP, if at all:
+they execute inside the runtime and need a separate replay and permission design.
+See [MCP tools](ARCHITECTURE.md#pi-mcp-tools) and [HOST.md](HOST.md) for the
+implemented discovery, configuration, and approval contracts.
 
-Step 4 now adds configured MCP tool calls; browser sign-in remains planned. Its details are agreed under "Agreed next,
-for daily use". Step 3, named CLIs for sandboxed projects, is agreed and
-waits until a sandboxed project needs it.
+## Turn records and review
 
-**Direction for M9, turn records:** the host records the checkout around every
-run, for Pi, Codex, and Claude Code in every permission mode. This protection
-does not depend on the harness reporting its edits. Step 1, per-turn undo,
-shipped in v0.1.0-preview.15: recording, the host's undo operations, and their
-desktop controls. None of it has been checked in the installed app yet; the
-[verification record](VERIFICATION.md#turn-undo-desktop-controls) says what
-was. Steps 2 and 3 are not built.
+**Built for M9 step 1:** the host records the checkout before and after each
+run, for every harness and permission mode. One submitted message, its steering
+messages, and the harness turns inside it share a pair; queued follow-ups get
+new pairs. Recording does not depend on the harness reporting its edits.
 
-- **A run is the unit.** One submitted message, steering messages that join it,
-  and all harness turns inside it share one before/after pair. A queued
-  follow-up starts a new run and gets its own pair.
-- **Kept by the host.** Records are commits in a private Git store, separated
-  by object format, with a private index for each checkout. Only a run's after
-  commit has its before commit as a parent. Runs are ordered in SQLite, not
-  linked into an ever-growing Git history.
-- **Read-only checkout.** Records never write the person's files, index,
-  objects, refs, or Git metadata, including modification times. On macOS the
-  recorder runs under a sandbox denying these writes. The store and checkout
-  must not overlap. Repository objects may be borrowed for reads; writes go
-  only to the host's store.
-- **Exact content.** Records hold working-tree bytes, executable bits, and
-  symlink targets with filters and line-ending conversion disabled. The host
-  keeps its own copy of the before-content of each changed path. Other
-  permissions, extended attributes, and hard-link relationships are not saved
-  for restoration.
-- **Cheap and off the UI thread.** A warm record of an unchanged 50,000-file
-  checkout targets under 300 ms on Apple silicon. The
-  [verification record](VERIFICATION.md#checkout-recording)
-  separates measured costs from this target.
+The private Git store saves working-tree bytes, executable bits, and symlink
+targets without writing the checkout or its Git metadata. Coverage is bounded;
+excluded paths are listed. Records are retained for 30 days, with active pairs
+protected from pruning. A failed before record prevents execution; a failed
+after record prevents Undo. A recovered after record says “after restart”
+because it may include changes made while the host was down.
 
-**Agreed for M9 step 1, per-turn undo:** the host makes a before record before
-starting any harness and an after record after every outcome, including Stop
-and failure, while retaining the checkout lease. The difference lists the
-paths the run changed and lines added and removed per path; binary counts are
-unknown. A created-then-deleted file leaves no difference.
+Undo restores only paths that still match the saved after record. Later edits
+are not overwritten; conflicts offer Undo the rest or Cancel. Undo can itself
+be undone. It does not restore Git history, outside-checkout effects, other
+permissions, extended attributes, or hard-link relationships. The checkout
+lease excludes host writers, not every external-editor race.
 
-- **Failure.** If the before record fails, the run ends with `record_failed`
-  before its harness starts and its queue stays held. A failed after record
-  makes the run unavailable for undo. After a host crash, recovery takes a
-  missing after record in the background under the checkout lease, or at the
-  next leased run if the checkout was busy. That record is marked “after
-  restart”: it may include changes made while the host was down.
-- **Undo this run.** Restore changed and
-  deleted files and remove created files, only when each path still matches
-  the run's after record. Paths changed since are never overwritten; the
-  person chooses “Undo the rest” or “Cancel”. An undo is recorded and can
-  itself be undone. Undo changes files, not Git history.
-- **Presentation.** A finished run shows recorded file changes and
-  line counts, including command writes, with Undo on its last closing line.
-  Steering shares that control; a queued follow-up gets its own. Undone runs
-  offer Redo. Changed-since conflicts open an inline panel with Undo the rest
-  and Cancel; coverage and restart/HEAD warnings are explained on hover.
-  The changed-files card uses record paths. Headless scenes cover these
-  states; installed-app acceptance remains outstanding.
-- **Order and release.** Shipped in v0.1.0-preview.15, ahead of M7's ACP
-  client. Earlier releases record nothing, so a run made with an older host
-  cannot be undone.
+The exact coverage limits, failure states, retention rules, and compatibility
+contract are in [HOST.md](HOST.md#protocol-version-5). Implementation boundaries
+are in [Architecture](ARCHITECTURE.md#checkout-recording-and-undo); evidence is
+in [Verification](VERIFICATION.md#checkout-recording). A warm unchanged
+50,000-file record targets under 300 ms on Apple silicon; this is a target,
+not an installed-app measurement.
 
-Agreed for implementation:
+### Remaining daily-use work
 
-- **Coverage.** Tracked and untracked checkout files are recorded, including
-  untracked directories file by file. Individually ignored files are included
-  up to 1 MiB each, at most 2,000 files and 64 MiB total per record. A single
-  file over 100 MiB is excluded. Ignored directories, nested repositories,
-  submodules, and unreadable or unsupported files are not covered. Every
-  omitted path or directory is listed, with its reason. Files observed changing
-  during capture are also marked unavailable for undo.
-- **Beyond files.** Outside-checkout effects, commits, branch changes, pushes,
-  and effects beyond the machine are not undone. HEAD and its branch are
-  recorded so movement can be reported.
-- **Retention.** Keep pairs for 30 days, including archived threads; there is
-  no thread deletion. Prune at startup and daily, with recording paused during
-  pruning. Remove expired refs, stale private indexes, and unreachable private
-  objects, including packed objects. No expired before record is removed while
-  its run is active or its after record is still within retention.
-- **Protocol.** Versions 1–4 keep their existing snapshots. Their only
-  visible addition is the failed-before error (`runtime_error` to versions 1
-  and 2). Listing records and undo are operations in protocol version 5,
-  documented in the [host contract](HOST.md#protocol-version-5).
-  Lists page within the frame; applied undos deduplicate by request ID, and
-  interrupted operations are never replayed. The 10-second budget can leave a
-  partial undo if a failure happens after restoring starts. The checkout lease
-  excludes host writers; external-editor races remain an explicit limit. Older
-  hosts offer no undo, and the desktop must say so.
-
-Use existing tools for editing, interactive shells, and debugging; "Ways out"
-below is how Plait hands off to them. A native mobile companion is a
-possibility, not a current feature.
-
-Build original application code and design. Compare other products by outcomes,
-not as source or layout templates. See [the originality policy](ORIGINALITY.md).
-
-## Agreed next, for daily use
-
-Agreed on 2026-11-18, to make Plait usable for a full day's work without
-another agent app beside it. Built in this order after M9 step 1, each on its
-own and released as it lands. Pi, Codex, and Claude Code are the harnesses for
-this work; the ACP client (M7 step 3) follows it.
-
-**A native acceptance check.** A script drives a separate development copy of
-Plait, with test data and its own host store, through what headless tests
-cannot see: moving the window by its bar, double-click and full screen,
-selecting text and following a link, typing and streaming, the approval
-shortcuts, and the settings pages. It takes over the pointer, so a person runs
-it when away, before a release. It is a development tool, not part of the app.
+M9 steps 2 and 3 remain agreed, after the current installation, alerts,
+Antigravity, and Linear work. The high-level goals are agreed; unresolved review semantics
+and new shared contracts still need agreement.
 
 **M9 step 2, commit by turn — the first part shipped in v0.1.0-preview.17.** A
 finished run's closing line now opens that exact record's saved before/after
@@ -424,299 +361,102 @@ preserving other work. Authorship wording and review semantics remain
 unsettled; the recorded view displays no origin or review control. A recorded
 interval by itself does not establish who wrote its bytes.
 
-**M9 step 3, since you last looked.** Plait remembers, for each file, the record
-the person last reviewed, and a file's diff can show only what changed since
-then. A file that a later turn changes again is marked as changed, not hidden.
+**M9 step 3, since you last looked — not built.** Plait will remember the record
+the person last reviewed for each file, so its diff can show only later changes.
+A file that a later turn changes again must be marked as changed, not hidden.
 
-**Ways out.** Plait is not an editor or a terminal, so leaving for one is one
-action. From a file, a diff, or a changed-file row: open it in the person's
-editor at that line, or show it in Finder. From a project: open a terminal at
-its checkout. The editor and the terminal are each a command the person sets
-once in Settings, with `{file}`, `{line}`, and `{project}` filled in; ready
-choices include the system default and Neovim in a Rex tab. Plait starts the
-command and nothing more: it does not wait for it, read its output, or depend
-on Rex.
-
-**Branches.** From Changes: create a branch from the current commit and switch
-to it, or switch to an existing local branch. Uncommitted changes are carried
-as Git carries them, and a switch that would overwrite them is refused with
-Git's own message. There is no force, no merge, no rebase, and no branch
-deletion. These two are added to the Git writes Plait may make.
-
-**Images in messages.** A PNG or JPEG pasted or dropped into the message box is
-sent with the message when the thread's model accepts images, and shown in the
-conversation. The host stores it with the thread. A model or harness that
-cannot take images says so before sending. Shipped in v0.1.0-preview.17, in
-[protocol 6](HOST.md#protocol-version-6): removable draft
-thumbnails, a larger conversation view, private persisted originals, and
-bounded transfers outside snapshots. PNG/JPEG only; four images, 5 MiB each,
-5 MiB per message, 8,192 pixels per side and 16,777,216 pixels per image.
-The pinned clipboard reader pastes text when text and an image coexist and
-refuses TIFF-only images; the [Mac guide](MACOS.md#images-in-messages)
-gives alternatives. Claude Code capability is unknown, so harness refusals
-remain run errors. [Scripted and offscreen checks](VERIFICATION.md#images-in-messages)
-cover the implementation; installed-app and live-model acceptance remain open.
-
-**Search in a conversation.** Find in the open conversation, as Find works in
-a file: matches in loaded messages, next and previous, and a count. Text that
-has not been loaded from the host is not searched, and the bar says so.
-
-**M8 step 4, MCP servers.** Pi threads use the MCP servers the person already
-set up for Pi (`~/.pi/agent/mcp.json`, and a project's `.pi/mcp.json` only
-when its commands are trusted). Plait starts only those servers, each for one
-run, and lists them on the project's settings page with a switch for that
-project.
-
-- **One call per tool.** The agent finds a tool by search and each call is its
-  own row in the conversation with its own approval, as MCP calls from Codex
-  and Claude Code already are. Pi's code mode, where one script calls several
-  tools, is not used.
-- **Approval.** In a trusted project a call follows the thread's approval
-  mode. In a sandboxed project a server is off until turned on for that
-  project, and every call asks. A project-defined or replaced server is off
-  even in a trusted project until the person reads its configuration and
-  turns it on; the choice is bound to the unresolved definition, and a change
-  switches it off again. Project overrides only narrow the user's enablement
-  and tool visibility until explicitly enabled with the same binding. Once a
-  server starts it can read the project and, even when sandboxed, use the
-  network before a call is approved: approval gates calls, not server behaviour.
-  What a server says about itself never skips an approval.
-- **Sign-in.** A server that needs a key from the config file, or none, works
-  at once. One that needs a browser sign-in is listed as needing a sign-in
-  with Pi; once that is done Plait uses the same saved token. Plait has no
-  sign-in of its own for MCP servers yet.
-- **Never.** Plait does not start a server the person did not configure, does
-  not send a server's secrets to the model or the desktop, declines a server's
-  requests to sample the model or question the person, and does not repeat a
-  call after a host restart. A configuration supplied by a repository is not
-  the person's choice until they explicitly enable its reviewed definition.
-
-**Built for step 4:** bounded configuration discovery and project switches;
-run-scoped, guardian-owned stdio and header-key/anonymous HTTP connections;
-deferred search and one row per tool; exact-call approval under both project
-policies; bounded output; secret redaction; sampling/elicitation refusal; and
-no replay after restart. Settings shows observed counts and connection problems.
-Browser OAuth sign-in, reuse/refresh of Pi's tokens, and provider-backed `auth`
-remain planned. Verification uses scripted stdio and loopback HTTP fixtures,
-not real servers or the installed app.
-
-**M8 step 3, named CLIs, is agreed but waits.** It matters only in a project
-the person has sandboxed: a trusted project, the default, already runs any
-tool as the person. It is built when a sandboxed project needs a tool with
-network access or the person's own credentials.
+Ways out, branch controls, images in messages, and conversation search are
+already built. Their controls and limits belong in the [Mac guide](MACOS.md),
+not in the remaining-work list. MCP authentication and conditional named-CLI
+work are described under [Harnesses and tools](#harnesses-and-tools).
 
 ## Thread tabs
 
-**Shipped in v0.1.0-preview.18:** one thread per tab, a 40-point top row that stays visible with the
-sidebar hidden, a 36-point row for the thread's Conversation, Changes, History
-and Files views, and a state-grouped overflow list. Sidebar clicks open or
-activate a thread's tab. Closing never stops a run or removes a worktree.
-Closing the last tab leaves an empty workspace. Settings and Project settings
-open as window modals over the unchanged tab rows and content. Tab controls
-remain inactive until the modal closes.
-
-**Shipped in v0.1.0-preview.20:** every New tab or New thread action appends
-an independent, empty draft, including in the same checkout; creating its
-thread replaces that draft in place. There is no ceiling on open tabs. Only
-visible tab-strip and overflow rows are drawn.
-
-Cmd-1 through Cmd-8 select positions; Cmd-9 selects the last tab. Cmd-W closes
-a tab, Cmd-Shift-W closes the window, Cmd-Shift-T reopens one of the last twenty
-closed tabs, and Cmd-Shift-[ / Cmd-Shift-] cycle. Sidebar jumps use
-Cmd-Option-1 through Cmd-Option-9. Tabs can be dragged or moved with
-Control-Shift-Left / Control-Shift-Right.
-
-Only the active workspace retains loaded transcripts, projections, files,
-diffs, images and its snapshot subscription. Cold tabs keep bounded bookmarks;
-editor history spills to private records. Background reads retain their owner
-and visibility guards, while accepted mutations finish into their owner ledgers.
-Tab order, active identity and bookmarks are saved separately in `tabs.json`,
-with debounced atomic writes and total decoding after host and checkout
-verification. Drafts and submissions remain in the existing recovery journal.
+**Built:** independent thread and draft tabs, persisted order and bookmarks,
+keyboard navigation, overflow, and separate per-thread view state. Closing a
+tab never stops a run or removes a worktree. Only the active workspace retains
+loaded content and a transcript watch; cold tabs retain bounded bookmarks.
+Settings opens over the workspace without changing the selected tab.
+See [tabs in the Mac guide](MACOS.md#tabs) and the
+[headless tab model](ARCHITECTURE.md#headless-tab-model).
 
 ### Several threads in one project
 
-**Shipped in v0.1.0-preview.20:** stages 6a, 6b, 7 and 8 below. A checkout
-still has one writer at a time. A new thread in a busy project is offered its
-own worktree, and a project can make that automatic.
+**Built:** one writer per checkout, cleanup confirmation, host-owned worktrees,
+a busy-project placement choice, a durable checkout queue, approved
+copy-on-write build output, and the Worktrees graph. The stage numbers below
+remain references for the remaining concurrency work, not a second priority list.
 
-**Stage 6a, write exclusion.** Every Git write Plait makes (staging
-and unstaging by file or hunk, committing, discarding and restoring a discard,
-creating and switching branches, pushing, publishing, fetching, pulling, turn
-undo and redo, adding and removing a worktree) and every run take one ordered
-set of OS locks: a per-user lifecycle lock for each checkout (with a reader
-class tested with a fake reader, no reader run shipped), the existing writer
-lock on the checkout directory, and a lock on the repository's shared Git
-metadata so linked worktrees take turns. One change is visible: a desktop Git
-write while a thread is running in the same checkout is now refused with a
-note (staging and committing used to go ahead with a warning; branch controls
-were already locked), and a message sent during such a write is refused as
-busy. This stage added no control and no Git verb.
+| Stage | Status and boundary |
+| --- | --- |
+| 6a / 6b — Exclusion and cleanup | Runs and Git writes take ordered checkout and shared-Git locks. Unconfirmed cleanup blocks new writes across restart; detached trusted processes remain a stated limit. |
+| 7 / 8 — Worktrees and admission | Durable host-owned creation and removal; busy projects offer an own worktree or Wait. Automatic worktree placement requires per-project authorization. |
+| 9 — Checkout queue | Explicit acceptance into a bounded durable line; restart holds pending inputs for Resume. Interrupted effects are never re-queued. |
+| 10 — Read in place | Planned, only as a host-enforced Pi mode. All shipped runs remain writers. |
+| 11 — Build output | Implemented: clone only approved ignored directories on macOS, using immutable idle seeds when the source is busy. No byte-copy fallback; Skip or interrupted preparation can recover cold. |
+| 12 — Storage | Graph, storage visibility, and manual safe checkout removal are built. Further storage management, cache deletion, and opt-in cleanup rules remain. |
 
-**Stage 6b, cleanup confirmation.** Run and undo admission persist inode-keyed cleanup markers; unconfirmed cleanup
-blocks both runs and desktop Git changes across host restarts and stores.
-Command/MCP/record guardians verify normal-group absence, Claude cleanup waits
-for actual process exit, and a Codex interrupt timeout retains exclusion until
-a terminal acknowledgement or verified server exit. Desktop Git writers and
-lent worktree children keep separate crash records; orphaned groups block new
-work, and a verified group can be stopped explicitly. Recording adds no helper
-process or fsync to a Git write. Late evidence clears the
-state automatically; otherwise the person uses **Stop unconfirmed** → **Confirm
-stopped** after checking remaining processes. Deliberately detached writers in
-trusted and external-harness runs remain an explicit limitation. Clean runs
-are unchanged; unrelated checkouts keep working. Scripted process tests and
-native offscreen scenes cover this behavior; live harness and installed-window
-acceptance are separate. See [the cleanup contract](HOST.md#cleanup-confirmation-and-quarantine).
+Worktrees start from an explicit captured HEAD commit, never from a copy of
+uncommitted files. Host-owned branches use `plait/<UUID-prefix>`, extended on
+collision, in `<main-repository>.worktrees/`. Build output is copied only from
+the project's approved list. Removal preserves branches and history, verifies
+identity and leases, and refuses uncommitted or unknown ignored files. Unpushed
+or unknown publication state requires an explicit preservation exception.
+Imported desktop associations never grant removal authority.
 
-**Stage 7, host-owned worktrees.** The host owns explicit worktree creation and removal. A creation request fixes
-its parent directory identity, common Git directory identity, base commit and
-harness/model/permissions before any checkout is made. Its durable request ID
-allocates one thread UUID; the branch is `plait/` plus the first twelve UUID hex
-digits, extended on a name collision. The checkout lives beside the main
-repository in `<repository>.worktrees/`, including when requested from a linked
-worktree. It starts cold, with no build artifacts or dirty files copied.
+There is no default active-checkout ceiling; a host can set
+`PLAIT_MAX_ACTIVE_CHECKOUTS`. Preparation is serialized per filesystem and
+resource exhaustion fails explicitly. This is not a promise of unlimited
+machine or provider capacity.
 
-Creation, status, listing and removal use additive operations, leaving protocol
-versions 1–6 unchanged. Older hosts explicitly refuse the new operations.
-Desktop worktree associations remain imported presentation metadata and never
-grant deletion authority. Removal is manual, preserves branches and history,
-and refuses changed identities, active leases, uncommitted or unknown ignored
-files. Unpushed or unknown publication status requires an explicit preservation
-exception. No force removal, branch deletion, integration verb or automatic
-cleanup is added.
+**Remaining recovery work:** the agreed v2 index/blob layout needs its own
+compatibility review and a retained v1 backup. The shipped v1 journal is limited
+to 4 MiB serialized and 256 KiB per draft. Its additive `draft_tabs` field and
+tab preferences each decode at most 10,000 entries; preferences also have a
+16 MiB limit. Legacy journal snapshots retain their 512-record bound. Twenty
+maximal drafts and a separate 4 MiB resident submission cache are not supported
+capacity promises. At a limit, required saves refuse submission or closing and
+keep the last good journal instead of discarding work.
 
-**Stage 8, busy-project choice and capacity.** New drafts negotiate placement before the first run. A busy project asks each
-time whether to use an own worktree; the project modal can authorize that choice
-automatically for that project. Stage 9 supplies the durable Wait choice. Existing threads remain bound to their checkout and can
-explicitly start a linked continuation with a fresh harness session. The original
-history and draft remain intact. Capabilities are additive and strictly probed.
-
-Worktree creation retains the agreed `plait/<UUID-prefix>` branch naming and
-explicit HEAD commit base. It excludes original dirty files and build outputs,
-shows the actual checkout and branch, and never removes worktrees automatically.
-Commit, push and pull request remain the integration path. No merge, rebase,
-cherry-pick, shared live reader, artifact cloning or fake queue is added.
-
-The fixed eight-checkout cap is removed. There is no default run-count ceiling;
-a host can set `PLAIT_MAX_ACTIVE_CHECKOUTS`. Before-record preparation is
-serialized by filesystem and resource exhaustion fails explicitly with cleanup.
-Scripted harness tests cover twenty simultaneous independent writers, same-root
-exclusion, preparation cancellation, lost replies and resource failures. Live
-provider limits and native focus/accessibility behavior still need separate
-acceptance; headless tests do not claim those results.
-
-**Stage 9, durable checkout queue (shipped in v0.1.0-preview.23).** Wait
-explicitly accepts a message
-and its images into host-owned storage, bound to its checkout identity and
-chosen settings. Existing threads offer Wait beside Continue separately. One
-acceptance order covers checkout waiters and eligible follow-ups, preventing a
-follow-up chain from starving another thread. Independent checkouts drain
-independently. Revalidation occurs at start; failures leave a reason and advance
-the line. Queues are bounded to 32 pending inputs and 32 MiB per checkout.
-Restart holds not-started inputs until Resume releases the checkout's line;
-interrupted effects are never re-queued. Cancel after start requests Stop.
-Additive operations and `checkout_queue_v1` preserve older reply shapes. Tabs,
-sidebar rows and the composer show Waiting or Held from the shared summary
-stream, without per-waiter desktop polling. Scripted host, parser, draft/image
-recovery and headless accessibility checks cover the contract; installed-window
-and live-provider acceptance remain separate.
-
-**Stage 11, approved copy-on-write build output (implemented).** Project settings
-stores an explicit per-project directory list as host policy. Creation clones
-only approved ignored output on macOS, using immutable idle seeds when the
-source is busy, before admitting the first message. Local runs preempt seed
-refresh; Skip and interrupted preparation recover to a cold checkout. Sandboxed
-Pi receives Cargo output in its private cache. Additive capabilities preserve
-older hosts. The Worktrees view shows Warm or Cold, current known build output
-and logical sizes without promising reclaimed shared blocks. Removal accepts
-approved build output while preserving every other ignored file. There is no
-byte-copy fallback, automatic worktree cleanup, orchestration or merge flow.
-Filesystem, host, protocol and headless scene checks cover these boundaries;
-native window interaction and live harness acceptance remain separate.
-
-**Shipped in v0.1.0-preview.22: Worktrees.** One project graph per window is the first tab content
-that is not a thread. It opens from the sidebar project menu, command palette,
-Project settings and a worktree thread's context line. The graph presents actual
-commit ancestry, host-owned preservation facts, bounded cached storage accounting
-and manual safe removal. External and missing worktrees remain visible; removed
-worktrees retain their private cache attribution. Stage 12's visibility and
-manual checkout removal are built; automated cleanup and cache deletion are not.
-Headless scenes, lifecycle tests and a fifty-worktree frame case cover this view;
-installed-window acceptance and performance timings remain separate verification.
-
-**Still planned:** further tab content kinds, enforced Pi read-in-place (Stage 10), and further worktree storage management
-(Stage 12).
-
-
-**Agreed concurrency decisions (built in the stages named below):**
-
-- **Busy-project choice (Stages 8 and 9):** when a project is busy and a new
-  thread is started there, Plait offers a choice between its own worktree or
-  waiting in a checkout queue; a per-project switch can make the worktree
-  automatic, never automatic everywhere. Stage 8 shipped the worktree choice
-  and the switch; Stage 9 builds the explicit durable queue.
-- **Reading in place (Stage 10):** sharing a busy checkout to read while another
-  thread writes comes later, and only as a host-enforced mode for Pi. Until
-  then, all runs are writers (with the lifecycle lease prepared and tested for a
-  reader class, shipping none).
-- **Worktree build artifacts, cleanup, and returning work (Stages 11 and 12):**
-  a new worktree's build output is cloned copy-on-write only from a per-project
-  approved list; worktree cleanup is manual first (Stage 12a), then an opt-in
-  rule (Stage 12b). This view supplies the manual part; work returns by commit,
-  push, and pull request, with no
-  merge, rebase, or cherry-pick added.
-
-The agreed v2 recovery index/blob layout remains planned, with its own
-compatibility review and retained v1 backup. The shipped v1 journal is limited
-to 4 MiB serialized and 256 KiB per draft. Its additive `draft_tabs` field keeps
-independent drafts and pending first sends; legacy snapshots stay readable by
-older builds and retain their 512-record bound. The new field decodes at most
-10,000 drafts; tab preferences decode at most 10,000 entries and 16 MiB. Twenty maximal drafts
-and a separate 4 MiB resident submission cache are not supported capacity
-promises. At a limit, the last good journal remains intact; required saves
-refuse submission or closing instead of discarding current work.
-
-- **Agreed proposed host capabilities (for the concurrency stages).** Use additive operations that omit `protocol_version` where existing reply
-  shapes are unchanged, with explicit capability flags
-  (`worktree_threads_v1`, `checkout_queue_v1`, `execution_class_v1`,
-  `worktree_inventory_v1` (built), `worktree_storage_v1`, and per-harness `shared_reader`), preserving
-  backward compatibility with older hosts and single-writer checkout behavior
-  until each capability is complete.
+New host capabilities remain additive, with explicit support checks and old
+reply shapes preserved. The remaining proposed flags include
+`execution_class_v1`, per-harness `shared_reader`, and `worktree_storage_v1`.
+Read-in-place and automatic cleanup need their own complete safety checks before
+enablement; neither is implied by existing lifecycle locks or manual removal.
+See [HOST.md](HOST.md), [Worktrees architecture](ARCHITECTURE.md#worktrees-graph),
+and the [Mac guide](MACOS.md#worktrees) for implemented contracts and controls.
 
 ## Agreed next: Linear
 
-Native Linear integration is agreed and ordered in three steps. Nothing is
-visible in the desktop app yet, and nothing has been tried against Linear's
-live API. See [Linear integration](LINEAR.md).
+Native Linear work has three steps. The first is built in the host, not exposed
+in the desktop. Nothing has been verified against Linear's live API.
 
-1. **Host foundation (built in `runtime/`).** Additive host operations for
-   pasted API-key sign-in and sign-out (stored in a private `0600` file beside
-   `host.sqlite`, never in the database or any reply), listing teams and
-   workflow states, binding a project checkout to a team, bounded paged issue
-   lists and details with SQLite caching and offline fallback, local
-   thread-to-issue links, and two explicit person-initiated writes (post a
-   comment on an issue, and move an issue to another workflow state in its
-   team). Nothing writes automatically, no agent, tool, or MCP server can call
-   these host operations, there is no background polling, and the protocol
-   version is unchanged. Browser OAuth sign-in is planned for later.
-2. **First desktop step (planned, after thread tabs).** Enter the Linear API
-   key in Settings, pick an issue to start a thread from, and show the linked
-   issue on its thread as a label. There is no Linear tab in this step.
-3. **Linear view and issue-triggered runs (planned, rules not yet agreed).** A
-   dedicated Linear view arrives together with issue-triggered runs, as the
-   place where unattended work waits for review. The rules for issue-triggered
-   runs are not agreed yet—which issues are eligible, what a run may do with
-   nobody there, and where it stops—and they require rewording Plait's rule
-   against agent orchestration, which has not been done.
+1. **Host foundation — built.** Private API-key storage, project/team binding,
+   bounded issue reads and offline caching, local thread-to-issue links, and
+   durable receipts for two explicit person-initiated writes: post a comment
+   and change workflow state. No automatic writes or background polling; no
+   agent or MCP server can call these native host operations.
+2. **Desktop view — agreed, not built.** API-key Settings and a persistent
+   project-level issue view: search, read details, insert references and chosen
+   context into existing threads, or fill a new draft for review before sending.
+   Keep the source-issue label and Open in Linear. No automatic run or issue
+   write in this first UI step. Thread tabs, its prerequisite, are built.
+3. **Issue-triggered runs — planned, rules not agreed.** Separate from the
+   issue view. Decide eligible issues, unattended permissions, stopping
+   conditions, and where results wait for review. This also requires an
+   explicit change to the rule against agent orchestration; that change is
+   not agreed.
 
-An agent can still use Linear's own MCP server through Plait's MCP support,
-but MCP is not the path Plait's native Linear features take.
+Native features use the host's GraphQL client. Agents may separately use
+Linear's MCP server. Browser OAuth comes later; it needs callback registration,
+PKCE, and token-refresh decisions. See [Linear integration](LINEAR.md) for
+write retry rules, identity handling, live checks, and remaining UI decisions.
 
 ## Proposed, not yet agreed
 
-The later steps of M9, each agreed before it starts. All of them read the turn
-records described under "Direction for M9" above. None adds a write to the
-person's repository beyond the staging and committing Plait already does.
+The later steps of M9 need agreement before implementation. They build on
+[turn records](#turn-records-and-review), but any extension to restoration or
+Git writes needs its own explicit scope and safety contract.
 
 **Step 4, checks the host runs.** After a turn, the host can run a check the
 person named for the project, such as a build or a test run, and show its
