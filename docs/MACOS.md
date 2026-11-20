@@ -865,9 +865,12 @@ already current. Sizes are logical bytes: shared blocks may remain after one
 worktree is removed.
 
 The project's main checkout, when quiet, supplies a seed while Plait holds a
-lease; a linked worktree never does. Seeds refresh after
-successful runs or approval changes; a new run interrupts preparation promptly.
-A busy checkout uses its earlier immutable seed. No approval, no suitable idle
+lease; a linked worktree never does. After a run, a seed older than an hour is
+checked against the source by file metadata alone and cloned again only if
+something changed; inside the hour nothing runs. Approving or removing a
+directory refreshes the seed at once, and **Refresh** refreshes it whatever its
+age. A new run interrupts a refresh promptly. Creating a worktree uses the seed
+that is there, however old, and only waits for a fresh one when there is none. No approval, no suitable idle
 seed, missing output, a changed approval, an unsupported filesystem or platform,
 a different volume, insufficient space or interrupted preparation starts cold.
 There is no disk-consuming copy fallback. Builds run in a separate terminal do

@@ -23,6 +23,9 @@ pub enum Kind {
 pub enum Request {
     BuildOutputInfo {
         checkout: PathBuf,
+        /// Only the Refresh control sends this: refresh the seed whatever its age.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        refresh: bool,
     },
     SetBuildOutput {
         checkout: PathBuf,
@@ -126,8 +129,8 @@ fn verified(info: Info) -> Result<Info, Error> {
     }
     Ok(info)
 }
-pub fn info(client: &Client, checkout: PathBuf) -> Result<Option<Info>, Error> {
-    match client.send(&Request::BuildOutputInfo { checkout }) {
+pub fn info(client: &Client, checkout: PathBuf, refresh: bool) -> Result<Option<Info>, Error> {
+    match client.send(&Request::BuildOutputInfo { checkout, refresh }) {
         Ok(info) => verified(info).map(Some),
         Err(Error::Rejected(e)) if e.code == "invalid_request" => Ok(None),
         Err(e) => Err(e),
@@ -180,6 +183,24 @@ pub fn subscribe(client: &Client, request: String, kind: Kind) -> Result<Updates
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn only_the_refresh_control_asks_for_a_seed_refresh() {
+        let request = |refresh| {
+            serde_json::to_value(Request::BuildOutputInfo {
+                checkout: "/repo".into(),
+                refresh,
+            })
+            .unwrap()
+        };
+        assert_eq!(
+            request(false),
+            json!({"op":"build_output_info","checkout":"/repo"})
+        );
+        assert_eq!(
+            request(true),
+            json!({"op":"build_output_info","checkout":"/repo","refresh":true})
+        );
+    }
     #[test]
     fn build_output_replies_require_capability_identity_bounds_and_consistent_state() {
         let value = json!({"schema":1,"worktree_build_output_v1":true,"request_id":"creation","thread_id":null,"phase":"cloning","files":42,"outcome":null});

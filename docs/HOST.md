@@ -2511,7 +2511,7 @@ edits. Policy reads use no-follow, owner/mode/link-count and size checks; writes
 use a synced temporary file and atomic rename. Editing tracked configuration
 cannot widen this list.
 
-The additive `build_output_info {checkout}` and
+The additive `build_output_info {checkout,refresh?}` and
 `set_build_output {checkout,identity,revision,paths}` return
 `{schema:1,worktree_build_output_v1:true,policy,suggestions}`. A suggestion is
 never approval. Manifests are bounded data reads, never executed: Cargo suggests
@@ -2559,10 +2559,24 @@ Other platforms start cold because cloning is unavailable.
 The project's main checkout, while idle, supplies an immutable seed under
 `build-output-seeds` while Plait holds its writer lease. A linked worktree never
 supplies one: one thread's output must not replace a fuller seed or become every
-later thread's starting cache. Approval changes and successful run completion
-schedule a low-priority refresh; creation also tries a refresh if its source is
-idle. A local admission or run aborts that helper and waits for its process exit
-before taking its writer lease. A private, verified FIFO beside the shared
+later thread's starting cache.
+
+A seed records when it was taken or last found unchanged, and a digest of every
+entry it cloned: path, device and inode, type, mode, size, flags, modification
+and change times, and link targets. A run ending in the main checkout starts no
+helper while the seed matches the approval and is less than an hour old; after
+that, a refresh first walks the source with `stat` only, under the same writer
+lease, and clones again only if the digest differs. An unchanged walk resets the
+seed's age. Dependency output, the part worth cloning, changes with a lockfile,
+not every run, and a new worktree rebuilds the workspace's own artifacts anyway
+because their fingerprints carry the checkout path. Approval changes refresh at
+once in the background, and `refresh:true`, sent only by the Refresh control,
+refreshes whatever the seed's age; both still skip an unchanged source.
+Creation clones the published seed that matches the approval, however old, and
+never waits for a refresh; only with no usable seed at all does it wait for one
+capture from an idle main checkout. After the thread is admitted, an old seed is
+refreshed in the background by the same rule. A local admission or run aborts a
+refresh helper and waits for its process exit before taking its writer lease. A private, verified FIFO beside the shared
 checkout lease lets another host's admission or writer wake the seed too; it
 allows at most 20 ms for the seed to release its lease before applying the
 ordinary lease check.

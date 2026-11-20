@@ -120,9 +120,12 @@ export class Worktrees {
     if (Array.isArray(value)) fail('invalid_request', 'Invalid build output request.');
     const fields: Record<string, string[]> = { build_output_info: ['checkout'], set_build_output: ['checkout','identity','revision','paths'], watch_build_output: ['request_id','kind'], skip_build_output: ['request_id','kind'], project_worktrees_build: ['checkout'] };
     const required = fields[String(value.op)];
-    if (Buffer.byteLength(JSON.stringify(value)) > 40000 || required.some(key => !Object.hasOwn(value,key)) || Object.keys(value).some(key => key !== 'op' && !required.includes(key) && !(value.op === 'project_worktrees_build' && key === 'only'))) fail('invalid_request','Unknown or missing build output field.');
+    if (Buffer.byteLength(JSON.stringify(value)) > 40000 || required.some(key => !Object.hasOwn(value,key)) || Object.keys(value).some(key => key !== 'op' && !required.includes(key) && !(value.op === 'project_worktrees_build' && key === 'only') && !(value.op === 'build_output_info' && key === 'refresh'))) fail('invalid_request','Unknown or missing build output field.');
     if (value.checkout !== undefined) path(value.checkout);
-    if (value.op === 'build_output_info') return this.builds.info(value.checkout as string);
+    if (value.op === 'build_output_info') {
+      if (value.refresh !== undefined && value.refresh !== true) fail('invalid_request', 'Invalid build output refresh.');
+      return this.builds.info(value.checkout as string, value.refresh === true);
+    }
     if (value.op === 'set_build_output') {
       identity(value.identity);
       if (!Number.isSafeInteger(value.revision) || Number(value.revision) < 0 || !Array.isArray(value.paths) || value.paths.length > 32 || value.paths.some(p => typeof p !== 'string' || Buffer.byteLength(p) > 1024)) fail('invalid_request','Invalid build output approval.');
@@ -254,6 +257,8 @@ export class Worktrees {
         this.store.admit('worktree_create', id, request, { thread_id: snapshot.id }, snapshot, tree.identity);
       }
       operation.state = 'ready'; operation.error = null; this.put(operation); this.changed();
+      // After admission, never before it: an old seed is refreshed in the background.
+      this.builds.scheduleSeed(tree.parent.main);
     } catch (error) {
       operation.state = 'failed'; operation.error = failure(error);
       operation.worktree ??= await worktreeHelper<Managed | null>({ action: 'read', store: this.directory, thread_id: operation.thread_id }).catch(() => null);

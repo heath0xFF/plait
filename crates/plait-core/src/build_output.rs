@@ -4,7 +4,7 @@ use crate::worktree_size::{id, list, open_at, open_root, stat_at};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
-    ffi::{CStr, CString, OsString},
+    ffi::{CStr, CString, OsStr, OsString},
     io,
     os::{
         fd::{AsRawFd, FromRawFd, OwnedFd},
@@ -87,6 +87,7 @@ pub fn relative(value: &str) -> Result<PathBuf, String> {
     Ok(PathBuf::from(value))
 }
 
+pub type DirectoryFd = OwnedFd;
 /// Opens every component without following links, checking the listed identity.
 pub fn directory(root: &Path, relative: &Path) -> io::Result<(OwnedFd, libc::stat)> {
     let listed = std::fs::symlink_metadata(root)?;
@@ -194,6 +195,16 @@ pub fn clone_tree(
     cancelled: &AtomicBool,
     progress: &mut dyn FnMut(&Counts),
 ) -> io::Result<Counts> {
+    clone_tree_digest(source, destination, cancelled, progress).map(|(counts, _)| counts)
+}
+/// Also returns the digest of every entry the clone saw, as `fingerprint`
+/// would compute it for the same unchanged source.
+pub fn clone_tree_digest(
+    source: &OwnedFd,
+    destination: &OwnedFd,
+    cancelled: &AtomicBool,
+    progress: &mut dyn FnMut(&Counts),
+) -> io::Result<(Counts, Digest)> {
     if cancelled.load(Ordering::Relaxed) {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
@@ -213,7 +224,7 @@ fn clone_with(
     cancelled: &AtomicBool,
     progress: &mut dyn FnMut(&Counts),
     clone: &mut CloneFile<'_>,
-) -> io::Result<Counts> {
+) -> io::Result<(Counts, Digest)> {
     let start = Instant::now();
     if id(&stat(source)?).0 != id(&stat(destination)?).0 {
         return Err(io::Error::from_raw_os_error(libc::EXDEV));
@@ -228,7 +239,9 @@ fn clone_with(
         clone,
         members: BTreeMap::new(),
         links: Vec::new(),
+        digest: Digest::default(),
     };
+    walk.digest.add(Path::new(""), &stat(source)?, None);
     walk.visit(source, destination, Path::new(""), 0)?;
     set_mode(destination, &stat(source)?)?;
     for (path, target) in &walk.links {
@@ -251,7 +264,7 @@ fn clone_with(
     }
     walk.counts.elapsed_ms = start.elapsed().as_millis() as u64;
     (walk.progress)(&walk.counts);
-    Ok(walk.counts)
+    Ok((walk.counts, walk.digest))
 }
 
 fn below(root: &OwnedFd, path: &Path) -> io::Result<(OwnedFd, libc::stat)> {
@@ -417,6 +430,7 @@ struct Walk<'a> {
     clone: &'a mut CloneFile<'a>,
     members: BTreeMap<PathBuf, Option<PathBuf>>,
     links: Vec<(PathBuf, PathBuf)>,
+    digest: Digest,
 }
 impl Walk<'_> {
     fn check(&mut self) -> io::Result<()> {
@@ -490,6 +504,9 @@ impl Walk<'_> {
         if id(&before).0 != id(&stat(src)?).0 {
             return Err(io::Error::from_raw_os_error(libc::EXDEV));
         }
+        if before.st_mode & libc::S_IFMT != libc::S_IFLNK {
+            self.digest.add(path, &before, None);
+        }
         match before.st_mode & libc::S_IFMT {
             libc::S_IFDIR => {
                 let (child, opened) = open_at(src.as_raw_fd(), name)?;
@@ -540,22 +557,8 @@ impl Walk<'_> {
                 self.members.insert(path.to_owned(), None);
             }
             libc::S_IFLNK => {
-                let mut buffer = vec![0u8; 4097];
-                let length = unsafe {
-                    libc::readlinkat(
-                        src.as_raw_fd(),
-                        name.as_ptr(),
-                        buffer.as_mut_ptr().cast(),
-                        buffer.len(),
-                    )
-                };
-                if length < 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                if length as usize == buffer.len() {
-                    return Err(io::Error::other("Build link is too long."));
-                }
-                buffer.truncate(length as usize);
+                let buffer = read_link(src, name)?;
+                self.digest.add(path, &before, Some(&buffer));
                 let target = PathBuf::from(OsString::from_vec(buffer));
                 if !unchanged(&before, &stat_at(src.as_raw_fd(), name)?) {
                     return Err(moving());
@@ -606,6 +609,159 @@ fn unreadable(path: &Path, error: io::Error) -> io::Error {
         ));
     }
     error
+}
+fn read_link(parent: &OwnedFd, name: &CStr) -> io::Result<Vec<u8>> {
+    let mut buffer = vec![0u8; 4097];
+    // SAFETY: an open directory, one NUL-terminated component and a sized buffer.
+    let length = unsafe {
+        libc::readlinkat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+        )
+    };
+    if length < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if length as usize == buffer.len() {
+        return Err(io::Error::other("Build link is too long."));
+    }
+    buffer.truncate(length as usize);
+    Ok(buffer)
+}
+/// An order-independent digest of every entry a clone sees: its path, identity,
+/// type, mode, size, flags, modification and change times, and a link's target.
+/// Any write moves a file's change time, so an equal digest means a new clone
+/// would copy the same tree.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Digest([u64; 4]);
+impl Digest {
+    // `dev_t`, `ino_t` and the time fields differ in width and sign by platform.
+    #[allow(clippy::unnecessary_cast)]
+    fn add(&mut self, path: &Path, stat: &libc::stat, link: Option<&[u8]>) {
+        use sha2::Digest as _;
+        let mut hash = sha2::Sha256::new();
+        hash.update(path.as_os_str().as_bytes());
+        hash.update([0]);
+        for value in [
+            stat.st_dev as u64,
+            stat.st_ino as u64,
+            stat.st_mode as u64,
+            stat.st_size as u64,
+            stat.st_mtime as u64,
+            stat.st_mtime_nsec as u64,
+            stat.st_ctime as u64,
+            stat.st_ctime_nsec as u64,
+            file_flags(stat),
+        ] {
+            hash.update(value.to_le_bytes());
+        }
+        if let Some(link) = link {
+            hash.update(link);
+        }
+        for (slot, chunk) in self.0.iter_mut().zip(hash.finalize().chunks(8)) {
+            *slot = slot.wrapping_add(u64::from_le_bytes(chunk.try_into().unwrap()));
+        }
+    }
+    pub fn hex(&self) -> String {
+        self.0.iter().map(|value| format!("{value:016x}")).collect()
+    }
+}
+fn file_flags(stat: &libc::stat) -> u64 {
+    #[cfg(target_os = "macos")]
+    {
+        u64::from(stat.st_flags)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = stat;
+        0
+    }
+}
+/// A stat-only walk with a clone's order, bounds and checks. It opens no file
+/// and writes nothing, so an unchanged source costs listings, not a clone.
+pub fn fingerprint(source: &OwnedFd, cancelled: &AtomicBool) -> io::Result<Digest> {
+    struct Scan<'a> {
+        digest: Digest,
+        entries: usize,
+        start: Instant,
+        cancelled: &'a AtomicBool,
+    }
+    fn visit(scan: &mut Scan<'_>, fd: &OwnedFd, path: &Path, depth: usize) -> io::Result<()> {
+        if depth > 128 {
+            return Err(io::Error::other("Build directory is too deeply nested."));
+        }
+        reject_repository(fd)?;
+        let mut error = None;
+        let complete = list(fd, |name| {
+            let result = (|| {
+                if scan.cancelled.load(Ordering::Relaxed) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        "Build output cloning was skipped.",
+                    ));
+                }
+                scan.entries += 1;
+                if scan.entries > ENTRY_LIMIT || scan.start.elapsed() > DEADLINE {
+                    return Err(io::Error::other(
+                        "Build output exceeds the clone preparation limit.",
+                    ));
+                }
+                if name.to_bytes().eq_ignore_ascii_case(b".git") {
+                    return Err(io::Error::other("Nested repository in build output."));
+                }
+                let child = path.join(OsStr::from_bytes(name.to_bytes()));
+                let before = stat_at(fd.as_raw_fd(), name)?;
+                match before.st_mode & libc::S_IFMT {
+                    libc::S_IFDIR => {
+                        let (sub, opened) = open_at(fd.as_raw_fd(), name)?;
+                        if id(&opened) != id(&before) {
+                            return Err(moving());
+                        }
+                        scan.digest.add(&child, &before, None);
+                        visit(scan, &sub, &child, depth + 1)
+                    }
+                    libc::S_IFLNK => {
+                        let target = read_link(fd, name)?;
+                        scan.digest.add(&child, &before, Some(&target));
+                        Ok(())
+                    }
+                    _ => {
+                        scan.digest.add(&child, &before, None);
+                        Ok(())
+                    }
+                }
+            })();
+            match result {
+                Ok(()) => true,
+                Err(e) => {
+                    error = Some(e);
+                    false
+                }
+            }
+        });
+        if let Some(error) = error {
+            return Err(error);
+        }
+        if !complete {
+            return Err(io::Error::other(
+                "Could not list the build directory completely.",
+            ));
+        }
+        Ok(())
+    }
+    // A separate open has its own offset: the clone may list `source` next.
+    let (root, root_stat) = open_at(source.as_raw_fd(), c".")?;
+    let mut scan = Scan {
+        digest: Digest::default(),
+        entries: 0,
+        start: Instant::now(),
+        cancelled,
+    };
+    scan.digest.add(Path::new(""), &root_stat, None);
+    visit(&mut scan, &root, Path::new(""), 0)?;
+    Ok(scan.digest)
 }
 fn moving() -> io::Error {
     io::Error::other("Build output changed while it was being cloned.")
