@@ -183,6 +183,38 @@ fn immutable_files_are_skipped_so_the_clone_can_always_be_removed() {
     remove_owned(&tree.0, Path::new("dst"), expected).unwrap();
 }
 #[test]
+fn cloned_directories_keep_the_source_permissions_and_stay_removable() {
+    use std::os::unix::fs::PermissionsExt;
+    let tree = Tree::new();
+    let src = tree.dir("src");
+    let dst = tree.dir("dst");
+    for (name, mode) in [("open", 0o755), ("group", 0o750), ("sealed", 0o555)] {
+        fs::create_dir(tree.0.join("src").join(name)).unwrap();
+        fs::write(tree.0.join("src").join(name).join("file"), "x").unwrap();
+        fs::set_permissions(
+            tree.0.join("src").join(name),
+            fs::Permissions::from_mode(mode),
+        )
+        .unwrap();
+    }
+    fs::set_permissions(tree.0.join("src"), fs::Permissions::from_mode(0o755)).unwrap();
+    clone_tree(&src, &dst, &AtomicBool::new(false), &mut |_| {}).unwrap();
+    let mode = |name: &str| {
+        fs::metadata(tree.0.join(name))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    assert_eq!(mode("dst"), 0o755);
+    assert_eq!(mode("dst/open"), 0o755);
+    assert_eq!(mode("dst/group"), 0o750);
+    assert_eq!(mode("dst/sealed"), 0o755);
+    let expected = id(&stat(&dst).unwrap());
+    remove_owned(&tree.0, Path::new("dst"), expected).unwrap();
+    fs::set_permissions(tree.0.join("src/sealed"), fs::Permissions::from_mode(0o755)).unwrap();
+}
+#[test]
 fn replaced_directory_is_not_followed_and_partial_output_can_be_erased() {
     let tree = Tree::new();
     let src = tree.dir("src");
