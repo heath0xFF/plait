@@ -46,7 +46,8 @@ tabs, threads, and drafts.
 - **Several threads in one project.** Start a thread where another is already
   running and Plait offers it its own worktree, a new branch and checkout made
   from HEAD beside the repository, or a place in line for the checkout. A
-  project can make the worktree automatic. See
+  project can make the worktree automatic, and can start each one with the
+  build output you approve, cloned copy-on-write. See
   [a busy project](docs/MACOS.md#starting-a-thread-while-a-project-is-busy).
 - **Worktrees as a branch graph.** A project's Worktrees tab draws each
   worktree's branch off the trunk, with its thread's state, what is
@@ -208,8 +209,9 @@ changes the app publishes the next one.
   and named CLIs are planned (M8).
 - **One thread writes a checkout at a time.** A second thread in a busy
   project can use its own worktree or explicitly wait in a durable queue.
-  Worktrees start cold: uncommitted files and build output are not copied, and
-  removing them is manual. A host restart holds queued messages for Resume.
+  A worktree starts from HEAD: uncommitted files are never copied, build
+  output only from the directories you approve for the project, and removing
+  one is manual. A host restart holds queued messages for Resume.
   Reading while another thread writes and cleanup rules are
   [planned](docs/ROADMAP.md).
 - **Not an IDE.** There is no file editor, embedded terminal, merge, or rebase.
