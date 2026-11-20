@@ -11,7 +11,9 @@ process.env.PLAIT_HOST_EXE = process.env.PLAIT_HOST_BINARY ?? resolve('../target
 export async function setup(t: { after: (fn: () => Promise<void>) => void }) {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'plait-sandbox-')));
   const root = join(base, 'repo'); await mkdir(root);
-  t.after(async () => { await rm(base, { recursive: true, force: true }); });
+  // This runs before a test's own hook closes its runtime, and that runtime may still have a helper writing to its
+  // store (a build seed is checked after a run), so the removal retries instead of failing on a folder being filled.
+  t.after(async () => { await rm(base, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); });
   await exec('/usr/bin/git', ['init', '-q', root]);
   return { root, base };
 }
