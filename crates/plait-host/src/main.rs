@@ -1,3 +1,4 @@
+mod build_output;
 mod command;
 mod files;
 mod fingerprint;
@@ -62,6 +63,7 @@ fn run() -> io::Result<()> {
         "record" => return record::run(),
         "review" => return review::run(),
         "worktree" => return worktree::run(),
+        "build-output" => return build_output::run(),
         "worktree-git" => return worktree::git_run(),
         "review-contained" => return review::contained(),
         "undo" => return record::undo(),
