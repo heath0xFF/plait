@@ -85,15 +85,17 @@ export class BuildOutputs {
     const done = (async () => {
       let outcome: Outcome;
       try {
-        if (!abort.signal.aborted && !this.busy(tree.parent.root)) {
-          const cancelSeed = () => this.seeds.get(tree.parent.root)?.abort.abort();
+        // Seeds come only from the main checkout, even for a worktree made from another.
+        const main = tree.parent.main;
+        if (!abort.signal.aborted && !this.busy(main)) {
+          const cancelSeed = () => this.seeds.get(main)?.abort.abort();
           abort.signal.addEventListener('abort', cancelSeed, { once: true });
-          try { await this.refreshSeed(tree.parent.root); } finally { abort.signal.removeEventListener('abort', cancelSeed); }
+          try { await this.refreshSeed(main); } finally { abort.signal.removeEventListener('abort', cancelSeed); }
         }
         if (abort.signal.aborted) throw new HostError('cancelled', 'Build output cloning was skipped.');
         outcome = await buildHelper<Outcome>({ action: 'clone', store: this.directory, worktree: tree, private_target: privateTarget }, abort.signal,
           counts => this.put(tree.thread_id, { phase: 'cloning', files: counts.files, outcome: null }));
-        const seedError = this.seedErrors.get(tree.parent.root);
+        const seedError = this.seedErrors.get(tree.parent.main);
         if (!outcome.warm && outcome.reason.includes('no idle build seed') && seedError) outcome = cold(seedError);
       } catch (error) {
         // Recovery finishes before admitting a first message, including after Skip.

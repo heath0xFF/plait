@@ -270,3 +270,35 @@ fn approval_can_be_revoked_when_another_approved_directory_is_missing() {
     assert_eq!(f.approve(&["target"]).paths, vec!["target"]);
     assert!(f.approve(&[]).paths.is_empty());
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_linked_worktree_never_replaces_the_project_seed() {
+    let f = Fixture::new();
+    f.approve(&["assets", "target"]);
+    f.seed().unwrap();
+    let pointer = seed_pointer(&f.store, &f.identity).unwrap();
+    let before: Seed = policy::read(&pointer).unwrap().unwrap();
+    assert_eq!(before.directories.len(), 2);
+    // A cold worktree whose run built only one of the approved directories.
+    let tree = f.tree();
+    fs::create_dir(tree.path.join("target")).unwrap();
+    fs::write(tree.path.join("target/file"), "one thread's output").unwrap();
+    let next = "12345678-1234-4234-8234-123456789abe";
+    let outcome = seed(
+        &f.store,
+        &tree.path,
+        tree.identity.as_ref().unwrap(),
+        next,
+        None,
+    )
+    .unwrap();
+    assert_eq!(outcome.reason, MAIN_ONLY);
+    let after: Seed = policy::read(&pointer).unwrap().unwrap();
+    assert_eq!(after.path, before.path);
+    assert_eq!(after.directories, before.directories);
+    assert_eq!(
+        fs::read(after.path.join("1/file")).unwrap(),
+        b"target source"
+    );
+}

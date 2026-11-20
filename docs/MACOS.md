@@ -864,7 +864,8 @@ skipped entries. Warm means a starting cache, not a guarantee that a build is
 already current. Sizes are logical bytes: shared blocks may remain after one
 worktree is removed.
 
-A quiet checkout can supply a seed while Plait holds a lease. Seeds refresh after
+The project's main checkout, when quiet, supplies a seed while Plait holds a
+lease; a linked worktree never does. Seeds refresh after
 successful runs or approval changes; a new run interrupts preparation promptly.
 A busy checkout uses its earlier immutable seed. No approval, no suitable idle
 seed, missing output, a changed approval, an unsupported filesystem or platform,

@@ -200,6 +200,7 @@ fn private_cache(store: &Path, thread: &str) -> io::Result<PathBuf> {
     policy::private_directory(&root, true)?;
     Ok(root)
 }
+const MAIN_ONLY: &str = "Build seeds are taken only from the project's main checkout.";
 fn seed(
     store: &Path,
     root: &Path,
@@ -209,6 +210,11 @@ fn seed(
 ) -> io::Result<Outcome> {
     uuid(generation)?;
     let (main, main_identity) = policy::project(root)?;
+    // A linked worktree's output is one thread's: it must not replace a fuller
+    // seed, nor become every later thread's starting cache.
+    if main != root {
+        return Ok(Outcome::cold(MAIN_ONLY));
+    }
     let _seed_lock = seed_lock(store, &main_identity, true)?;
     let capture = lease::seed::capture(
         root,
