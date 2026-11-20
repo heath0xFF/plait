@@ -10,12 +10,11 @@
   fallback, local thread-to-issue links, and two durably recorded person-initiated
   writes (post comment and change workflow state). Nothing is visible in the
   desktop app yet.
-- **Planned next.** After thread tabs, a small desktop step adds Settings
-  entry for the API key, an issue picker to start a thread from an issue, and
-  a label showing the linked issue on its thread. There is no Linear tab in
-  that step. A dedicated Linear view arrives later together with
-  issue-triggered runs, as the place where unattended work waits for review;
-  the rules for issue-triggered runs are not yet agreed.
+- **Planned next.** A persistent project-level issue view adds search, ticket
+  details, references in existing threads, and starting a thread from an issue.
+  Settings holds the API key; a source-issue label links back to Linear.
+  The view does not depend on issue-triggered runs. Those remain separate,
+  with permissions and execution rules not yet agreed.
 - **Unverified against Linear.** Nothing in this stage has been tried against
   Linear's live GraphQL API or MCP server. Every automated test runs against a
   local loopback fake server. An opt-in manual probe (`scripts/probe-linear.mjs`)
@@ -95,17 +94,20 @@ This first step gives an agent issue context and, when permitted, issue tools.
 It does not add a native issue list, a durable thread-to-issue link, automatic
 status changes, or an unattended agent.
 
-## Proposed native slice
+## Agreed native scope
 
-The smallest useful native integration is **start a thread from an issue**:
+The first desktop step is a **persistent project-level issue view**:
 
 1. Associate a Plait project with a chosen Linear workspace, team, and optionally
-   a Linear project.
-2. Find an issue or paste its URL. Show its identifier, title, state, and source.
-3. Let the person review the issue text before using it in a new thread draft.
-   Do not start the run automatically.
-4. Keep the issue's stable identity and URL with the thread. Show an Open in
-   Linear action, not an embedded copy of Linear.
+   a Linear project. Reuse the host's existing binding where it applies.
+2. Browse and search tickets, or resolve a pasted issue ID or URL. Show the
+   identifier, title, state, source, and selected ticket's details.
+3. Insert a reference and chosen context into an existing thread's draft, or
+   fill a new thread draft. The person reviews it before sending; nothing runs
+   automatically and an existing draft is not silently replaced.
+4. Keep the source issue's stable identity and URL with a thread started from
+   it. Offer Open in Linear. Text references to other tickets do not change
+   that source link or introduce a multi-issue link schema.
 5. Keep posting comments and changing issue state out of the first slice.
    Those can follow with explicit confirmation and clear failure handling.
 
@@ -120,7 +122,7 @@ send credentials to arbitrary URLs in an issue.
 - Plain models hold issue identity and request state without GPUI. A focused
   integration module handles Linear's API; thread execution does not depend on
   its network availability.
-- The desktop owns the picker, draft confirmation, and navigation. It must
+- The desktop owns the issue view, draft confirmation, and navigation. It must
   discard stale replies after a project or query changes.
 - Use explicit refresh and bounded, paged queries initially. Do not add a
   public webhook listener to the local host or poll each issue separately.
@@ -142,11 +144,10 @@ Agreed:
 
 - **Order of native work.**
   1. Host foundation in `runtime/` (built; unverified against Linear).
-  2. After thread tabs, a small desktop step: enter the API key in Settings,
-     start a thread from an issue with a picker, and show the issue on its
-     thread as a label. No Linear tab in this step.
-  3. A dedicated Linear view arrives later together with issue-triggered runs,
-     as the place where unattended work waits for review.
+  2. With thread tabs built, add the project-level issue view, API-key
+     Settings, draft references, and source-issue labels described above.
+  3. Issue-triggered runs follow only after their rules are agreed. They are
+     not a prerequisite for the view.
 - **Native path vs MCP.** Plait's native Linear features use the host's
   GraphQL client directly. Agents can still use Linear's official MCP server
   when configured, but MCP is not the path Plait's own features take.
@@ -162,14 +163,14 @@ Agreed:
 
 Not yet agreed / still open:
 
-- **Issue-triggered runs.** Planned alongside the later Linear view, but their
-  rules are not agreed: which issues are eligible, what a run may do with
+- **Issue-triggered runs.** Separate from the issue view. Their rules are not
+  agreed: which issues are eligible, what a run may do with
   nobody there, and where it stops. They also require rewording Plait's rule
   against agent orchestration, which has not been done.
 - Browser OAuth client registration, PKCE callback handling, and token refresh
   for distributed builds.
 - Which default workspace, team, and optional Linear project selectors to
-  present in Settings and the issue picker.
+  present in Settings and the issue view.
 - Whether a thread will ever need more than one linked issue, and whether
   thread summaries should carry a linked-issue field in a future protocol
   version when the desktop stage lands.

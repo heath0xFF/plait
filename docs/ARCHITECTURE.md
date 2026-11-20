@@ -160,6 +160,20 @@ probe succeeded, but a read-only bind mount still permitted access to an outside
 pathname Unix socket. See [the evidence, alternatives, and enablement gates](LINUX-SANDBOX.md).
 Landlock ABI 9 is one option, not a fixed product requirement.
 
+## Client/server direction
+
+The [roadmap](ROADMAP.md#clientserver-platform-and-installation) agrees a
+client/server platform with independent updates. Plait Server is the product
+boundary represented today by the host and runtime; `plait-core` remains an
+internal library, not a separately installed component. Other apps will use
+the versioned public protocol, not GPUI or Rust implementation details.
+
+This is direction, not shipped installation behavior. The app currently carries
+its host archive, and the in-app updater replaces both components. The first
+change separates initial local-server setup from explicit replacement. A bundled
+server is a bootstrap source, not a requirement to keep server and client
+versions equal. Remote transport and additional clients remain later work.
+
 ## Checkout recording and undo
 
 The TypeScript runtime owns run boundaries for every harness. `records.ts`
