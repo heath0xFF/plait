@@ -522,7 +522,7 @@ impl Walk<'_> {
                     )
                 };
                 if raw < 0 {
-                    return Err(io::Error::last_os_error());
+                    return Err(unreadable(path, io::Error::last_os_error()));
                 }
                 let file = unsafe { OwnedFd::from_raw_fd(raw) };
                 let opened = stat(&file)?;
@@ -595,6 +595,17 @@ fn locked(stat: &libc::stat) -> bool {
         let _ = stat;
         false
     }
+}
+/// Skipping an unreadable file would leave an inconsistent cache, so the clone
+/// fails; the reason names the file the person can fix.
+fn unreadable(path: &Path, error: io::Error) -> io::Error {
+    if matches!(error.raw_os_error(), Some(libc::EACCES | libc::EPERM)) {
+        return io::Error::other(format!(
+            "Cannot read {} in the build directory; it is not readable.",
+            path.display()
+        ));
+    }
+    error
 }
 fn moving() -> io::Error {
     io::Error::other("Build output changed while it was being cloned.")
