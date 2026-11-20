@@ -857,6 +857,8 @@ with the checkout until either changes, so it is not space that removing it
 would free, but once the checkout is rebuilt the seed keeps the old blocks.
 Removing every approved directory removes the seed.
 Approve only reproducible output you are willing to remove with its worktree.
+An approval covers everything inside the directory: any file placed there, a
+`.env` included, is cloned into each new worktree and removed with it.
 Ignored files inside the current approved directories are **Build output** in
 the Worktrees facts and do not block removal. A `.env`, unapproved ignored cache
 or other ignored user data still blocks it. Removing a directory from the

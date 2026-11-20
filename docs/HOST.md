@@ -2523,7 +2523,9 @@ an existing ignored `target`; a package manifest with a lockfile suggests an
 existing ignored `node_modules`. Custom output directories are supported.
 Approval refuses dot components, absolute paths, Git data, linked directories,
 volume boundaries, nested repositories and Python virtual environments
-(`venv`, `.venv` or `pyvenv.cfg`). The entire directory must be ignored and
+(`venv`, `.venv` or `pyvenv.cfg`). An approval covers the whole directory:
+every file inside it, whatever its name, is cloned and goes with a removed
+worktree; only what sits outside an approved directory is never copied. The entire directory must be ignored and
 contain no tracked or non-ignored files. Git reads retain their hardening;
 `check-ignore` alone disables literal *pathspec* mode because it accepts
 filenames and rejects that flag, receiving NUL-delimited directory names.
