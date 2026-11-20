@@ -279,6 +279,8 @@ mod tests {
     }
     fn checkout(head: usize, base: Option<usize>) -> Checkout {
         Checkout {
+            build_directories: Vec::new(),
+            build_output: None,
             path: format!("/repo/{head}").into(),
             main: base.is_none(),
             branch: None,

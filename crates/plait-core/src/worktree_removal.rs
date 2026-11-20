@@ -222,6 +222,8 @@ mod tests {
     };
     fn row() -> Checkout {
         Checkout {
+            build_directories: Vec::new(),
+            build_output: None,
             path: "/repo.worktrees/tree".into(),
             main: false,
             branch: Some("plait/tree".into()),
@@ -235,6 +237,7 @@ mod tests {
             missing: false,
             removed: false,
             preservation: Preservation {
+                build_output: None,
                 changed: Some(0),
                 unpushed: Some(0),
                 exclusive: Some(0),

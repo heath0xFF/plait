@@ -810,6 +810,7 @@ fn format_diff(bytes: &[u8], mut truncated: bool, elapsed: Duration, headers: Fi
 }
 
 mod branch;
+pub mod build_output;
 mod counts;
 pub mod log;
 pub mod record;
