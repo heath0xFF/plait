@@ -85,6 +85,10 @@ pub fn acquire(args: Vec<String>) -> io::Result<()> {
     let (_expected_file, expected_lock_id) = open_lock_file(&lease_dir_fd, &expected_name)
         .map_err(|error| io::Error::other(error.to_string()))?;
     verify_inherited_lock_fd(3, expected_lock_id)?;
+    if matches!(mode, "writer" | "exclusive") {
+        verify_inherited_dir_fd(4, id)?;
+        plait_core::lease::seed::yield_to_run(&canonical).map_err(io::Error::other)?;
+    }
     if let Err(error) = lock_mode(mode, id, timeout_ms) {
         // A lent Git child may hold these locks: explain its saved state. A
         // record that cannot be read explains nothing: keep the refusal.

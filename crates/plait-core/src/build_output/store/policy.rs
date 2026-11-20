@@ -108,7 +108,13 @@ pub fn set(
     }
     let mut approved = Vec::<PathBuf>::new();
     for path in &paths {
-        let checked = git::build_output::validate(&main, path).map_err(io::Error::other)?;
+        // Revocation must work even if another previously approved cache is gone.
+        // Clone and removal revalidate retained entries at their use site.
+        let checked = if policy.paths.contains(path) {
+            build_output::relative(path).map_err(io::Error::other)?
+        } else {
+            git::build_output::validate(&main, path).map_err(io::Error::other)?
+        };
         if approved
             .iter()
             .any(|p| checked.starts_with(p) || p.starts_with(&checked))

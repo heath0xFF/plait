@@ -117,6 +117,7 @@ export class Admissions {
    * write or removal holds the lifecycle exclusively; it is not a run. */
   protected async writerElsewhere(root: string): Promise<boolean> {
     const busy = (error: unknown) => { if (error instanceof HostError && error.code === 'busy') return true; throw error; };
+    await this.worktrees.builds.yieldToRun(root);
     try { await (await acquireCheckout(root)).close(); return false; } catch (error) { busy(error); }
     try { await (await acquireCheckout(root, 'reader')).close(); return true; } catch (error) { busy(error); return false; }
   }

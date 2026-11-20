@@ -78,6 +78,7 @@ export class BuildOutputs {
       this.put(tree.thread_id, { phase: outcome.warm ? 'warm' : 'cold', files: outcome.counts.files, outcome }); return outcome;
     }
     const abort = new AbortController();
+    const started = Date.now();
     if (this.closing) abort.abort();
     if (this.store.setting(`build_skip:${tree.thread_id}`) === 'yes') abort.abort();
     this.put(tree.thread_id, { phase: 'cloning', files: 0, outcome: null });
@@ -99,6 +100,7 @@ export class BuildOutputs {
         const recovered = await buildHelper<Outcome>({ action: 'recover', store: this.directory, worktree: tree });
         outcome = recovered.warm ? recovered : cold(error instanceof Error ? error.message : 'Build output cloning failed.');
       }
+      outcome.counts.elapsed_ms = Date.now() - started;
       this.put(tree.thread_id, { phase: outcome.warm ? 'warm' : 'cold', files: outcome.counts.files, outcome }); return outcome;
     })();
     this.clones.set(tree.thread_id, { abort, done });
