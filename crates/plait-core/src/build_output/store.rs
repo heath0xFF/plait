@@ -210,10 +210,10 @@ fn seed(
     uuid(generation)?;
     let (main, main_identity) = policy::project(root)?;
     let _seed_lock = seed_lock(store, &main_identity, true)?;
-    let _lease = lease::acquire_checkout(
+    let capture = lease::seed::capture(
         root,
-        Some(identity.lease().map_err(io::Error::other)?),
-        LeaseClass::Writer,
+        identity.lease().map_err(io::Error::other)?,
+        std::env::var("PLAIT_BUILD_LIFETIME_FD").as_deref() == Ok("4"),
     )
     .map_err(io::Error::other)?;
     let approved = policy::load(store, &main, &main_identity)?;
@@ -227,6 +227,16 @@ fn seed(
     let folder = pointer.parent().unwrap();
     // Only this project's unfinished staging directory is recovered, never a seed in use.
     let pending = folder.join(format!("{}.pending.json", policy::key(&main_identity)?));
+    let retired = folder.join(format!("{}.retired.json", policy::key(&main_identity)?));
+    if let Some(old) = policy::read::<Seed>(&retired)? {
+        if previous
+            .as_ref()
+            .is_none_or(|current| current.path != old.path)
+        {
+            remove_seed(folder, &old)?;
+        }
+        fs::remove_file(&retired)?;
+    }
     if let Some(old) = policy::read::<Seed>(&pending)? {
         if previous
             .as_ref()
@@ -279,28 +289,29 @@ fn seed(
             let destination = seed.path.join(index.to_string());
             fs::create_dir(&destination)?;
             let output = build_output::directory(&destination, Path::new(""))?;
-            let counts = build_output::clone_tree(
-                &source.0,
-                &output.0,
-                &AtomicBool::new(false),
-                &mut progress,
-            )?;
+            let counts =
+                build_output::clone_tree(&source.0, &output.0, capture.cancelled(), &mut progress)?;
             merge(&mut seed.counts, &counts);
             seed.directories.push(directory.clone());
         }
         identity.checked(root).map_err(io::Error::other)?;
+        drop(capture);
         // A policy edit during the scan cannot publish a widened or stale seed.
         if policy::load(store, &main, &main_identity)?.revision != approved.revision {
             return Err(io::Error::other(
                 "Build output approval changed during seeding.",
             ));
         }
+        if let Some(previous) = &previous {
+            policy::save(&retired, previous)?;
+        }
         policy::save(&pointer, &seed)?;
         published = true;
-        fs::remove_file(&pending)?;
         if let Some(previous) = &previous {
             remove_seed(folder, previous)?;
+            fs::remove_file(&retired)?;
         }
+        fs::remove_file(&pending)?;
         Ok(Outcome {
             warm: !seed.directories.is_empty(),
             reason: "An idle checkout supplied an immutable build seed.".into(),

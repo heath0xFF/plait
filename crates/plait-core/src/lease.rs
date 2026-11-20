@@ -39,6 +39,7 @@ use std::{
 pub mod cleanup;
 pub mod git_cleanup;
 mod process;
+pub mod seed;
 
 /// User-facing refusal when an active run, reader, or another Plait write holds a checkout.
 pub const CHECKOUT_BUSY: &str = "This checkout is in use by an active run or another Plait write. Wait until it finishes, then try again.";
@@ -559,6 +560,7 @@ pub(crate) fn prepare_checkout_lock_in(
     lease_dir: &Path,
     path: &Path,
 ) -> Result<PreparedLock, LeaseError> {
+    seed::yield_in(lease_dir, path)?;
     let (root, _dir, identity) = open_verified_dir(path)?;
     let (canonical_lease_dir, lease_dir_fd) = open_lease_dir(lease_dir)?;
     let name = checkout_lock_name(identity);
@@ -606,6 +608,17 @@ pub fn acquire_checkout(
 }
 
 pub(crate) fn acquire_checkout_in(
+    lease_dir: &Path,
+    root: &Path,
+    expected: Option<DirIdentity>,
+    class: LeaseClass,
+) -> Result<CheckoutLease, LeaseError> {
+    if class != LeaseClass::Reader {
+        seed::yield_in(lease_dir, root)?;
+    }
+    acquire_without_seed_yield(lease_dir, root, expected, class)
+}
+fn acquire_without_seed_yield(
     lease_dir: &Path,
     root: &Path,
     expected: Option<DirIdentity>,

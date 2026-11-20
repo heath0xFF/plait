@@ -194,6 +194,15 @@ pub fn clone_tree(
     cancelled: &AtomicBool,
     progress: &mut dyn FnMut(&Counts),
 ) -> io::Result<Counts> {
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "Build output cloning was skipped.",
+        ));
+    }
+    if !cfg!(target_os = "macos") {
+        return Err(io::Error::from_raw_os_error(libc::ENOTSUP));
+    }
     clone_with(source, destination, cancelled, progress, &mut clone_file)
 }
 

@@ -130,6 +130,9 @@ fn approval_is_private_and_survives_tracked_configuration_edits() {
     assert!(git::build_output::validate(&f.root, "assets").is_err());
     assert!(git::build_output::validate(&f.root, ".env").is_err());
     assert!(git::build_output::validate(&f.root, "../store").is_err());
+    fs::remove_dir(f.root.join("assets/nested/.git")).unwrap();
+    fs::write(f.root.join("assets/pyvenv.cfg"), "home = /old/python").unwrap();
+    assert!(git::build_output::validate(&f.root, "assets").is_err());
 }
 #[test]
 fn a_source_with_a_writer_is_never_seeded() {
@@ -257,4 +260,13 @@ fn revoked_seed_is_not_reused_and_a_published_pending_seed_survives_recovery() {
     assert!(outcome.reason.contains("current approval"));
     assert!(!tree.path.join("target").exists());
     assert!(!tree.path.join("assets").exists());
+}
+
+#[test]
+fn approval_can_be_revoked_when_another_approved_directory_is_missing() {
+    let f = Fixture::new();
+    f.approve(&["assets", "target"]);
+    fs::remove_dir_all(f.root.join("target")).unwrap();
+    assert_eq!(f.approve(&["target"]).paths, vec!["target"]);
+    assert!(f.approve(&[]).paths.is_empty());
 }

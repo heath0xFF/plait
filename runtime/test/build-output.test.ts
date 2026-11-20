@@ -93,7 +93,7 @@ test('removal consults current host policy and still preserves an env file',{ski
   const env:any=await remove('env'); assert.equal(env.state,'ready'); assert.ok(env.error); assert.equal(await readFile(join(op.worktree!.path,'.env'),'utf8'),'keep');
 });
 
-test('real host restart during pushed clone progress recovers cold before admission',{skip:process.platform!=='darwin',timeout:60000},async t=>{
+test('real host restart, Skip and lease preemption interrupt cloned output safely',{skip:process.platform!=='darwin',timeout:60000},async t=>{
   const { setup: hostSetup, request, childPids, until }=await import('./support/host.ts');
   const { connect }=await import('node:net');
   const f=await hostSetup(t);
@@ -129,4 +129,29 @@ test('real host restart during pushed clone progress recovers cold before admiss
   const state:any=await request(f.store,{op:'watch_build_output',request_id:'crash-clone',kind:'worktree'}); assert.equal(state.result.phase,'cold'); assert.match(state.result.outcome.reason,/interrupted/);
   await assert.rejects(readFile(join(recovered.worktree.path,'custom/0/artifact-0')));
   const { readdir }=await import('node:fs/promises'); assert.equal((await readdir(recovered.worktree.path)).some(p=>p.startsWith('.plait-build-')),false);
+  socket.destroy();
+  const cancelSocket=connect(join(f.store,'host.sock')); t.after(async()=>{cancelSocket.destroy();});
+  let cancelBuffer=''; let cancelling:Promise<unknown>|undefined;
+  cancelSocket.setEncoding('utf8'); cancelSocket.on('error',()=>{});
+  cancelSocket.on('connect',()=>cancelSocket.write(JSON.stringify({op:'watch_build_output',request_id:'cancel-clone',kind:'worktree'})+'\n'));
+  cancelSocket.on('data',data=>{
+    cancelBuffer+=data;
+    for(;;) { const end=cancelBuffer.indexOf('\n'); if(end<0)break; const message=JSON.parse(cancelBuffer.slice(0,end));cancelBuffer=cancelBuffer.slice(end+1); const state=message.build_output??message.result;
+      if(!cancelling&&state?.phase==='cloning'&&state.files>0) cancelling=request(f.store,{op:'skip_build_output',request_id:'cancel-clone',kind:'worktree'});
+    }
+  });
+  const second:any=await request(f.store,{op:'create_worktree_thread',request_id:'cancel-clone',parent:parent.result.parent,harness:'pi',provider:'faux',model_id:'faux-1',approval:'ask'}); assert.equal(second.ok,true,JSON.stringify(second));
+  await until(async()=>!!cancelling,Boolean,20000); await cancelling;
+  const cancelled:any=await until(async()=>(await request(f.store,{op:'worktree_status',request_id:'cancel-clone'}) as any).result.operation,(op:any)=>op.state!=='preparing');
+  assert.equal(cancelled.state,'ready',JSON.stringify(cancelled));
+  const cold:any=await request(f.store,{op:'watch_build_output',request_id:'cancel-clone',kind:'worktree'}); assert.equal(cold.result.phase,'cold'); assert.match(cold.result.outcome.reason,/skipped/);
+  assert.equal((await readdir(cancelled.worktree.path)).some(p=>p.startsWith('.plait-build-')||p==='custom'),false);
+  // This caller has no BuildOutputs job map. The shared lease registry must
+  // wake the other helper, just as it does for a run in another host store.
+  let writer:Promise<{elapsed:number;error:unknown}>|undefined;
+  const capture=buildHelper<Outcome>({action:'seed',store:f.store,root:f.repo,identity:info.result.policy.identity,generation:randomUUID(),source_cache:null},undefined,counts=>{
+    if(!writer&&counts.files>0) { const start=Date.now(); writer=acquireCheckout(f.repo).then(async lease=>{await lease.close();return {elapsed:Date.now()-start,error:null};},error=>({elapsed:Date.now()-start,error})); }
+  }).then(value=>({value,error:null}),error=>({value:null,error}));
+  const interrupted=await capture; assert.ok(interrupted.error,'seed should yield instead of publishing'); assert.ok(writer);
+  const {elapsed,error}=await writer; assert.equal(error,null); assert.ok(elapsed<1000,`seed yield took ${elapsed} ms`); console.log(`shared seed preemption: ${elapsed} ms`);
 });
