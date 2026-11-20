@@ -76,6 +76,7 @@ impl Plait {
         }
         self.prepare_project_policy(cx);
         self.prepare_isolation_settings(cx);
+        self.prepare_build_settings(cx);
         let key = (
             self.host.connection.epoch,
             self.settings_checkout().to_owned(),
@@ -167,7 +168,8 @@ impl Plait {
             && self.settings_checkout() != checkout
             && (self.project_policy().busy
                 || self.project_agent().busy
-                || self.admission.settings_busy)
+                || self.admission.settings_busy
+                || self.build_output.busy)
         {
             return;
         }

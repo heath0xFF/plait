@@ -345,6 +345,11 @@ impl Plait {
             self.admission.pending = Some(request.clone());
             self.admission.choice = false;
         }
+        let build_generation = self.watch_build_output(
+            created.request_id.clone(),
+            host::build_output::Kind::Admission,
+            cx,
+        );
         let epoch = self.host.connection.epoch;
         let expected = self.state.checkout_key().cloned();
         let journal = self.session.journal.clone();
@@ -412,6 +417,7 @@ impl Plait {
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
             let _ = this.update_in(cx, |this, window, cx| {
+                if this.host.connection.epoch == epoch { this.finish_build_watch(&created.request_id, build_generation); }
                 if created.draft_id.is_some() {
                     this.finish_draft_creation(created, epoch, result, window, cx);
                     return;
@@ -540,7 +546,7 @@ async fn await_admission(
     let Request::CreateAdmittedThread { request_id, .. } = request else {
         unreachable!()
     };
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(330);
     let mut receipt = admission::admission(client, request)?;
     loop {
         receipt.verify_request(request)?;

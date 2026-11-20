@@ -820,10 +820,11 @@ holds nothing. Draft text and image references are saved per checkout
 in the desktop recovery journal across restarts. Cmd-Shift-N opens it with the
 model list open. A thread with no title
 yet reads **New thread**. **New Thread in Worktree** (Cmd-Option-N) asks the
-host to create a cold checkout and a thread at once, with the draft's selected
+host to create a checkout and a thread at once, with the draft's selected
 harness/model/permissions, or the configured defaults when no draft is open.
-It uses the captured committed base, leaving dirty files and build output in
-the original checkout. The branch is `plait/` plus twelve UUID hex digits,
+It uses the captured committed base, leaving dirty files in the original
+checkout. Only approved build output can be cloned into the new checkout. The
+branch is `plait/` plus twelve UUID hex digits,
 extended if needed, under `<main-repository>.worktrees/` even when started from
 a linked worktree. An unavailable chosen harness is refused, never replaced.
 
@@ -838,11 +839,47 @@ happened and preserves existing files and branches for inspection.
 upstream containing the current commit, as of the last fetch. **Keep local
 commits only** explicitly permits unpushed or unknown publication status while
 keeping the branch. Both refuse active work, changed directory identity,
-uncommitted files, ignored files, edits hidden by assume-unchanged or
+uncommitted files, ignored content outside approved build directories, edits
+hidden by assume-unchanged or
 skip-worktree flags, commits on no branch (made on a detached HEAD in the
 worktree) and unfinished Git operations. Old worktrees
 created by the desktop remain grouped as imported records and must be removed
 with your Git tools. There is no automatic cleanup or force removal.
+
+In **Project settings → New threads → Build output**, choose **Approve** beside
+a suggestion or enter a relative directory and choose **Approve**. Suggestions
+come from manifests, without running scripts; none is applied automatically.
+**Remove** revokes a directory and **Refresh** rereads the host's choices.
+Nothing is cloned before approval. An older host shows **Unavailable**.
+Approve only reproducible output you are willing to remove with its worktree.
+Ignored files inside the current approved directories are **Build output** in
+the Worktrees facts and do not block removal. A `.env`, unapproved ignored cache
+or other ignored user data still blocks it. Removing a directory from the
+approved list makes its existing ignored content block removal again.
+
+During creation, **Cloning build output** shows the file count; **Skip** discards
+partial output and proceeds cold. The Worktrees view reports **Warm** when output
+was cloned, or **Cold** with the reason on hover, along with time, file count and
+skipped entries. Warm means a starting cache, not a guarantee that a build is
+already current. Sizes are logical bytes: shared blocks may remain after one
+worktree is removed.
+
+A quiet checkout can supply a seed while Plait holds a lease. Seeds refresh after
+successful runs or approval changes; a new run interrupts preparation promptly.
+A busy checkout uses its earlier immutable seed. No approval, no suitable idle
+seed, missing output, a changed approval, an unsupported filesystem or platform,
+a different volume, insufficient space or interrupted preparation starts cold.
+There is no disk-consuming copy fallback. Builds run in a separate terminal do
+not participate in Plait's leases and can still race a seed capture.
+
+Git data, nested repositories and Python virtual environments are refused.
+Unapproved ignored directories are never copied. Safe package-manager `.bin`
+links are retained; links leaving the approved directory, absolute or unresolved
+links, sockets and devices are skipped. Recreate other caches that embed absolute
+paths. Sandboxed Pi's Cargo output is seeded in its private thread cache; trusted
+projects, Codex and Claude Code use checkout output. Removing a checkout still
+retains its separately attributed private cache. Worktrees remain optional and
+cleanup remains manual.
 
 Cmd-Option-1 to Cmd-Option-9
 count threads in sidebar order; Settings can change this to machines or

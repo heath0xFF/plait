@@ -97,7 +97,7 @@ impl Plait {
         let enabled =
             current.is_some() && !self.admission.settings_busy && self.host.connection.connected;
         let mut control = segmented();
-        for (i,(label,value,tip)) in [("Ask",false,"When this project is busy, choose whether a new thread gets its own worktree."), ("Own worktree",true,"When this project is busy, new threads automatically get a worktree from HEAD. Original uncommitted files and build output are not copied.")].into_iter().enumerate() {
+        for (i,(label,value,tip)) in [("Ask",false,"When this project is busy, choose whether a new thread gets its own worktree."), ("Own worktree",true,"When this project is busy, new threads automatically get a worktree from HEAD. Uncommitted files stay in the original checkout. Only approved build output can be cloned.")].into_iter().enumerate() {
             control = control.child(segment(("isolation-setting",i),label,current==Some(value)).disabled(!enabled)
                 .tooltip(move |_,cx| cx.new(|_| TextTooltip(tip.into())).into())
                 .when(enabled,|el| el.on_activate(cx,move |this,_,cx| this.request_isolation_setting(Some(value),cx))));
@@ -113,6 +113,7 @@ impl Plait {
             .into_any_element()
         };
         settings::section("New threads")
+            .child(self.build_settings(cx))
             .child(settings::setting("When this project is busy", "Applies only to new threads in this project. Worktrees start from HEAD; cleanup is manual.", control))
             .when(self.admission.settings_busy, |el| el.child(tag("isolation-setting-loading", "Loading isolation setting…",colors().muted)))
             .when_some(self.admission.note.clone(),|el,note| el.child(tag("isolation-setting-note", note,colors().amber)))
