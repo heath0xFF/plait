@@ -2,7 +2,7 @@
 use super::*;
 use serde_json::{Value, json};
 use std::{
-    io::{BufRead, BufReader, Write},
+    io::Write,
     os::unix::{fs::PermissionsExt, net::UnixListener},
     sync::{
         Mutex,
@@ -41,12 +41,9 @@ fn host_defaults_and_grouping() {
                 }
                 Err(error) => panic!("{error}"),
             };
-            stream
-                .set_read_timeout(Some(Duration::from_secs(3)))
-                .unwrap();
-            let mut input = String::new();
-            BufReader::new(&mut stream).read_line(&mut input).unwrap();
-            let request: Value = serde_json::from_str(&input).unwrap();
+            let Some(request) = scripted_request(&mut stream, Duration::from_secs(3)) else {
+                continue;
+            };
             let result = match request["op"].as_str().unwrap() {
                 "worktree_info" => {
                     json!({"schema":1,"worktree_threads_v1":true,"parent":plait_core::git::worktree::worktree_parent(&root).unwrap()})
