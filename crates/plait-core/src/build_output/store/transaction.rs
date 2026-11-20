@@ -127,9 +127,7 @@ fn fill(
             "No build directories are approved for this project.",
         ));
     }
-    let _lock = seed_lock(store, &tree.parent.main_identity, false)?;
-    let Some(seed) = policy::read::<Seed>(&seed_pointer(store, &tree.parent.main_identity)?)?
-    else {
+    let Some((seed, _lock)) = published_seed(store, &tree.parent.main_identity)? else {
         return Ok(Outcome::cold(
             "The source checkout is busy or unavailable and there is no idle build seed.",
         ));

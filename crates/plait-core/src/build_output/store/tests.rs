@@ -302,3 +302,71 @@ fn a_linked_worktree_never_replaces_the_project_seed() {
         b"target source"
     );
 }
+
+#[cfg(target_os = "macos")]
+fn tree_for(f: &Fixture, thread: &str) -> ManagedWorktree {
+    git::worktree::create_managed_worktree(
+        &git::worktree::worktree_parent(&f.root).unwrap(),
+        thread,
+        None,
+        |_| Ok(()),
+    )
+    .unwrap()
+}
+#[cfg(target_os = "macos")]
+#[test]
+fn a_refresh_or_its_old_seed_deletion_never_makes_a_creation_cold() {
+    let f = Fixture::new();
+    f.approve(&["target"]);
+    // Enough files that capture and the old seed's deletion each take a while.
+    for i in 0..20_000 {
+        fs::write(f.root.join(format!("target/f{i}")), "x").unwrap();
+    }
+    f.seed().unwrap();
+    let folder = seed_pointer(&f.store, &f.identity)
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_owned();
+    let key = policy::key(&f.identity).unwrap();
+    let (pending, retired) = (
+        folder.join(format!("{key}.pending.json")),
+        folder.join(format!("{key}.retired.json")),
+    );
+    let (store, root, identity) = (f.store.clone(), f.root.clone(), f.identity.clone());
+    let refresh = std::thread::spawn(move || {
+        seed(
+            &store,
+            &root,
+            &identity,
+            "12345678-1234-4234-8234-123456789abe",
+            None,
+        )
+        .unwrap()
+    });
+    let wait = |path: &Path| {
+        let start = std::time::Instant::now();
+        while !path.exists() && !refresh.is_finished() {
+            assert!(start.elapsed() < std::time::Duration::from_secs(60));
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    };
+    wait(&pending);
+    let during_capture = transaction::prepare(&f.store, &f.tree(), false).unwrap();
+    assert!(during_capture.warm, "{}", during_capture.reason);
+    wait(&retired);
+    let during_deletion = transaction::prepare(
+        &f.store,
+        &tree_for(&f, "12345678-1234-4234-8234-123456789abf"),
+        false,
+    )
+    .unwrap();
+    assert!(during_deletion.warm, "{}", during_deletion.reason);
+    assert!(refresh.join().unwrap().warm);
+    let entries: Vec<_> = fs::read_dir(&folder)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|name| !name.ends_with(".lock") && !name.ends_with(".json"))
+        .collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+}
