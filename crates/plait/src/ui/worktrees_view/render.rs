@@ -76,7 +76,10 @@ impl Plait {
                 div()
                     .flex_1()
                     .text_color(rgb(colors().subtle))
-                    .child(a11y_text("worktrees-total", self.worktrees.total.clone())),
+                    .child(hover_text("worktrees-total", self.worktrees.total.clone(), match self.worktrees.seed_bytes {
+                        Some(seed) => format!("Logical bytes of these checkouts and their private build caches, plus {} in this project's build seed, the copy new worktrees are cloned from. Copy-on-write blocks may be shared, so removing worktrees does not free all of this.", super::bytes(seed)),
+                        None => "Logical bytes of these checkouts and their private build caches. Copy-on-write blocks may be shared, so removing worktrees does not free all of this.".into(),
+                    })),
             )
             .child(
                 toned_button(

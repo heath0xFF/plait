@@ -851,6 +851,11 @@ a suggestion or enter a relative directory and choose **Approve**. Suggestions
 come from manifests, without running scripts; none is applied automatically.
 **Remove** revokes a directory and **Refresh** rereads the host's choices.
 Nothing is cloned before approval. An older host shows **Unavailable**.
+**Seed · 2.4 GiB** (for example) is the logical size of the copy new worktrees
+are cloned from; the Worktrees view's total includes it. Its blocks are shared
+with the checkout until either changes, so it is not space that removing it
+would free, but once the checkout is rebuilt the seed keeps the old blocks.
+Removing every approved directory removes the seed.
 Approve only reproducible output you are willing to remove with its worktree.
 Ignored files inside the current approved directories are **Build output** in
 the Worktrees facts and do not block removal. A `.env`, unapproved ignored cache

@@ -184,3 +184,15 @@ test('a creation with an old seed clones it at once and refreshes only after adm
   await builds.settled();
   assert.deepEqual(builds.started.slice(before),['clone','seed']);
 });
+test('the seed is counted where storage is shown and goes when approvals are cleared',{skip:process.platform!=='darwin'},async t=>{
+  const h=await codex(t); await setup(h); await approve(h,['custom','target']);
+  const builds=h.runtime.worktrees.builds; await builds.settled();
+  const shown=await info(h); assert.equal(shown.seed?.files,2); assert.equal(shown.seed?.bytes,'custom'.length+'target'.length);
+  const rows:any=await h.runtime.reply({op:'project_worktrees_build',checkout:h.root}); assert.equal(rows.result.seed_bytes,shown.seed?.bytes);
+  const old:any=await h.runtime.reply({op:'project_worktrees',checkout:h.root}); assert.equal('seed_bytes' in old.result,false);
+  await approve(h,[]); await builds.settled();
+  assert.equal((await info(h)).seed,null);
+  const { readdir }=await import('node:fs/promises');
+  assert.deepEqual((await readdir(join(h.store,'build-output-seeds'))).filter(n=>!n.endsWith('.lock')&&!n.endsWith('.json')),[]);
+  assert.equal(await readFile(join(h.root,'custom/artifact'),'utf8'),'custom');
+});

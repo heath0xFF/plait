@@ -1,7 +1,10 @@
 //! Storage fixtures never read or approve a real project's output.
 use super::*;
 use plait_core::{
-    build_output::{Outcome, store::policy::Policy},
+    build_output::{
+        Outcome,
+        store::{SeedSummary, policy::Policy},
+    },
     git::worktree::Identity,
     host::build_output::{Info, Kind, Phase, Progress},
 };
@@ -23,6 +26,11 @@ fn choice(h: &mut Harness) {
                 paths: vec!["target".into()],
             },
             suggestions: vec!["runtime/node_modules".into()],
+            seed: Some(SeedSummary {
+                bytes: 2_576_980_378,
+                files: 130_000,
+                verified_at: 1,
+            }),
         });
         p.build_output.note = None;
     });
@@ -33,6 +41,7 @@ fn cold(h: &mut Harness) {
     super::worktrees_view::install(h, 4);
     h.update(|p, _, _| {
         p.worktrees.selected = 3;
+        p.worktrees.seed_bytes = Some(2_576_980_378);
         p.worktrees.rows[3].build_output = Some(Outcome::cold(
             "The source checkout is busy or unavailable and there is no idle build seed.",
         ));
@@ -90,10 +99,10 @@ fn storage_controls_remain_accessible_wide_and_narrow() {
             (
                 "storage-cache-choice",
                 choice as fn(&mut Harness),
-                "Approve",
+                &["Approve", "Seed · 2.4 GiB"][..],
             ),
-            ("storage-cold-fallback", cold, "Cold"),
-            ("storage-seeding", seeding, "Skip"),
+            ("storage-cold-fallback", cold, &["Cold"]),
+            ("storage-seeding", seeding, &["Skip"]),
         ] {
             let mut h = Harness::new(&repo, None, width, height);
             h.connect(&repo, false);
@@ -101,13 +110,15 @@ fn storage_controls_remain_accessible_wide_and_narrow() {
             for _ in 0..2 {
                 let frame = h.draw_a11y();
                 frame.assert_no_duplicates(name);
-                assert!(
-                    frame
-                        .nodes
-                        .iter()
-                        .any(|n| n.label.as_deref() == Some(required)),
-                    "{name} missing {required} at {width}"
-                );
+                for required in required {
+                    assert!(
+                        frame
+                            .nodes
+                            .iter()
+                            .any(|n| n.label.as_deref() == Some(*required)),
+                        "{name} missing {required} at {width}"
+                    );
+                }
             }
         }
     }

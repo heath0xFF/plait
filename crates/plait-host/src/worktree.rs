@@ -40,20 +40,24 @@ fn execute(input: Value) -> io::Result<Value> {
             records,
             only,
         } => {
-            let approved = if let Some(store) = store {
-                let (main, identity) = plait_core::build_output::store::policy::project(&root)?;
-                plait_core::build_output::store::policy::load(&store, &main, &identity)?.paths
-            } else {
-                Vec::new()
+            use plait_core::build_output::store::{policy, seed_summary};
+            let Some(store) = store else {
+                return worktree::inventory::inventory_of(&root, &records, only.as_deref())
+                    .and_then(|value| serde_json::to_value(value).map_err(|e| e.to_string()))
+                    .map_err(io::Error::other);
             };
-            return worktree::inventory::inventory_with_output(
+            let (main, identity) = policy::project(&root)?;
+            let approved = policy::load(&store, &main, &identity)?.paths;
+            let checkouts = worktree::inventory::inventory_with_output(
                 &root,
                 &records,
                 only.as_deref(),
                 &approved,
             )
-            .and_then(|value| serde_json::to_value(value).map_err(|e| e.to_string()))
-            .map_err(io::Error::other);
+            .map_err(io::Error::other)?;
+            // The seed counts toward the project's storage; read from its pointer.
+            let seed = seed_summary(&store, &identity)?.map(|seed| seed.bytes);
+            return Ok(json!({"checkouts":checkouts,"seed_bytes":seed}));
         }
         Request::Parent { root } => {
             return worktree::worktree_parent(&root)

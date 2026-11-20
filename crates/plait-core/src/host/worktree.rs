@@ -325,6 +325,9 @@ pub struct Inventory {
     #[serde(default)]
     pub worktree_build_output_v1: bool,
     pub checkouts: Vec<Checkout>,
+    /// Logical bytes of the project's build seed, counted in its storage.
+    #[serde(default)]
+    pub seed_bytes: Option<u64>,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -365,6 +368,8 @@ impl Inventory {
             || !self.worktree_inventory_v1
             || self.checkouts.is_empty()
             || self.checkouts.len() > 256
+            || self.seed_bytes.is_some_and(|n| n > 9_007_199_254_740_991)
+            || !self.worktree_build_output_v1 && self.seed_bytes.is_some()
         {
             return Err(invalid());
         }

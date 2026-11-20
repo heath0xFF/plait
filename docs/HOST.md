@@ -2513,8 +2513,12 @@ cannot widen this list.
 
 The additive `build_output_info {checkout,refresh?}` and
 `set_build_output {checkout,identity,revision,paths}` return
-`{schema:1,worktree_build_output_v1:true,policy,suggestions}`. A suggestion is
-never approval. Manifests are bounded data reads, never executed: Cargo suggests
+`{schema:1,worktree_build_output_v1:true,policy,suggestions,seed}`. `seed` is
+null or `{bytes,files,verified_at}`: the published seed's logical bytes and file
+count as recorded when it was taken, and when it was taken or last found
+unchanged (Unix seconds). It is read from the seed's record, never by walking
+it, and its blocks are shared copy-on-write, so it is not reclaimable space. A
+suggestion is never approval. Manifests are bounded data reads, never executed: Cargo suggests
 an existing ignored `target`; a package manifest with a lockfile suggests an
 existing ignored `node_modules`. Custom output directories are supported.
 Approval refuses dot components, absolute paths, Git data, linked directories,
@@ -2537,8 +2541,9 @@ Older hosts make the list unavailable. Existing creation-status retries retain
 their behavior and wait up to 330 seconds for accepted preparation.
 
 `project_worktrees_build {checkout,only?}` adds `worktree_build_output_v1:true`
-to inventory and `build_directories`, nullable `build_output` outcome, and
-nullable `preservation.build_output` to its rows. Older inventory reply shapes
+and nullable `seed_bytes` (the project's seed, as in `seed.bytes`) to inventory,
+and `build_directories`, nullable `build_output` outcome, and nullable
+`preservation.build_output` to its rows. Older inventory reply shapes
 stay unchanged. Known approved ignored content does not count as `changed`;
 unknown ignored content still blocks removal. Preview and removal use the
 same validation function. Revoking approval immediately restores that
@@ -2613,7 +2618,12 @@ cold. A pending journal distinguishes an abandoned capture from a published one;
 the retired list (`<key>.retired.json`) names earlier and abandoned seeds, which
 are deleted after the new seed is published and its source lease released,
 each once no creation still clones from it. An interrupted deletion resumes at
-the next refresh. Refresh replaces only earlier seeds, never a worktree. Worktree cleanup remains manual, with no eviction or storage budget.
+the next refresh. Refresh replaces only earlier seeds, never a worktree. Clearing every approval
+removes the project's seed at the refresh that follows. There is no host
+operation that removes a project, so a project that is never opened again keeps
+its seed until its approvals are cleared; a seed whose main checkout is gone or
+replaced is never used, because seeds are found through that checkout's
+identity. Worktree cleanup remains manual, with no eviction or storage budget.
 
 Creation/removal return `{schema:1,operation}` promptly. An operation includes
 `request_id`, allocated `thread_id`, `state` (`preparing`, `ready`, `failed`,
