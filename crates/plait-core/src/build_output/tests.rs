@@ -156,6 +156,32 @@ fn clones_are_independent_keep_bin_links_and_skip_escaping_links_and_sockets() {
     assert_eq!(fs::read(&cloned).unwrap(), b"clone edit");
     assert_eq!(fs::read(tree.0.join("dst/hard")).unwrap(), b"source");
 }
+#[cfg(target_os = "macos")]
+#[test]
+fn immutable_files_are_skipped_so_the_clone_can_always_be_removed() {
+    let tree = Tree::new();
+    let src = tree.dir("src");
+    let dst = tree.dir("dst");
+    fs::write(tree.0.join("src/locked"), "keep").unwrap();
+    fs::write(tree.0.join("src/plain"), "copy").unwrap();
+    let flag = |path: &Path, flags: u32| {
+        let path = CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::chflags(path.as_ptr(), flags) }, 0);
+    };
+    flag(&tree.0.join("src/locked"), libc::UF_IMMUTABLE);
+    let result = clone_tree(&src, &dst, &AtomicBool::new(false), &mut |_| {});
+    flag(&tree.0.join("src/locked"), 0);
+    // Before the fix the clone carried the flag; clear it so the fixture can go.
+    if fs::symlink_metadata(tree.0.join("dst/locked")).is_ok() {
+        flag(&tree.0.join("dst/locked"), 0);
+    }
+    let counts = result.unwrap();
+    assert_eq!((counts.files, counts.skipped), (1, 1));
+    assert!(counts.notes[0].starts_with("locked: immutable"));
+    assert!(fs::symlink_metadata(tree.0.join("dst/locked")).is_err());
+    let expected = id(&stat(&dst).unwrap());
+    remove_owned(&tree.0, Path::new("dst"), expected).unwrap();
+}
 #[test]
 fn replaced_directory_is_not_followed_and_partial_output_can_be_erased() {
     let tree = Tree::new();

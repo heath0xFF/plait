@@ -506,6 +506,10 @@ impl Walk<'_> {
                     return Err(moving());
                 }
             }
+            libc::S_IFREG if locked(&before) => self.counts.skip(
+                path,
+                "immutable or append-only file, which no clone could delete",
+            ),
             libc::S_IFREG => {
                 // An open descriptor fixes the file's identity for fclonefileat.
                 let raw = unsafe {
@@ -562,6 +566,21 @@ impl Walk<'_> {
                 .skip(path, "not a regular file, directory or safe link"),
         }
         Ok(())
+    }
+}
+/// A clone keeps the source's file flags. An immutable or append-only clone
+/// could never be rolled back, refreshed or removed with its worktree.
+fn locked(stat: &libc::stat) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        const FLAGS: u32 =
+            libc::UF_IMMUTABLE | libc::UF_APPEND | libc::SF_IMMUTABLE | libc::SF_APPEND;
+        stat.st_flags & FLAGS != 0
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = stat;
+        false
     }
 }
 fn moving() -> io::Error {

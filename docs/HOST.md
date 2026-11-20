@@ -2550,7 +2550,8 @@ on the same volume. It creates directories, verifies every opened directory
 against the listed identity, never follows a substituted link, and never makes
 hard links or falls back to copying bytes. It retains only relative links that
 resolve inside the approved directory; escaping, absolute and unresolved links,
-sockets and devices are skipped and reported. Nested repositories and changed
+sockets, devices and immutable or append-only files are skipped and reported
+(a clone keeps file flags, so such a clone could never be removed). Nested repositories and changed
 source identities fail preparation. Another volume, unsupported cloning,
 insufficient space, cancellation or a failed check starts cold with a reason.
 Other platforms start cold because cloning is unavailable.
