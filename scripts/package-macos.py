@@ -122,7 +122,7 @@ def main():
         host_archive = work / f"Plait-Host-{host_version}-{revision}-macos-arm64.tar.gz"
         shutil.copy2(resources / "Host.tar.gz", host_archive)
         installers.append(host_archive)
-        installers += build_distribution(installers, version, revision, work, archive)
+        installers += build_distribution(installers, version, revision, work, archive, bundle)
         # Only replace generated output after both the bundle and its archive pass verification.
         destination = dist / "Plait.app"
         if destination.exists():

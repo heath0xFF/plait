@@ -6,6 +6,7 @@
 //! network and file work must run on the caller's background executor.
 
 pub mod install;
+pub mod setup;
 
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde::Deserialize;

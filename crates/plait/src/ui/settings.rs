@@ -214,14 +214,22 @@ impl Plait {
                             ),
                     ),
             )
-            .when_some(self.host.connection.error.clone(), |el, error| {
-                el.child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(rgb(colors().red))
-                        .child(a11y_text("settings-host-error", error)),
-                )
-            })
+            .children(self.server_setup_line(cx))
+            .when_some(
+                self.host
+                    .connection
+                    .error
+                    .clone()
+                    .filter(|_| !self.server_setup_visible()),
+                |el, error| {
+                    el.child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(rgb(colors().red))
+                            .child(a11y_text("settings-host-error", error)),
+                    )
+                },
+            )
             .when(!self.host.connection.connected, |el| {
                 el.child(note(
                     "The installed host normally starts at login. Reconnect does not restart it. Closing Plait does not stop accepted work.",

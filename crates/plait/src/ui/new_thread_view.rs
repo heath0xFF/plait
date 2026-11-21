@@ -283,6 +283,10 @@ impl Plait {
                 .gap_2()
                 .text_size(px(11.))
         };
+        // First launch: setting up the server explains the missing connection.
+        if let Some(setup) = self.server_setup_line(cx) {
+            return Some(line().child(setup).into_any_element());
+        }
         if self.draft_pending() {
             if self.draft_creating() {
                 let model = self.draft_model_name().unwrap_or_default();
