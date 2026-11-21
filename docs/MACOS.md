@@ -10,9 +10,10 @@ runtime acceptance is not yet complete.
 ## Download and install
 
 Published previews live on the [GitHub releases page](https://github.com/heath0xFF/plait/releases).
-Download the **DMG**, open it, then run **Install Plait.command**. It installs
-the prebuilt app and bundled host in the per-user layout used by in-app updates.
-No source checkout, Xcode, Rust, or separately installed Node is required.
+Download the **DMG**, open it, and drag **Plait** into **Applications**. Open
+it from Applications: on first launch it sets up its local server in the
+per-user layout used by in-app updates. No source checkout, Xcode, Rust,
+separately installed Node, or Terminal command is required.
 
 For a command-line installation or update, download and inspect the installer:
 
@@ -52,7 +53,7 @@ create an installation eligible for in-app updates.
 
 | Artifact | Purpose |
 | --- | --- |
-| `Plait-…-macos-arm64.dmg` | Prebuilt app archive, Install Plait.command, and instructions |
+| `Plait-…-macos-arm64.dmg` | Plait.app beside an Applications shortcut, the system-wide migration command, and instructions |
 | `Plait-Installer-…-macos-arm64.pkg` | Install both components; Customize can select either one |
 | `Plait-Client-…-macos-arm64.pkg` | Install or update only `/Applications/Plait.app` |
 | `Plait-Host-…-macos-arm64.pkg` | Install or stage only the host, Node, and pinned runtime |
@@ -71,14 +72,17 @@ stop; this preview provides no security-policy bypass.
 
 ## First installation
 
-1. Finish work in any manually started development host. Do not start two hosts
-   against the same store. The installer refuses while a managed run is active or awaiting approval.
-2. Open **Install Plait.command** from the DMG. It closes the client, installs
-   the app and host, and reopens Plait. An older system-wide install needs an
-   administrator password once; subsequent updates do not.
-3. Open **Plait** from Applications. Use **Open repository…** (Cmd-O), then
-   **Settings** (Cmd-comma) to check the local host and choose an authenticated
-   model. Reconnect if the client opened before the host was ready.
+1. Do not start two hosts against the same store. First launch never stops or
+   replaces a host that is already running, so a manually started development
+   host keeps serving.
+2. Drag **Plait** from the DMG into **Applications**, then open it from
+   Applications. The first time, macOS asks you to approve the unsigned preview
+   in System Settings → Privacy & Security → **Open Anyway**.
+3. With no server on this Mac, Plait sets one up: it installs its bundled host
+   under `~/Library/Application Support/Plait/Host` and registers it as your
+   LaunchAgent. The new thread view says so while it works, and shows **Retry**
+   if it fails. Then use **Open repository…** (Cmd-O), and **Settings**
+   (Cmd-comma) to choose an authenticated model.
 4. Start a real thread. Settings → New threads selects automatic approval or
    asking for each action. Whether a project's commands are sandboxed or
    trusted is that project's own choice, in its settings (the project's **…**
@@ -86,6 +90,28 @@ stop; this preview provides no security-policy bypass.
    uses that harness's own permissions instead, chosen with **Permissions**
    under a new or open thread's message box, with a default for each harness
    in Settings → Agents. The app shows only real threads.
+
+### What first launch sets up
+
+First launch only installs a server that is missing. It runs in the
+background, one launch at a time, and leaves alone:
+
+- a host launchd already runs, of any version, including one with active work;
+- a host that answers on the default socket, such as one you started by hand;
+- an installed release that is not running: Plait registers that release, not
+  its own bundled copy, so a newer host is never downgraded.
+
+It does nothing for a source build or when `PLAIT_HOST_STORE` selects a
+development store. Opened from the mounted DMG or from Downloads (where macOS
+runs a quarantined app from a temporary copy), Plait asks you to drag it to
+Applications first, so no service points at a disk that goes away. An earlier
+system-wide package install needs **Move from system-wide install.command**
+once; first launch does not remove root-owned files or ask for an
+administrator password. It does not write through a symbolic link at the
+host folder or LaunchAgents folder.
+
+Replacing a host is not part of first launch: that is
+[Check for Updates](#updates), which waits until no run is active.
 
 The host is a **per-user LaunchAgent**, not a root daemon. It starts for the
 current graphical user when possible and at later graphical logins. If no
@@ -1265,8 +1291,9 @@ signature remains ad hoc; downloads are not notarized.
 
 In-app updates need a per-user install: an app bundle you own and a host under
 `~/Library/Application Support/Plait/Host`. An install made by the published
-Installer packages is root-owned. Run **Install Plait.command** from the
-latest DMG, or use the command-line installer above, to migrate once. It asks
+Installer packages is root-owned. Open **Move from system-wide
+install.command** from the latest DMG, or use the command-line installer above,
+to migrate once. It asks
 for administrator access only for that migration; no source build is needed. Release builds compare versions; a source build is offered the
 newest release.
 

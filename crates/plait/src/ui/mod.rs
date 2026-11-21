@@ -32,6 +32,7 @@ mod palette;
 mod panels;
 mod permissions;
 mod selection;
+mod server_setup;
 mod session;
 mod settings;
 mod settings_agent;
@@ -189,6 +190,7 @@ pub struct Plait {
     themes: appearance::Themes,
     code_font: appearance::CodeFont,
     updates: update::UpdateState,
+    server_setup: server_setup::ServerSetup,
     session: session::SessionState,
     picker_open: bool,
     notice: Option<String>,
@@ -255,6 +257,7 @@ impl Plait {
             themes: Default::default(),
             code_font: Default::default(),
             updates: update::UpdateState::default(),
+            server_setup: server_setup::ServerSetup::default(),
             session: session::SessionState::default(),
             picker_open: false,
             notice: None,

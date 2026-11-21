@@ -278,15 +278,15 @@ jobs:
         run: |
           printf '%s\n' \
             '## Install' \
-            'Download the DMG, open it, and run **Install Plait.command**.' \
-            'This installs the prebuilt app and bundled host for your user account. No Xcode, Rust, or Node installation is needed.' \
+            'Download the DMG, open it, and drag **Plait** into **Applications**, then open it from there.' \
+            'On first launch Plait sets up its local server for your user account. No Xcode, Rust, Node, or Terminal command is needed.' \
             '' \
             '**Unsigned local preview. Not notarized. Do not disable Gatekeeper.**' \
             'Apple Silicon; macOS 15+ declared, tested on macOS 26.' \
             '' \
             'The host includes Node and the runtime. Model credentials and project build tools are not included.' \
             'Per-user installs update from **Plait → Check for Updates…**; headless hosts run `plait-host update`.' \
-            'Older package installs move to the per-user layout automatically; administrator access is needed once. Threads, drafts, and credentials are preserved.' \
+            'An earlier system-wide package install moves once with **Move from system-wide install.command** on the DMG; it needs administrator access once. Threads, drafts, and credentials are preserved.' \
             '' \
             'Native code display, copy controls, saved drafts, and safe submission recovery are included.' \
             'The installed coding/reconnect test uses a scripted provider and real sandboxed Cargo commands, not a live model.' \

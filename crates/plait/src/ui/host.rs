@@ -193,6 +193,10 @@ impl Plait {
                 Err(error) => {
                     this.host.connection.connecting = false;
                     this.host.connection.error = Some(error.to_string());
+                    // A fresh install has no server yet; set one up once.
+                    if matches!(error, host::Error::Transport(_)) {
+                        this.offer_server_setup(window, cx);
+                    }
                 }
             },
         );

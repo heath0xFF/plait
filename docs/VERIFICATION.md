@@ -235,6 +235,14 @@ close any of these native gaps.
 
 - Gatekeeper approval, installed authentication, and a live-model source change
   on a user-managed Mac need separate acceptance. CI does not replace them.
+- Drag-and-drop installation: first-launch setup's decisions (fresh Mac,
+  running or manual host, installed-but-stopped release, source build and
+  development store, DMG and translocated launch, legacy install, missing
+  bundled host) and its symbolic-link refusal are unit tests in
+  `plait-core::update::setup`. Registering the LaunchAgent, the cross-launch
+  lock, the new DMG layout, and the setup line in the app have not run on a
+  Mac yet. A real downloaded DMG, dragged to Applications with quarantine
+  intact and opened on a Mac with no host, is still needed.
 - The bundle targets macOS 15+, but CI currently runs on macOS 26. Older-system
   runtime behavior, Intel macOS, and a native Linux client are not validated.
 - Full VoiceOver, keyboard focus, IME, and sustained typing/streaming checks

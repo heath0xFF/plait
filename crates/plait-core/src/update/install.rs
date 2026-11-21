@@ -19,8 +19,8 @@ pub const LABEL: &str = "dev.plait.host";
 pub const BUNDLE_ID: &str = "dev.plait.desktop";
 const LEGACY_AGENT: &str = "/Library/LaunchAgents/dev.plait.host.plist";
 const MIGRATE: &str = "This Plait was installed system-wide by an Installer package. \
-    Download the latest release and run Install Plait.command once to move it to a per-user install; \
-    later updates install from here.";
+    Download the latest release and open Move from system-wide install.command from its disk image once \
+    to move it to a per-user install; later updates install from here.";
 
 /// Where one user's host releases, service definition, and store live.
 pub struct Layout {
@@ -206,6 +206,24 @@ pub fn activate(layout: &Layout, program: &Path) -> Result<(), Error> {
         wait(50, || !loaded())
             .ok_or_else(|| Error::Unsupported("The running host did not stop.".into()))?;
     }
+    bootstrap(layout, program)
+}
+
+/// Registers the host service on first launch. Unlike `activate`, it never
+/// stops a loaded service: if one appeared meanwhile, it is left running.
+pub fn register(layout: &Layout, program: &Path) -> Result<(), Error> {
+    if legacy_install() {
+        return Err(Error::Unsupported(MIGRATE.into()));
+    }
+    if loaded() {
+        return Ok(());
+    }
+    write_atomic(&layout.agent, agent_plist(program).as_bytes())?;
+    bootstrap(layout, program)
+}
+
+/// Loads the written service definition and waits until its host answers.
+fn bootstrap(layout: &Layout, program: &Path) -> Result<(), Error> {
     run(Command::new("/bin/launchctl")
         .args(["bootstrap", &format!("gui/{}", uid())])
         .arg(&layout.agent))?;
