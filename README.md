@@ -153,7 +153,8 @@ account with a model provider. The installer includes the host and its Node
 runtime; you do not need Xcode, Rust, or Node.
 
 Download the **DMG** from [Releases](https://github.com/heath0xFF/plait/releases),
-open it, and run **Install Plait.command**. Or from Terminal:
+open it, and drag **Plait** into **Applications**. Open it from there; on first
+launch Plait sets up its local server for your account. Or from Terminal:
 
 ```sh
 curl --proto '=https' -fsSL \
